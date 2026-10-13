@@ -1,61 +1,52 @@
 {
-  "status": "PARTIAL_CANDIDATE",
+  "status": "M3_EXECUTABLE_CANDIDATE_NOT_READY",
   "m3_ready": false,
   "authoritative": true,
-  "note": "唯一权威候选索引；随 code_commit 之后的提交入库。M0–M2 离线闭环（含浏览器端口经同一编排）已贯通；M3 运行必需能力仍有缺口，故不标 M3_READY。",
-  "goal": "视频号一级观众评论 -> 作者一次二级回复，人工审批版",
+  "note": "唯一权威候选索引；随 code_commit 之后的提交入库。真实操作入口已接通并经隔离测试验证；真实平台适配仍缺真实样本，故不标 M3_READY。",
   "baseline": "0419de5",
-  "code_commit": "e947fd489bba660add9c566215d8f6f73463e588",
+  "m0_m2_accepted_by_codex": {"head": "fe10d00", "code_commit": "e947fd4", "tests": "170 passed (Codex 独立复跑)"},
+  "code_commit": "1a6905f9598bf80a055a71e8138fd812af23922d",
   "branch": "task/secondary-reply-m0-m2",
   "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
   "pushed": false,
   "merged": false,
   "interpreter": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python (仅经 scripts/run_isolated_tests.py --browser)",
   "tests": {
-    "command": "cd <workspace> && <interpreter> scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_account_and_source.py tests/unit/test_secondary_reply_cli_readonly.py tests/unit/test_secondary_reply_contract_and_dal.py tests/unit/test_secondary_reply_orchestration.py tests/unit/test_secondary_reply_review_counterexamples.py tests/unit/test_secondary_reply_service_and_corpus.py tests/browser/test_secondary_reply_browser.py tests/browser/test_secondary_reply_orchestrated_browser.py tests/unit/test_wechat_interaction*.py",
-    "result": "170 passed, 0 failed, 0 skipped",
-    "log": "/private/tmp/video-pytest-8vuxt4zj/pytest.log",
-    "log_sha256": "f928c7b1c50c4d3f062260c3265e20c3e696f9c2ab0e2a9d249ef0fbda85066d",
-    "note": "含既有首评互动回归；运行时源码与 code_commit 内容一致（运行后只提交，无再改动）"
+    "command": "cd <workspace> && <interpreter> scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_account_and_source.py tests/unit/test_secondary_reply_cli_readonly.py tests/unit/test_secondary_reply_cli_real_entry.py tests/unit/test_secondary_reply_contract_and_dal.py tests/unit/test_secondary_reply_orchestration.py tests/unit/test_secondary_reply_review_counterexamples.py tests/unit/test_secondary_reply_service_and_corpus.py tests/browser/test_secondary_reply_browser.py tests/browser/test_secondary_reply_orchestrated_browser.py tests/unit/test_wechat_interaction*.py",
+    "result": "177 passed, 0 failed, 0 skipped",
+    "log": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-zat2xvfe/pytest.log",
+    "log_sha256": "279ea070149dc3ca3678b3ccbc6489af9f39edc4326f3ed41ad1e309c49989f1",
+    "note": "该目录为 external-auto-cleanup，日志可能被清理；哈希供核对。含既有首评互动回归。"
   },
-  "demo": {
-    "command": "PYTHONPATH=src <interpreter> scripts/wechat_secondary_reply.py --demo",
-    "result": "all_passed=true（离线平台替身）",
-    "caveat": "demo 仍使用 FakeSecondaryReplyPlatform；同一四条路径经真实浏览器端口的验证在 tests/browser/test_secondary_reply_orchestrated_browser.py（隔离 Chromium + 夹具网络）"
+  "diff_stat_vs_baseline": "32 files changed, 8324 insertions(+), 25 deletions(-)",
+  "new_in_this_round": {
+    "real_entry": "scripts/wechat_secondary_reply.py 子命令 import-draft/preflight/approve/submit/reconcile-platform/status/stop/resume，全部经 SecondaryReplyOrchestrator；旧无子命令运行不再 exit 3，只打印用法且不发送",
+    "ops_module": "src/video_processing/interaction/secondary_reply_ops.py",
+    "approval": "本地人工审批：配置审批人 + 正文哈希前12位回填 + 一次性 token 原子消费，绑定目标/源评论快照/草稿版本/有效期；fixture provider 草稿不可批准",
+    "copy_source": "人工撰写导入（provider=manual_import，经确定性格式+政策终审）；不是自动生成能力",
+    "platform_reconcile": "reconcile-platform 经浏览器端口真实读取平台状态（需 --confirm-readonly-platform-access）；--reconcile 仅本地检视",
+    "stop": "stop/resume 停止文件，submit 在访问平台前拒绝",
+    "settings": "wechat_reply_account_key / wechat_reply_author_finder_id（settings.py + .env.example）"
   },
-  "diff_stat_vs_baseline": "28 files changed, 7613 insertions(+), 5 deletions(-)",
-  "codex_review_findings": {
-    "1_account_isolation_claim_reconcile": "FIXED：submit/reconcile 在认领与平台访问前核对 account_key；DAL 对账支持 account_key 限定；落库被拒不返回 VERIFIED。正式回归 test_secondary_reply_account_and_source.py",
-    "2_source_change_old_approval": "FIXED：重新采集更新最新观察值但不改审批绑定快照；变化后旧审批零出站，重审后合法通过，已提交/成功状态与账本不被复活",
-    "3_browser_in_orchestration_and_evidence": "FIXED（夹具层面）：BrowserSecondaryReplyPlatform 接入同一编排；成功证据为刷新后截图 + JSON 凭据（任务/账号/尝试/作品/父评论/原生回复 ID）；证据保存失败 -> UNCERTAIN 不重发；适配器 verified_reply.png 改为刷新核对后保存"
+  "verification_tiers": {
+    "isolated_tests": "通过：CLI 全流程（导入/预检/审批/提交/重复提交/开关与停止/平台对账/不重发）；隔离 Chromium：实际 CLI -> 统一编排 -> 浏览器端口 -> 夹具网络 -> 全新会话回读 -> 凭据",
+    "real_readonly_verification": "未做。仅有历史回执证明 create_comment 载荷含 _log_finder_id 与返回新 commentId",
+    "human_review": "材料 docs/specs/secondary_reply_human_review_sheet.md 已导出，结论列为空",
+    "real_send": "未发生",
+    "public_visibility": "未验证（凭据 public_visibility=NOT_CHECKED）"
   },
-  "additional_fixes": [
-    "适配器标题兜底选卡片可能错绑同名作品：现要求详情区 data-current-object-id 与目标作品一致，否则拒绝（失败关闭）",
-    "回读文本比较改为 NFC + 空白折叠后等值（渲染会把中英换行折叠为空格），内容本身仍须完全一致",
-    "编排由平台端口提供 guard（trusted_origins），端口必须提供已验证 account_finder_id"
-  ],
   "external_actions": [],
   "flags_default": {"enable_wechat_secondary_reply": false, "enable_wechat_secondary_reply_live_submission": false},
-  "m3_blockers": [
-    "真实微信页面样本缺失：详情区是否带原生作品 ID 标识、二级回复分页字段、原生回复 ID 位置均未验证（适配器在缺失时失败关闭）",
-    "作者原生账号标识 finder_id 的可信获取方式尚未实现",
-    "CLI 真实提交入口未接线（实际发送路径返回 exit 3 拒绝）",
-    "真实 Telegram 传输未实现（仅 FakeApprovalTransport）",
-    "真实 AGY provider 无工具/凭据隔离证明；规则 provider 仅限 fixture，编排默认拒绝发送其草稿",
-    "40 样本人评采纳率 HUMAN_REVIEW_PENDING"
+  "consolidated_blockers": [
+    "真实页面/接口样本缺失：适配器页面选择器（作品标识、data-comment-id、data-author-id、二级回复容器、折叠/分页）来自夹具，真实页面未知，缺失时失败关闭；二级回复分页与完整性判断无含二级回复的真实样本。需一次性只读授权（见 canary 方案 §5-1）",
+    "account_key 与 finder_id 可信绑定：当前为配置声明 + 发送载荷 _log_finder_id 一致性校验；尚无从登录态只读读取作者原生标识的实现与验证",
+    "本地人工审批的操作者身份由本机运行者与配置共同声明，未独立验证；Telegram 真实传输未实现（仅 fake）",
+    "自动生成未交付：规则 provider 仅限 fixture，真实 provider 无工具/凭据隔离证明；仅人工撰写导入路径可用",
+    "人评结论未填"
   ],
-  "unverified": [
-    "真实微信页面（分页、字段、回读、公众可见性、移动端显示）",
-    "真实 provider 与 Telegram",
-    "不声称 exactly-once，也不排除手机端并发回复竞态",
-    "旧库 account_key 迁移（表未部署）",
-    "首评共享配额仅在 enable_wechat_secondary_reply=ON 时生效"
-  ],
-  "runbook": "docs/specs/secondary_reply_m3_runbook.md",
-  "m3_minimum_conditions": [
-    "用户授权单条真实 canary 及只读样本采集",
-    "依据脱敏真实样本校准选择器与分页完整性判断",
-    "实现 finder_id 可信来源、CLI 真实入口、审批传输（Telegram 或本地人工确认）",
-    "人工文案/provider 隔离方案与人工评审通过"
-  ]
+  "docs": {
+    "canary_plan": "docs/specs/secondary_reply_m3_canary_plan.md",
+    "human_review_sheet": "docs/specs/secondary_reply_human_review_sheet.md",
+    "supersedes": "docs/specs/secondary_reply_m3_runbook.md（已删除）"
+  }
 }
