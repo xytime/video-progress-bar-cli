@@ -139,3 +139,11 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 03:56:57 现场计算仍受保护，下一安全分钟04:15。维护状态 active 为空，但正式来源冻结门禁仍须由新部署计划执行，不能以空闲代替来源证明。
 - 03:57 通过 Cloud 控制台配额页只读刷新：项目 `gen-lang-client-0993011647`、YouTube Data API 已启用；Search Queries per day 为0/100，Queries per day为225/10000（余量分别100和9775）。没有进入凭据值页面、读取密钥或发起 YouTube 业务搜索。此观察一小时后过期；下一次执行应刷新，不能改写观察时间。
 - 尚未创建或执行 TRIAL 计划，等待现场安全窗口。后续继续按已授权阶段转换，不需用户重复确认，自动跟进仍 ACTIVE。
+
+## 2026-10-14 04:55 安全时间窗口开放，但排空门禁未通过
+
+- 04:55:31 现场 settings 判断宿主时间窗口已允许；生产仍 `2fcb1d0`，对上次原生计划执行 `Sources.final()` 再核实通过，运行源码、七项 dirty 和 untracked 保留一致。候选分支仅新增验收记录，未改实现。
+- 生产当时有 `PpEUTpzWt2M:0`、`bTK1d3TuL5U:0` 及 queue-dispatch 在途；后一次检查前者已转为 review-notification，后者仍 ACTIVE。PID18437 的 Python 子进程和其子 PID18959 FFmpeg 的 cwd 均为生产目录；没有将渲染子进程直接排除。pipeline/pipeline_job 仍有未登记业务锁，正式来源证明也尚未生成，safe=false。
+- 正常页面会话回读 OFF/version17、search_open=false，试运行 search=0/3、general=0/6，关键词作业为空。未生成 TRIAL 计划、未执行 freeze/stop/adopt，没有强杀、删除锁或改写维护状态。时间窗口允许不能替代任务排空与来源门禁。
+- Cloud 配额只读刷新：YouTube Data API 已启用，指定项目 Search Queries per day为0/100，Queries per day为237/10000；余量100/9763。未访问凭据值或发起真实 YouTube 搜索。待在途自然结束后重新观察配额和门禁，再编制有效期内的新计划。
+- 自动跟进继续 ACTIVE；下一步应关注任务排空，不再将04:15视为尚未到来的阻塞时间。无用户操作需求，真实采集目标尚未完成。
