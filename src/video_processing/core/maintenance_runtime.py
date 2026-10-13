@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-12 | Codex | 真实角色锁、未接入来源阻断及正常 SIGTERM 生命周期 |
+| 1.0.1 | 2026-10-13 | Codex | macOS 使用系统 lsof 路径，兼容 launchd 精简 PATH |
 """
 from __future__ import annotations
 from functools import wraps
@@ -140,7 +141,8 @@ def inspection(control, *, evidence=None, process_pids=None):
                 if str(settings.project_root) in command:
                     process_pids.add(pid)
                 else:
-                    cwd = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                    lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+                    cwd = subprocess.run([lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
                                          text=True, capture_output=True, timeout=2)
                     if cwd.returncode:
                         unknown.append({"code": "PROCESS_CWD_UNKNOWN", "pid": pid})
