@@ -1,59 +1,56 @@
 {
-  "baseline_commit": "0419de50cfd806353256db607878bdd34a096878",
+  "status": "REVIEW_READY",
+  "authoritative": true,
+  "note": "本文件为唯一权威候选索引；它随提交 8a0083c 之后的提交入库，故 code_commit 指向被验证的代码提交。brain 目录旧副本已作废。",
+  "goal": "视频号一级观众评论 -> 作者一次二级回复，M0-M2 离线人工审批版候选",
+  "baseline": "0419de5",
+  "review_baseline": "8db5c40",
+  "code_commit": "8a0083ccd56a2d45090a525fe4064459046b8a83",
   "branch": "task/secondary-reply-m0-m2",
-  "delivery_state": "CANDIDATE_READY_FOR_REVIEW",
-  "feature_flags": {
-    "enable_wechat_secondary_reply": false,
-    "enable_wechat_secondary_reply_live_submission": false
+  "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
+  "pushed": false,
+  "merged": false,
+  "interpreter": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python (仅经 scripts/run_isolated_tests.py)",
+  "tests": {
+    "command": "cd <workspace> && <interpreter> scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_*.py tests/browser/test_secondary_reply_browser.py tests/unit/test_wechat_interaction*.py",
+    "result": "154 passed, 0 failed, 0 skipped",
+    "log": "/private/tmp/video-pytest-533o7h6k/pytest.log",
+    "log_sha256": "b6dc47dfb21d6d6087ae06511039fd6d22df6eff3cffa6f5a1878ea9aec8f6f8",
+    "note": "含既有首评互动回归；运行时工作区仅有测试修复之外的同一源码，提交内容与其一致"
   },
-  "acceptance_checks": {
-    "T01_comment_discovery_and_parsing": "PASSED",
-    "T02_pagination_completeness_and_folded_blocking": "PASSED",
-    "T03_comment_id_disambiguation": "PASSED",
-    "T04_author_already_replied_safe_skip": "PASSED",
-    "T05_atomic_claim_and_anti_duplicate_submission": "PASSED",
-    "T06_network_precheck_route_guard_and_account_verification": "PASSED",
-    "T07_approval_fingerprint_invalidation_and_single_consumption": "PASSED",
-    "T08_dropped_response_uncertain_read_only_reconcile": "PASSED",
-    "T09_tombstone_survives_task_deletion": "PASSED",
-    "T10_dual_confirmation_platform_and_dom_readback": "PASSED",
-    "T11_fact_evidence_refs_and_dual_channel_censorship": "PASSED",
-    "T12_strict_schema_and_prompt_injection_defense": "PASSED",
-    "T13_corpus_40_samples_integrity_and_pending_human_review": "PASSED",
-    "T14_shanghai_window_and_shared_rate_limiting": "PASSED",
-    "T15_cli_dry_run_and_reconcile_zero_side_effect": "PASSED",
-    "T16_isolated_browser_chromium_e2e_closed_loop": "PASSED"
+  "demo": {
+    "command": "PYTHONPATH=src <interpreter> scripts/wechat_secondary_reply.py --demo",
+    "result": "all_passed=true",
+    "paths": ["success+二次运行零出站", "错目标网络前拦截", "崩溃后重启仅对账", "删除任务后防重账本仍拒绝"],
+    "caveat": "演示使用离线平台替身(FakeSecondaryReplyPlatform)，不是真实浏览器流程"
   },
-  "isolated_test_receipts": [
-    "/private/tmp/video-pytest-nf2fo9o_",
-    "/private/tmp/video-pytest-nyarp__u",
-    "/private/tmp/video-pytest-4v_w4ga9"
+  "diff_stat_vs_baseline": "24 files changed, 6849 insertions(+), 5 deletions(-)",
+  "requirements_mapping": {
+    "R1_account_key_protected_states_intent_reconcile": "DONE (DAL + tests)",
+    "R2_strict_readback_request_correlation": "DONE in adapter/guard + 浏览器 fixture 测试",
+    "R3_approval_chat_bound_required": "DONE",
+    "R4_orchestrator_cli_demo": "DONE (orchestrator + demo；live 路径返回 exit 3 拒绝)",
+    "R5_shared_quota_atomic": "DONE，仅当 enable_wechat_secondary_reply=ON 时首评入口启用共享预占",
+    "R6_provider_fixture_only_corpus_recheck": "DONE (规则 provider 仅限 fixture；40 样本经确定性检查重跑；人评 HUMAN_REVIEW_PENDING)",
+    "R7_cli_readonly": "DONE"
+  },
+  "acceptance": "T01–T16 的离线可验证部分均有对应测试通过；真实平台相关项见 unverified",
+  "external_actions": [],
+  "flags_default": {"enable_wechat_secondary_reply": false, "enable_wechat_secondary_reply_live_submission": false},
+  "unverified": [
+    "真实 AGY provider 生成与工具隔离（live provider 保持不可用）",
+    "真实 Telegram 审批（仅 FakeApprovalTransport）",
+    "真实微信页面：二级回复分页、字段样本、真实回读、公众可见性",
+    "真实浏览器 adapter 尚未接入 orchestrator（仅经 fixture 浏览器测试单独验证）",
+    "人工评审采纳率（HUMAN_REVIEW_PENDING）",
+    "旧库 account_key 迁移（表未部署，未做迁移）",
+    "不声称 exactly-once，也不排除手机端并发回复竞态",
+    "移动端中英换行显示"
   ],
-  "offline_demo_evidence": {
-    "command": "PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py --demo",
-    "status": "PASSED",
-    "paths_verified": 4
-  },
-  "files_touched": [
-    ".env.example",
-    "src/config/settings.py",
-    "src/video_processing/db/database.py",
-    "docs/specs/secondary_reply_m0_m2_spec.md",
-    "src/video_processing/interaction/secondary_reply_contract.py",
-    "src/video_processing/interaction/secondary_reply_service.py",
-    "src/video_processing/interaction/secondary_reply_approval.py",
-    "src/video_processing/interaction/secondary_reply_browser_adapter.py",
-    "scripts/wechat_secondary_reply.py",
-    "tests/fixtures/secondary_reply/sanitized_api_responses.json",
-    "tests/fixtures/secondary_reply/synthetic_scenarios.json",
-    "tests/fixtures/secondary_reply/corpus_40_samples.json",
-    "tests/fixtures/wechat_secondary_reply.html",
-    "tests/unit/test_secondary_reply_contract_and_dal.py",
-    "tests/unit/test_secondary_reply_service_and_corpus.py",
-    "tests/browser/test_secondary_reply_browser.py"
-  ],
-  "unverified_aspects": [
-    "Production live WeChat Channels endpoints (intentionally blocked by enable_wechat_secondary_reply_live_submission=False)",
-    "Real external Telegram Bot API network round-trip (verified with FakeApprovalTransport and contract parsing)"
+  "m3_minimum_conditions": [
+    "用户授权单条真实 canary 与只读分页样本采集",
+    "配置真实审批人/chat 并通过 Telegram 身份校验",
+    "接入真实 browser adapter 到 orchestrator 并经隔离浏览器复测",
+    "人工评审通过并确认长度方案 A"
   ]
 }
