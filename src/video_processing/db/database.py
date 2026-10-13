@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
+| deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
@@ -368,6 +369,43 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 if count:
                     rows.append({"table": table, "count": count})
             return rows
+
+    @staticmethod
+    def maintenance_backup(source: Path, destination: Path) -> dict:
+        """独占新备份目标，包含 WAL；不初始化/迁移源数据库，失败不覆盖旧备份。"""
+        import hashlib
+        source, destination = Path(source).resolve(), Path(destination).resolve()
+        if source == destination or destination.exists():
+            raise ValueError("备份目标必须是新文件")
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        deadline = time.monotonic() + 30
+
+        def progress(status, remaining, total):
+            if time.monotonic() > deadline:
+                raise TimeoutError("一致性备份超时")
+
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=2)) as original:
+            with closing(sqlite3.connect(destination, timeout=2)) as saved:
+                original.backup(saved, pages=256, progress=progress, sleep=.01)
+                result = [row[0] for row in saved.execute("PRAGMA integrity_check")]
+                if result != ["ok"]:
+                    raise ValueError("备份完整性检查失败")
+        with destination.open("rb") as stream:
+            os.fsync(stream.fileno())
+        return {"path": str(destination), "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                "integrity": "ok", "bytes": destination.stat().st_size}
+
+    @staticmethod
+    def maintenance_verify_backup(destination: Path, expected: dict) -> bool:
+        """恢复前复验备份内容与完整性，不用备份覆盖生产。"""
+        import hashlib
+        destination = Path(destination).resolve()
+        if str(destination) != expected.get("path") or hashlib.sha256(destination.read_bytes()).hexdigest() != expected.get("sha256"):
+            return False
+        with closing(sqlite3.connect(destination.as_uri() + "?mode=ro", uri=True, timeout=2)) as saved:
+            return [row[0] for row in saved.execute("PRAGMA integrity_check")] == ["ok"]
 
     def _migrate_publication_subjects_if_needed(self) -> None:
         if self._read_only or not self.db_path or self.db_path == ":memory:":

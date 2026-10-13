@@ -137,6 +137,9 @@ show_usage() {
     echo "  ./vpanel craft [PATH...]      扫描 Python 文件或目录的架构坏味道与复杂度"
     echo "  ./vpanel craft --check [PATH] 检查依赖规则；违规=1，扫描不完整=2；路径相对调用目录"
     echo ""
+    echo "受控部署:"
+    echo "  ./vpanel deploy plan --directory <私有目录> --target <提交> --tested-manifest <测试清单> [--overlay <整合副本>]"
+    echo "  ./vpanel deploy apply|status|recover --directory <私有目录>"
     echo "通用:"
     echo "  ./vpanel help                 显示此帮助信息"
     echo ""
@@ -366,6 +369,10 @@ case "$GROUP" in
                 exit 1
                 ;;
         esac
+        ;;
+    deploy)
+        shift
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/deployment_control.py" "$@"
         ;;
     maintenance)
         shift
