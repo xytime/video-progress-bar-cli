@@ -1,12 +1,12 @@
 {
   "source": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
-  "started_at": "2026-10-13T13:23:15.043935+00:00",
-  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0groz2gz",
+  "started_at": "2026-10-13T15:25:19.353345+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-a4lmz1yk",
   "storage_policy": "external-auto-cleanup",
-  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0groz2gz/sandbox/repo",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-a4lmz1yk/sandbox/repo",
   "probe": {
     "exit_code": 0,
-    "seconds": 0.076
+    "seconds": 0.132
   },
   "pytest_arguments": [
     "-q",
@@ -28,24 +28,24 @@
     "tests/unit/test_wechat_interaction_state.py"
   ],
   "timeout_seconds": 600,
-  "source_manifest_sha256": "27f80e44f26edc3f4c4ec9ebbeb0aa2fb6f233676c8918dc69769fc3bfc6cf88",
-  "profile_sha256": "b67cae3bd35b18faf7c067ddfed0acb6d16a714814285e20b20ebcdca1bc9526",
+  "source_manifest_sha256": "affd1763f1859564ef664b4c977aa0b9ccb9ad094900cff425729a8fb4844510",
+  "profile_sha256": "fd01d5a51f5086e0ba4d3b727d70771939c0f434f621e43108ae1a70b5a19706",
   "browser_runtime": {
     "revision": "1223",
     "version": "148.0.7778.96",
-    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0groz2gz/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-a4lmz1yk/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
   },
-  "browser_runtime_sha256": "8017415d2e80acad37b7ed2405992d37f29b9e9d8f08e25715387fffe6776434",
+  "browser_runtime_sha256": "0663b73dcbf20193581f0743d6133e868b74816ffc1609d342fc7fff3cdd6558",
   "media_runtime": null,
   "media_runtime_sha256": null,
   "pytest": {
     "exit_code": 0,
-    "seconds": 195.279
+    "seconds": 211.231
   },
   "exit_code": 0,
   "cleanup": {
     "status": "removed",
-    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0groz2gz/sandbox"
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-a4lmz1yk/sandbox"
   },
-  "finished_at": "2026-10-13T13:26:31.112753+00:00"
+  "finished_at": "2026-10-13T15:28:52.924914+00:00"
 }

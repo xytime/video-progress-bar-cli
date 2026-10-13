@@ -7,13 +7,14 @@
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.1.0   | 2026-10-13 | Antigravity | 新增：create_wechat_context 支持自定义 viewport 参数。 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始版本：统一创建微信视频号浏览器上下文，收拢 UA、Viewport 与 init_script 反检测指纹。 |
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 # 统一微信视频号视口规格（1280x800）
 WECHAT_VIEWPORT: dict[str, int] = {"width": 1280, "height": 800}
@@ -57,18 +58,20 @@ __all__ = [
 def create_wechat_context(
     browser: Any,
     storage_state: Path | str | Mapping[str, Any] | None = None,
+    viewport: Optional[dict[str, int]] = None,
 ) -> Any:
     """创建配置了统一微信环境指纹的全新独立浏览器上下文。
 
     Args:
         browser: Playwright Browser 实例。
         storage_state: 可选的会话凭证路径（Path/str）或字典对象；为 None 时创建干净上下文（如 relogin 或初次授权）。
+        viewport: 可选自定义视口规格，未提供时默认使用 WECHAT_VIEWPORT (1280x800)。
 
     Returns:
         注入了统一反检测指纹脚本的 Playwright BrowserContext 实例。
     """
     context_opts: dict[str, Any] = {
-        "viewport": dict(WECHAT_VIEWPORT),
+        "viewport": dict(viewport or WECHAT_VIEWPORT),
         "user_agent": WECHAT_USER_AGENT,
     }
 

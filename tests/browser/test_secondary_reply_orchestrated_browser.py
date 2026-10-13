@@ -295,3 +295,24 @@ def test_cli_entry_single_item_through_browser_port(stack, monkeypatch, capsys):
 def PipelineDB_row(db_path, tid):
     from video_processing.db.database import PipelineDB
     return PipelineDB(str(db_path)).get_secondary_reply_task(tid)
+
+
+def test_orchestrated_author_reply_on_subsequent_page_skips(stack):
+    """编排经浏览器端口：后续页发现作者回复，安全跳过，零出站请求。"""
+    s = stack
+    tid = _task(s, comment_id="synth_cmt_105")
+    out = s.orch.submit(tid)
+    assert out.status == "SKIPPED_ALREADY_REPLIED", out
+    assert _sends(s) == []
+    assert s.db.check_secondary_reply_idempotency(POST, "synth_cmt_105", account_key=TEST_ACCOUNT) is None
+
+
+def test_orchestrated_pagination_unknown_fails_closed_before_intent(stack):
+    """编排经浏览器端口：分页状态未知时 Fail-Closed 阻断，零出站请求零意图落盘。"""
+    s = stack
+    tid = _task(s, comment_id="synth_cmt_106")
+    out = s.orch.submit(tid)
+    assert out.status == "REJECTED_BEFORE_INTENT", out
+    assert "无法完整判断是否已回复" in (out.detail or "")
+    assert _sends(s) == []
+    assert s.db.check_secondary_reply_idempotency(POST, "synth_cmt_106", account_key=TEST_ACCOUNT) is None

@@ -30,6 +30,14 @@ COMMENT_SUBMIT_PATH = "/cgi-bin/mmfinderassistant-bin/comment/create_comment"
 UTC = datetime.timezone.utc
 
 
+@pytest.fixture(autouse=True)
+def _test_submission_window(monkeypatch):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:59", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 0, raising=False)
+
+
 @pytest.fixture
 def secondary_reply_harness(chromium, tmp_path):
     """构建受控 Chromium 页面与路由桩。"""
@@ -403,3 +411,76 @@ def test_browser_readback_rejects_wrong_author_or_altered_text(secondary_reply_h
     )
     assert status == "UNCERTAIN"
     assert db.get_secondary_reply_task(task_id)["status"] == "UNCERTAIN"
+
+
+def test_secondary_reply_author_reply_on_subsequent_page(secondary_reply_harness):
+    """新增回归：作者回复位于后续折叠页，展开后发现作者已回复，安全阻断并记录 SKIPPED_ALREADY_REPLIED。"""
+    harness = secondary_reply_harness
+    db = harness["db"]
+    post_id = "export/synth_video_888"
+    root_id = "synth_cmt_105"  # 该评论初始只有观众回复和展开按钮，展开后有作者回复
+    content = "测试后续页作者回复"
+
+    task_id = approved_task(
+        db,
+        platform_post_id=post_id,
+        comment_id=root_id,
+        chinese_reply=content,
+        english_reply="Subsequent page.",
+        formatted_reply=content,
+        provider="rule_mock",
+    )
+    claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
+    assert claimed is not None
+    writes_before = len(harness["writes"])
+
+    status, evidence, err = _run_secondary(
+        harness,
+        task_id=task_id,
+        platform_post_id=post_id,
+        root_comment_id=root_id,
+        reply_content=content,
+        video_title="深度解读视频",
+        before_submit=lambda: db.record_secondary_reply_submit_intent(task_id, claimed["lease_token"])[0],
+    )
+    assert status == "SKIPPED_ALREADY_REPLIED"
+    assert len(harness["writes"]) == writes_before  # 绝不出站
+    task = db.get_secondary_reply_task(task_id)
+    assert task["status"] == "SKIPPED"
+
+
+def test_secondary_reply_pagination_unknown_fails_closed(secondary_reply_harness):
+    """新增回归：二级回复分页状态未知或折叠无法穷尽，无法证明作者未回复，Fail-Closed 硬阻断。"""
+    harness = secondary_reply_harness
+    db = harness["db"]
+    post_id = "export/synth_video_888"
+    root_id = "synth_cmt_106"  # 该评论标记 data-pagination-status="unknown"
+    content = "测试未知分页阻断"
+
+    task_id = approved_task(
+        db,
+        platform_post_id=post_id,
+        comment_id=root_id,
+        chinese_reply=content,
+        english_reply="Unknown pagination.",
+        formatted_reply=content,
+        provider="rule_mock",
+    )
+    claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
+    assert claimed is not None
+    writes_before = len(harness["writes"])
+
+    status, evidence, err = _run_secondary(
+        harness,
+        task_id=task_id,
+        platform_post_id=post_id,
+        root_comment_id=root_id,
+        reply_content=content,
+        video_title="深度解读视频",
+        before_submit=lambda: db.record_secondary_reply_submit_intent(task_id, claimed["lease_token"])[0],
+    )
+    assert status == "FAILED"
+    assert "二级回复分页状态不完整或未知" in (err or "")
+    assert len(harness["writes"]) == writes_before  # 零出站请求
+    # 意图未被记录
+    assert db.check_secondary_reply_idempotency(post_id, root_id) is None

@@ -31,9 +31,48 @@
               <div class="sub-comment" data-author-role="author" data-author-id="v2_synthetic_author_finder_id@finder"><span class="author-label">六维时空号(作者)</span> <span data-reply-content>之前已回复过</span></div>
             </div>
           </div>
+          <div class="comment-item-main" data-comment-id="synth_cmt_105">
+            <span class="nickname">用户小张</span>
+            <p class="content">后续页有作者回复的评论</p>
+            <button type="button" class="reply-btn" data-reply>回复</button>
+            <div class="reply-compose" hidden>
+              <textarea placeholder="回复用户小张" data-comment-editor></textarea>
+              <button type="button" data-submit>发送</button>
+            </div>
+            <div class="level-two" data-level-two>
+              <div class="sub-comment" data-author-id="other_user@finder"><span class="nickname">路人甲</span> <span>初次可见回复</span></div>
+            </div>
+            <button type="button" class="show-more-replies" data-action="expand-replies">展开更多回复</button>
+          </div>
+          <div class="comment-item-main" data-comment-id="synth_cmt_106" data-pagination-status="unknown">
+            <span class="nickname">用户小陈</span>
+            <p class="content">分页状态未知的评论</p>
+            <button type="button" class="reply-btn" data-reply>回复</button>
+            <div class="reply-compose" hidden>
+              <textarea placeholder="回复用户小陈" data-comment-editor></textarea>
+              <button type="button" data-submit>发送</button>
+            </div>
+            <div class="level-two" data-level-two></div>
+          </div>
         </article>`;
       const detail = host.firstElementChild;
       const c1 = detail.querySelector("[data-comment-id='synth_cmt_101']");
+      const c105 = detail.querySelector("[data-comment-id='synth_cmt_105']");
+      if (c105) {
+        const expandBtn = c105.querySelector('[data-action="expand-replies"]');
+        if (expandBtn) {
+          expandBtn.addEventListener('click', () => {
+            const n = document.createElement('div');
+            n.className = 'sub-comment';
+            n.dataset.commentId = 'synth_reply_subsequent_page_105';
+            n.dataset.authorRole = 'author';
+            n.dataset.authorId = 'v2_synthetic_author_finder_id@finder';
+            n.innerHTML = '<span class="author-label">作者</span> <span data-reply-content>后续页上的作者回复</span>';
+            c105.querySelector('[data-level-two]').appendChild(n);
+            expandBtn.remove();
+          });
+        }
+      }
       // 服务器持久化的回复（由路由桩注入，页面重新加载后仍存在）；与下方“乐观 DOM 节点”区分
       (window.__serverReplies || []).forEach(r => {
         const n = document.createElement('div');
