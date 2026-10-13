@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-12 | Antigravity | 最终核验时清理竞争的旧文章与无挂接回读，防止证据目录复用时相互污染。 |
 | 1.3.0 | 2026-10-12 | Codex | 最终实读回执保留平台选中行的挂载 ID，拒绝前后身份变化。 |
 | 1.2.0 | 2026-10-12 | Codex | 保留逐次选品结果；允许正式挂商品验收显式要求最终绑定，日常降级规则不变。 |
 | 1.1.0 | 2026-10-11 | Codex | 取消商品绑定硬门槛及商品可用性退避；保留提交去重、产物一致性与在途租约。 |
@@ -109,6 +110,8 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
     import json
     readback = evidence_dir / 'product_pre_submit_readback.json'
     readback.unlink(missing_ok=True)
+    (evidence_dir / "article_pre_submit_readback.json").unlink(missing_ok=True)
+    (evidence_dir / "none_pre_submit_readback.json").unlink(missing_ok=True)
     try:
         receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text())
         if payload is not None:

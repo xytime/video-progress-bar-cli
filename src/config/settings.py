@@ -13,6 +13,7 @@
 | insight-v1.2 | 2026-10-09 | Codex | 完整 B 策划独立超时，不增加普通 A 预算。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
+| 3.75.0 | 2026-10-12 | Codex | 新增 enable_wechat_article_link, wechat_article_timeout_seconds, wechat_article_policy_path，支持公众号文章挂接一期 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
 | 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
@@ -241,6 +242,11 @@ class Settings(BaseSettings):
     # 控制台配置目前只用于保存与预览，发布器接入后才用于真实选品。
     wechat_product_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_products.json"
     wechat_product_status_path: Path = _PROJECT_ROOT / "output" / "wechat_product_runtime.json"
+
+    # 视频号公众号文章扩展链接挂接（一期：已发表文章链接）。默认关闭。
+    enable_wechat_article_link: bool = False
+    wechat_article_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
+    wechat_article_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_articles.json"
 
 
     # Google Gemini API Key

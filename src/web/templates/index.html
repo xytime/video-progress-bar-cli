@@ -48,6 +48,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="manifest" href="/static/site.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="VideoPipeline" />
@@ -2479,6 +2480,20 @@
     }
   }
 
+  function actionErrorMessage(result, status) {
+    const detail = result?.detail;
+    const message = result?.error || (typeof detail === 'string' ? detail : detail?.message);
+    const code = typeof detail === 'object' ? detail?.code : null;
+    return (typeof message === 'string' && message ? message : `请求失败（HTTP ${status}）`)
+      + (code ? ` [${code}]` : '');
+  }
+
+  async function readProcessResponse(response) {
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result?.success) throw new Error(actionErrorMessage(result, response.status));
+    return result;
+  }
+
   async function processVideoNow(youtubeId) {
     navigator.vibrate(15);
     const btn = event?.target;
@@ -2489,17 +2504,12 @@
     }
     try {
       const r = await fetch(`/api/videos/${youtubeId}/process`, { method: 'POST' });
-      const res = await r.json();
-      if (res.success) {
-        showToast('✅ ' + (res.message || '管线已手动启动'));
-        loadVideos();
-        fetchStats();
-      } else {
-        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
-      }
+      const res = await readProcessResponse(r);
+      showToast('✅ ' + (res.message || '管线已手动启动'));
+      loadVideos();
+      fetchStats();
     } catch (e) {
-      showToast('❌ 网络错误: ' + e.message, 'error');
+      showToast('❌ 启动失败: ' + e.message, 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
@@ -2698,17 +2708,12 @@
     }
     try {
       const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`, { method: 'POST' });
-      const res = await r.json();
-      if (res.success) {
-        showToast('✅ ' + (res.message || '分集任务已启动'));
-        loadVideos();
-        fetchStats();
-      } else {
-        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
-      }
+      const res = await readProcessResponse(r);
+      showToast('✅ ' + (res.message || '分集任务已启动'));
+      loadVideos();
+      fetchStats();
     } catch (e) {
-      showToast('❌ 网络错误: ' + e.message, 'error');
+      showToast('❌ 启动失败: ' + e.message, 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
@@ -2882,18 +2887,18 @@
 
       try {
         const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
-        const d = await r.json();
-        if (d.success) {
+        const d = await r.json().catch(() => ({})) || {};
+        if (r.ok && d.success) {
           showToast(d.message || '✅ 已彻底删除任务记录');
           loadVideos();
           fetchStats();
           closeDeleteModal();
         } else {
-          if (await refreshMissingTask(d)) {
+          if (r.ok && await refreshMissingTask(d)) {
             closeDeleteModal();
             return;
           }
-          showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
+          showToast('❌ 删除失败: ' + actionErrorMessage(d, r.status), 'error');
           confirmBtn.disabled = false;
           confirmBtn.innerHTML = '确认删除 (Delete)';
         }

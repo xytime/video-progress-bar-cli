@@ -5,6 +5,7 @@
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
+| 3.72.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：受控开关控制、按视频挂接决策冻结并透传上传器。 |
 | 3.71.0 | 2026-10-10 | Antigravity | 视频号发布支持自动挂载图书商品（enable_wechat_product_link），透传频道来源并强制要求商品绑定。 |
 | 3.70.0 | 2026-10-10 | Codex | 首尾清理只接入新 TED 整片；固定历史成片绑定及异常回退。 |
 | 3.69.2 | 2026-10-09 | Codex | 裁剪超时独立清理进程组；裁剪副本接入硬重置与受保护 TTL。 |
@@ -3969,6 +3970,17 @@ class PipelineManager:
             self.db.defer_ready_publication(yid, '商品等待：原商品不可用、身份阻断或检查退避；保留原决定和成片', slice_index=slice_index)
             return
         upload_cmd.extend(write_product_task_arguments(product_task, evidence_dir.parent / '_product_task_inputs' / evidence_dir.name))
+
+        if settings.enable_wechat_article_link:
+            from .utils.wechat_article_task import get_article_for_video, freeze_task_article_decision, write_article_task_arguments
+            article_info = get_article_for_video(prefix, settings.wechat_article_policy_path)
+            if not article_info and prefix != yid:
+                article_info = get_article_for_video(yid, settings.wechat_article_policy_path)
+            if article_info:
+                article_task = freeze_task_article_decision(f"pipeline:article:{yid}:{slice_index}", article_info)
+                if article_task:
+                    upload_cmd.extend(write_article_task_arguments(article_task, evidence_dir.parent / '_article_task_inputs' / evidence_dir.name))
+
 
         try:
             res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
