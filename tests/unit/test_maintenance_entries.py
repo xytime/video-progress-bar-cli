@@ -370,7 +370,7 @@ def test_ui_startup_preserves_uvicorn_sigterm_handler(isolated_running_maintenan
     assert not any(thread.is_alive() for thread in web._scheduler_threads)
 
 
-@pytest.mark.parametrize('case', ['independent', 'cwd_mismatch', 'cwd_denied', 'cwd_empty',
+@pytest.mark.parametrize('case', ['independent', 'cwd_mismatch', 'cwd_denied', 'cwd_empty', 'cwd_multiple', 'cwd_relative',
                                   'production_entry', 'production_cwd', 'production_argument',
                                   'changed_runner', 'symlink_entry', 'unparseable'])
 def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_running_maintenance, monkeypatch, case):
@@ -398,14 +398,15 @@ def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_r
         if args[0] == 'ps':
             return subprocess.CompletedProcess(args, 0, f'99999998 {command}\n', '')
         return subprocess.CompletedProcess(args, 1 if case == 'cwd_denied' else 0,
-            '' if case == 'cwd_empty' else f'p99999998\nn{cwd}\n', '')
+            '' if case == 'cwd_empty' else 'nrelative\n' if case == 'cwd_relative' else
+            f'n{cwd}\nn{root}\n' if case == 'cwd_multiple' else f'p99999998\nn{cwd}\n', '')
     monkeypatch.setattr(subprocess, 'run', run)
     before = isolated_running_maintenance.status()
     result = inspection(isolated_running_maintenance)
     codes = {row['code'] for row in result['unknown']}
     if case == 'independent':
         assert codes == {'SOURCES_NOT_VERIFIED'}
-    elif case in {'cwd_denied', 'cwd_empty'}:
+    elif case in {'cwd_denied', 'cwd_empty', 'cwd_multiple', 'cwd_relative'}:
         assert 'PROCESS_CWD_UNKNOWN' in codes
     else:
         assert 'UNREGISTERED_PROCESS' in codes
