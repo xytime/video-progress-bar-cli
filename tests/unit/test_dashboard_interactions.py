@@ -57,6 +57,39 @@ def test_process_failure_shows_reason_and_restores_button(dashboard, slice_index
     state['warnings'][:] = [message for message in state['warnings'] if message != expected_warning]
 
 
+@pytest.mark.parametrize('payload,expected', [
+    ({'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},
+     '维护状态不允许领取新工作 [MAINTENANCE]'),
+    (None, '请求失败（HTTP 503）'),
+])
+def test_delete_rejection_keeps_task_and_explains_failure(dashboard, payload, expected):
+    from playwright.sync_api import expect
+    page, state = dashboard
+    requests = []
+
+    def deny(route):
+        requests.append((route.request.method, route.request.url))
+        if payload is None:
+            route.fulfill(status=503, content_type='text/html', body='<h1>Unavailable</h1>')
+        else:
+            route.fulfill(status=503, json=payload)
+
+    page.route('**/api/videos/first?delete_files=false', deny)
+    row = page.locator('#row-first')
+    row.get_by_role('button', name='❌ 删除', exact=True).click()
+    page.locator('#delete-confirm-code-input').fill(page.locator('#delete-safety-code').inner_text())
+    confirm = page.locator('#btn-confirm-delete')
+    confirm.click()
+    expect(page.locator('.toast-item').last).to_have_text('❌ 删除失败: ' + expected)
+    expect(confirm).to_be_enabled()
+    expect(confirm).to_have_text('确认删除 (Delete)')
+    expect(page.locator('#delete-modal')).to_be_visible()
+    expect(row).to_be_visible()
+    assert requests == [('DELETE', 'http://dashboard-test.invalid/api/videos/first?delete_files=false')]
+    state['warnings'][:] = [message for message in state['warnings'] if message !=
+        'Failed to load resource: the server responded with a status of 503 (Service Unavailable)']
+
+
 def test_processing_row_has_stop_and_delete_controls(dashboard):
     page, state = dashboard
     state['payload'] = _payload([_video('preparing', status='PROCESSING')], total=1)
