@@ -44,3 +44,13 @@
 ## 隔离修复验收
 
 关键词单元、边界、API 和真实浏览器合计 **135 passed / 10 warnings**，不是与之前 32 项专项累加。[回执](evidence/youtube-keyword-live-rollout/receipt.json)、[测试日志](evidence/youtube-keyword-live-rollout/pytest.log)。源码清单 SHA-256 `734bb8da7d265ca4e48910963f2d7b7228c89d655ba737089dc8b5e6d64a92bf`，测试完成时间 2026-10-13T13:41:34Z。沙盒退出后自动清理，外部证据保留。修复已在隔离分支保存，尚未并入或采用到生产；最终整合与部署需要新鲜现场计划。
+
+## 2026-10-13 22:41 独立推进与归属排查
+
+- 按用户要求，不读取或暴露密钥。已检查维护源码、配置契约及现有部署/验收记录，未发现将生产实际配置绑定到 Cloud 凭据资源的非秘密记录。配置契约是项目根配置文件加可覆盖环境变量；没有资源 ID 绑定字段。
+- [Google 官方说明](https://docs.cloud.google.com/api-keys/docs/get-info-api-keys)区分元数据 GetKey/ListKeys 与 LookupKey：前者能证明资源在项目中，后者才能由密钥反查项目，但要求传入 keyString。本次没有调用 LookupKey/GetKeyString，也没有查看密钥或用一次业务调用推断绑定。现有元数据证据不能补上生产配置这一端。
+- 已向负责人给出私下核对的具体步骤：确认生产实际配置及启动覆盖，核对 Cloud 项目 `gen-lang-client-0993011647` 下资源 `286cb0f6-4231-4ca2-831f-1e4646829b55`，只返回一致性及核对方式，不发送秘密材料。此事实待答复，未改变 quota_verified。
+- 隔离分支合入生产 `ba53a61`，候选提交为 `36803a6`，已推送。扩展盘整合副本保留生产原 7 项 dirty，并复制受维护的额外源码；未更改生产文件。原改动与本次差异无重叠，逐项保存哈希。
+- 最终整合回归 **401 passed / 13 warnings**，包含关键词/API/真实浏览器、维护/部署、数据库兼容和生词超时；与历史批次不相加。测试完成时间 2026-10-13T14:41:00Z。源码清单 SHA-256 `8ef6d96acae885e8de41bb1456a098ca2e18e68e9f0069440ebab80d618ab531`。[回执](evidence/youtube-keyword-live-rollout/integration-20261013/receipt.json)、[保留摘要](evidence/youtube-keyword-live-rollout/integration-20261013/preparation.json)、[日志](evidence/youtube-keyword-live-rollout/integration-20261013/pytest.log)。沙盒已自动清理。
+- 原生部署器生成计划成功，ID `b1c5f885c4ec4f4788f677a2bc4a8f0a`，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-cap-20261013-c/`；验证最终运行源码与测试清单匹配。仅生成计划，尚未 apply。任何生产漂移均须重新核对，不能直接沿用旧计划。
+- 最新维护回查为 RUNNING/version 20，但有 `wallstreet-render` 在途任务和 UNREGISTERED_PROCESS，safe=false。没有冻结、停止、强杀或绕过；搜索/调度/准入仍关闭。需在采用前重新核查任务、未知进程、代码基线与全部门禁。
