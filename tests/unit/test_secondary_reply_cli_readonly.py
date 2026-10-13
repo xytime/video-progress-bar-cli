@@ -48,9 +48,9 @@ def test_existing_db_is_not_modified(tmp_path, monkeypatch, flag, capsys):
     assert _snapshot(tmp_path) == before
 
 
-def test_live_path_is_refused_when_unwired(monkeypatch):
+def test_legacy_invocation_never_sends_even_with_both_flags_on(monkeypatch):
     cli = _load_cli()
     monkeypatch.setattr(cli.settings, "enable_wechat_secondary_reply", True)
     monkeypatch.setattr(cli.settings, "enable_wechat_secondary_reply_live_submission", True)
     monkeypatch.setattr(sys, "argv", ["x"])
-    assert cli.main() == 3
+    assert cli.main() == 2  # 仅打印用法；真实发送只能经 submit 子命令（见 test_secondary_reply_cli_real_entry）

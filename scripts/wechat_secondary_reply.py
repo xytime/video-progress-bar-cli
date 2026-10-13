@@ -250,15 +250,123 @@ def _read_only_refusal(db_path):
     return None
 
 
-def main():
-    parser = argparse.ArgumentParser(description="视频号二级回复自动化处理")
+SUBCOMMANDS = {"import-draft", "preflight", "approve", "submit", "reconcile-platform", "status", "stop", "resume"}
+
+
+def _build_real_platform(args):
+    """真实浏览器端口：账号标识来自配置；缺失时拒绝。"""
+    from video_processing.interaction.secondary_reply_browser_platform import BrowserSecondaryReplyPlatform
+
+    finder = (settings.wechat_reply_author_finder_id or "").strip()
+    if not finder:
+        raise SystemExit("AUTHOR_FINDER_ID_NOT_CONFIGURED: 请配置 wechat_reply_author_finder_id")
+    adapter = SecondaryReplyBrowserAdapter(headless=not getattr(args, "headed", False))
+    title = getattr(args, "video_title", "") or ""
+    return BrowserSecondaryReplyPlatform(adapter, account_finder_id=finder, post_hints=lambda _p: (title, ""))
+
+
+def ops_main(argv: List[str], platform_factory=None) -> int:
+    """M3 单条操作入口：预检/导入/本地审批/提交/平台对账/状态/停用。所有发送经统一编排。"""
+    from video_processing.interaction import secondary_reply_ops as ops
+
+    parser = argparse.ArgumentParser(prog="wechat_secondary_reply")
+    parser.add_argument("command", choices=sorted(SUBCOMMANDS))
+    parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH, help="数据库路径（测试可指向临时库）")
+    parser.add_argument("--task-id", type=int)
+    parser.add_argument("--post-id")
+    parser.add_argument("--comment-id")
+    parser.add_argument("--comment-text", help="导入时：该一级评论的原文（作为审批绑定的源评论快照）")
+    parser.add_argument("--zh")
+    parser.add_argument("--en")
+    parser.add_argument("--style", default="CASUAL", choices=[s.value for s in SecondaryReplyStyle])
+    parser.add_argument("--confirm-reply-sha12", help="approve：回填预检输出 reply_sha256 前 12 位")
+    parser.add_argument("--ttl-minutes", type=int, default=60)
+    parser.add_argument("--video-title", default="", help="仅用于页面卡片导航提示；不作为作品绑定依据")
+    parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--confirm-readonly-platform-access", action="store_true",
+                        help="reconcile-platform：明确确认本次将只读访问真实平台")
+    args = parser.parse_args(argv)
+
+    if args.command == "stop":
+        print(json.dumps(ops.stop(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "resume":
+        print(json.dumps(ops.resume(), ensure_ascii=False, indent=2))
+        return 0
+
+    account_key = (settings.wechat_reply_account_key or "").strip()
+    finder = (settings.wechat_reply_author_finder_id or "").strip()
+    if not account_key:
+        print(json.dumps({"ok": False, "reason": "ACCOUNT_KEY_NOT_CONFIGURED"}, ensure_ascii=False))
+        return 2
+    if not args.db_path.exists() and args.command != "import-draft":
+        print(json.dumps({"ok": False, "reason": "DB_NOT_FOUND"}, ensure_ascii=False))
+        return 2
+    db = PipelineDB(db_path=str(args.db_path))
+
+    def need(*names):
+        missing = [n for n in names if getattr(args, n.replace("-", "_")) in (None, "")]
+        if missing:
+            print(json.dumps({"ok": False, "reason": "MISSING_ARGS", "args": missing}, ensure_ascii=False))
+            raise SystemExit(2)
+
+    def show(res) -> int:
+        print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
+        return 0 if res.get("ok", True) else 1
+
+    if args.command == "status":
+        return show(ops.status_summary(db))
+    if args.command == "import-draft":
+        need("post-id", "comment-id", "comment-text", "zh", "en")
+        return show(ops.import_manual_draft(
+            db, account_key=account_key, post_id=args.post_id, comment_id=args.comment_id,
+            comment_text=args.comment_text, zh=args.zh, en=args.en, style=args.style,
+        ))
+    need("task-id")
+    if args.command == "preflight":
+        return show(ops.preflight(db, args.task_id, account_key=account_key, finder_id=finder))
+    if args.command == "approve":
+        need("confirm-reply-sha12")
+        return show(ops.approve_local(
+            db, args.task_id, confirm_reply_sha12=args.confirm_reply_sha12, ttl_minutes=args.ttl_minutes,
+        ))
+
+    factory = platform_factory or _build_real_platform
+    if args.command == "submit":
+        if not settings.enable_wechat_secondary_reply or not settings.enable_wechat_secondary_reply_live_submission:
+            return show({"ok": False, "reason": "FLAGS_OFF（默认关闭，M3 窗口内临时开启）"})
+        if not finder:
+            return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
+        return show(ops.submit_single(
+            db, args.task_id, platform=factory(args), account_key=account_key, evidence_dir=args.evidence_dir,
+        ))
+    if args.command == "reconcile-platform":
+        if not args.confirm_readonly_platform_access:
+            return show({"ok": False, "reason": "需要 --confirm-readonly-platform-access 明确确认只读访问平台"})
+        if not finder:
+            return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
+        return show(ops.reconcile_on_platform(
+            db, args.task_id, platform=factory(args), account_key=account_key, evidence_dir=args.evidence_dir,
+        ))
+    return 2
+
+
+def main(argv: Optional[List[str]] = None, platform_factory=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in SUBCOMMANDS:
+        return ops_main(argv, platform_factory)
+
+    parser = argparse.ArgumentParser(
+        description="视频号二级回复（旧式只读/演示开关；真实操作请使用子命令: " + ", ".join(sorted(SUBCOMMANDS)) + "）"
+    )
     parser.add_argument("--post-id", type=str, help="视频号平台作品 exportId")
     parser.add_argument("--task-id", type=int, help="指定的二级回复任务 ID")
     parser.add_argument("--dry-run", action="store_true", help="本地只读模式，零写操作零副作用")
-    parser.add_argument("--reconcile", action="store_true", help="对 UNCERTAIN 任务进行只读对账")
+    parser.add_argument("--reconcile", action="store_true", help="仅本地检视待对账任务（不访问平台；平台对账请用 reconcile-platform）")
     parser.add_argument("--demo", action="store_true", help="运行离线 4 路径重现验证 Demo")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.demo:
         results = run_offline_4path_demo()
@@ -274,7 +382,7 @@ def main():
             return 2
         db = PipelineDB(db_path=str(db_path), read_only=True)
         if args.reconcile:
-            logger.info("[Reconcile] 本地 UNCERTAIN 任务只读检视（不访问平台）...")
+            logger.info("[Local inspection] 本地待对账任务只读检视（不访问平台，不等于平台对账）...")
             res = run_reconcile_inspection(db, args.post_id)
         else:
             logger.info("[DryRun] 本地只读模式，不执行任何外部操作或写事务。")
@@ -282,19 +390,9 @@ def main():
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return 0
 
-    if not settings.enable_wechat_secondary_reply:
-        logger.info("enable_wechat_secondary_reply 特性开关未开启，安全停止。")
-        return 0
-
-    if not settings.enable_wechat_secondary_reply_live_submission:
-        logger.info("enable_wechat_secondary_reply_live_submission 提交闸门未开启，安全停止真实发送。")
-        return 0
-
-    # 真实发送链路尚未接线（M3 之前不实现）：明确拒绝，不得静默返回成功
-    logger.error("真实二级回复执行链路尚未接线，拒绝运行（退出码 3）。")
-    return 3
+    parser.print_help()
+    return 2
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

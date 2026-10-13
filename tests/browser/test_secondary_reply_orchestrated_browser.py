@@ -237,3 +237,61 @@ def test_restart_reconcile_only_after_lost_response_and_tombstone_after_delete(s
     out3 = s.orch.submit(tid2)
     assert out3.status == "REJECTED_BEFORE_INTENT" and "IDEMPOTENCY_CONFLICT" in out3.detail, out3
     assert len(_sends(s)) == 1
+
+
+# ---------------------------------------------------------------------------
+# 实际 CLI 入口 -> 统一编排 -> 浏览器端口 -> 隔离 Chromium 夹具网络
+# ---------------------------------------------------------------------------
+
+def test_cli_entry_single_item_through_browser_port(stack, monkeypatch, capsys):
+    import importlib.util
+    import json as _json
+    import sys as _sys
+    from pathlib import Path as _P
+
+    spec = importlib.util.spec_from_file_location(
+        "wechat_secondary_reply_cli_b", _P(__file__).resolve().parents[2] / "scripts" / "wechat_secondary_reply.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = cli
+    spec.loader.exec_module(cli)
+    from video_processing.interaction import secondary_reply_ops as ops
+
+    s = stack
+    db_path = s.h["tmp_path"] / "test.db"
+    monkeypatch.setattr(settings, "wechat_reply_account_key", TEST_ACCOUNT, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_author_finder_id", AUTHOR, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_telegram_id", "555", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", "", raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:59", raising=False)
+    monkeypatch.setattr(ops, "DEFAULT_STOP_FILE", s.h["tmp_path"] / "STOP")
+
+    def run(*argv):
+        capsys.readouterr()
+        code = cli.main(list(argv) + ["--db-path", str(db_path)], platform_factory=lambda a: s.platform)
+        return code, _json.loads(capsys.readouterr().out)
+
+    code, imp = run("import-draft", "--post-id", POST, "--comment-id", "synth_cmt_101",
+                    "--comment-text", "非常深刻的宏观分析！", "--zh", "谢谢分享。", "--en", "Thanks.")
+    assert code == 0, imp
+    tid = imp["task_id"]
+    code, pre = run("preflight", "--task-id", str(tid))
+    code, ap = run("approve", "--task-id", str(tid), "--confirm-reply-sha12", pre["reply_sha256"][:12])
+    assert code == 0, ap
+    code, pre2 = run("preflight", "--task-id", str(tid))
+    assert code == 0 and pre2["ok"], pre2
+    code, res = run("submit", "--task-id", str(tid), "--evidence-dir", str(s.h["tmp_path"] / "cli_receipts"))
+    assert code == 0 and res["status"] == "VERIFIED", res
+    assert len(_sends(s)) == 1
+    r = _receipt(PipelineDB_row(db_path, tid)["evidence_path"])
+    assert r["task_id"] == tid and r["platform_reply_comment_id"] == "synth_new_reply_999"
+    code, again = run("submit", "--task-id", str(tid))
+    assert again["status"] == "NOT_CLAIMABLE" and len(_sends(s)) == 1
+
+
+def PipelineDB_row(db_path, tid):
+    from video_processing.db.database import PipelineDB
+    return PipelineDB(str(db_path)).get_secondary_reply_task(tid)

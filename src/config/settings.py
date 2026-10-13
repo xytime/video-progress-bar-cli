@@ -239,6 +239,8 @@ class Settings(BaseSettings):
     enable_wechat_secondary_reply_live_submission: bool = False
     wechat_reply_approver_telegram_id: Optional[str] = None
     wechat_reply_approver_chat_id: Optional[str] = None
+    wechat_reply_account_key: Optional[str] = None  # 业务账号键（隔离防重/配额/对账），真实入口必填
+    wechat_reply_author_finder_id: Optional[str] = None  # 当前登录作者的原生标识；发送守卫要求请求 _log_finder_id 与之一致
     wechat_reply_hourly_quota: int = Field(default=10, ge=1, le=100)
     wechat_reply_max_per_video: int = Field(default=3, ge=1, le=10)
     wechat_reply_min_interval_seconds: int = Field(default=15, ge=5, le=300)

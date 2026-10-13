@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,43 @@ SOURCE_DIRS = {"src", "scripts", "tests", "resources", "assets", "config", "docs
 SOURCE_FILES = {"pyproject.toml", "setup.py", "requirements.txt", ".env.example", "data/comment_strategies.json",
                 "vpanel", "vhelp"}
 MARKER = ".test-sandbox.json"
+TEST_VOLUME = Path("/Volumes/EXT2T")
+TEST_RUNS = TEST_VOLUME / "AppDataOffload/ryusei/TestRuns"
+
+
+def create_evidence():
+    """扩展盘缺失时拒绝运行，绝不在主盘创建大副本。"""
+    if not TEST_VOLUME.is_mount():
+        raise ValueError("测试扩展盘 EXT2T 未挂载；不回退主盘")
+    root = TEST_RUNS.resolve()
+    if not root.is_relative_to(TEST_VOLUME.resolve()):
+        raise ValueError("测试目录必须位于 EXT2T 内")
+    root.mkdir(parents=True, exist_ok=True)
+    if root.stat().st_dev != TEST_VOLUME.stat().st_dev:
+        raise ValueError("测试目录不在 EXT2T 文件系统内")
+    return Path(tempfile.mkdtemp(prefix="video-pytest-", dir=root)).resolve()
+
+
+def finish_run(evidence, receipt, keep_sandbox=False):
+    """保留宿主日志/收据与 JUnit，仅回收本次创建的副本。"""
+    root = evidence / "sandbox"
+    cleanup = {"status": "retained" if keep_sandbox else "removed", "path": str(root)}
+    try:
+        if root.is_symlink():
+            raise ValueError("拒绝清理链接形式的 sandbox")
+        junit = root / "pytest.xml"
+        if junit.is_file() and not junit.is_symlink():
+            shutil.copy2(junit, evidence / "pytest.xml")
+        if root.exists() and not keep_sandbox:
+            shutil.rmtree(root)
+    except (OSError, ValueError) as exc:
+        cleanup.update(status="failed", error_type=type(exc).__name__, error=str(exc))
+    receipt["cleanup"] = cleanup
+    if cleanup["status"] == "failed" and receipt.get("exit_code") == 0:
+        receipt["exit_code"] = 3
+    receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
+    (evidence / "receipt.json").write_text(json.dumps(receipt, indent=2))
+    return cleanup["status"] != "failed"
 
 
 def source_files(source):
@@ -149,12 +187,11 @@ sys.exit(0 if all(checks.values()) else 2)
 '''
 
 
-def prepare_run(source):
+def prepare_run(source, evidence):
     if sys.prefix == sys.base_prefix:
         raise ValueError("必须使用项目 .venv/bin/python")
     if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
         raise ValueError("需要可用的 macOS sandbox-exec；禁止退回裸 pytest")
-    evidence = Path(tempfile.mkdtemp(prefix="video-pytest-", dir="/tmp")).resolve()
     run_root = evidence / "sandbox"
     repo = run_root / "repo"
     repo.mkdir(parents=True)
@@ -176,6 +213,7 @@ def parse_arguments(argv):
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--browser", action="store_true", help="复制本机 Chromium 并允许其内部 rendezvous IPC")
     parser.add_argument("--media", action="store_true", help="校验并复制本机 Whisper tiny/base；不联网下载")
+    parser.add_argument("--keep-sandbox", action="store_true", help="排查时显式保留扩展盘副本及 QA 产物；默认自动回收")
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.timeout <= 0:
@@ -183,24 +221,18 @@ def parse_arguments(argv):
     return args
 
 
-def main(argv=None):
-    args = parse_arguments(argv)
-    source = Path(__file__).resolve().parents[1]
+def execute_run(args, source, evidence, receipt):
     browser = None
     media = None
-    try:
-        evidence, run_root, repo, canary, profile = prepare_run(source)
-        if args.browser:
-            from test_browser_runtime import prepare_browser
+    evidence, run_root, repo, canary, profile = prepare_run(source, evidence)
+    if args.browser:
+        from test_browser_runtime import prepare_browser
 
-            browser = prepare_browser(run_root, repo, profile, evidence)
-        if args.media:
-            from test_media_runtime import prepare_media
+        browser = prepare_browser(run_root, repo, profile, evidence)
+    if args.media:
+        from test_media_runtime import prepare_media
 
-            media = prepare_media(run_root, repo, evidence)
-    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
-        print(f"ISOLATION_REFUSED: {exc}", file=sys.stderr)
-        return 2
+        media = prepare_media(run_root, repo, evidence)
     environment = child_environment(repo, run_root)
     if browser is not None:
         environment["PLAYWRIGHT_BROWSERS_PATH"] = str(run_root / "browser")
@@ -211,7 +243,7 @@ def main(argv=None):
     test_args = args.pytest_args
     if test_args[:1] == ["--"]:
         test_args = test_args[1:]
-    receipt = {
+    receipt.update({
         "source": str(source), "snapshot": str(repo), "probe": probe,
         "pytest_arguments": test_args, "timeout_seconds": args.timeout,
         "source_manifest_sha256": hashlib.sha256((evidence / "source-manifest.json").read_bytes()).hexdigest(),
@@ -226,7 +258,7 @@ def main(argv=None):
         "media_runtime_sha256": None if media is None else hashlib.sha256(
             (evidence / "media-runtime.json").read_bytes()
         ).hexdigest(),
-    }
+    })
     if probe["exit_code"] == 0:
         result = run_child(prefix + ["-m", "pytest", "-p", "no:cacheprovider", "-p", "pytest_asyncio.plugin",
                                     "--basetemp", str(run_root / "pytest-tmp"),
@@ -236,10 +268,48 @@ def main(argv=None):
     else:
         result = {"exit_code": 2}
         print("ISOLATION_REFUSED: 边界探针未通过；未启动 pytest", file=sys.stderr)
-    receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
-    (evidence / "receipt.json").write_text(json.dumps(receipt, indent=2))
-    print(json.dumps(receipt, ensure_ascii=False), flush=True)
     return result["exit_code"]
+
+
+def main(argv=None):
+    args = parse_arguments(argv)
+    source = Path(__file__).resolve().parents[1]
+    try:
+        evidence = create_evidence()
+    except (ValueError, OSError) as exc:
+        print(f"ISOLATION_REFUSED: {exc}", file=sys.stderr)
+        return 2
+    receipt = {"source": str(source), "started_at": datetime.now(timezone.utc).isoformat(),
+               "evidence": str(evidence), "storage_policy": "external-auto-cleanup"}
+    (evidence / "receipt.json").write_text(json.dumps(receipt, indent=2))
+
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, interrupted)
+    code = 2
+    try:
+        code = execute_run(args, source, evidence, receipt)
+    except KeyboardInterrupt:
+        code = 130
+        receipt["error_type"] = "KeyboardInterrupt"
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
+        receipt.update(error_type=type(exc).__name__, error=str(exc))
+        print(f"ISOLATION_REFUSED: {exc}", file=sys.stderr)
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        previous_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            receipt["exit_code"] = code
+            if not finish_run(evidence, receipt, args.keep_sandbox):
+                print(f"CLEANUP_FAILED: {evidence}; 查看 receipt.json", file=sys.stderr)
+                if code == 0:
+                    code = 3
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            signal.signal(signal.SIGINT, previous_int)
+    print(json.dumps(receipt, ensure_ascii=False), flush=True)
+    return code
 
 
 if __name__ == "__main__":
