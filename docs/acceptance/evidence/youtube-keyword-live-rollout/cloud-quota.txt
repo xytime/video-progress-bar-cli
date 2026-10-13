@@ -1,0 +1,320 @@
+- complementary "跳过链接":
+  - link "跳至主要内容":
+    - /url: /apis/api/youtube.googleapis.com/quotas?project=gen-lang-client-0993011647
+    - generic: 跳至主要内容
+  - button "键盘快捷键":
+    - generic: 键盘快捷键
+  - link "无障碍功能帮助 外部链接，在新窗口中打开":
+    - /url: https://cloud.google.com/docs/accessibility?hl=zh_CN
+    - text: 无障碍功能帮助
+    - generic "外部链接，在新窗口中打开":
+      - img "外部链接，在新窗口中打开":
+  - link "无障碍功能反馈 外部链接，在新窗口中打开":
+    - /url: https://support.google.com/accessibility/contact/feedback?hl=zh_CN
+    - text: 无障碍功能反馈
+    - generic "外部链接，在新窗口中打开":
+      - img "外部链接，在新窗口中打开":
+- banner:
+  - navigation:
+    - button "导航菜单 (.)":
+  - link "Google Cloud Platform 首页":
+    - /url: /?project=gen-lang-client-0993011647
+  - button "目前正在 anti-gravity 中执行操作。按 Enter 键即可切换项目、文件夹或组织":
+    - generic: anti-gravity
+  - search "Google云端平台":
+    - combobox:
+      - searchbox "输入查询以搜索资源、文档、产品等"
+    - button "查看所有搜索结果" [disabled]:
+      - generic: 搜索
+  - button "打开或关闭 Gemini Cloud Assist 对话 (Option G)":
+  - button "激活 Cloud Shell (G then S)":
+  - button "打开通知":
+  - button "设置与实用工具":
+  - button "账号：Dylan Gu (dragonjia@gmail.com)":
+- status "通信":
+  - generic: "Action Required: One or more projects enabled with Gemini API (generativelanguage.googleapis.com) have unrestricted API keys. To prevent unauthorized usage and costs, restrict these keys or switch to Authorization keys in APIs & Services > Credentials. This banner may persist for 24 hours after you address the issue."
+  - link "详细了解 Google Cloud":
+    - /url: https://docs.cloud.google.com/docs/authentication/api-keys#list-no-restriction-keys
+    - text: 展开
+  - button "关闭":
+    - generic: 关闭
+- navigation "API 和服务":
+  - heading "API 和服务" [level=2]:
+    - link "API 和服务":
+      - /url: /apis?project=gen-lang-client-0993011647
+      - generic: API 和服务
+  - button "展开/收起API 和服务导航菜单" [expanded]:
+  - list "已启用的 API 和服务，1/5 更多选项 库，2/5 更多选项 凭证，3/5 更多选项 OAuth 权限请求页面，4/5 更多选项 页面使用协议，5/5 更多选项":
+    - link "已启用的 API 和服务，1/5":
+      - /url: /apis/dashboard?project=gen-lang-client-0993011647
+      - generic: 已启用的 API 和服务
+    - button "更多选项":
+    - link "库，2/5":
+      - /url: /apis/library?project=gen-lang-client-0993011647
+      - generic: 库
+    - button "更多选项":
+    - link "凭证，3/5":
+      - /url: /apis/credentials?project=gen-lang-client-0993011647
+      - generic: 凭证
+    - button "更多选项":
+    - link "OAuth 权限请求页面，4/5":
+      - /url: /apis/credentials/consent?project=gen-lang-client-0993011647
+      - generic: OAuth 权限请求页面
+    - button "更多选项":
+    - link "页面使用协议，5/5":
+      - /url: /apis/agreements?project=gen-lang-client-0993011647
+      - generic: 页面使用协议
+    - button "更多选项":
+- main:
+  - link "返回已启用的 API 和服务":
+    - /url: /apis/dashboard?project=gen-lang-client-0993011647
+  - heading "API/服务详情" [level=1]:
+    - generic: API/服务详情
+  - button "停用 API":
+    - generic: 停用 API
+  - heading "YouTube Data API v3" [level=2]
+  - paragraph: The YouTube Data API v3 is an API that provides access to YouTube data, such as videos, playlists, and channels.
+  - generic: 提供方：Google
+  - term: 服务名称
+  - definition: youtube.googleapis.com
+  - term: 类型
+  - definition: 公共 API
+  - term: 状态
+  - definition:
+    - generic: 已启用
+  - term: 文档
+  - definition:
+    - link "查看文档":
+      - /url: https://developers.google.com/youtube/?hl=zh_CN
+      - text: Learn more
+      - generic "外部链接，在新窗口中打开":
+        - img "外部链接，在新窗口中打开":
+  - term: 探索
+  - definition:
+    - link "试用 API Explorer":
+      - /url: https://developers.google.com/apis-explorer/?hl=zh_CN#p/youtube/v3/
+      - text: 试用 API Explorer
+      - generic "外部链接，在新窗口中打开":
+        - img "外部链接，在新窗口中打开":
+  - term: 支持
+  - definition:
+    - link "维护和支持":
+      - /url: https://developers.google.com/youtube/v3/?hl=zh_CN
+      - text: 维护和支持
+      - generic "外部链接，在新窗口中打开":
+        - img "外部链接，在新窗口中打开":
+  - tablist "导航栏":
+    - tab "指标":
+      - generic: 指标
+    - tab "配额和系统限制" [active] [selected]:
+      - generic: 配额和系统限制
+    - tab "凭证":
+      - generic: 凭证
+  - tabpanel "配额和系统限制":
+    - generic "设置配额提醒和系统限制提醒":
+      - heading "设置配额提醒和系统限制提醒" [level=2]:
+        - generic: 设置配额提醒和系统限制提醒
+    - button "关闭促销":
+    - text: 在配额即将达到上限时收到提醒。您可以点击行中的“更多操作”按钮
+    - img "更多操作":
+    - text: 开始，也可以点击“了解详情”查看文档。
+    - link "用于详细了解如何设置配额提醒的外部链接 外部链接（在新窗口中打开）":
+      - /url: https://cloud.google.com/docs/quota_detail/monitor?hl=zh_CN
+      - text: 了解详情
+      - img "外部链接（在新窗口中打开）":
+        - img "外部链接（在新窗口中打开）":
+    - term: 当前用量 > 90%
+    - definition: "0"
+    - definition:
+      - button "查看配额和系统限制"
+    - term: 7 天峰值用量 > 90%
+    - definition: "0"
+    - definition:
+      - button "查看配额和系统限制"
+    - term: 所有配额和系统限制
+    - definition: "9"
+    - button "管理提醒政策":
+      - text: 管理提醒政策
+    - generic: 过滤条件
+    - group "过滤条件":
+      - combobox "过滤条件": 输入属性名称或值
+    - button "关于过滤的帮助。":
+    - button "列显示选项…":
+    - grid "列出所有 Cloud 配额的表 , 按箭头键可在表中导航。按 Enter 键可与单元格交互。按 Tab 键可在单元格内导航。按 Esc 键可退出单元格。":
+      - rowgroup:
+        - row "行选择 名称 类型 维度（例如位置） 值 其他配额信息 当前用量百分比 当前使用量 是否可调整 操作":
+          - gridcell "行选择":
+            - checkbox "选择所有行"
+          - columnheader "名称":
+            - generic: 名称
+            - button "排序依据：名称":
+          - columnheader "类型":
+            - generic: 类型
+            - button "排序依据：类型":
+          - columnheader "维度（例如位置）":
+            - generic: 维度（例如位置）
+            - button "排序依据：维度（例如位置）":
+          - columnheader "值":
+            - generic: 值
+            - button "排序依据：值":
+          - columnheader "其他配额信息"
+          - columnheader "当前用量百分比":
+            - generic: 当前用量百分比
+            - button "排序依据：当前用量百分比":
+          - columnheader "当前使用量":
+            - generic: 当前使用量
+            - button "排序依据：当前使用量":
+          - columnheader "是否可调整":
+            - text: 是否可调整
+            - button "用于详细了解可调整性的提示。":
+            - button "排序依据：是否可调整":
+          - columnheader "操作"
+      - rowgroup:
+        - row "YouTube Data API v3 Queries per day [object Object] Queries per day 配额 10,000 1.04% 104 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Queries per day [object Object]":
+            - checkbox "YouTube Data API v3 Queries per day [object Object]"
+          - gridcell "Queries per day": Queries per day
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "10,000"
+          - gridcell
+          - gridcell "1.04%":
+            - generic: 1.04%
+          - gridcell "104"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Queries per minute [object Object] Queries per minute 配额 1,800,000 0% 10 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Queries per minute [object Object]":
+            - checkbox "YouTube Data API v3 Queries per minute [object Object]"
+          - gridcell "Queries per minute": Queries per minute
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "1,800,000"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "10"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Search Queries per day [object Object] Search Queries per day 配额 100 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Search Queries per day [object Object]":
+            - checkbox "YouTube Data API v3 Search Queries per day [object Object]"
+          - gridcell "Search Queries per day": Search Queries per day
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "100"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Search Queries per minute [object Object] Search Queries per minute 配额 100 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Search Queries per minute [object Object]":
+            - checkbox "YouTube Data API v3 Search Queries per minute [object Object]"
+          - gridcell "Search Queries per minute": Search Queries per minute
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "100"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Video Batch Get Stats Queries per day [object Object] Video Batch Get Stats Queries per day 配额 10,000 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Video Batch Get Stats Queries per day [object Object]":
+            - checkbox "YouTube Data API v3 Video Batch Get Stats Queries per day [object Object]"
+          - gridcell "Video Batch Get Stats Queries per day": Video Batch Get Stats Queries per day
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "10,000"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Video Batch Get Stats Queries per minute [object Object] Video Batch Get Stats Queries per minute 配额 600 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Video Batch Get Stats Queries per minute [object Object]":
+            - checkbox "YouTube Data API v3 Video Batch Get Stats Queries per minute [object Object]"
+          - gridcell "Video Batch Get Stats Queries per minute": Video Batch Get Stats Queries per minute
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "600"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Video Uploads per day [object Object] Video Uploads per day 配额 100 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Video Uploads per day [object Object]":
+            - checkbox "YouTube Data API v3 Video Uploads per day [object Object]"
+          - gridcell "Video Uploads per day": Video Uploads per day
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "100"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Video Uploads per minute [object Object] Video Uploads per minute 配额 100 0% 0 是 显示用量图表 更多操作":
+          - gridcell "YouTube Data API v3 Video Uploads per minute [object Object]":
+            - checkbox "YouTube Data API v3 Video Uploads per minute [object Object]"
+          - gridcell "Video Uploads per minute": Video Uploads per minute
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "100"
+          - gridcell
+          - gridcell "0%":
+            - generic: 0%
+          - gridcell "0"
+          - gridcell "是"
+          - gridcell "显示用量图表 更多操作":
+            - button "显示用量图表":
+            - button "更多操作":
+        - row "YouTube Data API v3 Queries per minute per user [object Object] Queries per minute per user 配额 180,000 — 关于不显示配额用量的帮助信息 是 更多操作":
+          - gridcell "YouTube Data API v3 Queries per minute per user [object Object]":
+            - checkbox "YouTube Data API v3 Queries per minute per user [object Object]"
+          - gridcell "Queries per minute per user": Queries per minute per user
+          - gridcell "配额"
+          - gridcell:
+            - list
+          - gridcell "180,000"
+          - gridcell
+          - gridcell "— 关于不显示配额用量的帮助信息":
+            - text: —
+            - button "关于不显示配额用量的帮助信息":
+          - gridcell
+          - gridcell "是"
+          - gridcell "更多操作":
+            - button "更多操作":
+- iframe [id="google-feedback-rif"]
+- iframe [id="google-feedback-rif"]
+- iframe [id="google-feedback-rif"]
+- iframe [id="google-feedback-rif-preload"]

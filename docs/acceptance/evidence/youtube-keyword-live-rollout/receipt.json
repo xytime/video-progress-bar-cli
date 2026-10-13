@@ -1,0 +1,40 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "started_at": "2026-10-13T13:40:32.824550+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.077
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "734bb8da7d265ca4e48910963f2d7b7228c89d655ba737089dc8b5e6d64a92bf",
+  "profile_sha256": "9bb9401ca911ddbf2178a1ab95f53d9b321a18498b5def50bb1611118ab5fd41",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "b8b3d9c8675906f62f877d0f719a58429b362fd8ee9564bf226bdb9436c5a150",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 60.347
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j/sandbox"
+  },
+  "finished_at": "2026-10-13T13:41:34.741861+00:00"
+}

@@ -292,3 +292,39 @@ def test_maintenance_during_request_stops_details_and_admission(tracker,isolated
     assert [x[0] for x in tracker.adapter.calls]==['search']
     assert isolated_running_maintenance.status()['active']==[]
     assert tracker.db.topic_jobs()[0]['code']=='MAINTENANCE'
+
+
+@pytest.mark.parametrize('limit', [0, 1])
+def test_trial_admission_limit_is_atomic_and_survives_restart(tracker, monkeypatch, limit):
+    """不同候选并发只能消费一次累计额度；重新建 DAL 和跨日不退款。"""
+    from video_processing.db.database import PipelineDB
+    tracker.config.topic_admission_total_limit = limit
+    tracker.adapter.items = [video(1), video(2)]
+    for item in tracker.adapter.items:
+        item['statistics'] = dict(viewCount='3000', likeCount='150')
+    t = enable(tracker)
+    tracker.tick(verify_runtime=False)
+    admit(tracker, monkeypatch)
+    candidates = tracker.db.keyword_admission_candidates(tracker.clock())
+    assert len(candidates) == 2
+    def attempt(row):
+        try:
+            return tracker.db.keyword_admit(row['key'], row['revision'], t['id'], t['version'],
+                tracker.rules.version, tracker.config, tracker.clock())['result']
+        except TopicError as exc:
+            return exc.code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, candidates))
+    assert results.count('ADMITTED') == limit
+    assert results.count('ADMISSION_LIMIT') == 2 - limit
+    tracker.db = PipelineDB(tracker.db.db_path)
+    tracker.clock.advance(hours=8)  # 从太平洋前一配额日跨到下一日。
+    # 搜索重新补齐统计以免过期门禁掩盖累计额度检查。
+    tracker.tick(verify_runtime=False)
+    pending = tracker.db.keyword_admission_candidates(tracker.clock())
+    assert pending
+    assert {attempt(row) for row in pending} == {'ADMISSION_LIMIT'}
+    # 已存在的主队列只做来源关联，不因新准入额度用尽被错误阻挡。
+    row = pending[0]
+    tracker.db.add_video(row['youtube_id'], 'existing', 'UC-isolated', source='DISCOVERY')
+    assert attempt(row) == 'EXISTING'

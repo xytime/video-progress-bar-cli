@@ -366,6 +366,7 @@ class Settings(BaseSettings):
     # 专题候选：本轮仅开发和隔离验收，生产搜索保持关闭。
     topic_scheduler_enabled: bool = Field(default=False, description="关键词定时采集宿主开关")
     topic_admission_enabled: bool = Field(default=False, description="关键词达标准入及自动处理宿主开关")
+    topic_admission_total_limit: int = Field(default=1, ge=0, le=1000, description="关键词累计新增准入上限；0 阻止新增，不随跨日或重启重置")
     topic_search_enabled: bool = False
     topic_quota_verified: bool = False
     topic_quota_project: str = ""

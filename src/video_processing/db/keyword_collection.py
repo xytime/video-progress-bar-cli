@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.1 | 2026-10-13 | Codex | 累计准入额度与插入共用事务，受控试运行最多一条 |
 | 0.4.0 | 2026-10-13 | Codex | 独立候选的持久调度、评分证据及受控准入 |
 """
 from datetime import datetime, timedelta
@@ -191,6 +192,10 @@ class KeywordCollectionDAL:
             old=c.execute('SELECT id FROM processed_videos WHERE youtube_id=? ORDER BY slice_index LIMIT 1',(meta['youtube_id'],)).fetchone()
             if old: video_id,result=old['id'],'EXISTING'
             else:
+                # 在同一写事务中计算累计额度；跨日、重启和删除主任务都不退款。
+                used=c.execute("SELECT COUNT(*) FROM keyword_admissions WHERE result='ADMITTED'").fetchone()[0]
+                if used>=getattr(config,'topic_admission_total_limit',1):
+                    raise TopicError('ADMISSION_LIMIT','已达到累计准入上限，等待管理员评审扩容')
                 cursor=c.execute("""INSERT INTO processed_videos(youtube_id,slice_index,title,channel_id,score,status,source,duration_sec,view_count,like_count,source_published_at,upload_date,disable_slicing,category)
                     VALUES(?,0,?,?,?,'PENDING','KEYWORD',?,?,?,?,?,0,?)""",(meta['youtube_id'],meta['title'],meta['channel_id'],score,meta['duration'],meta['views'],meta['likes'],meta['published_at'],published.strftime('%Y%m%d'),t['category']))
                 video_id,result=cursor.lastrowid,'ADMITTED'
