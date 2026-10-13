@@ -373,7 +373,8 @@ def test_ui_startup_preserves_uvicorn_sigterm_handler(isolated_running_maintenan
 @pytest.mark.parametrize('case', ['independent', 'cwd_mismatch', 'cwd_denied', 'cwd_empty', 'cwd_multiple', 'cwd_relative',
                                   'production_entry', 'production_cwd', 'production_argument',
                                   'changed_runner', 'symlink_entry', 'unparseable'])
-def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_running_maintenance, monkeypatch, case):
+@pytest.mark.parametrize('relative', [False, True])
+def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_running_maintenance, monkeypatch, case, relative):
     root = settings.project_root
     external = tmp_path / 'independent repo'
     scripts = external / 'scripts'
@@ -388,7 +389,10 @@ def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_r
         entry.symlink_to(original)
     if case == 'production_entry':
         entry = original
-    command = shlex.join([str(root / '.venv/bin/python'), str(entry), '--', '-q'])
+    argument = str(entry)
+    if relative:
+        argument = 'scripts/run_isolated_tests.py' if case != 'production_entry' else os.path.relpath(entry, external)
+    command = shlex.join([str(root / '.venv/bin/python'), argument, '--', '-q'])
     if case == 'production_argument':
         command += ' ' + shlex.quote(str(root / 'tests'))
     if case == 'unparseable':
