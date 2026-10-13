@@ -28,7 +28,7 @@
             <span class="nickname">用户老李</span>
             <p class="content">作者之前回复过的评论</p>
             <div class="level-two" data-level-two>
-              <div class="sub-comment" data-author-role="author">六维时空号(作者): 之前已回复过</div>
+              <div class="sub-comment" data-author-role="author" data-author-id="v2_synthetic_author_finder_id@finder"><span class="author-label">六维时空号(作者)</span> <span data-reply-content>之前已回复过</span></div>
             </div>
           </div>
         </article>`;
@@ -40,7 +40,9 @@
         n.className = 'sub-comment';
         n.dataset.commentId = r.commentId;
         n.dataset.authorRole = 'author';
-        n.textContent = r.content;
+        n.dataset.authorId = r.authorId || '';
+        n.innerHTML = '<span class="author-label">作者</span> <span data-reply-content></span>';
+        n.querySelector('[data-reply-content]').textContent = r.content;
         c1.querySelector('[data-level-two]').appendChild(n);
       });
       c1.querySelector('[data-reply]').addEventListener('click', () => {
@@ -91,7 +93,9 @@
             node.className = "sub-comment";
             node.dataset.commentId = resJson.data.commentId;
             node.dataset.authorRole = 'author';
-            node.textContent = content;
+            node.dataset.authorId = 'v2_synthetic_author_finder_id@finder';
+            node.innerHTML = '<span class="author-label">作者</span> <span data-reply-content></span>';
+            node.querySelector('[data-reply-content]').textContent = content;
             c1.querySelector('[data-level-two]').appendChild(node);
           }
         } catch (err) {}

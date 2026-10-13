@@ -154,15 +154,12 @@ def dispatch_approval_request(
     if not task:
         return False, "TASK_NOT_FOUND"
 
-    comment_row = db.get_secondary_reply_task_by_comment(
-        task["platform_post_id"], task["comment_id"]
-    )
     # 获取观众评论原文
     audience_comment = None
     with db.get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
-            (task["platform_post_id"], task["comment_id"]),
+            "SELECT * FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+            (task["account_key"], task["platform_post_id"], task["comment_id"]),
         ).fetchone()
         if row:
             audience_comment = dict(row)
@@ -181,6 +178,7 @@ def dispatch_approval_request(
         approval_token=token,
         expires_at_iso=expires_iso,
         approver_id=configured_approver,
+        approver_chat_id=configured_chat,
     )
     if not bound:
         return False, "FAILED_TO_BIND_TOKEN"
@@ -216,8 +214,8 @@ def handle_approval_callback(
     db: PipelineDB,
     callback_data: str,
     user_id: str,
+    chat_id: str,
     admin_ids_override: Optional[str] = None,
-    chat_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """处理审批按钮回调并原子执行状态机消费。"""
     # 格式: rep:{task_id}:{token}:{action}
@@ -247,14 +245,14 @@ def handle_approval_callback(
     if not task:
         return False, "TASK_NOT_FOUND"
 
-    # 若调用方提供了 chat 身份，必须与配置的审批私聊一致（失败关闭）
-    configured_chat = str(getattr(settings, "wechat_reply_approver_chat_id", "") or "")
-    if chat_id is not None and configured_chat and str(chat_id) != configured_chat:
+    # chat 身份必须由可信回调传入；缺失一律拒绝，是否与审批记录绑定的 chat 一致由 DAL 在原子消费内核对
+    if chat_id is None or str(chat_id).strip() == "":
         return False, "CHAT_MISMATCH"
 
     return db.consume_reply_task_approval(
         task_id=task_id,
         token=callback_token,
         approver_id=str(user_id),
+        chat_id=str(chat_id),
         action=action,
     )

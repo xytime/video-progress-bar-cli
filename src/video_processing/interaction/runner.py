@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
+from config.settings import settings
 from video_processing.db.database import PipelineDB
 
 logger = logging.getLogger(__name__)
@@ -182,8 +183,10 @@ def run_interaction_tick(
     )
 
     def persist_submit_intent() -> bool:
+        # 二级回复功能开启后，首评与二级回复共用同一原子配额；功能关闭时保持既有首评行为不变
         return db.mark_wechat_interaction_submit_intent(
-            interaction_id, lease_token, now=clock()
+            interaction_id, lease_token, now=clock(),
+            enforce_shared_quota=bool(settings.enable_wechat_secondary_reply),
         )
 
     status, evidence_path, error_message = services.post_comment(

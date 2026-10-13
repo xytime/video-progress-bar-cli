@@ -87,6 +87,9 @@ class SecondaryReplySubmissionGuard:
         self.requests: List[Dict[str, Any]] = []
         self.mismatched_requests: List[Dict[str, Any]] = []
         self.responses: List[Dict[str, Any]] = []
+        # 唯一被准许出站的 Request 对象；只有与它关联的 Response 才算本次发送的回执
+        self.allowed_request: Any = None
+        self.uncorrelated_responses: List[Dict[str, Any]] = []
 
     def capture_request(self, request) -> bool:
         """检查出站发评请求。若合法则放行并记录，若不符则返回 False 触发硬阻断。"""
@@ -175,10 +178,11 @@ class SecondaryReplySubmissionGuard:
             return False
 
         self.requests.append(payload)
+        self.allowed_request = request
         return True
 
     def capture_response(self, response) -> None:
-        """捕获提交回执。"""
+        """捕获提交回执；仅接受与唯一准许出站 Request 对应的 Response，其余记为无关回执。"""
         url_path = urlparse(response.url).path
         if url_path not in COMMENT_SUBMIT_PATHS:
             return
@@ -186,11 +190,35 @@ class SecondaryReplySubmissionGuard:
             payload = response.json()
         except Exception:
             payload = None
-        self.responses.append({
-            "status": response.status,
-            "url": response.url,
-            "data": payload,
-        })
+        item = {"status": response.status, "url": response.url, "data": payload}
+        if self.allowed_request is not None and getattr(response, "request", None) is self.allowed_request:
+            self.responses.append(item)
+        else:
+            self.uncorrelated_responses.append(item)
+
+    def validate_success_response(self) -> Tuple[bool, str, str]:
+        """校验与唯一出站 Request 关联的业务成功回执。返回 (ok, 原生回复 ID, 原因)。
+
+        要求：HTTP 200/201、errCode==0、非空回复 ID、回执中的父评论/作者/正文与获批内容一致。
+        """
+        if len(self.responses) != 1:
+            return False, "", f"correlated_responses={len(self.responses)}"
+        item = self.responses[0]
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        if item.get("status") not in (200, 201) or data.get("errCode") != 0:
+            return False, "", "NOT_BUSINESS_SUCCESS"
+        body = data.get("data") if isinstance(data.get("data"), dict) else {}
+        comment = body.get("comment") if isinstance(body.get("comment"), dict) else {}
+        reply_id = str(body.get("commentId") or "").strip()
+        if not reply_id or str(comment.get("commentId") or "").strip() != reply_id:
+            return False, "", "REPLY_ID_MISSING_OR_INCONSISTENT"
+        if str(comment.get("replyCommentId") or "").strip() != self.expected_root_comment_id:
+            return False, "", "PARENT_MISMATCH"
+        if not self.expected_finder_id or str(comment.get("username") or "").strip() != self.expected_finder_id:
+            return False, "", "AUTHOR_MISMATCH"
+        if unicodedata.normalize("NFC", str(comment.get("commentContent") or "")) != unicodedata.normalize("NFC", self.expected_content):
+            return False, "", "CONTENT_MISMATCH"
+        return True, reply_id, "OK"
 
 
 class SecondaryReplyBrowserAdapter:
@@ -381,7 +409,11 @@ class SecondaryReplyBrowserAdapter:
 
         # 2. 定位指定的一级观众评论 (通过 root_comment_id 绑定)
         # 检查是否已存在作者二级回复（锁内复审）
-        already_replied, parent_item = self._check_author_already_replied(page, root_comment_id)
+        if not guard.expected_finder_id:
+            return "FAILED", None, "缺少已验证的作者账号标识，无法判定是否已回复，拒绝继续"
+        already_replied, parent_item = self._check_author_already_replied(
+            page, root_comment_id, guard.expected_finder_id
+        )
         if already_replied:
             evidence_img = attempt_dir / "already_replied.png"
             try:
@@ -452,17 +484,8 @@ class SecondaryReplyBrowserAdapter:
             mism = guard.mismatched_requests[0]
             return "FAILED", None, f"发送前路由守卫拦截: {mism.get('reason')} ({mism.get('details')})"
 
-        # 7. 验证接口响应
-        api_success = False
-        new_reply_id = None
-        for resp_item in guard.responses:
-            if resp_item["status"] in (200, 201):
-                resp_data = resp_item.get("data") or {}
-                if resp_data.get("errCode") == 0:
-                    api_success = True
-                    data_obj = resp_data.get("data") or {}
-                    new_reply_id = str(data_obj.get("commentId") or "")
-                    break
+        # 7. 验证接口响应：只认与唯一准许出站 Request 关联且字段一致的业务成功回执
+        api_success, new_reply_id, _resp_reason = guard.validate_success_response()
 
         # 8. 刷新并进行独立回读校验
         evidence_img = attempt_dir / "verified_reply.png"
@@ -474,7 +497,8 @@ class SecondaryReplyBrowserAdapter:
         # T10 铁律：双重成功确认 — 平台返回成功 且 独立回读确认存在于父评论下
         if api_success:
             readback_ok = False
-            # 必须有非空的平台回复 ID，且在“重新加载页面”后由服务器数据渲染出同 ID、同文
+            # 必须有非空的平台回复 ID，且在“重新加载页面”后由服务器数据渲染出：
+            # 同作品、父评论下、原生作者身份一致、正文（专用内容节点）NFC 后完整等值
             if new_reply_id:
                 try:
                     page.reload()
@@ -483,23 +507,39 @@ class SecondaryReplyBrowserAdapter:
                     if card2 is not None:
                         card2.click()
                         page.wait_for_timeout(1500)
-                        replied, parent2 = self._check_author_already_replied(page, root_comment_id)
+                        _replied, parent2 = self._check_author_already_replied(
+                            page, root_comment_id, guard.expected_finder_id
+                        )
                         if parent2 is not None:
+                            post_attr = parent2.locator("xpath=ancestor::article[@data-current-object-id]")
+                            post_ok = post_attr.count() == 1 and post_attr.first.get_attribute("data-current-object-id") == platform_post_id
                             node = parent2.locator(f"[data-comment-id='{new_reply_id}']")
-                            if node.count() == 1:
-                                shown = unicodedata.normalize("NFC", node.first.inner_text() or "")
-                                if unicodedata.normalize("NFC", reply_content) in shown:
-                                    readback_ok = True
+                            if post_ok and node.count() == 1:
+                                author_ok = node.first.get_attribute("data-author-id") == guard.expected_finder_id
+                                content_loc = node.first.locator("[data-reply-content]")
+                                shown = content_loc.first.inner_text() if content_loc.count() == 1 else None
+                                text_ok = shown is not None and (
+                                    unicodedata.normalize("NFC", shown) == unicodedata.normalize("NFC", reply_content)
+                                )
+                                readback_ok = bool(author_ok and text_ok)
                 except Exception as exc:  # 回读异常不得判成功
                     logger.warning("[SecondaryReplyBrowser] 重新加载回读异常: %s", exc)
 
             if readback_ok:
-                if db and new_reply_id:
-                    db.record_secondary_reply_success(
+                if db:
+                    persisted = db.record_secondary_reply_success(
                         task_id=task_id,
                         platform_reply_comment_id=new_reply_id,
                         evidence_path=str(evidence_img),
                     )
+                    if not persisted:
+                        # 成功落库被拒（状态不符/缺 ID）时不得对外报告 VERIFIED
+                        db.record_secondary_reply_uncertain(
+                            task_id=task_id,
+                            error_message="平台回读确认但本地成功落库被拒绝，转入只读对账",
+                            evidence_path=str(evidence_img),
+                        )
+                        return "UNCERTAIN", str(evidence_img), "成功落库返回 False，转入 UNCERTAIN"
                 return "VERIFIED", str(evidence_img), None
             else:
                 logger.warning(
@@ -552,27 +592,17 @@ class SecondaryReplyBrowserAdapter:
         self,
         page,
         root_comment_id: str,
+        author_id: Optional[str],
     ) -> Tuple[bool, Any]:
-        """检查指定一级评论下是否已有作者回复。"""
-        # 查找包含指定 commentId 的评论节点
-        parent_loc = page.locator(f"[data-comment-id='{root_comment_id}'], .comment-item-main:has-text('{root_comment_id}')")
-        if parent_loc.count() == 0:
-            # 尝试按通用评论项查找
-            items = page.locator(".comment-item-main, [data-comment-item]")
-            for i in range(items.count()):
-                item = items.nth(i)
-                # 检查是否包含作者标签且是子回复
-                if root_comment_id in (item.get_attribute("data-comment-id") or ""):
-                    parent_loc = item
-                    break
-
-        if parent_loc.count() == 0:
+        """检查指定一级评论下是否已有作者回复；作者身份只认原生作者 ID（data-author-id），不认昵称或“作者”字样。"""
+        parent_loc = page.locator(f"[data-comment-id='{root_comment_id}']")
+        if parent_loc.count() != 1:
             return False, None
 
         parent_node = parent_loc.first
-        # 检查其子元素中是否存在作者标签
-        author_badge = parent_node.locator(".level-two, [data-level-two]").locator("[data-author-role='author'], :has-text('作者')")
-        if author_badge.count() > 0:
+        if not author_id or "'" in author_id:
+            return False, parent_node
+        author_nodes = parent_node.locator(".level-two, [data-level-two]").locator(f"[data-author-id='{author_id}']")
+        if author_nodes.count() > 0:
             return True, parent_node
-
         return False, parent_node

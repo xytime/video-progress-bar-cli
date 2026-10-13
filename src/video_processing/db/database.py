@@ -2089,6 +2089,7 @@ class PipelineDB(WallstreetExperimentDAL):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_audience_comments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_key TEXT NOT NULL DEFAULT '',
                     platform_post_id TEXT NOT NULL,
                     comment_id TEXT NOT NULL,
                     nickname TEXT NOT NULL,
@@ -2101,7 +2102,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     status TEXT NOT NULL CHECK(status IN ('DISCOVERED', 'PROCESSED', 'IGNORED')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(platform_post_id, comment_id)
+                    UNIQUE(account_key, platform_post_id, comment_id)
                 )
             ''')
             cursor.execute('''
@@ -2112,6 +2113,7 @@ class PipelineDB(WallstreetExperimentDAL):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_secondary_reply_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_key TEXT NOT NULL DEFAULT '',
                     platform_post_id TEXT NOT NULL,
                     comment_id TEXT NOT NULL,
                     intent TEXT NOT NULL CHECK(intent IN ('REPLY', 'SKIP', 'MANUAL')),
@@ -2130,6 +2132,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     )),
                     approval_token TEXT DEFAULT NULL,
                     approver_id TEXT DEFAULT NULL,
+                    approver_chat_id TEXT DEFAULT NULL,
                     approved_at TIMESTAMP DEFAULT NULL,
                     approval_expires_at TIMESTAMP DEFAULT NULL,
                     is_token_consumed INTEGER DEFAULT 0,
@@ -2145,7 +2148,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(platform_post_id, comment_id)
+                    UNIQUE(account_key, platform_post_id, comment_id)
                 )
             ''')
             cursor.execute('''
@@ -2170,6 +2173,7 @@ class PipelineDB(WallstreetExperimentDAL):
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_secondary_reply_idempotency_ledger (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_key TEXT NOT NULL DEFAULT '',
                     platform_post_id TEXT NOT NULL,
                     root_comment_id TEXT NOT NULL,
                     reply_comment_id TEXT NOT NULL,
@@ -2177,7 +2181,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     status TEXT NOT NULL CHECK(status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     verified_at TIMESTAMP DEFAULT NULL,
-                    UNIQUE(platform_post_id, root_comment_id)
+                    UNIQUE(account_key, platform_post_id, root_comment_id)
                 )
             ''')
             cursor.execute('''
@@ -11993,6 +11997,8 @@ class PipelineDB(WallstreetExperimentDAL):
         now_text = self._wechat_interaction_timestamp(now_dt)
         with self.get_connection() as conn:
             if enforce_shared_quota:
+                # 与二级回复相同的机制：写锁内检查并预占，任何一方成功后另一方立即看到占用
+                conn.execute("BEGIN IMMEDIATE")
                 row_cur = conn.execute(
                     "SELECT platform_post_id FROM wechat_interactions WHERE id = ?",
                     (int(interaction_id),)
@@ -12597,8 +12603,9 @@ class PipelineDB(WallstreetExperimentDAL):
         self,
         platform_post_id: str,
         comments: List[Dict[str, Any]],
+        account_key: str = "",
     ) -> int:
-        """保存采集到的一级观众评论，仅新增不覆盖，返回新增数量。"""
+        """保存采集到的一级观众评论，仅新增不覆盖，返回新增数量。按 account_key 隔离。"""
         if not comments:
             return 0
         inserted = 0
@@ -12620,11 +12627,11 @@ class PipelineDB(WallstreetExperimentDAL):
                 cur = conn.execute(
                     """
                     INSERT OR IGNORE INTO wechat_audience_comments (
-                        platform_post_id, comment_id, nickname, content, content_hash,
+                        account_key, platform_post_id, comment_id, nickname, content, content_hash,
                         createtime, like_count, is_author, has_author_reply, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
                     """,
-                    (platform_post_id, cid, nickname, content, content_hash,
+                    (account_key, platform_post_id, cid, nickname, content, content_hash,
                      createtime, like_count, is_author, has_reply),
                 )
                 if cur.rowcount > 0:
@@ -12632,19 +12639,22 @@ class PipelineDB(WallstreetExperimentDAL):
             conn.commit()
         return inserted
 
-    def get_unprocessed_audience_comments(self, platform_post_id: str) -> List[Dict[str, Any]]:
+    def get_unprocessed_audience_comments(
+        self, platform_post_id: str, account_key: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """获取指定作品下未处理的一级观众评论（排除作者自身评论及已回复评论）。"""
         with self.get_connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM wechat_audience_comments
                 WHERE platform_post_id = ?
+                  AND (? IS NULL OR account_key = ?)
                   AND status = 'DISCOVERED'
                   AND is_author = 0
                   AND has_author_reply = 0
                 ORDER BY id ASC
                 """,
-                (platform_post_id,),
+                (platform_post_id, account_key, account_key),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -12662,25 +12672,32 @@ class PipelineDB(WallstreetExperimentDAL):
         evidence_refs: Optional[List[str]] = None,
         provider: str,
         status: str = "DRAFTED",
+        account_key: str = "",
     ) -> int:
-        """创建或更新二级回复草稿任务。若正文变更则升级 revision 并重置审批。"""
+        """创建或更新二级回复草稿任务。若正文变更则升级 revision 并重置审批。
+
+        已被认领/已落提交意图/未知/已验证的任务是受保护终态，普通 upsert 不得改写，直接返回原任务 ID。
+        """
         refs_json = json.dumps(evidence_refs or [], ensure_ascii=False)
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
-                "SELECT * FROM wechat_secondary_reply_tasks WHERE platform_post_id = ? AND comment_id = ?",
-                (platform_post_id, comment_id),
+                "SELECT * FROM wechat_secondary_reply_tasks WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                (account_key, platform_post_id, comment_id),
             ).fetchone()
+            if existing and existing["status"] in ("CLAIMED", "SUBMIT_INTENT", "UNCERTAIN", "VERIFIED"):
+                return int(existing["id"])
 
             if not existing:
                 cur = conn.execute(
                     """
                     INSERT INTO wechat_secondary_reply_tasks (
-                        platform_post_id, comment_id, intent, style,
+                        account_key, platform_post_id, comment_id, intent, style,
                         chinese_reply, english_reply, formatted_reply,
                         reason_code, evidence_refs, provider, revision, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                     """,
-                    (platform_post_id, comment_id, intent, style,
+                    (account_key, platform_post_id, comment_id, intent, style,
                      chinese_reply, english_reply, formatted_reply,
                      reason_code, refs_json, provider, status),
                 )
@@ -12700,12 +12717,17 @@ class PipelineDB(WallstreetExperimentDAL):
                     provider = ?, revision = ?, status = ?,
                     approval_token = CASE WHEN ? THEN NULL ELSE approval_token END,
                     is_token_consumed = CASE WHEN ? THEN 0 ELSE is_token_consumed END,
+                    approved_at = CASE WHEN ? THEN NULL ELSE approved_at END,
+                    bound_source_comment_hash = CASE WHEN ? THEN NULL ELSE bound_source_comment_hash END,
+                    bound_draft_revision = CASE WHEN ? THEN NULL ELSE bound_draft_revision END,
+                    bound_reply_text_hash = CASE WHEN ? THEN NULL ELSE bound_reply_text_hash END,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
                 (intent, style, chinese_reply, english_reply,
                  formatted_reply, reason_code, refs_json, provider,
-                 new_rev, status, is_modified, is_modified, existing["id"]),
+                 new_rev, status, is_modified, is_modified, is_modified,
+                 is_modified, is_modified, is_modified, existing["id"]),
             )
             conn.commit()
             return int(existing["id"])
@@ -12723,12 +12745,13 @@ class PipelineDB(WallstreetExperimentDAL):
         self,
         platform_post_id: str,
         comment_id: str,
+        account_key: str = "",
     ) -> Optional[Dict[str, Any]]:
-        """按作品与评论 ID 查询二级回复任务。"""
+        """按账号、作品与评论 ID 查询二级回复任务。"""
         with self.get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM wechat_secondary_reply_tasks WHERE platform_post_id = ? AND comment_id = ?",
-                (platform_post_id, comment_id),
+                "SELECT * FROM wechat_secondary_reply_tasks WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                (account_key, platform_post_id, comment_id),
             ).fetchone()
             return dict(row) if row else None
 
@@ -12739,11 +12762,12 @@ class PipelineDB(WallstreetExperimentDAL):
         approval_token: str,
         expires_at_iso: str,
         approver_id: Optional[str] = None,
+        approver_chat_id: Optional[str] = None,
         source_comment_hash: Optional[str] = None,
         draft_revision: Optional[int] = None,
         reply_text_hash: Optional[str] = None,
     ) -> bool:
-        """服务端绑定随机审批 Token 与过期时间，状态置为 PENDING_REVIEW。"""
+        """服务端绑定随机审批 Token、审批人、审批 chat 与过期时间，状态置为 PENDING_REVIEW。"""
         with self.get_connection() as conn:
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
@@ -12767,12 +12791,12 @@ class PipelineDB(WallstreetExperimentDAL):
             cur = conn.execute(
                 """
                 UPDATE wechat_secondary_reply_tasks
-                SET approval_token = ?, approval_expires_at = ?, approver_id = ?,
+                SET approval_token = ?, approval_expires_at = ?, approver_id = ?, approver_chat_id = ?,
                     bound_source_comment_hash = ?, bound_draft_revision = ?, bound_reply_text_hash = ?,
                     status = 'PENDING_REVIEW', is_token_consumed = 0, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status IN ('DRAFTED', 'PENDING_REVIEW')
                 """,
-                (approval_token, expires_at_iso, approver_id, s_hash, rev, t_hash, int(task_id)),
+                (approval_token, expires_at_iso, approver_id, approver_chat_id, s_hash, rev, t_hash, int(task_id)),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -12783,6 +12807,7 @@ class PipelineDB(WallstreetExperimentDAL):
         task_id: int,
         token: str,
         approver_id: str,
+        chat_id: str,
         action: str,
         now_utc_iso: Optional[str] = None,
     ) -> Tuple[bool, str]:
@@ -12817,6 +12842,9 @@ class PipelineDB(WallstreetExperimentDAL):
                 return False, "TOKEN_EXPIRED"
             if not task["approver_id"] or str(task["approver_id"]) != str(approver_id):
                 return False, "APPROVER_MISMATCH"
+            # 审批 chat 必须已绑定且与可信回调传入的 chat 一致（缺失/未配置/不匹配均拒绝）
+            if not task["approver_chat_id"] or not chat_id or str(task["approver_chat_id"]) != str(chat_id):
+                return False, "CHAT_MISMATCH"
 
             # 校验绑定的草稿版本与正文指纹 (T07: 草稿变更不放行)
             if task["bound_draft_revision"] is not None and task["revision"] != task["bound_draft_revision"]:
@@ -13055,35 +13083,52 @@ class PipelineDB(WallstreetExperimentDAL):
 
             post_id = task["platform_post_id"]
             root_id = task["comment_id"]
+            account_key = task["account_key"] or ""
+            if not account_key:
+                return False, "ACCOUNT_KEY_MISSING"
+
+            # 发送前最后一次核对批准：必须由真实审批消费产生，且有效期、版本、正文、源评论均未变
+            if not task["approved_at"] or not task["is_token_consumed"]:
+                return False, "NOT_APPROVED"
+            if task["approval_expires_at"] and task["approval_expires_at"] < now_iso:
+                return False, "APPROVAL_EXPIRED"
+            if task["bound_draft_revision"] is None or task["revision"] != task["bound_draft_revision"]:
+                return False, "DRAFT_REVISION_CHANGED"
+            cur_text = task["formatted_reply"] or f"{task['chinese_reply']}\n{task['english_reply']}"
+            cur_hash = hashlib.sha256(unicodedata.normalize("NFC", cur_text).encode("utf-8")).hexdigest()
+            if not task["bound_reply_text_hash"] or task["bound_reply_text_hash"] != cur_hash:
+                return False, "DRAFT_TEXT_CHANGED"
+            src_row = conn.execute(
+                "SELECT content_hash FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                (account_key, post_id, root_id),
+            ).fetchone()
+            if not src_row or not task["bound_source_comment_hash"] or src_row["content_hash"] != task["bound_source_comment_hash"]:
+                return False, "SOURCE_COMMENT_CHANGED"
+
+            # 独立防重账本核查与写入
+            existing_ledger = conn.execute(
+                "SELECT * FROM wechat_secondary_reply_idempotency_ledger WHERE account_key = ? AND platform_post_id = ? AND root_comment_id = ?",
+                (account_key, post_id, root_id),
+            ).fetchone()
+            if existing_ledger:
+                return False, f"IDEMPOTENCY_CONFLICT: Already exists with status {existing_ledger['status']}"
 
             # 配额预占核查
             quota_ok, quota_reason = self._check_reply_quota_conn(conn, post_id, now_dt)
             if not quota_ok:
                 return False, f"QUOTA_REJECTED: {quota_reason}"
 
-            # 独立防重账本核查与写入
-            existing_ledger = conn.execute(
-                "SELECT * FROM wechat_secondary_reply_idempotency_ledger WHERE platform_post_id = ? AND root_comment_id = ?",
-                (post_id, root_id),
-            ).fetchone()
-            if existing_ledger:
-                return False, f"IDEMPOTENCY_CONFLICT: Already exists with status {existing_ledger['status']}"
-
-            comment_row = conn.execute(
-                "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
-                (post_id, root_id),
-            ).fetchone()
-            content_hash = comment_row["content_hash"] if comment_row else hashlib.sha256(root_id.encode()).hexdigest()
+            content_hash = src_row["content_hash"]
 
             # 写入独立防重账本（状态为 INTENT）
             conn.execute(
                 """
                 INSERT INTO wechat_secondary_reply_idempotency_ledger (
-                    platform_post_id, root_comment_id, reply_comment_id,
+                    account_key, platform_post_id, root_comment_id, reply_comment_id,
                     content_hash, status, created_at
-                ) VALUES (?, ?, ?, ?, 'INTENT', ?)
+                ) VALUES (?, ?, ?, ?, ?, 'INTENT', ?)
                 """,
-                (post_id, root_id, "PENDING", content_hash, now_iso),
+                (account_key, post_id, root_id, "PENDING", content_hash, now_iso),
             )
 
             # 更新任务状态
@@ -13102,9 +13147,9 @@ class PipelineDB(WallstreetExperimentDAL):
                 """
                 INSERT INTO wechat_secondary_reply_attempt_history (
                     task_id, attempt_no, intent_at, request_payload_hash, result_status
-                ) VALUES (?, 1, ?, ?, 'INTENT')
+                ) VALUES (?, (SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM wechat_secondary_reply_attempt_history WHERE task_id = ?), ?, ?, 'INTENT')
                 """,
-                (int(task_id), now_iso, req_hash),
+                (int(task_id), int(task_id), now_iso, req_hash),
             )
             conn.commit()
             return True, "INTENT_RECORDED"
@@ -13161,9 +13206,9 @@ class PipelineDB(WallstreetExperimentDAL):
                 """
                 UPDATE wechat_secondary_reply_idempotency_ledger
                 SET status = 'VERIFIED', reply_comment_id = ?, verified_at = ?
-                WHERE platform_post_id = ? AND root_comment_id = ?
+                WHERE account_key = ? AND platform_post_id = ? AND root_comment_id = ?
                 """,
-                (platform_reply_comment_id, now_iso, post_id, root_id),
+                (platform_reply_comment_id, now_iso, task["account_key"], post_id, root_id),
             )
 
             # 3. 观众评论标记已回复
@@ -13171,9 +13216,9 @@ class PipelineDB(WallstreetExperimentDAL):
                 """
                 UPDATE wechat_audience_comments
                 SET has_author_reply = 1, status = 'PROCESSED', updated_at = CURRENT_TIMESTAMP
-                WHERE platform_post_id = ? AND comment_id = ?
+                WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?
                 """,
-                (post_id, root_id),
+                (task["account_key"], post_id, root_id),
             )
 
             # 4. 尝试历史更新
@@ -13182,7 +13227,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 UPDATE wechat_secondary_reply_attempt_history
                 SET http_status = ?, err_code = ?, platform_reply_id = ?,
                     evidence_path = ?, result_status = 'VERIFIED'
-                WHERE task_id = ?
+                WHERE id = (SELECT MAX(id) FROM wechat_secondary_reply_attempt_history WHERE task_id = ?)
                 """,
                 (http_status, err_code, platform_reply_comment_id, evidence_path, int(task_id)),
             )
@@ -13221,15 +13266,15 @@ class PipelineDB(WallstreetExperimentDAL):
                 """
                 UPDATE wechat_secondary_reply_idempotency_ledger
                 SET status = 'UNCERTAIN'
-                WHERE platform_post_id = ? AND root_comment_id = ?
+                WHERE account_key = ? AND platform_post_id = ? AND root_comment_id = ?
                 """,
-                (post_id, root_id),
+                (task["account_key"], post_id, root_id),
             )
             conn.execute(
                 """
                 UPDATE wechat_secondary_reply_attempt_history
                 SET result_status = 'UNCERTAIN', evidence_path = COALESCE(?, evidence_path)
-                WHERE task_id = ?
+                WHERE id = (SELECT MAX(id) FROM wechat_secondary_reply_attempt_history WHERE task_id = ?)
                 """,
                 (evidence_path, int(task_id)),
             )
@@ -13271,12 +13316,13 @@ class PipelineDB(WallstreetExperimentDAL):
         self,
         platform_post_id: str,
         root_comment_id: str,
+        account_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """从独立防重账本查询凭据（无论上游任务是否被归档或删除）。"""
+        """从独立防重账本查询凭据（无论上游任务是否被归档或删除）。account_key 为 None 时跨账号检视。"""
         with self.get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM wechat_secondary_reply_idempotency_ledger WHERE platform_post_id = ? AND root_comment_id = ?",
-                (platform_post_id, root_comment_id),
+                "SELECT * FROM wechat_secondary_reply_idempotency_ledger WHERE platform_post_id = ? AND root_comment_id = ? AND (? IS NULL OR account_key = ?)",
+                (platform_post_id, root_comment_id, account_key, account_key),
             ).fetchone()
             return dict(row) if row else None
 
@@ -13314,16 +13360,16 @@ class PipelineDB(WallstreetExperimentDAL):
     def get_uncertain_secondary_reply_tasks(
         self, platform_post_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """获取所有处于 UNCERTAIN 状态需进行只读对账的二级回复任务。"""
+        """获取需只读对账的任务：UNCERTAIN，以及崩溃后遗留的 SUBMIT_INTENT（可能已发出）。"""
         with self.get_connection() as conn:
             if platform_post_id:
                 rows = conn.execute(
-                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status = 'UNCERTAIN' AND platform_post_id = ? ORDER BY id ASC",
+                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status IN ('UNCERTAIN', 'SUBMIT_INTENT') AND platform_post_id = ? ORDER BY id ASC",
                     (platform_post_id,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status = 'UNCERTAIN' ORDER BY id ASC"
+                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status IN ('UNCERTAIN', 'SUBMIT_INTENT') ORDER BY id ASC"
                 ).fetchall()
             return [dict(r) for r in rows]
 
@@ -13336,6 +13382,7 @@ class PipelineDB(WallstreetExperimentDAL):
         evidence_path: Optional[str] = None,
         reason: Optional[str] = None,
         outcome: Optional[str] = None,
+        not_sent_evidence: Optional[str] = None,
     ) -> bool:
         """只读对账决策落地，三种结果互不混淆，且任何结果都不会触发重发：
 
@@ -13350,12 +13397,16 @@ class PipelineDB(WallstreetExperimentDAL):
         verified = outcome == "FOUND"
         if verified and not (platform_reply_comment_id or "").strip():
             return False  # 没有真实原生回复 ID 不得判 VERIFIED
+        # CONFIRMED_NOT_SENT 只能基于明确的“未出站”证据（如守卫在网络前中止的记录），
+        # “完整遍历没看到”不是证据，缺证据时一律不得终结
+        if outcome == "CONFIRMED_NOT_SENT" and not (not_sent_evidence or "").strip():
+            return False
         with self.get_connection() as conn:
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
                 (int(task_id),),
             ).fetchone()
-            if not task or task["status"] != "UNCERTAIN":
+            if not task or task["status"] not in ("UNCERTAIN", "SUBMIT_INTENT"):
                 return False
 
             post_id = task["platform_post_id"]
@@ -13382,14 +13433,19 @@ class PipelineDB(WallstreetExperimentDAL):
                     SET status = 'VERIFIED',
                         reply_comment_id = COALESCE(?, reply_comment_id),
                         verified_at = COALESCE(verified_at, ?)
-                    WHERE platform_post_id = ? AND root_comment_id = ?
+                    WHERE account_key = ? AND platform_post_id = ? AND root_comment_id = ?
                     """,
-                    (platform_reply_comment_id, now_iso, post_id, root_id),
+                    (platform_reply_comment_id, now_iso, task["account_key"], post_id, root_id),
                 )
             elif outcome == "NOT_OBSERVED_INCOMPLETE":
+                # 崩溃遗留的 SUBMIT_INTENT 也在此升级为 UNCERTAIN，并保持账本凭据
                 conn.execute(
-                    "UPDATE wechat_secondary_reply_tasks SET error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    "UPDATE wechat_secondary_reply_tasks SET status = 'UNCERTAIN', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (reason or "对账未观察到回复，但无法证明未发出，保持 UNCERTAIN", int(task_id)),
+                )
+                conn.execute(
+                    "UPDATE wechat_secondary_reply_idempotency_ledger SET status = 'UNCERTAIN' WHERE account_key = ? AND platform_post_id = ? AND root_comment_id = ? AND status = 'INTENT'",
+                    (task["account_key"], post_id, root_id),
                 )
             else:
                 err_msg = reason or "只读对账确认：完整遍历后平台未找到该回复"

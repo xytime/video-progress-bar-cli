@@ -83,284 +83,153 @@ def run_reconcile_inspection(db: PipelineDB, platform_post_id: Optional[str] = N
 
 
 def run_offline_4path_demo() -> Dict[str, Any]:
-    """离线 4 路径重现验证 Demo。
+    """离线 4 路径演示：四条路径全部经过同一编排服务与离线平台替身，不手工写状态。
 
-    1. 路径一（成功与防重）：解析真实载荷 -> 发现入库 -> 起草 -> 虚拟审批 -> 提交意图落盘 -> 回执与回读 -> VERIFIED。二次运行被防重账本拦截。
-    2. 路径二（前置路由守卫）：错作品 exportId 或错 rootCommentId 在网络发送前硬拦截，零出站流量。
-    3. 路径三（异常只读对账）：提交后网络丢包/假死，安全转入 UNCERTAIN，执行只读对账。
-    4. 路径四（墓碑持久保护）：任务被物理删除后，独立防重账本墓碑依然阻断重发。
+    1. 成功与防重：fixture 采集 -> 草稿 -> fake 审批 -> 认领/终审/意图/守卫/回执/刷新回读 -> VERIFIED；二次运行零出站。
+    2. 错目标：守卫在网络前拦截，零出站，意图保留墓碑。
+    3. 重启对账：意图后崩溃，只读对账发现平台已有回复 -> VERIFIED；未发现 -> 保持 UNCERTAIN，不重发。
+    4. 删除后墓碑：任务被物理删除，账本仍阻断再次发送。
+    平台替身仅为离线模拟，真实平台字段/分页仍属未验证项。
     """
-    logger.info("开始执行离线 4 路径重现验证 Demo...")
+    import copy
+    from datetime import datetime as _dt
+
+    from video_processing.interaction.secondary_reply_fake_platform import FakeSecondaryReplyPlatform
+    from video_processing.interaction.secondary_reply_orchestrator import SecondaryReplyOrchestrator
+
+    logger.info("开始执行离线 4 路径演示（统一编排 + 平台替身）...")
     results: Dict[str, Any] = {}
+    post_id = "export/synth_video_888"
+    approver = "888999"
+    material = {"title": "合成演示视频", "evidence": {"fixture_segment_1": "【合成夹具材料，仅用于离线演示】"}}
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        db_path = Path(tmp_dir) / "demo.db"
-        db = PipelineDB(db_path=str(db_path))
-
-        # ==========================================
-        # 路径一：全链路成功与二次防重拦截
-        # ==========================================
-        logger.info("[Demo] 路径一：开始全链路成功与二次防重验证...")
-        post_id = "export/synth_video_888"
-        fixture_path = PROJECT_ROOT / "tests" / "fixtures" / "secondary_reply" / "sanitized_api_responses.json"
-        with open(fixture_path, "r", encoding="utf-8") as f:
-            fixture_data = json.load(f)
-
-        # 1. 严格 API 载荷解析（T01/T02/T03/T12）
-        parse_res = parse_wechat_comment_list_payload(
-            fixture_data["comment_list"],
-            platform_post_id=post_id,
-            author_username="v2_synthetic_author_finder_id@finder",
-            strict_schema=True,
-        )
-        assert parse_res.top_level_status == TopLevelPaginationStatus.COMPLETE
-        assert parse_res.author_first_comment is not None
-        assert parse_res.author_first_comment.is_author is True
-        assert len(parse_res.comments) >= 1
-
-        db.save_discovered_audience_comments(
-            post_id,
-            [
-                {
-                    "comment_id": c.comment_id,
-                    "nickname": c.nickname,
-                    "content": c.content,
-                    "createtime": c.createtime,
-                }
-                for c in parse_res.comments
-            ],
-        )
-
-        target_comment = parse_res.comments[0]
-        root_id = target_comment.comment_id
-
-        # 2. 生成起草（规则引擎保证符合 Scheme A 契约）
-        service = SecondaryReplyService(censor=SecondaryReplyCensor())
-        draft = service.generate_draft(
-            comment=target_comment,
-            video_context={"title": "全球货币与资产配置解析",
-                           "evidence": {"fixture_segment_1": "【合成夹具材料，仅用于离线演示】"}},
-        )
-        assert draft.intent == SecondaryReplyIntent.REPLY
-        assert draft.evidence_refs
-
-        # 3. 创建任务并派发 Telegram 审批请求
-        task_id_1 = db.create_or_update_secondary_reply_task(
-            platform_post_id=post_id,
-            comment_id=root_id,
-            intent=draft.intent.value,
-            style=draft.style.value,
-            chinese_reply=draft.chinese_reply,
-            english_reply=draft.english_reply,
-            formatted_reply=draft.formatted_reply,
-            evidence_refs=draft.evidence_refs,
-            provider="rule_engine",
-            status="PENDING_REVIEW",
-        )
+        db = PipelineDB(db_path=str(Path(tmp_dir) / "demo.db"))
+        platform = FakeSecondaryReplyPlatform()
         transport = FakeApprovalTransport()
-        dispatch_ok, dispatch_msg = dispatch_approval_request(
-            db=db,
-            task_id=task_id_1,
-            transport=transport,
-            approver_telegram_id="888999",
-            approver_chat_id="888999",
-            admin_ids_override="888999",
-        )
-        assert dispatch_ok and len(transport.sent_messages) == 1
-        msg = transport.sent_messages[0]
-        app_callback_data = msg["inline_keyboard"][0][0]["callback_data"]
+        # 固定时钟：上海 12:00，每次提交推进 60 秒，避开最小间隔与时段限制
+        state = {"now": _dt(2026, 10, 12, 4, 0, 0, tzinfo=timezone.utc)}
 
-        # 4. 模拟人工通过审批
-        cb_ok, cb_msg = handle_approval_callback(
-            db=db,
-            callback_data=app_callback_data,
-            user_id="888999",
-            admin_ids_override="888999",
-        )
-        assert cb_ok
-        task_1 = db.get_secondary_reply_task(task_id_1)
-        assert task_1["status"] == "APPROVED"
+        def clock():
+            state["now"] += timedelta(seconds=60)
+            return state["now"]
 
-        # 5. 调度器领取任务并持久化提交意图
-        claimed_1 = db.claim_approved_reply_task(task_id=task_id_1)
-        assert claimed_1 is not None
-        intent_ok, intent_msg = db.record_secondary_reply_submit_intent(
-            task_id_1, claimed_1["lease_token"]
+        orch = SecondaryReplyOrchestrator(
+            db=db, service=SecondaryReplyService(censor=SecondaryReplyCensor()), platform=platform,
+            approval_transport=transport, account_key="acct_demo", approver_id=approver,
+            approver_chat_id=approver, admin_ids_override=approver, clock=clock,
         )
-        assert intent_ok
 
-        # 6. 提交成功并回读确认
-        db.record_secondary_reply_success(
-            task_id=task_id_1,
-            platform_reply_comment_id="synth_platform_reply_999",
-            evidence_path=str(Path(tmp_dir) / "evidence_verified.png"),
+        with open(PROJECT_ROOT / "tests" / "fixtures" / "secondary_reply" / "sanitized_api_responses.json", "r", encoding="utf-8") as f:
+            fixture_data = json.load(f)
+        parse_res = parse_wechat_comment_list_payload(
+            fixture_data["comment_list"], platform_post_id=post_id,
+            author_username=platform.account_finder_id, strict_schema=True,
         )
-        task_1_final = db.get_secondary_reply_task(task_id_1)
-        ledger_1 = db.check_secondary_reply_idempotency(post_id, root_id)
-        assert task_1_final["status"] == "VERIFIED"
-        assert ledger_1["status"] == "VERIFIED"
+        assert parse_res.top_level_status == TopLevelPaginationStatus.COMPLETE and parse_res.comments
 
-        # 7. 二次运行尝试：同一作品同一评论再次尝试创建与提交
-        task_id_dup = db.create_or_update_secondary_reply_task(
-            platform_post_id=post_id,
-            comment_id=root_id,
-            intent="REPLY",
-            style="MACRO",
-            chinese_reply="尝试再次回复",
-            evidence_refs=["secondary_retry_evidence"],
-            provider="rule_engine",
-            status="APPROVED",
-        )
-        claimed_dup = db.claim_approved_reply_task(task_id=task_id_dup)
-        now_30s_later = (datetime.now(timezone.utc) + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
-        intent_dup_ok, intent_dup_err = db.record_secondary_reply_submit_intent(
-            task_id_dup, claimed_dup["lease_token"], now_utc=now_30s_later
-        )
-        assert not intent_dup_ok
-        assert "IDEMPOTENCY_CONFLICT" in intent_dup_err
+        def approve(task_id: int) -> None:
+            callback = transport.sent_messages[-1]["inline_keyboard"][0][0]["callback_data"]
+            ok, msg = orch.approve_via_callback(callback, user_id=approver, chat_id=approver)
+            assert ok, msg
 
+        # ---- 路径一：成功与防重 ----
+        base = parse_res.comments[0]
+        (task_1,) = orch.ingest_and_draft(post_id=post_id, comments=[base], video_context=material)
+        approve(task_1)
+        out1 = orch.submit(task_1)
+        assert out1.status == "VERIFIED", out1
+        sent_after_first = len(platform.outbound_requests)
+        out1b = orch.submit(task_1)  # 二次运行
+        dup_id = db.create_or_update_secondary_reply_task(
+            platform_post_id=post_id, comment_id=base.comment_id, intent="REPLY", style="MACRO",
+            chinese_reply="尝试再次回复", provider="rule_engine", status="PENDING_REVIEW", account_key="acct_demo",
+        )
+        task_1_final = db.get_secondary_reply_task(task_1)
         results["path_1_success_and_idempotency"] = {
-            "status": "PASSED",
-            "task_id": task_id_1,
-            "final_status": task_1_final["status"],
+            "status": "PASSED" if (
+                task_1_final["status"] == "VERIFIED" and out1b.status == "NOT_CLAIMABLE"
+                and dup_id == task_1 and len(platform.outbound_requests) == sent_after_first == 1
+            ) else "FAILED",
+            "first_run": out1.status, "second_run": out1b.status,
+            "outbound_requests_total": len(platform.outbound_requests),
             "platform_reply_comment_id": task_1_final["platform_reply_comment_id"],
-            "second_run_intercepted": not intent_dup_ok,
-            "second_run_reason": intent_dup_err,
         }
 
-        # ==========================================
-        # 路径二：前置路由守卫拦截错作品/错评论/错账号/缺字段
-        # ==========================================
-        logger.info("[Demo] 路径二：开始前置路由守卫拦截错作品验证...")
-        guard = SecondaryReplySubmissionGuard(
-            expected_export_id=post_id,
-            expected_root_comment_id=root_id,
-            expected_content=draft.formatted_reply,
-            expected_finder_id="v2_synthetic_author_finder_id@finder",
-        )
+        def extra_comment(cid: str, text: str) -> AudienceCommentRecord:
+            return AudienceCommentRecord(
+                platform_post_id=post_id, comment_id=cid, nickname="合成观众", content=text,
+                content_hash="demo", createtime="1791779000",
+            )
 
-        class FakeInterceptedRequest:
-            method = "POST"
-            url = "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/comment/create_comment"
-            post_data_json = {
-                "exportId": "export/WRONG_VIDEO_999",
-                "rootCommentId": root_id,
-                "replyCommentId": root_id,
-                "content": draft.formatted_reply,
-                "_log_finder_id": "v2_synthetic_author_finder_id@finder",
-            }
-
-        guard_pass = guard.capture_request(FakeInterceptedRequest())
-        assert not guard_pass
-        assert len(guard.requests) == 0
-        assert len(guard.mismatched_requests) == 1
-        mism = guard.mismatched_requests[0]
-
-        results["path_2_route_guard_mismatch"] = {
-            "status": "PASSED",
-            "guard_blocked": not guard_pass,
-            "blocked_reason": mism.get("reason"),
-            "details": mism.get("details"),
+        # ---- 路径二：错目标在网络前拦截 ----
+        platform.mode = "wrong-root"
+        (task_2,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_2", "为什么会出现这种情况？")], video_context=material)
+        approve(task_2)
+        before = len(platform.outbound_requests)
+        out2 = orch.submit(task_2)
+        results["path_2_wrong_target_blocked_before_network"] = {
+            "status": "PASSED" if out2.status == "BLOCKED_BY_GUARD" and len(platform.outbound_requests) == before else "FAILED",
+            "outcome": out2.status, "detail": out2.detail,
+            "new_outbound_requests": len(platform.outbound_requests) - before,
         }
 
-        # ==========================================
-        # 路径三：提交后异常转入 UNCERTAIN 对账
-        # ==========================================
-        logger.info("[Demo] 路径三：开始提交后丢包转入 UNCERTAIN 只读对账验证...")
-        root_id_3 = "demo_root_cmt_103"
-        task_id_3 = db.create_or_update_secondary_reply_task(
-            platform_post_id=post_id,
-            comment_id=root_id_3,
-            intent="REPLY",
-            style="PRAGMATIC",
-            chinese_reply="测试异常场景",
-            evidence_refs=["evidence_path3"],
-            provider="rule_engine",
-            status="APPROVED",
-        )
-        claimed_3 = db.claim_approved_reply_task(task_id=task_id_3)
-        assert claimed_3 is not None
-        now_path3 = (datetime.now(timezone.utc) + timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
-        intent_3_ok, intent_3_err = db.record_secondary_reply_submit_intent(
-            task_id_3, claimed_3["lease_token"], now_utc=now_path3
-        )
-        assert intent_3_ok, f"Path 3 intent failed: {intent_3_err}"
-
-        # 模拟提交发出但网络丢包/假死未获得明确 201 回执
-        db.record_secondary_reply_uncertain(
-            task_id=task_id_3,
-            error_message="提交网络丢包或超时，转入只读对账",
-            evidence_path=str(Path(tmp_dir) / "evidence_drop.png"),
-        )
-        task_3 = db.get_secondary_reply_task(task_id_3)
-        ledger_3 = db.check_secondary_reply_idempotency(post_id, root_id_3)
-        assert task_3["status"] == "UNCERTAIN"
-        assert ledger_3["status"] == "UNCERTAIN"
-
-        # 验证只读对账查询
-        uncertain_tasks = db.get_uncertain_secondary_reply_tasks(post_id)
-        assert any(t["id"] == task_id_3 for t in uncertain_tasks)
-
-        # 模拟只读对账安全终结
-        db.reconcile_secondary_reply_uncertain(
-            task_id=task_id_3,
-            verified=False,
-            outcome="CONFIRMED_NOT_SENT",
-            reason="对账确认：平台未找到该回复",
-        )
-        task_3_reconciled = db.get_secondary_reply_task(task_id_3)
-        assert task_3_reconciled["status"] == "FAILED"
-
-        results["path_3_drop_uncertain_reconcile"] = {
-            "status": "PASSED",
-            "task_id": task_id_3,
-            "task_status": task_3["status"],
-            "ledger_status": ledger_3["status"],
-            "error_message": task_3["error_message"],
-            "reconciled_status": task_3_reconciled["status"],
+        # ---- 路径三：意图后崩溃，重启只读对账 ----
+        platform.mode = "crash-after-intent"
+        (task_3,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_3", "为什么会出现这种情况？")], video_context=material)
+        approve(task_3)
+        crashed = orch.submit(task_3)
+        # “重启”：新的编排实例/新的 DB 连接仅做只读对账
+        db_after_restart = PipelineDB(db_path=str(Path(tmp_dir) / "demo.db"))
+        queue = [t["id"] for t in db_after_restart.get_uncertain_secondary_reply_tasks(post_id)]
+        platform.mode = "success"
+        before = len(platform.outbound_requests)
+        rec_not_seen = orch.reconcile(task_3)  # 平台上没有该回复
+        platform._store(post_id, "demo_cmt_3", db.get_secondary_reply_task(task_3)["formatted_reply"], platform.account_finder_id, "late_reply_1")
+        rec_found = orch.reconcile(task_3)  # 延迟出现
+        results["path_3_restart_reconcile_only"] = {
+            "status": "PASSED" if (
+                crashed.status == "UNCERTAIN" and task_3 in queue
+                and rec_not_seen.status == "UNCERTAIN" and rec_found.status == "VERIFIED"
+                and len(platform.outbound_requests) == before
+            ) else "FAILED",
+            "crash_outcome": crashed.status, "in_reconcile_queue": task_3 in queue,
+            "reconcile_not_observed": rec_not_seen.status, "reconcile_found": rec_found.status,
+            "outbound_during_reconcile": len(platform.outbound_requests) - before,
         }
 
-        # ==========================================
-        # 路径四：任务被物理删除后墓碑仍然阻断重发
-        # ==========================================
-        logger.info("[Demo] 路径四：开始任务删除后墓碑持久防护验证...")
+        # ---- 路径四：任务删除后墓碑仍阻断 ----
         with db.get_connection() as conn:
-            conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (task_id_1,))
-
-        deleted_task = db.get_secondary_reply_task(task_id_1)
-        assert deleted_task is None
-
-        tombstone = db.check_secondary_reply_idempotency(post_id, root_id)
-        assert tombstone is not None
-        assert tombstone["status"] == "VERIFIED"
-
-        task_id_4 = db.create_or_update_secondary_reply_task(
-            platform_post_id=post_id,
-            comment_id=root_id,
-            intent="REPLY",
-            style="MACRO",
-            chinese_reply="重新创建的任务尝试提交",
-            evidence_refs=["evidence_tombstone"],
-            provider="rule_engine",
-            status="APPROVED",
+            conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (task_1,))
+        tombstone = db.check_secondary_reply_idempotency(post_id, base.comment_id, account_key="acct_demo")
+        # 绕过采集（评论已 PROCESSED）直接重建同目标任务，并走真实审批回调，最后仍应被账本拦截
+        task_4 = db.create_or_update_secondary_reply_task(
+            platform_post_id=post_id, comment_id=base.comment_id, intent="REPLY", style="MACRO",
+            chinese_reply="重新创建的任务。", english_reply="Recreated task.",
+            formatted_reply="重新创建的任务。\nRecreated task.", evidence_refs=["fixture_segment_1"],
+            provider="rule_engine", status="PENDING_REVIEW", account_key="acct_demo",
         )
-        claimed_4 = db.claim_approved_reply_task(task_id=task_id_4)
-        now_120s_later = (datetime.now(timezone.utc) + timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
-        intent_4_ok, intent_4_err = db.record_secondary_reply_submit_intent(
-            task_id_4, claimed_4["lease_token"], now_utc=now_120s_later
+        dispatch_approval_request(
+            db=db, task_id=task_4, transport=transport, approver_telegram_id=approver,
+            approver_chat_id=approver, admin_ids_override=approver,
         )
-        assert not intent_4_ok
-        assert "IDEMPOTENCY_CONFLICT" in intent_4_err
-
+        approve(task_4)
+        # 模拟页面读不到已发回复（折叠/延迟），此时只能靠独立账本拦截
+        platform.server_replies.pop((post_id, base.comment_id), None)
+        before = len(platform.outbound_requests)
+        out4 = orch.submit(task_4)
+        blocked = (
+            out4.status == "REJECTED_BEFORE_INTENT" and "IDEMPOTENCY_CONFLICT" in out4.detail
+            and len(platform.outbound_requests) == before
+        )
         results["path_4_tombstone_survives_deletion"] = {
-            "status": "PASSED",
-            "task_deleted": deleted_task is None,
-            "tombstone_survived": tombstone["status"] == "VERIFIED",
-            "recreation_blocked": not intent_4_ok,
-            "recreation_blocked_reason": intent_4_err,
+            "status": "PASSED" if (tombstone and tombstone["status"] == "VERIFIED" and blocked) else "FAILED",
+            "tombstone_status": tombstone["status"] if tombstone else None, "resend_blocked": blocked,
+            "outcome": out4.status, "detail": out4.detail,
         }
 
-    logger.info("离线 4 路径重现验证 Demo 全部顺利完成并通过！")
+    results["all_passed"] = all(v["status"] == "PASSED" for v in results.values() if isinstance(v, dict))
+    logger.info("离线 4 路径演示结束: all_passed=%s", results["all_passed"])
     return results
 
 

@@ -64,7 +64,7 @@ def secondary_reply_harness(chromium, tmp_path):
                     return
                 else:
                     if mode != "success-not-persisted":
-                        server_replies.append({"commentId": "synth_new_reply_999", "content": payload.get("content")})
+                        server_replies.append({"commentId": "synth_new_reply_999", "content": payload.get("content"), "authorId": "v2_synthetic_author_finder_id@finder"})
                     route.fulfill(json={
                         "errCode": 0,
                         "errMsg": "request successful",
