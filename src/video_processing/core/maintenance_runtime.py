@@ -70,7 +70,9 @@ def protection_snapshot():
     names = ("enable_public_publish_windows", "market_guard_policy", "enable_market_hours_guard", "wechat_publishing_paused",
              "enable_douyin_browser_publishing", "enable_kuaishou_browser_publishing",
              "enable_wechat_comment_interaction", "wechat_keepalive_enabled",
-             "topic_search_enabled", "topic_scheduler_enabled", "topic_admission_enabled")
+             "topic_search_enabled", "topic_scheduler_enabled", "topic_admission_enabled", "topic_trial_mode",
+             "topic_quota_verified", "topic_quota_project", "topic_search_daily_limit",
+             "topic_general_daily_limit", "topic_admission_total_limit")
     return {name: getattr(settings, name) for name in names}
 
 
@@ -237,7 +239,7 @@ def inspection(control, *, evidence=None, process_pids=None):
             from ..db.database import PipelineDB
             if PipelineDB.maintenance_active_work(output / "pipeline.db"):
                 unknown.append({"code": "UNFINISHED_LEDGER"})
-            if (settings.topic_search_enabled or settings.topic_scheduler_enabled or settings.topic_admission_enabled
+            if (settings.topic_search_enabled or settings.topic_scheduler_enabled or settings.topic_admission_enabled or settings.topic_trial_mode
                     or settings.topic_quota_verified or settings.topic_quota_project):
                 unknown.append({"code": "SEARCH_CLOSURE_UNCONFIRMED"})
             from ..db.topic_candidates import TopicCandidateDAL

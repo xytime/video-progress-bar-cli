@@ -58,6 +58,21 @@ def evidence(page,name):
     path.mkdir(parents=True,exist_ok=True);page.screenshot(path=str(path/(name+'.png')),full_page=True)
 
 
+def test_trial_budget_exhaustion_has_cumulative_explanation(ui):
+    page, tracker, flags = ui
+    tracker.config.topic_trial_mode = True
+    selected = topic(tracker)
+    for _ in range(3):
+        run(tracker, selected)
+        tracker.clock.advance(minutes=16)
+    page.reload()
+    expect(page.locator('#budget')).to_contain_text('试运行累计 · 搜索 3 / 3 次')
+    expect(page.locator('#budget')).to_contain_text('跨日和重启不重置')
+    expect(page.get_by_role('button', name='搜索候选', exact=True)).to_be_disabled()
+    expect(page.locator('.topic-row')).to_contain_text('试运行累计额度已用完')
+    evidence(page, 'trial-budget-exhausted')
+
+
 def test_a20_complete_task_desktop_and_narrow(ui):
     page,tracker,flags=ui
     expect(page).to_have_title('YouTube 关键词采集 · 视频控制台')

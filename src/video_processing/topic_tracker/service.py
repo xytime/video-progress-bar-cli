@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.1 | 2026-10-14 | Codex | 试运行累计预算入账及错误配置关闭，提供非秘密用量回读 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 锁故障脱敏，维护状态阻止模式开放与搜索 |
 | 1.0.0 | 2026-10-11 | Codex | 实现 v0.2 的 OFF/仅发现与有界停止；无主管线或发布调用 |
@@ -76,6 +77,10 @@ class TopicTracker(KeywordCollection):
             raise TopicError(exc.code, str(exc), 503) from exc
         if not self.config.topic_search_enabled:
             raise TopicError("SEARCH_CLOSED", "生产搜索尚未开放", 403)
+        if getattr(self.config, "topic_trial_mode", False) and (
+                getattr(self.config, "topic_scheduler_enabled", False) or
+                getattr(self.config, "topic_admission_enabled", False)):
+            raise TopicError("TRIAL_CONFIG", "试运行阶段必须关闭定时采集和自动准入", 403)
         if not self.config.topic_quota_verified or not self.config.topic_quota_project:
             raise TopicError("QUOTA_UNVERIFIED", "项目配额与可分配额度尚未核实", 403)
         if not self.config.enable_market_hours_guard:
@@ -164,7 +169,8 @@ class TopicTracker(KeywordCollection):
     def _request(self, job_id, bucket, deadline, method, *args):
         timeout = self._timeout(job_id, deadline)
         limit = self.config.topic_search_daily_limit if bucket == "search" else self.config.topic_general_daily_limit
-        self.db.topic_reserve(job_id, self.config.topic_quota_project, bucket, limit, self.clock())
+        self.db.topic_reserve(job_id, self.config.topic_quota_project, bucket, limit, self.clock(),
+                              trial=getattr(self.config, "topic_trial_mode", False))
         timeout = self._timeout(job_id, deadline)
         return method(*args, timeout=timeout)
 
@@ -297,4 +303,5 @@ class TopicTracker(KeywordCollection):
         return dict(collection=dict(scheduler_enabled=getattr(self.config,"topic_scheduler_enabled",False), admission_available=getattr(self.config,"topic_admission_enabled",False), automatic_used=self.db.keyword_auto_budget(self.config.topic_quota_project,self.clock()), **self.db.keyword_control()), control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),
                     search_open=search_open, can_enable=can_enable, search_gate=dict(code=reason_code, message=reason),
+                    trial=dict(enabled=getattr(self.config, "topic_trial_mode", False), budget=self.db.topic_trial_budget()),
                     limits=dict(search=self.config.topic_search_daily_limit, general=self.config.topic_general_daily_limit))

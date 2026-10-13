@@ -87,7 +87,7 @@ def test_d07_partial_adoption_recovery_is_unknown_not_repeated(tmp_path):
     assert instance.reconcile({"pending": "adopt"}) == "UNKNOWN"
 
 
-@pytest.mark.parametrize('flag',['topic_scheduler_enabled','topic_admission_enabled'])
+@pytest.mark.parametrize('flag',['topic_scheduler_enabled','topic_admission_enabled','topic_trial_mode','topic_quota_verified'])
 def test_keyword_flags_in_off_adoption_protection(monkeypatch,flag):
     from config.settings import settings
     instance=host.HostDeployment.__new__(host.HostDeployment)

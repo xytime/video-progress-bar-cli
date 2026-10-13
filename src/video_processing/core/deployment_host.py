@@ -43,7 +43,7 @@ class HostDeployment:
 
     def protections(self):
         require(protection_snapshot() == self.plan["protections"], "PROTECTION_DRIFT")
-        require(not settings.topic_search_enabled and not settings.topic_scheduler_enabled and not settings.topic_admission_enabled
+        require(not settings.topic_search_enabled and not settings.topic_scheduler_enabled and not settings.topic_admission_enabled and not settings.topic_trial_mode
                 and not settings.topic_quota_verified and not settings.topic_quota_project,
                 "SEARCH_CLOSURE_UNCONFIRMED")
 

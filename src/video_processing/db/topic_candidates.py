@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.1 | 2026-10-14 | Codex | 试运行使用原子累计预算，跨日、重启和项目切换不重置 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 连接及 PRAGMA 纳入完整故障边界，保证资源释放 |
 | 1.0.0 | 2026-10-11 | Codex | 候选/决定/作业/配额持久化；原子预算与 CAS；不写主表 |
@@ -240,11 +241,18 @@ class TopicCandidateDAL(KeywordCollectionDAL):
         with self._topic_connection() as c:
             return dict(self._topic_check_job(c, job_id, now))
 
-    def topic_reserve(self, job_id, project, bucket, limit, now):
+    def topic_reserve(self, job_id, project, bucket, limit, now, *, trial=False):
         if bucket not in ("search", "general"):
             raise TopicError("INVALID_BUCKET", "预算桶无效", 422)
         with self._topic_connection(write=True) as c:
             job = self._topic_check_job(c, job_id, now)
+            if trial:
+                if job["kind"] != "MANUAL":
+                    raise TopicError("TRIAL_CONFIG", "试运行仅允许手动搜索")
+                # 计入所有历史预留（包括失败和重试），不通过换项目或日期释放。
+                total = c.execute("SELECT COALESCE(SUM(units),0) FROM topic_budget WHERE bucket=?", (bucket,)).fetchone()[0]
+                if total >= (3 if bucket == "search" else 6):
+                    raise TopicError("TRIAL_BUDGET", "试运行累计额度已用完；不会随跨日或重启恢复")
             if bucket == "search" and job["kind"] == "SCHEDULED":
                 auto_used = c.execute("SELECT COUNT(*) FROM topic_budget b JOIN topic_jobs j ON j.id=b.job_id WHERE b.project=? AND b.bucket='search' AND b.day=? AND j.kind='SCHEDULED'", (project, quota_day(now))).fetchone()[0]
                 if auto_used >= min(18, max(0, limit - 2)):
@@ -253,6 +261,14 @@ class TopicCandidateDAL(KeywordCollectionDAL):
             if used >= limit:
                 raise TopicError("BUDGET", "本模块今日预算不足；请等待太平洋时间次日")
             c.execute("INSERT INTO topic_budget VALUES(?,?,?,?,?,?,?)", (uuid.uuid4().hex, project, bucket, quota_day(now), 1, job_id, stamp(now)))
+
+    def topic_trial_budget(self):
+        with self._topic_connection() as c:
+            rows = c.execute("SELECT bucket,SUM(units) n FROM topic_budget GROUP BY bucket").fetchall()
+            used = {r["bucket"]: r["n"] for r in rows}
+            return {bucket: dict(used=used.get(bucket, 0), limit=limit,
+                                remaining=max(0, limit - used.get(bucket, 0)))
+                    for bucket, limit in (("search", 3), ("general", 6))}
 
     def topic_budget(self, project, now):
         with self._topic_connection() as c:
