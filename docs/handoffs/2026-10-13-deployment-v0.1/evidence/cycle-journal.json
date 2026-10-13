@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "plan": "e354a4edebae00cef35b5da0f2f0303502760ad425e8e8287d2b027d168c7466",
+  "done": [
+    "baseline",
+    "freeze",
+    "stop",
+    "backup",
+    "adopt",
+    "start",
+    "resume",
+    "restore",
+    "verify"
+  ],
+  "pending": null,
+  "state": "COMPLETE",
+  "at": 1791872215.6960819,
+  "error": null
+}
