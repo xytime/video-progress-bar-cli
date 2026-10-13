@@ -12636,6 +12636,21 @@ class PipelineDB(WallstreetExperimentDAL):
                 )
                 if cur.rowcount > 0:
                     inserted += 1
+                else:
+                    # 已存在：记录“最新观察值”。审批绑定快照（bound_source_comment_hash）保存在任务行上，
+                    # 不在此改写；正文变化后旧审批在认领/提交意图处因 SOURCE_COMMENT_CHANGED 被阻断。
+                    # 不改 status，不触碰任务与防重账本，故不会复活已提交/未知/成功任务。
+                    conn.execute(
+                        """
+                        UPDATE wechat_audience_comments
+                        SET content = ?, content_hash = ?, nickname = ?, like_count = ?,
+                            has_author_reply = MAX(has_author_reply, ?)
+                        WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?
+                          AND content_hash != ?
+                        """,
+                        (content, content_hash, nickname, like_count, has_reply,
+                         account_key, platform_post_id, cid, content_hash),
+                    )
             conn.commit()
         return inserted
 
@@ -13383,6 +13398,7 @@ class PipelineDB(WallstreetExperimentDAL):
         reason: Optional[str] = None,
         outcome: Optional[str] = None,
         not_sent_evidence: Optional[str] = None,
+        account_key: Optional[str] = None,
     ) -> bool:
         """只读对账决策落地，三种结果互不混淆，且任何结果都不会触发重发：
 
@@ -13408,6 +13424,8 @@ class PipelineDB(WallstreetExperimentDAL):
             ).fetchone()
             if not task or task["status"] not in ("UNCERTAIN", "SUBMIT_INTENT"):
                 return False
+            if account_key is not None and (task["account_key"] or "") != account_key:
+                return False  # 跨账号对账：不得修改目标任务与防重账本
 
             post_id = task["platform_post_id"]
             root_id = task["comment_id"]

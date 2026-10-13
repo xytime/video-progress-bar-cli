@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -392,8 +393,13 @@ class SecondaryReplyBrowserAdapter:
         before_submit: Optional[Callable[[], bool]] = None,
         verify_only: bool = False,
         db: Optional[PipelineDB] = None,
+        send_only: bool = False,
     ) -> SecondaryBrowserResult:
-        """在已打开的页面中执行卡片绑定、前置复审、意图落盘、发评及回读验证。"""
+        """在已打开的页面中执行卡片绑定、前置复审、意图落盘、发评及回读验证。
+
+        ``send_only=True`` 时发出唯一出站请求并检查守卫后即返回 ``SENT``（不在本会话内回读、不写库），
+        由业务编排在全新会话中独立回读并落终态。
+        """
         # 检查登录态有效性
         is_login, _ = check_explicit_login_prompt(page)
         if is_login:
@@ -406,6 +412,14 @@ class SecondaryReplyBrowserAdapter:
             return "FAILED", None, f"未找到作品卡片 (exportId: {platform_post_id})"
         card.click()
         page.wait_for_timeout(2000)
+
+        # 文案前缀只用于导航：点开后详情区必须携带与原生作品 ID 一致的标识，否则拒绝（不信任标题匹配）
+        bound = page.locator("[data-current-object-id]")
+        if bound.count() < 1 or any(
+            (bound.nth(i).get_attribute("data-current-object-id") or "") != platform_post_id
+            for i in range(bound.count())
+        ):
+            return "FAILED", None, f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})，拒绝继续"
 
         # 2. 定位指定的一级观众评论 (通过 root_comment_id 绑定)
         # 检查是否已存在作者二级回复（锁内复审）
@@ -484,13 +498,19 @@ class SecondaryReplyBrowserAdapter:
             mism = guard.mismatched_requests[0]
             return "FAILED", None, f"发送前路由守卫拦截: {mism.get('reason')} ({mism.get('details')})"
 
+        if send_only:
+            if guard.requests:
+                return "SENT", None, None
+            return "UNCERTAIN", None, "意图已持久化，但未观察到出站请求"
+
         # 7. 验证接口响应：只认与唯一准许出站 Request 关联且字段一致的业务成功回执
         api_success, new_reply_id, _resp_reason = guard.validate_success_response()
 
-        # 8. 刷新并进行独立回读校验
+        # 8. 刷新并进行独立回读校验（刷新前截图只作为“未经核对”的现场记录，不作为成功证据）
+        pre_reload_img = attempt_dir / "post_submit_pre_reload_unverified.png"
         evidence_img = attempt_dir / "verified_reply.png"
         try:
-            page.screenshot(path=str(evidence_img))
+            page.screenshot(path=str(pre_reload_img))
         except Exception:
             pass
 
@@ -519,13 +539,26 @@ class SecondaryReplyBrowserAdapter:
                                 content_loc = node.first.locator("[data-reply-content]")
                                 shown = content_loc.first.inner_text() if content_loc.count() == 1 else None
                                 text_ok = shown is not None and (
-                                    unicodedata.normalize("NFC", shown) == unicodedata.normalize("NFC", reply_content)
+                                    _normalized_text(unicodedata.normalize("NFC", shown))
+                                    == _normalized_text(unicodedata.normalize("NFC", reply_content))
                                 )
                                 readback_ok = bool(author_ok and text_ok)
                 except Exception as exc:  # 回读异常不得判成功
                     logger.warning("[SecondaryReplyBrowser] 重新加载回读异常: %s", exc)
 
             if readback_ok:
+                # 成功证据必须是刷新并核对通过之后的页面状态；保存失败则不得报告 VERIFIED（避免无证据成功）
+                try:
+                    page.screenshot(path=str(evidence_img))
+                except Exception as exc:
+                    logger.warning("[SecondaryReplyBrowser] 成功证据保存失败: %s", exc)
+                    if db:
+                        db.record_secondary_reply_uncertain(
+                            task_id=task_id,
+                            error_message="平台回读确认，但成功证据保存失败，转入只读对账",
+                            evidence_path=str(pre_reload_img),
+                        )
+                    return "UNCERTAIN", str(pre_reload_img), "成功证据保存失败，转入 UNCERTAIN"
                 if db:
                     persisted = db.record_secondary_reply_success(
                         task_id=task_id,
@@ -549,9 +582,9 @@ class SecondaryReplyBrowserAdapter:
                     db.record_secondary_reply_uncertain(
                         task_id=task_id,
                         error_message="平台接口成功返回 201，但页面独立回读未找到回复节点，转入只读对账",
-                        evidence_path=str(evidence_img),
+                        evidence_path=str(pre_reload_img),
                     )
-                return "UNCERTAIN", str(evidence_img), "平台返回 201 但独立回读未确认，转入 UNCERTAIN"
+                return "UNCERTAIN", str(pre_reload_img), "平台返回 201 但独立回读未确认，转入 UNCERTAIN"
 
         # 若发出了请求但未收到明确成功回执，必须进入 UNCERTAIN 只读对账
         if guard.requests:
@@ -559,11 +592,95 @@ class SecondaryReplyBrowserAdapter:
                 db.record_secondary_reply_uncertain(
                     task_id=task_id,
                     error_message="发评请求已发出，但未收到确定的 201 成功回执",
-                    evidence_path=str(evidence_img),
+                    evidence_path=str(pre_reload_img),
                 )
-            return "UNCERTAIN", str(evidence_img), "未收到确定成功回执，转入 UNCERTAIN 对账"
+            return "UNCERTAIN", str(pre_reload_img), "未收到确定成功回执，转入 UNCERTAIN 对账"
 
-        return "FAILED", str(evidence_img), "未触发发评网络请求"
+        return "FAILED", str(pre_reload_img), "未触发发评网络请求"
+
+    @contextlib.contextmanager
+    def open_session(self, guard: Optional[SecondaryReplySubmissionGuard] = None):
+        """会话锁 + 全新 Chromium 上下文 + 发送路由守卫，yield 已打开评论页的 page。
+
+        每次调用都是全新会话，因此在其中读到的数据来自服务器而非上一次会话的乐观 DOM。
+        """
+        if not self.state_path.exists():
+            raise FileNotFoundError(f"登录态文件不存在: {self.state_path}")
+        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=self.headless, args=["--window-size=1920,1080", "--no-proxy-server"],
+                )
+                context = browser.new_context(
+                    viewport={"width": 1920, "height": 1080}, storage_state=str(self.state_path),
+                )
+                try:
+                    page = context.new_page()
+                    if guard is not None:
+                        def route_interceptor(route):
+                            if not guard.capture_request(route.request):
+                                logger.critical("[SecondaryReplyBrowser] 拦截到违规或错帖请求，中止请求！")
+                                route.abort()
+                                return
+                            route.continue_()
+
+                        page.route("**/comment/create_comment*", route_interceptor)
+                        page.on("response", guard.capture_response)
+                    page.goto(self.comment_url, timeout=45000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(2000)
+                    yield page
+                finally:
+                    context.close()
+                    browser.close()
+
+    def find_author_reply(
+        self,
+        page,
+        *,
+        platform_post_id: str,
+        root_comment_id: str,
+        reply_content: str,
+        author_id: str,
+        video_title: Optional[str] = None,
+        published_description: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """只读：在已打开页面的正确作品/父评论下，查找同作者且正文 NFC 完整等值的回复。
+
+        返回 (状态, 回复原生 ID)；状态为 FOUND / NOT_FOUND / AMBIGUOUS / UNKNOWN。
+        只有恰好一个匹配才 FOUND；找不到不代表未发出，仅代表“未观察到”。
+        """
+        if not author_id or "'" in author_id:
+            return "UNKNOWN", ""
+        is_login, _ = check_explicit_login_prompt(page)
+        if is_login:
+            return "UNKNOWN", ""
+        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
+        if card is None:
+            return "UNKNOWN", ""
+        card.click()
+        page.wait_for_timeout(1500)
+        _replied, parent = self._check_author_already_replied(page, root_comment_id, author_id)
+        if parent is None:
+            return "UNKNOWN", ""
+        post_attr = parent.locator("xpath=ancestor::article[@data-current-object-id]")
+        if post_attr.count() != 1 or post_attr.first.get_attribute("data-current-object-id") != platform_post_id:
+            return "UNKNOWN", ""
+        want = _normalized_text(unicodedata.normalize("NFC", reply_content))
+        nodes = parent.locator(".level-two, [data-level-two]").locator(f"[data-author-id='{author_id}']")
+        matches: List[str] = []
+        for i in range(nodes.count()):
+            node = nodes.nth(i)
+            content = node.locator("[data-reply-content]")
+            if content.count() != 1:
+                continue
+            if _normalized_text(unicodedata.normalize("NFC", content.first.inner_text())) == want:
+                matches.append(node.get_attribute("data-comment-id") or "")
+        matches = [m for m in matches if m]
+        if len(matches) == 1:
+            return "FOUND", matches[0]
+        if len(matches) > 1:
+            return "AMBIGUOUS", ""
+        return "NOT_FOUND", ""
 
     def _resolve_video_card(
         self,

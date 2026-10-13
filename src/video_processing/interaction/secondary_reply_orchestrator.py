@@ -17,9 +17,12 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
+import json
 import logging
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from video_processing.db.database import PipelineDB
@@ -56,6 +59,8 @@ class LookupResult:
     found: bool
     reply_id: str = ""
     complete: bool = False  # 是否完整遍历（仅供报告；未见回复不等于未出站）
+    evidence_path: str = ""  # 刷新后核对通过时保存的页面证据（截图等）
+    evidence_ok: bool = True  # False 表示已读到回复但证据保存失败：不得判 VERIFIED
 
 
 class SecondaryReplyPlatformPort(Protocol):
@@ -96,9 +101,13 @@ class SecondaryReplyOrchestrator:
         admin_ids_override: Optional[str] = None,
         clock: Optional[Callable[[], datetime.datetime]] = None,
         allow_fixture_drafts: bool = False,
+        evidence_dir: Optional[Path] = None,
     ) -> None:
         if not account_key:
             raise ValueError("account_key 不能为空")
+        if not getattr(platform, "account_finder_id", ""):
+            raise ValueError("平台端口必须提供已验证的作者原生账号标识 account_finder_id")
+        self.evidence_dir = Path(evidence_dir) if evidence_dir else None  # 未设置时仅用于离线替身的内存凭据
         self.db = db
         self.service = service
         self.platform = platform
@@ -167,6 +176,12 @@ class SecondaryReplyOrchestrator:
 
     # ---------------- 发送 ----------------
     def submit(self, task_id: int) -> SubmitOutcome:
+        # 认领前先只读核对账号归属：跨账号调用不得修改目标任务、租约、审批或账本
+        existing = self.db.get_secondary_reply_task(task_id)
+        if not existing:
+            return SubmitOutcome("NOT_CLAIMABLE", "任务不存在", task_id)
+        if (existing.get("account_key") or "") != self.account_key:
+            return SubmitOutcome("REJECTED_ACCOUNT_MISMATCH", "ACCOUNT_KEY_MISMATCH（未改动任何状态）", task_id)
         claimed = self.db.claim_approved_reply_task(task_id=task_id)
         if not claimed:
             return SubmitOutcome("NOT_CLAIMABLE", "任务不是已批准状态或租约仍有效", task_id)
@@ -201,9 +216,13 @@ class SecondaryReplyOrchestrator:
             self.db.record_secondary_reply_failed(task_id, error_message="AUTHOR_REPLY_STATE_UNKNOWN")
             return SubmitOutcome("REJECTED_BEFORE_INTENT", "无法完整判断是否已回复，禁止发送", task_id)
 
-        guard = SecondaryReplySubmissionGuard(
-            post_id, root_id, final_text, expected_finder_id=self.platform.account_finder_id
-        )
+        make_guard = getattr(self.platform, "make_guard", None)
+        if callable(make_guard):
+            guard = make_guard(post_id, root_id, final_text)
+        else:
+            guard = SecondaryReplySubmissionGuard(
+                post_id, root_id, final_text, expected_finder_id=self.platform.account_finder_id
+            )
         intent_msgs: List[str] = []
 
         def before_submit() -> bool:
@@ -247,34 +266,81 @@ class SecondaryReplyOrchestrator:
             self.db.record_secondary_reply_uncertain(task_id, error_message=f"无关联的业务成功回执: {reason}")
             return SubmitOutcome("UNCERTAIN", reason, task_id)
 
-        # 刷新后独立回读
+        # 刷新后独立回读（全新会话读取服务器数据）
         look = self.platform.lookup_reply(post_id=post_id, root_id=root_id, text=final_text)
         if not (look.found and look.reply_id == reply_id):
             self.db.record_secondary_reply_uncertain(task_id, error_message="平台回执成功但刷新后回读未确认")
             return SubmitOutcome("UNCERTAIN", "readback_not_confirmed", task_id)
+        evidence_ref = self._save_receipt(
+            task_id=task_id, account_key=self.account_key, attempt_id=lease, post_id=post_id, root_id=root_id,
+            reply_id=reply_id, text=final_text, look=look, source="submit",
+        )
+        if not evidence_ref:
+            # 已读到回复但证据无法保存：不得无证据成功；保留意图转只读对账，绝不重发
+            self.db.record_secondary_reply_uncertain(task_id, error_message="回读确认但成功证据保存失败，转只读对账")
+            return SubmitOutcome("UNCERTAIN", "EVIDENCE_NOT_SAVED", task_id)
         if not self.db.record_secondary_reply_success(
-            task_id, platform_reply_comment_id=reply_id, evidence_path="fixture://readback"
+            task_id, platform_reply_comment_id=reply_id, evidence_path=evidence_ref,
         ):
             self.db.record_secondary_reply_uncertain(task_id, error_message="成功落库被拒绝")
             return SubmitOutcome("UNCERTAIN", "success_persist_rejected", task_id)
-        return SubmitOutcome("VERIFIED", reply_id, task_id, {"reply_id": reply_id})
+        return SubmitOutcome("VERIFIED", reply_id, task_id, {"reply_id": reply_id, "evidence": evidence_ref})
+
+    def _save_receipt(
+        self, *, task_id: int, account_key: str, attempt_id: str, post_id: str, root_id: str,
+        reply_id: str, text: str, look: LookupResult, source: str,
+    ) -> str:
+        """保存关联 任务/账号/尝试/作品/父评论/原生回复 ID 的凭据；失败返回空串。
+
+        凭据内容来自刷新后的回读结果；未配置 evidence_dir 时只允许离线替身使用内存引用。
+        """
+        if not look.evidence_ok:
+            return ""
+        if self.evidence_dir is None:
+            return getattr(self.platform, "evidence_ref", "fixture://readback")
+        try:
+            self.evidence_dir.mkdir(parents=True, exist_ok=True)
+            receipt = {
+                "task_id": task_id, "account_key": account_key, "attempt_id": attempt_id, "source": source,
+                "platform_post_id": post_id, "root_comment_id": root_id, "platform_reply_comment_id": reply_id,
+                "reply_text_sha256": hashlib.sha256(unicodedata.normalize("NFC", text).encode("utf-8")).hexdigest(),
+                "readback_layer": "fresh_session_admin_view", "public_visibility": "NOT_CHECKED",
+                "screenshot_after_refresh": look.evidence_path or None,
+            }
+            path = self.evidence_dir / f"receipt_task{task_id}_{reply_id}.json"
+            path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+            return str(path)
+        except Exception as exc:
+            logger.warning("成功凭据保存失败: %s", exc)
+            return ""
 
     # ---------------- 只读对账 ----------------
     def reconcile(self, task_id: int) -> SubmitOutcome:
-        """只读对账：不发送任何写请求。"""
+        """只读对账：不发送任何写请求。先核对账号，再访问平台。"""
         task = self.db.get_secondary_reply_task(task_id)
         if not task or task["status"] not in ("UNCERTAIN", "SUBMIT_INTENT"):
             return SubmitOutcome("NOT_RECONCILABLE", "", task_id)
+        if (task.get("account_key") or "") != self.account_key:
+            return SubmitOutcome("REJECTED_ACCOUNT_MISMATCH", "ACCOUNT_KEY_MISMATCH（未改动任何状态）", task_id)
         look = self.platform.lookup_reply(
             post_id=task["platform_post_id"], root_id=task["comment_id"], text=task["formatted_reply"]
         )
         if look.found and look.reply_id:
-            self.db.reconcile_secondary_reply_uncertain(
-                task_id, verified=True, platform_reply_comment_id=look.reply_id, outcome="FOUND"
+            evidence_ref = self._save_receipt(
+                task_id=task_id, account_key=self.account_key, attempt_id="reconcile",
+                post_id=task["platform_post_id"], root_id=task["comment_id"], reply_id=look.reply_id,
+                text=task["formatted_reply"], look=look, source="reconcile",
             )
-            return SubmitOutcome("VERIFIED", look.reply_id, task_id)
+            if not evidence_ref:
+                return SubmitOutcome("UNCERTAIN", "EVIDENCE_NOT_SAVED", task_id)
+            if not self.db.reconcile_secondary_reply_uncertain(
+                task_id, verified=True, platform_reply_comment_id=look.reply_id, outcome="FOUND",
+                evidence_path=evidence_ref, account_key=self.account_key,
+            ):
+                return SubmitOutcome("UNCERTAIN", "RECONCILE_PERSIST_REJECTED", task_id)
+            return SubmitOutcome("VERIFIED", look.reply_id, task_id, {"evidence": evidence_ref})
         self.db.reconcile_secondary_reply_uncertain(
             task_id, verified=False, outcome="NOT_OBSERVED_INCOMPLETE",
-            reason="未观察到回复，无法证明未发出，保持 UNCERTAIN",
+            reason="未观察到回复，无法证明未发出，保持 UNCERTAIN", account_key=self.account_key,
         )
         return SubmitOutcome("UNCERTAIN", "NOT_OBSERVED_INCOMPLETE", task_id)
