@@ -1,0 +1,19 @@
+{
+  "recorded_by": "Codex",
+  "date": "2026-10-13",
+  "status": "BLOCKED_BY_HOST_SITE_SAFETY_POLICY",
+  "user_readonly_authorized": true,
+  "attempt": {
+    "tool": "mcp__cua_repl.js",
+    "operation": "cua.getTab(existing_video_channels_tab)",
+    "target": "https://channels.weixin.qq.com/login.html",
+    "result": "Browser Use rejected this action due to browser security policy. The site-safety policy blocks this action; no user permission prompt or Auto-review was attempted."
+  },
+  "policy_boundary": "No workaround, indirect execution, raw CDP, alternate browser surface or policy circumvention permitted.",
+  "native_account_identity_verified": false,
+  "post_root_comment_mapping_verified": false,
+  "secondary_reply_pagination_verified": false,
+  "platform_samples_collected": false,
+  "real_submission_performed": false,
+  "remaining": "Restore permitted platform access, then collect and verify native identity, target mapping and pagination evidence. Do not infer platform readiness from offline tests."
+}

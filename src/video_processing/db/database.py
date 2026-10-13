@@ -12781,14 +12781,18 @@ class PipelineDB(WallstreetExperimentDAL):
         source_comment_hash: Optional[str] = None,
         draft_revision: Optional[int] = None,
         reply_text_hash: Optional[str] = None,
+        expected_account_key: Optional[str] = None,
     ) -> bool:
         """服务端绑定随机审批 Token、审批人、审批 chat 与过期时间，状态置为 PENDING_REVIEW。"""
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
                 (int(task_id),),
             ).fetchone()
             if not task:
+                return False
+            if expected_account_key is not None and (not expected_account_key or task["account_key"] != expected_account_key):
                 return False
 
             rev = draft_revision if draft_revision is not None else int(task["revision"])
@@ -12825,6 +12829,7 @@ class PipelineDB(WallstreetExperimentDAL):
         chat_id: str,
         action: str,
         now_utc_iso: Optional[str] = None,
+        expected_account_key: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """一次性原子消费审批 Token 并更新状态为 APPROVED 或 REJECTED。"""
         if action not in ("APPROVE", "REJECT"):
@@ -12839,6 +12844,8 @@ class PipelineDB(WallstreetExperimentDAL):
             ).fetchone()
             if not task:
                 return False, "TASK_NOT_FOUND"
+            if expected_account_key is not None and (not expected_account_key or task["account_key"] != expected_account_key):
+                return False, "ACCOUNT_MISMATCH"
             if task["status"] not in ("PENDING_REVIEW", "DRAFTED"):
                 return False, f"INVALID_STATUS: {task['status']}"
             if task["is_token_consumed"]:

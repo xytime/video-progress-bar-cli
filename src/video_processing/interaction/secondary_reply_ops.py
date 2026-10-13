@@ -131,7 +131,7 @@ def preflight(db: PipelineDB, task_id: int, *, account_key: str, finder_id: str)
 # ---------------------------------------------------------------- 本地人工审批 ----
 
 def approve_local(
-    db: PipelineDB, task_id: int, *, confirm_reply_sha12: str, ttl_minutes: int = 60,
+    db: PipelineDB, task_id: int, *, account_key: str, confirm_reply_sha12: str, ttl_minutes: int = 60,
 ) -> Dict[str, Any]:
     """本地人工审批：操作者必须回填正文哈希前 12 位以证明已核对将发送的正文。"""
     ident = local_approver_identity()
@@ -140,6 +140,8 @@ def approve_local(
     task = db.get_secondary_reply_task(task_id)
     if not task:
         return {"ok": False, "reason": "TASK_NOT_FOUND"}
+    if not account_key or task["account_key"] != account_key:
+        return {"ok": False, "reason": "ACCOUNT_MISMATCH"}
     if task["status"] not in ("PENDING_REVIEW", "DRAFTED"):
         return {"ok": False, "reason": f"INVALID_STATUS: {task['status']}"}
     if task["provider"] == "rule_secondary_provider":
@@ -152,12 +154,13 @@ def approve_local(
         "%Y-%m-%d %H:%M:%S"
     )
     if not db.bind_reply_task_approval_request(
-        task_id, approval_token=token, expires_at_iso=expires,
+        task_id, approval_token=token, expires_at_iso=expires, expected_account_key=account_key,
         approver_id=ident["approver_id"], approver_chat_id=ident["chat_id"],
     ):
         return {"ok": False, "reason": "BIND_FAILED"}
     ok, msg = db.consume_reply_task_approval(
         task_id=task_id, token=token, approver_id=ident["approver_id"], chat_id=ident["chat_id"], action="APPROVE",
+        expected_account_key=account_key,
     )
     return {"ok": bool(ok), "result": msg, "expires_at_utc": expires, "approver_id": ident["approver_id"]}
 

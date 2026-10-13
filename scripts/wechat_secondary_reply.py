@@ -303,7 +303,13 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     if not args.db_path.exists() and args.command != "import-draft":
         print(json.dumps({"ok": False, "reason": "DB_NOT_FOUND"}, ensure_ascii=False))
         return 2
-    db = PipelineDB(db_path=str(args.db_path))
+    read_only = args.command in {"preflight", "status"}
+    if read_only:
+        refusal = _read_only_refusal(args.db_path)
+        if refusal:
+            print(json.dumps({"ok": False, "reason": refusal}, ensure_ascii=False))
+            return 2
+    db = PipelineDB(db_path=str(args.db_path), read_only=read_only)
 
     def need(*names):
         missing = [n for n in names if getattr(args, n.replace("-", "_")) in (None, "")]
@@ -329,7 +335,8 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     if args.command == "approve":
         need("confirm-reply-sha12")
         return show(ops.approve_local(
-            db, args.task_id, confirm_reply_sha12=args.confirm_reply_sha12, ttl_minutes=args.ttl_minutes,
+            db, args.task_id, account_key=account_key,
+            confirm_reply_sha12=args.confirm_reply_sha12, ttl_minutes=args.ttl_minutes,
         ))
 
     factory = platform_factory or _build_real_platform
