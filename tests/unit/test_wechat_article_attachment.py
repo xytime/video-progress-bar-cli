@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-13 | Antigravity | 补齐 P1 串联测试：验证普通文章超时清退后真实回执写入 requested_url 并成功通过 _finalize_submission_attachments 降级 NONE；补充 URL/配置漂移、强制文章与清退失败反向用例。 |
 | 1.1.0 | 2026-10-12 | Antigravity | 补充 P1/P2 回归测试：NONE 分支旧回执/配置漂移/应有回执缺失拒绝测试；上传器开关隔离与显式参数阻断测试；证据目录复用防 NONE 覆盖测试。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：全量覆盖公众号文章挂接一期核心契约、仲裁矩阵与 G1~G3 保护门禁。 |
 """
@@ -240,7 +241,7 @@ def test_tc06_article_timeout_and_clear_success(tmp_path):
     assert receipt["state"] == "UNBOUND"
     assert receipt["fallback_reason"] == "ARTICLE_TIMEOUT_CLEARED"
 
-    assert finalize_none_before_submit(tmp_path, product_picker, picker) is True
+    assert finalize_none_before_submit(tmp_path, product_picker, picker, article_payload=payload) is True
 
 
 def test_tc07_article_timeout_and_clear_failure(tmp_path):
@@ -1176,4 +1177,173 @@ def test_finalize_none_rejects_unbound_receipt_with_residual_product_or_article(
     assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is False
 
 
+def test_p1_article_timeout_cleared_downgrade_e2e_integration(tmp_path):
+    """P1 终验串联集成测试：
+    验证普通非强制文章任务发生超时后，真实清退成功生成包含 requested_url 的 UNBOUND 回执，
+    并完整通过上传器真实 _finalize_submission_attachments 门禁降级为 NONE (True, 0)；
+    同时验证 URL 漂移、强制文章、清退失败与配置漂移坚决阻断。
+    """
+    # 1. 正向用例：普通文章超时 + 清退成功 -> 真实产物走 _finalize_submission_attachments 成功降级 (True, 0)
+    payload = {
+        "task_id": "art_timeout_e2e_001",
+        "config_version": "1.0.0",
+        "config_digest": "sha256_digest_art_e2e_001",
+        "url": VALID_MP_URL,
+        "title": VALID_TITLE,
+        "require_article": False,
+    }
+    picker = MockArticlePicker(attach_error=TimeoutError("Inject timed out"), cancel_result=True)
+    product_picker = MockProductPicker(binding=None)
 
+    ok = execute_article_task(payload, picker, tmp_path, product_picker=product_picker)
+    assert ok is True
+
+    receipt_path = tmp_path / "article_selection_receipt.json"
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["state"] == "UNBOUND"
+    assert receipt["fallback_reason"] == "ARTICLE_TIMEOUT_CLEARED"
+    assert receipt["task_id"] == "art_timeout_e2e_001"
+    assert receipt["config_version"] == "1.0.0"
+    assert receipt["config_digest"] == "sha256_digest_art_e2e_001"
+    assert receipt["requested_url"] == VALID_MP_URL
+    assert receipt["requested_title"] == VALID_TITLE
+    assert receipt["binding_confirmed"] is False
+    assert receipt["unbound_confirmed"] is True
+
+    # 串联调用上传器终验门禁
+    fin_ok, code = _finalize_submission_attachments(
+        evidence_root=tmp_path,
+        product_picker=product_picker,
+        article_picker=picker,
+        task_product=None,
+        task_article=payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok is True
+    assert code == 0
+
+    readback_path = tmp_path / "none_pre_submit_readback.json"
+    assert readback_path.exists()
+    readback = json.loads(readback_path.read_text(encoding="utf-8"))
+    assert readback["final_verified"] is True
+    assert readback["attachment_type"] == "NONE"
+    assert readback["article_task_id"] == "art_timeout_e2e_001"
+    assert readback["article_receipt_state"] == "UNBOUND"
+
+    # 2. 反向用例 A: URL 漂移 (payload url 与 receipt requested_url 不一致) -> 坚决阻断
+    drift_url_payload = dict(payload, url="https://mp.weixin.qq.com/s/another_article_url_drift")
+    fin_ok, code = _finalize_submission_attachments(
+        evidence_root=tmp_path,
+        product_picker=product_picker,
+        article_picker=picker,
+        task_product=None,
+        task_article=drift_url_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok is False
+    assert code == 1
+
+    # 3. 反向用例 B: task_id / config 漂移 -> 坚决阻断
+    drift_task_payload = dict(payload, task_id="drifted_task_999")
+    fin_ok, code = _finalize_submission_attachments(
+        evidence_root=tmp_path,
+        product_picker=product_picker,
+        article_picker=picker,
+        task_product=None,
+        task_article=drift_task_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok is False
+    assert code == 1
+
+    drift_ver_payload = dict(payload, config_version="2.0.0")
+    fin_ok, code = _finalize_submission_attachments(
+        evidence_root=tmp_path,
+        product_picker=product_picker,
+        article_picker=picker,
+        task_product=None,
+        task_article=drift_ver_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok is False
+    assert code == 1
+
+    drift_dig_payload = dict(payload, config_digest="drifted_digest_sha256")
+    fin_ok, code = _finalize_submission_attachments(
+        evidence_root=tmp_path,
+        product_picker=product_picker,
+        article_picker=picker,
+        task_product=None,
+        task_article=drift_dig_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok is False
+    assert code == 1
+
+    # 4. 反向用例 C: require_article=True (强制文章任务) 即使清退成功亦禁止降级
+    tmp_mandatory = tmp_path / "mandatory"
+    tmp_mandatory.mkdir()
+    mandatory_payload = dict(payload, require_article=True, task_id="art_mandatory_task")
+    picker_m = MockArticlePicker(attach_error=TimeoutError("Inject timed out"), cancel_result=True)
+    prod_picker_m = MockProductPicker(binding=None)
+
+    ok_m = execute_article_task(mandatory_payload, picker_m, tmp_mandatory, product_picker=prod_picker_m)
+    assert ok_m is False  # 执行器拒绝
+
+    receipt_m = json.loads((tmp_mandatory / "article_selection_receipt.json").read_text(encoding="utf-8"))
+    assert receipt_m["state"] == "BLOCKED"
+    assert receipt_m["binding_required"] is True
+    assert receipt_m["reason"] == "ARTICLE_TIMEOUT_REQUIRED_BLOCKED"
+    assert receipt_m["requested_url"] == VALID_MP_URL
+
+    fin_ok_m, code_m = _finalize_submission_attachments(
+        evidence_root=tmp_mandatory,
+        product_picker=prod_picker_m,
+        article_picker=picker_m,
+        task_product=None,
+        task_article=mandatory_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok_m is False
+    assert code_m == 1
+
+    # 5. 反向用例 D: 清退失败 (cancel_and_clear=False) -> Fail-Closed 坚决阻断
+    tmp_clear_fail = tmp_path / "clear_fail"
+    tmp_clear_fail.mkdir()
+    fail_payload = dict(payload, task_id="art_clear_fail_task")
+    picker_f = MockArticlePicker(attach_error=TimeoutError("Inject timed out"), cancel_result=False)
+    prod_picker_f = MockProductPicker(binding=None)
+
+    ok_f = execute_article_task(fail_payload, picker_f, tmp_clear_fail, product_picker=prod_picker_f)
+    assert ok_f is False
+
+    receipt_f = json.loads((tmp_clear_fail / "article_selection_receipt.json").read_text(encoding="utf-8"))
+    assert receipt_f["state"] == "BLOCKED"
+    assert receipt_f["reason"] == "CLEANUP_FAILED_AFTER_TIMEOUT"
+    assert receipt_f["requested_url"] == VALID_MP_URL
+
+    fin_ok_f, code_f = _finalize_submission_attachments(
+        evidence_root=tmp_clear_fail,
+        product_picker=prod_picker_f,
+        article_picker=picker_f,
+        task_product=None,
+        task_article=fail_payload,
+        expected_attachment="NONE",
+        require_bound_product=False,
+        enable_article_link=True,
+    )
+    assert fin_ok_f is False
+    assert code_f == 1

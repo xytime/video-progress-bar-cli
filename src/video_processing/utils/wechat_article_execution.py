@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-13 | Antigravity | 修复 P1: 补齐 execute_article_task 超时清退成功 (UNBOUND) 与异常回执中的 requested_url/title，打通非强制文章超时降级 NONE 门禁。 |
 | 1.3.0 | 2026-10-12 | Antigravity | 强化 finalize_none 门禁：补全无 payload 路径下的 UNBOUND/SKIPPED、binding_confirmed=False 与残留字段核验；兼容 required 判定。 |
 | 1.2.0 | 2026-10-12 | Antigravity | 修复 P1: finalize_none 补全商品与文章任务一致性检查（task_id/config_version/digest/url/required/缺失回执拒绝）；清理竞争回执防御 P2。 |
 | 1.1.0 | 2026-10-12 | Antigravity | 修复 G2 漏洞与仲裁逃逸：严格检查 payload 一致性（task_id/config_version/digest/url）；finalize_none 坚决阻断 BLOCKED 状态；支持 require_article 强制文章不降级。 |
@@ -65,6 +66,8 @@ def execute_article_task(
                 "task_id": task_id,
                 "config_version": config_version,
                 "config_digest": config_digest,
+                "requested_url": url,
+                "requested_title": title,
             }
             atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
             return False
@@ -80,6 +83,8 @@ def execute_article_task(
             "task_id": task_id,
             "config_version": config_version,
             "config_digest": config_digest,
+            "requested_url": url,
+            "requested_title": title,
         }
         atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
         return True
@@ -125,6 +130,8 @@ def execute_article_task(
             "task_id": task_id,
             "config_version": config_version,
             "config_digest": config_digest,
+            "requested_url": target.url,
+            "requested_title": target.title,
         }
         atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
         return False
@@ -161,6 +168,8 @@ def execute_article_task(
                     "task_id": task_id,
                     "config_version": config_version,
                     "config_digest": config_digest,
+                    "requested_url": target.url,
+                    "requested_title": target.title,
                 }
                 atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
                 return False
@@ -177,6 +186,8 @@ def execute_article_task(
                 "task_id": task_id,
                 "config_version": config_version,
                 "config_digest": config_digest,
+                "requested_url": target.url,
+                "requested_title": target.title,
             }
             atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
             return True
@@ -192,6 +203,8 @@ def execute_article_task(
                 "task_id": task_id,
                 "config_version": config_version,
                 "config_digest": config_digest,
+                "requested_url": target.url,
+                "requested_title": target.title,
             }
             atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
             return False
@@ -210,9 +223,12 @@ def execute_article_task(
             "task_id": task_id,
             "config_version": config_version,
             "config_digest": config_digest,
+            "requested_url": url,
+            "requested_title": title,
         }
         atomic_json(evidence_dir / "article_selection_receipt.json", receipt)
         return False
+
 
 
 def finalize_article_before_submit(
