@@ -95,6 +95,7 @@ class SecondaryReplyOrchestrator:
         approver_chat_id: str,
         admin_ids_override: Optional[str] = None,
         clock: Optional[Callable[[], datetime.datetime]] = None,
+        allow_fixture_drafts: bool = False,
     ) -> None:
         if not account_key:
             raise ValueError("account_key 不能为空")
@@ -106,6 +107,7 @@ class SecondaryReplyOrchestrator:
         self.approver_id = approver_id
         self.approver_chat_id = approver_chat_id
         self.admin_ids_override = admin_ids_override
+        self.allow_fixture_drafts = allow_fixture_drafts  # 仅离线演示/测试为 True；真实 provider 未验证前默认拒绝发送固定套话草稿
         self.clock = clock  # 仅用于离线演示/测试固定时钟；生产为 None 使用真实 UTC
 
     # ---------------- 采集 / 草稿 / 审批 ----------------
@@ -173,6 +175,10 @@ class SecondaryReplyOrchestrator:
         if (claimed.get("account_key") or "") != self.account_key:
             self.db.record_secondary_reply_failed(task_id, error_message="ACCOUNT_KEY_MISMATCH")
             return SubmitOutcome("REJECTED_BEFORE_INTENT", "ACCOUNT_KEY_MISMATCH", task_id)
+
+        if claimed.get("provider") == "rule_secondary_provider" and not self.allow_fixture_drafts:
+            self.db.record_secondary_reply_failed(task_id, error_message="REAL_PROVIDER_UNAVAILABLE_FIXTURE_DRAFT")
+            return SubmitOutcome("REJECTED_BEFORE_INTENT", "REAL_PROVIDER_UNAVAILABLE: fixture 草稿不得发送", task_id)
 
         # 发送前终审：以当前政策检查实际获批正文（中英分别、合并与跨字段）
         try:

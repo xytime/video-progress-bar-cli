@@ -112,6 +112,28 @@ class SecondaryReplyCensor:
         return True, None
 
 
+def _cjk_bigrams(text: str) -> set:
+    cleaned = re.sub(r"[\s\W\d_]+", "", text or "")
+    return {cleaned[i:i + 2] for i in range(len(cleaned) - 1)}
+
+
+def best_relevant_evidence_ref(comment_text: str, video_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """从已提供材料中选出与评论有字面重叠的片段；没有任何重叠则认为材料与评论无关，返回 None。
+
+    这只是确定性的最低门槛（防止给无关材料硬挂来源），不证明语义上的事实依据。
+    """
+    evidence = (video_context or {}).get("evidence")
+    if not isinstance(evidence, dict):
+        return None
+    cbg = _cjk_bigrams(comment_text)
+    best_ref, best_score = None, 0
+    for ref in allowed_evidence_refs(video_context):
+        score = len(cbg & _cjk_bigrams(evidence[ref]))
+        if score > best_score:
+            best_ref, best_score = ref, score
+    return best_ref
+
+
 def allowed_evidence_refs(video_context: Optional[Dict[str, Any]]) -> List[str]:
     """从上游提供的材料白名单取可引用的证据 ID（video_context['evidence'] 为 {ref_id: 片段文本}）。"""
     evidence = (video_context or {}).get("evidence")
@@ -121,7 +143,13 @@ def allowed_evidence_refs(video_context: Optional[Dict[str, Any]]) -> List[str]:
 
 
 class RuleSecondaryReplyProvider:
-    """基于确定性规则与受控语料的二级回复生成器。"""
+    """基于确定性规则与受控语料的二级回复生成器。
+
+    仅为 fixture/离线演示提供者（FIXTURE_ONLY）：固定套话不是正式生成能力，
+    编排层默认拒绝发送此类草稿，真实 provider 保持 unavailable，直至另行验证。
+    """
+
+    FIXTURE_ONLY = True
 
     def generate(
         self,
@@ -220,7 +248,8 @@ class RuleSecondaryReplyProvider:
 
         # 6a. 没有经审核的材料就不能声称“有依据”：转人工，绝不凭空编造 evidence_refs
         allowed_refs = allowed_evidence_refs(video_context)
-        if not allowed_refs:
+        relevant_ref = best_relevant_evidence_ref(content, video_context)
+        if not allowed_refs or relevant_ref is None:
             return SecondaryReplyDraft(
                 platform_post_id=comment.platform_post_id,
                 comment_id=comment.comment_id,
@@ -229,7 +258,7 @@ class RuleSecondaryReplyProvider:
                 chinese_reply="",
                 english_reply="",
                 formatted_reply="",
-                reason_code="NO_REVIEWED_VIDEO_MATERIAL",
+                reason_code="NO_REVIEWED_VIDEO_MATERIAL" if not allowed_refs else "EVIDENCE_NOT_RELEVANT",
                 evidence_refs=[],
                 provider="rule_secondary_provider",
             )
@@ -244,25 +273,25 @@ class RuleSecondaryReplyProvider:
             zh = "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。"
             en = "This reflects core structural trade-offs amid external shifts."
             reason = "ANSWER_ANALYTICAL_QUERY"
-            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
+            evidence = [relevant_ref]  # 仅引用与评论有字面关联、调用方提供且已审核的材料
         elif "对比" in content or "相比" in content:
             style = SecondaryReplyStyle.PHILOSOPHICAL
             zh = "两种路径各有约束与代价，本质是不同发展阶段下的选择取舍。"
             en = "Divergent paths reflect distinct constraints and trade-offs."
             reason = "COMPARATIVE_ANALYSIS"
-            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
+            evidence = [relevant_ref]  # 仅引用与评论有字面关联、调用方提供且已审核的材料
         elif "哈哈" in content or "乐" in content or "有意思" in content:
             style = SecondaryReplyStyle.HUMOROUS
             zh = "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。"
             en = "Keen observation; systemic irony often eclipses fiction."
             reason = "HUMOROUS_RESONANCE"
-            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
+            evidence = [relevant_ref]  # 仅引用与评论有字面关联、调用方提供且已审核的材料
         else:
             style = SecondaryReplyStyle.PRAGMATIC
             zh = "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。"
             en = "Appreciate the thoughtful insight on industry evolution."
             reason = "CONSTRUCTIVE_FEEDBACK"
-            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
+            evidence = [relevant_ref]  # 仅引用与评论有字面关联、调用方提供且已审核的材料
 
         zh_nfc, en_nfc, formatted = validate_reply_length_and_format(zh, en)
 

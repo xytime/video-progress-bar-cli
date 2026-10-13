@@ -101,7 +101,9 @@ def run_offline_4path_demo() -> Dict[str, Any]:
     results: Dict[str, Any] = {}
     post_id = "export/synth_video_888"
     approver = "888999"
-    material = {"title": "合成演示视频", "evidence": {"fixture_segment_1": "【合成夹具材料，仅用于离线演示】"}}
+    def material_for(text: str) -> Dict[str, Any]:
+        # 夹具材料：与评论有字面关联的合成片段（真实材料需上游审核提供）
+        return {"title": "合成演示视频", "evidence": {"fixture_segment_1": f"【合成夹具材料，仅用于离线演示】{text}"}}
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         db = PipelineDB(db_path=str(Path(tmp_dir) / "demo.db"))
@@ -118,6 +120,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             db=db, service=SecondaryReplyService(censor=SecondaryReplyCensor()), platform=platform,
             approval_transport=transport, account_key="acct_demo", approver_id=approver,
             approver_chat_id=approver, admin_ids_override=approver, clock=clock,
+            allow_fixture_drafts=True,  # 仅离线演示
         )
 
         with open(PROJECT_ROOT / "tests" / "fixtures" / "secondary_reply" / "sanitized_api_responses.json", "r", encoding="utf-8") as f:
@@ -135,7 +138,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
 
         # ---- 路径一：成功与防重 ----
         base = parse_res.comments[0]
-        (task_1,) = orch.ingest_and_draft(post_id=post_id, comments=[base], video_context=material)
+        (task_1,) = orch.ingest_and_draft(post_id=post_id, comments=[base], video_context=material_for(base.content))
         approve(task_1)
         out1 = orch.submit(task_1)
         assert out1.status == "VERIFIED", out1
@@ -164,7 +167,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
 
         # ---- 路径二：错目标在网络前拦截 ----
         platform.mode = "wrong-root"
-        (task_2,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_2", "为什么会出现这种情况？")], video_context=material)
+        (task_2,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_2", "为什么会出现这种情况？")], video_context=material_for("为什么会出现这种情况？"))
         approve(task_2)
         before = len(platform.outbound_requests)
         out2 = orch.submit(task_2)
@@ -176,7 +179,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
 
         # ---- 路径三：意图后崩溃，重启只读对账 ----
         platform.mode = "crash-after-intent"
-        (task_3,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_3", "为什么会出现这种情况？")], video_context=material)
+        (task_3,) = orch.ingest_and_draft(post_id=post_id, comments=[extra_comment("demo_cmt_3", "为什么会出现这种情况？")], video_context=material_for("为什么会出现这种情况？"))
         approve(task_3)
         crashed = orch.submit(task_3)
         # “重启”：新的编排实例/新的 DB 连接仅做只读对账

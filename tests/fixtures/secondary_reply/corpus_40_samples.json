@@ -395,7 +395,7 @@
       "formatted_reply": "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。\nThis reflects core structural trade-offs amid external shifts.",
       "reason_code": "ANSWER_ANALYTICAL_QUERY",
       "evidence_refs": [
-        "video_transcript_analysis"
+        "corpus_fixture_r01"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -416,7 +416,7 @@
       "formatted_reply": "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。\nThis reflects core structural trade-offs amid external shifts.",
       "reason_code": "ANSWER_ANALYTICAL_QUERY",
       "evidence_refs": [
-        "video_transcript_analysis"
+        "corpus_fixture_r02"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -437,7 +437,7 @@
       "formatted_reply": "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。\nThis reflects core structural trade-offs amid external shifts.",
       "reason_code": "ANSWER_ANALYTICAL_QUERY",
       "evidence_refs": [
-        "video_transcript_analysis"
+        "corpus_fixture_r03"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -458,7 +458,7 @@
       "formatted_reply": "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。\nThis reflects core structural trade-offs amid external shifts.",
       "reason_code": "ANSWER_ANALYTICAL_QUERY",
       "evidence_refs": [
-        "video_transcript_analysis"
+        "corpus_fixture_r04"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -479,7 +479,7 @@
       "formatted_reply": "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。\nThis reflects core structural trade-offs amid external shifts.",
       "reason_code": "ANSWER_ANALYTICAL_QUERY",
       "evidence_refs": [
-        "video_transcript_analysis"
+        "corpus_fixture_r05"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -500,7 +500,7 @@
       "formatted_reply": "两种路径各有约束与代价，本质是不同发展阶段下的选择取舍。\nDivergent paths reflect distinct constraints and trade-offs.",
       "reason_code": "COMPARATIVE_ANALYSIS",
       "evidence_refs": [
-        "comparative_framework"
+        "corpus_fixture_r06"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -521,7 +521,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r07"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -542,7 +542,7 @@
       "formatted_reply": "两种路径各有约束与代价，本质是不同发展阶段下的选择取舍。\nDivergent paths reflect distinct constraints and trade-offs.",
       "reason_code": "COMPARATIVE_ANALYSIS",
       "evidence_refs": [
-        "comparative_framework"
+        "corpus_fixture_r08"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -563,7 +563,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r09"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -584,7 +584,7 @@
       "formatted_reply": "两种路径各有约束与代价，本质是不同发展阶段下的选择取舍。\nDivergent paths reflect distinct constraints and trade-offs.",
       "reason_code": "COMPARATIVE_ANALYSIS",
       "evidence_refs": [
-        "comparative_framework"
+        "corpus_fixture_r10"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -605,7 +605,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r11"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -626,7 +626,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r12"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -647,7 +647,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r13"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -668,7 +668,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r14"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -689,7 +689,7 @@
       "formatted_reply": "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。\nKeen observation; systemic irony often eclipses fiction.",
       "reason_code": "HUMOROUS_RESONANCE",
       "evidence_refs": [
-        "context_nuance"
+        "corpus_fixture_r15"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -710,7 +710,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r16"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -731,7 +731,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r17"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -752,7 +752,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r18"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -773,7 +773,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r19"
       ],
       "format_valid": true,
       "censor_safe": true,
@@ -794,7 +794,7 @@
       "formatted_reply": "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。\nAppreciate the thoughtful insight on industry evolution.",
       "reason_code": "CONSTRUCTIVE_FEEDBACK",
       "evidence_refs": [
-        "domain_context"
+        "corpus_fixture_r20"
       ],
       "format_valid": true,
       "censor_safe": true,

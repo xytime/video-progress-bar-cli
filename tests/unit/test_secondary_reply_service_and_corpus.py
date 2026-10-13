@@ -52,8 +52,37 @@ def test_corpus_40_samples_integrity_and_pending_human_review():
     # 铁律：所有样本人工采纳状态必须为 HUMAN_REVIEW_PENDING，绝不能自填 >=90%
     for item in samples:
         assert item["human_review_status"] == "HUMAN_REVIEW_PENDING"
-        assert item["format_valid"] is True
-        assert item["censor_safe"] is True
+
+
+def test_corpus_samples_are_rechecked_by_deterministic_code_not_self_declared_flags():
+    """语料不信任自带的 format_valid/censor_safe：逐条重新生成并执行真实的格式与双通道审查。
+
+    注意：这只证明确定性门禁，不代表人评采纳率；材料是与评论同文的合成夹具片段。
+    """
+    with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+        samples = json.load(f)["samples"]
+    service = SecondaryReplyService()
+    censor = SecondaryReplyCensor()
+    seen = {"REPLY": 0, "MANUAL": 0, "SKIP": 0}
+    for item in samples:
+        comment = AudienceCommentRecord(
+            platform_post_id="export/corpus", comment_id=item["id"], nickname=item["nickname"],
+            content=item["user_comment"], content_hash=item["content_hash"], createtime="1",
+        )
+        material = {"evidence": {f"corpus_fixture_{item['id']}": f"合成夹具材料：{item['user_comment']}"}}
+        draft = service.generate_draft(comment, video_context=material)
+        assert draft.intent.value == item["intent"], item["id"]
+        seen[item["intent"]] += 1
+        if item["intent"] == "REPLY":
+            zh, en, formatted = validate_reply_length_and_format(draft.chinese_reply, draft.english_reply)
+            assert (zh, en, formatted) == (item["chinese_reply"], item["english_reply"], item["formatted_reply"]), item["id"]
+            safe, detail = censor.check_reply_safety(zh, en, formatted)
+            assert safe, (item["id"], detail)
+            assert draft.evidence_refs == item["evidence_refs"]
+        else:
+            assert draft.chinese_reply == "" and draft.english_reply == ""
+            assert draft.reason_code == item["reason_code"], item["id"]
+    assert seen == {"REPLY": 20, "MANUAL": 10, "SKIP": 10}
 
 
 def test_prompt_injection_defense_and_manual_routing():

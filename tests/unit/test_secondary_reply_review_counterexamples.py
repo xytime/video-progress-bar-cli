@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, BrokenBarrierError
 
+from tests.unit.secondary_reply_support import approved_task
 from video_processing.db.database import PipelineDB
 from video_processing.interaction.secondary_reply_approval import handle_approval_callback
 from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplySubmissionGuard
@@ -20,8 +21,8 @@ def test_empty_callback_token_must_be_rejected(tmp_path):
         provider='fixture', status='DRAFTED')
     expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
     assert db.bind_reply_task_approval_request(task_id, approval_token='unpredictable_fixture_token',
-        expires_at_iso=expires, approver_id='123')
-    result = handle_approval_callback(db, f'rep:{task_id}::app', '123', admin_ids_override='123')
+        expires_at_iso=expires, approver_id='123', approver_chat_id='chat_123')
+    result = handle_approval_callback(db, f'rep:{task_id}::app', '123', 'chat_123', admin_ids_override='123')
     assert result[0] is False, f'Empty token unexpectedly consumed approval: {result}'
 
 
@@ -57,9 +58,9 @@ def test_two_workers_must_not_both_take_last_hourly_quota(tmp_path, monkeypatch)
                 'VALUES (?, ?, ?, ?, ?, ?)', (f'export/older_{i}', f'old_{i}', f'reply_{i}', 'hash', 'VERIFIED', earlier))
     claims = []
     for i in range(2):
-        task_id = db.create_or_update_secondary_reply_task(platform_post_id=f'export/new_{i}',
+        task_id = approved_task(db, platform_post_id=f'export/new_{i}',
             comment_id=f'new_{i}', intent='REPLY', style='MACRO', chinese_reply='谢谢分享。',
-            provider='fixture', status='APPROVED')
+            provider='fixture')
         claims.append(db.claim_approved_reply_task(task_id=task_id))
     original_check = db._check_reply_quota_conn
     barrier = Barrier(2)
@@ -76,4 +77,4 @@ def test_two_workers_must_not_both_take_last_hourly_quota(tmp_path, monkeypatch)
             now_utc=now.strftime('%Y-%m-%d %H:%M:%S'))
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(reserve, claims))
-    assert sum(bool(result[0]) for result in results) <= 1, f'Both workers consumed last quota slot: {results}'
+    assert sorted(bool(result[0]) for result in results) == [False, True], f'Both workers consumed last quota slot: {results}'

@@ -17,6 +17,7 @@ import uuid
 import pytest
 
 from tests.browser_fixtures import chromium
+from tests.unit.secondary_reply_support import approved_task
 from video_processing.db.database import PipelineDB
 from video_processing.interaction.secondary_reply_browser_adapter import (
     SecondaryReplyBrowserAdapter,
@@ -64,7 +65,11 @@ def secondary_reply_harness(chromium, tmp_path):
                     return
                 else:
                     if mode != "success-not-persisted":
-                        server_replies.append({"commentId": "synth_new_reply_999", "content": payload.get("content"), "authorId": "v2_synthetic_author_finder_id@finder"})
+                        server_replies.append({
+                            "commentId": "synth_new_reply_999",
+                            "content": payload.get("content") + ("附加" if mode == "text-extended-persisted" else ""),
+                            "authorId": "other_user@finder" if mode == "wrong-author-persisted" else "v2_synthetic_author_finder_id@finder",
+                        })
                     route.fulfill(json={
                         "errCode": 0,
                         "errMsg": "request successful",
@@ -158,17 +163,14 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
     content = "这是针对宏观观点的作者二级回复正文。"
 
     # 1. 准备任务
-    task_id = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",
         style="MACRO",
         chinese_reply=content,
         english_reply="Author macro reply.",
         formatted_reply=content,
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
     assert claimed is not None
     lease_token = claimed["lease_token"]
@@ -202,17 +204,17 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
     assert ledger["status"] == "VERIFIED"
 
     # 第二次尝试运行：必须在 before_submit 时被独立防重账本直接拦截！
-    task_id_second = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    # VERIFIED 任务受保护不可重新审批；删除任务行后重建，验证独立账本仍然生效
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (task_id,))
+    task_id_second = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",
         style="MACRO",
         chinese_reply=content,
         english_reply="Author macro reply.",
         formatted_reply=content,
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed_sec = db.claim_approved_reply_task(task_id=task_id_second, lease_seconds=7200)
 
     # 推进时间 30 秒以绕过 15 秒限制，专注于验证防重账本
@@ -248,15 +250,12 @@ def test_browser_flow_skips_when_author_already_replied(secondary_reply_harness)
     root_id = "synth_cmt_104"  # 该评论在 HTML 夹具中已有作者二级回复
     content = "试图再次回复的内容"
 
-    task_id = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",
         style="MACRO",
         chinese_reply=content,
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = db.claim_approved_reply_task(task_id=task_id)
 
     status, evidence, err = _run_secondary(
@@ -306,15 +305,12 @@ def test_browser_flow_dropped_response_reconciles_uncertain(secondary_reply_harn
     root_id = "synth_cmt_101"
     content = "测试丢包场景"
 
-    task_id = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",
         style="PRAGMATIC",
         chinese_reply=content,
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
 
     status, evidence, err = _run_secondary(
@@ -348,15 +344,12 @@ def test_browser_flow_guard_intercepts_wrong_export_id(secondary_reply_harness):
     root_id = "synth_cmt_101"
     content = "测试守卫拦截"
 
-    task_id = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",
         style="PRAGMATIC",
         chinese_reply=content,
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
 
     status, evidence, err = _run_secondary(
@@ -379,11 +372,9 @@ def test_browser_flow_optimistic_dom_not_persisted_is_uncertain(secondary_reply_
     harness = secondary_reply_harness
     db = harness["db"]
     post_id, root_id, content = "export/synth_video_888", "synth_cmt_101", "乐观节点测试回复"
-    task_id = db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id, comment_id=root_id, intent="REPLY", style="MACRO",
+    task_id = approved_task(db, platform_post_id=post_id, comment_id=root_id, intent="REPLY", style="MACRO",
         chinese_reply=content, english_reply="Optimistic.", formatted_reply=content,
-        provider="rule_mock", status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
     status, _evidence, _err = _run_secondary(
         harness, task_id=task_id, platform_post_id=post_id, root_comment_id=root_id,
@@ -392,3 +383,23 @@ def test_browser_flow_optimistic_dom_not_persisted_is_uncertain(secondary_reply_
     )
     assert status == "UNCERTAIN"
     assert db.get_secondary_reply_task(task_id)["status"] != "VERIFIED"
+
+
+@pytest.mark.parametrize("mode", ["wrong-author-persisted", "text-extended-persisted"])
+def test_browser_readback_rejects_wrong_author_or_altered_text(secondary_reply_harness, mode):
+    """刷新后服务器数据里的回复作者不对，或正文被前后加字：不得 VERIFIED（原 “包含” 匹配会放过后者）。"""
+    harness = secondary_reply_harness
+    db = harness["db"]
+    post_id, root_id, content = "export/synth_video_888", "synth_cmt_101", "严格回读测试回复"
+    task_id = approved_task(
+        db, platform_post_id=post_id, comment_id=root_id, chinese_reply=content,
+        english_reply="Strict readback.", formatted_reply=content,
+    )
+    claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
+    status, _evidence, _err = _run_secondary(
+        harness, task_id=task_id, platform_post_id=post_id, root_comment_id=root_id,
+        reply_content=content, mode=mode,
+        before_submit=lambda: db.record_secondary_reply_submit_intent(task_id, claimed["lease_token"])[0],
+    )
+    assert status == "UNCERTAIN"
+    assert db.get_secondary_reply_task(task_id)["status"] == "UNCERTAIN"

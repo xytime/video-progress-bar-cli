@@ -12783,8 +12783,8 @@ class PipelineDB(WallstreetExperimentDAL):
             s_hash = source_comment_hash
             if not s_hash:
                 c_row = conn.execute(
-                    "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
-                    (task["platform_post_id"], task["comment_id"]),
+                    "SELECT content_hash FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                    (task["account_key"], task["platform_post_id"], task["comment_id"]),
                 ).fetchone()
                 s_hash = c_row["content_hash"] if c_row else ""
 
@@ -12858,8 +12858,8 @@ class PipelineDB(WallstreetExperimentDAL):
             # 校验源评论指纹 (T07: 评论变更不放行)
             if task["bound_source_comment_hash"]:
                 c_row = conn.execute(
-                    "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
-                    (task["platform_post_id"], task["comment_id"]),
+                    "SELECT content_hash FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                    (task["account_key"], task["platform_post_id"], task["comment_id"]),
                 ).fetchone()
                 if not c_row or c_row["content_hash"] != task["bound_source_comment_hash"]:
                     return False, "SOURCE_COMMENT_CHANGED"

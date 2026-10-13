@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 import sqlite3
 
+from tests.unit.secondary_reply_support import approved_task
 from video_processing.db.database import PipelineDB
 from video_processing.interaction.secondary_reply_contract import (
     SecondaryReplyIntent,
@@ -217,7 +218,7 @@ def test_secondary_reply_task_lifecycle_and_approval_token(test_db: PipelineDB):
     token = "secret_token_xyz123"
     expires = (datetime.datetime.now(UTC) + datetime.timedelta(hours=2)).isoformat()
     bound = test_db.bind_reply_task_approval_request(
-        task_id, approval_token=token, expires_at_iso=expires, approver_id="tg_admin_88"
+        task_id, approval_token=token, expires_at_iso=expires, approver_id="tg_admin_88", approver_chat_id="chat_88"
     )
     assert bound is True
 
@@ -228,28 +229,28 @@ def test_secondary_reply_task_lifecycle_and_approval_token(test_db: PipelineDB):
     # 3. 审批 Token 防重放与防伪造校验
     # 错误 Token 拒绝
     ok, reason = test_db.consume_reply_task_approval(
-        task_id=task_id, token="wrong_token", approver_id="tg_admin_88", action="APPROVE"
+        task_id=task_id, token="wrong_token", approver_id="tg_admin_88", chat_id="chat_88", action="APPROVE"
     )
     assert ok is False
     assert reason == "TOKEN_MISMATCH"
 
     # 错误审批人拒绝
     ok, reason = test_db.consume_reply_task_approval(
-        task_id=task_id, token=token, approver_id="tg_attacker_99", action="APPROVE"
+        task_id=task_id, token=token, approver_id="tg_attacker_99", chat_id="chat_88", action="APPROVE"
     )
     assert ok is False
     assert reason == "APPROVER_MISMATCH"
 
     # 正确批准
     ok, reason = test_db.consume_reply_task_approval(
-        task_id=task_id, token=token, approver_id="tg_admin_88", action="APPROVE"
+        task_id=task_id, token=token, approver_id="tg_admin_88", chat_id="chat_88", action="APPROVE"
     )
     assert ok is True
     assert reason == "APPROVED"
 
     # 重复批准拒绝（一次性消费 Token 防重放）
     ok, reason = test_db.consume_reply_task_approval(
-        task_id=task_id, token=token, approver_id="tg_admin_88", action="APPROVE"
+        task_id=task_id, token=token, approver_id="tg_admin_88", chat_id="chat_88", action="APPROVE"
     )
     assert ok is False
     assert "TOKEN_ALREADY_CONSUMED" in reason or "INVALID_STATUS" in reason
@@ -259,17 +260,14 @@ def test_claim_and_atomic_submit_intent(test_db: PipelineDB):
     post_id = "export/synth_post_003"
     cid = "c_201"
 
-    task_id = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="PRAGMATIC",
         chinese_reply="务实中文",
         english_reply="Pragmatic en",
         formatted_reply="务实中文\nPragmatic en",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
 
     # 1. 认领任务
     claimed = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id)
@@ -302,17 +300,14 @@ def test_tombstone_survives_task_deletion_and_blocks_resend(test_db: PipelineDB)
     post_id = "export/synth_post_t09"
     cid = "c_t09_root"
 
-    task_id = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="PHILOSOPHICAL",
         chinese_reply="哲理中文",
         english_reply="Philosophical en",
         formatted_reply="哲理中文\nPhilosophical en",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id)
     sh_dt = datetime.datetime(2026, 10, 12, 11, 0, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
     now_utc = sh_dt.astimezone(UTC).isoformat()
@@ -334,17 +329,14 @@ def test_tombstone_survives_task_deletion_and_blocks_resend(test_db: PipelineDB)
     assert ledger["status"] == "INTENT"
 
     # 尝试重新创建并提交（时间延后20秒，通过15秒间隔检查，精确验证独立防重账本拦截）
-    task_id_new = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id_new = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="PHILOSOPHICAL",
         chinese_reply="哲理中文2",
         english_reply="Philosophical en2",
         formatted_reply="哲理中文2\nPhilosophical en2",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed_new = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id_new)
     now_utc_later = (sh_dt + datetime.timedelta(seconds=20)).astimezone(UTC).isoformat()
     ok_new, msg_new = test_db.record_secondary_reply_submit_intent(task_id_new, claimed_new["lease_token"], now_utc=now_utc_later)
@@ -510,15 +502,12 @@ def test_atomic_claim_concurrency_race_condition_t05(test_db: PipelineDB):
     post_id = "export/synth_race"
     cid = "c_race_1"
 
-    task_id = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="MACRO",
         chinese_reply="原子抢占测试",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
 
     # Worker A 领取
     claimed_a = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id)
@@ -555,6 +544,7 @@ def test_approval_fingerprint_invalidation_on_draft_change_t07(test_db: Pipeline
         draft_revision=1,
         reply_text_hash=hashlib.sha256("原始方案内容".encode()).hexdigest(),
         approver_id="admin_1",
+        approver_chat_id="chat_1",
     )
     assert ok_bind is True
 
@@ -574,6 +564,7 @@ def test_approval_fingerprint_invalidation_on_draft_change_t07(test_db: Pipeline
         task_id=task_id,
         token=token,
         approver_id="admin_1",
+        chat_id="chat_1",
         action="APPROVE",
     )
     assert ok_consume is False
@@ -627,6 +618,7 @@ def test_uncertain_tasks_reconcile_flow_t10(test_db: PipelineDB):
         task_id=task_id,
         verified=False,
         outcome="CONFIRMED_NOT_SENT",
+        not_sent_evidence="guard_aborted_before_network",
         reason="平台回读未发现，证实未出站",
     )
     assert ok_reconcile is True
@@ -640,15 +632,12 @@ def test_shanghai_window_enforced_in_record_submit_intent_t14(test_db: PipelineD
     post_id = "export/synth_window"
     cid = "c_win_1"
 
-    task_id = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="MACRO",
         chinese_reply="时段测试",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = test_db.claim_approved_reply_task(task_id=task_id)
     assert claimed is not None
 
@@ -697,15 +686,12 @@ def test_shared_quota_rate_limiting_across_tables_t14(test_db: PipelineDB, tmp_p
 
     # 10 秒后试图记录二级回复提交意图（必须被 15 秒共享间隔拦截）
     t_10s_later = (t0 + datetime.timedelta(seconds=10)).astimezone(UTC).isoformat()
-    task_id = test_db.create_or_update_secondary_reply_task(
-        platform_post_id=post_id,
+    task_id = approved_task(test_db, platform_post_id=post_id,
         comment_id=cid,
         intent="REPLY",
         style="MACRO",
         chinese_reply="间隔拦截测试",
-        provider="rule_mock",
-        status="APPROVED",
-    )
+        provider="rule_mock")
     claimed = test_db.claim_approved_reply_task(task_id=task_id)
 
     ok, reason = test_db.record_secondary_reply_submit_intent(
