@@ -48,6 +48,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="manifest" href="/static/site.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="VideoPipeline" />
@@ -2477,6 +2478,18 @@
     }
   }
 
+  async function readProcessResponse(response) {
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result?.success) {
+      const detail = result?.detail;
+      const message = result?.error || (typeof detail === 'string' ? detail : detail?.message);
+      const code = typeof detail === 'object' ? detail?.code : null;
+      throw new Error((typeof message === 'string' && message ? message : `请求失败（HTTP ${response.status}）`)
+        + (code ? ` [${code}]` : ''));
+    }
+    return result;
+  }
+
   async function processVideoNow(youtubeId) {
     navigator.vibrate(15);
     const btn = event?.target;
@@ -2487,17 +2500,12 @@
     }
     try {
       const r = await fetch(`/api/videos/${youtubeId}/process`, { method: 'POST' });
-      const res = await r.json();
-      if (res.success) {
-        showToast('✅ ' + (res.message || '管线已手动启动'));
-        loadVideos();
-        fetchStats();
-      } else {
-        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
-      }
+      const res = await readProcessResponse(r);
+      showToast('✅ ' + (res.message || '管线已手动启动'));
+      loadVideos();
+      fetchStats();
     } catch (e) {
-      showToast('❌ 网络错误: ' + e.message, 'error');
+      showToast('❌ 启动失败: ' + e.message, 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
@@ -2696,17 +2704,12 @@
     }
     try {
       const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`, { method: 'POST' });
-      const res = await r.json();
-      if (res.success) {
-        showToast('✅ ' + (res.message || '分集任务已启动'));
-        loadVideos();
-        fetchStats();
-      } else {
-        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
-      }
+      const res = await readProcessResponse(r);
+      showToast('✅ ' + (res.message || '分集任务已启动'));
+      loadVideos();
+      fetchStats();
     } catch (e) {
-      showToast('❌ 网络错误: ' + e.message, 'error');
+      showToast('❌ 启动失败: ' + e.message, 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }

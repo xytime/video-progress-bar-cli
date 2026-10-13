@@ -13,6 +13,50 @@ import pytest
 from tests.browser_fixtures import chromium, dashboard, _payload, _video
 
 
+@pytest.mark.parametrize('slice_index', [None, 2])
+@pytest.mark.parametrize('status,payload,expected', [
+    (503, {'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},
+     '维护状态不允许领取新工作 [MAINTENANCE]'),
+    (503, {'detail': {'code': 'UNKNOWN', 'message': '维护状态无法确认'}},
+     '维护状态无法确认 [UNKNOWN]'),
+    (503, {'detail': '服务暂不可用'}, '服务暂不可用'),
+    (503, None, '请求失败（HTTP 503）'),
+    (200, {'success': False, 'error': '视频当前状态不是 PENDING'}, '视频当前状态不是 PENDING'),
+])
+def test_process_failure_shows_reason_and_restores_button(dashboard, slice_index, status, payload, expected):
+    from playwright.sync_api import expect
+    page, state = dashboard
+    requests = []
+    suffix = f'/slices/{slice_index}' if slice_index is not None else ''
+
+    def deny(route):
+        requests.append(route.request.method)
+        if payload is None:
+            route.fulfill(status=status, content_type='text/html', body='<h1>Unavailable</h1>')
+        else:
+            route.fulfill(status=status, json=payload)
+
+    page.route(f'**/api/videos/first{suffix}/process', deny)
+    if slice_index is None:
+        button = page.locator('#row-first button[onclick="processVideoNow(\'first\')"]')
+    else:
+        state['payload'] = _payload([dict(_video('first', status='SEGMENTED'), slices_count=1)], total=1)
+        page.route('**/api/videos/first/slices', lambda route: route.fulfill(
+            json={'slices': [dict(_video('first'), slice_index=slice_index)]}))
+        page.evaluate('async () => { await loadVideos(); }')
+        page.locator('#btn-toggle-first').click()
+        button = page.locator('.child-row-first button[onclick^="processSliceNow"]')
+    old_text = button.inner_text()
+    button.click()
+    expect(page.locator('.toast-item').last).to_have_text('❌ 启动失败: ' + expected)
+    expect(button).to_be_enabled()
+    expect(button).to_have_text(old_text)
+    assert requests == ['POST']
+    # 浏览器会为被刻意拒绝的 HTTP 请求记录资源错误，其他告警仍须通过夹具检查。
+    expected_warning = f'Failed to load resource: the server responded with a status of {status} (Service Unavailable)'
+    state['warnings'][:] = [message for message in state['warnings'] if message != expected_warning]
+
+
 def test_processing_row_has_stop_and_delete_controls(dashboard):
     page, state = dashboard
     state['payload'] = _payload([_video('preparing', status='PROCESSING')], total=1)
