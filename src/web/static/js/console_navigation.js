@@ -4,7 +4,7 @@
     ['overview', '总览', '/?view=overview', []],
     ['topics', '选题中心', '/?view=topics&tab=waitlist', [
       ['素材待筛选', '/?view=topics&tab=waitlist'], ['近期高互动', '/?view=topics&tab=high_likes'],
-      ['关键词追踪', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
+      ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
       ['手动加入生产队列', '/?view=topics&tab=manual']]],
     ['production', '生产队列', '/?view=production&tab=queue', []],
     ['publications', '发布记录', '/?view=publications&tab=review', []],

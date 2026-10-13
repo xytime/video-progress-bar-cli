@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.0 | 2026-10-11 | Codex | 实现 v0.2 字段、源身份、元数据与版本规则；导入无运行副作用 |
 """
 from __future__ import annotations
@@ -52,20 +53,26 @@ def topic_fields(value):
     name = str(value.get("name", "")).strip()
     query = " ".join(str(value.get("query", "")).split())
     category = value.get("category")
-    lookback, days = value.get("lookback_days", 7), value.get("valid_days", 7)
+    lookback, days = value.get("lookback_days", 1), value.get("valid_days", 7)
     if not 1 <= len(name) <= 40:
         raise TopicError("INVALID_NAME", "名称应为 1–40 个字符", 422)
     if not 1 <= len(query) <= 120 or any(ord(c) < 32 for c in query):
         raise TopicError("INVALID_QUERY", "查询词应为 1–120 个字符", 422)
     if category not in CATEGORIES:
         raise TopicError("INVALID_CATEGORY", "请选择有效类别", 422)
-    if type(lookback) is not int or lookback not in (3, 7, 30):
-        raise TopicError("INVALID_LOOKBACK", "搜索范围可选 3、7、30 天", 422)
+    if type(lookback) is not int or lookback not in (1, 3, 7, 30):
+        raise TopicError("INVALID_LOOKBACK", "搜索范围可选 1、3、7、30 天", 422)
     if type(days) is not int or not 1 <= days <= 30:
         raise TopicError("INVALID_EXPIRY", "有效期应为 1–30 天", 422)
+    language = value.get("language", "en")
+    minimum = value.get("min_duration", 30)
+    if language not in ("en", "zh", "ja", "es", "fr", "de"):
+        raise TopicError("INVALID_LANGUAGE", "请选择支持的语言偏好", 422)
+    if type(minimum) is not int or minimum not in (30, 60, 180):
+        raise TopicError("INVALID_DURATION", "最低时长可选 30、60、180 秒", 422)
     normalized = unicodedata.normalize("NFKC", query).casefold()
     return dict(name=name, query=query, category=category, lookback_days=lookback,
-                valid_days=days, identity=digest([normalized, category, lookback]))
+                valid_days=days, language=language, min_duration=minimum, identity=digest([normalized, category, lookback, language, minimum]))
 
 
 def seconds(value):
@@ -114,13 +121,13 @@ def metadata(video_id, item):
                 language=None, availability=availability)
 
 
-def eligibility(meta, check, presence):
+def eligibility(meta, check, presence, min_duration=180):
     if meta["availability"] in ("UNAVAILABLE", "LIVE"):
         return "UNAVAILABLE", "源视频不可用、直播中或尚未开播"
     if meta["availability"] == "UNKNOWN" or not all(meta.get(k) for k in ("title", "channel_id", "channel_name", "published_at")) or meta["duration"] is None:
         return "INCOMPLETE", "必要资料不足，不能收藏"
-    if not 180 <= meta["duration"] <= 1800:
-        return "RESTRICTED", "时长受限：需为 3–30 分钟"
+    if not min_duration <= meta["duration"] <= 1800:
+        return "RESTRICTED", f"时长受限：需为 {min_duration}–1800 秒"
     if presence.get("blacklisted") or presence.get("channel_blocked"):
         return "RESTRICTED", "已在黑名单或频道排除名单"
     hit = check(meta)

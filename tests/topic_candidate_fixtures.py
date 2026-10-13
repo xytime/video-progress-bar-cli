@@ -88,7 +88,7 @@ def tracker(tmp_path):
 
 
 def topic(service, query="energy industry", **fields):
-    value = dict(name="产业追踪", query=query, category="科技产业", lookback_days=7, valid_days=7)
+    value = dict(name="产业追踪", query=query, category="科技产业", lookback_days=7, valid_days=7, min_duration=180)
     value.update(fields)
     return service.db.topic_save(value, "operator", service.clock())
 

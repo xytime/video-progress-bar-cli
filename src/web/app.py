@@ -657,6 +657,12 @@ def _queue_runner_loop(stop=None):
             if not running():
                 stop.wait(15)
                 continue
+            # 复用单实例 queue-runner 角色、来源指纹及维护接纳；不新增 cron。
+            if settings.topic_scheduler_enabled:
+                try:
+                    app.state.topic_runtime.service().tick()
+                except Exception:
+                    logging.getLogger(__name__).warning("关键词调度暂不可用，等待下一轮核实")
             recovered = _recover_orphaned_publishing_tasks(stale_minutes=30)
             if recovered > 0:
                 logging.getLogger(__name__).warning(

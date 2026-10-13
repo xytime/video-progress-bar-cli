@@ -33,7 +33,8 @@ def ui(chromium,topic_client):
         # 浏览器的写请求必须实测 Origin；TestClient 不替浏览器补凭据。
         client.headers.pop('origin',None);client.headers.pop('x-topic-csrf',None)
         client.cookies.clear()
-        response=client.request(req.method,url.path+('?' + url.query if url.query else ''),content=req.post_data,headers=headers)
+        target=flags.get('main_client',client) if not url.path.startswith(('/topic-candidates','/api/topic-candidates','/static/')) else client
+        response=target.request(req.method,url.path+('?' + url.query if url.query else ''),content=req.post_data,headers=headers)
         if response.status_code == 422:
             print('隔离浏览器输入校验:',response.json())
         route.fulfill(status=response.status_code,body=response.content,headers=dict(response.headers))
@@ -59,7 +60,7 @@ def evidence(page,name):
 
 def test_a20_complete_task_desktop_and_narrow(ui):
     page,tracker,flags=ui
-    expect(page).to_have_title('关键词追踪 · 视频控制台')
+    expect(page).to_have_title('YouTube 关键词采集 · 视频控制台')
     create(page);assert tracker.adapter.calls==[]
     page.get_by_role('button',name='搜索候选',exact=True).click()
     expect(page.locator('.candidate-card')).to_have_count(1)
@@ -295,9 +296,9 @@ def test_v031_first_failure_timeout_and_late_response(ui):
 def test_v031_off_reenable_and_gate_reasons(ui):
     page,tracker,flags=ui
     create(page)
-    page.locator('#mode-button').click();expect(page.locator('#mode-button')).to_have_text('开启手动搜索')
+    page.locator('#mode-button').click();expect(page.locator('#mode-button')).to_have_text('开启搜索')
     expect(page.locator('#mode-button')).to_be_enabled()
-    expect(page.locator('#mode-state')).to_contain_text('手动搜索已关闭')
+    expect(page.locator('#mode-state')).to_contain_text('搜索已关闭')
     page.locator('#mode-button').click();expect(page.locator('#mode-button')).to_have_text('关闭搜索')
     assert not tracker.adapter.calls
     tracker.config.is_us_market_guard_window=lambda now:True
@@ -309,4 +310,100 @@ def test_v031_off_reenable_and_gate_reasons(ui):
     tracker.config.topic_search_daily_limit=20
     page.locator('#reload').click();expect(page.get_by_role('button',name='搜索候选',exact=True)).to_be_enabled()
     page.get_by_role('button',name='暂停',exact=True).click()
-    expect(page.locator('.topic-row')).to_contain_text('专题已暂停')
+    expect(page.locator('.topic-row')).to_contain_text('采集规则已暂停')
+
+
+def test_k14_keyword_collection_growth_and_controlled_admission(ui,monkeypatch):
+    from config.settings import settings
+    page,tracker,flags=ui
+    tracker.config.topic_scheduler_enabled=True
+    tracker.config.topic_admission_enabled=True
+    monkeypatch.setattr(settings,'topic_admission_enabled',True)
+    page.reload()
+    create(page)
+    expect(page.locator('.topic-row')).to_contain_text('30–1800 秒')
+    page.get_by_role('button',name='启用定时采集',exact=True).focus()
+    page.keyboard.press('Enter')
+    expect(page.get_by_role('button',name='关闭定时采集',exact=True)).to_be_visible()
+    assert tracker.tick(verify_runtime=False)=='SEARCH'
+    page.reload()
+    expect(page.locator('.candidate-card')).to_contain_text('观察中')
+    page.get_by_text('评分依据',exact=True).click()
+    expect(page.locator('.candidate-card')).to_contain_text('播放量 200')
+    evidence(page,'v04-observing')
+    tracker.adapter.items[0]['statistics']=dict(viewCount='3000',likeCount='150')
+    tracker.clock.advance(hours=4)
+    tracker.tick(verify_runtime=False)
+    page.reload()
+    expect(page.locator('.candidate-card')).to_contain_text('已达标，等待准入')
+    assert tracker.db.get_video_by_youtube_id('00000000001') is None
+    page.locator('#admission-button').click()
+    expect(page.locator('#action-dialog')).to_contain_text('自动制作、审查和发布')
+    page.locator('#action-confirm').click()
+    expect(page.locator('#admission-button')).to_have_text('关闭达标准入')
+    tracker.tick(verify_runtime=False)
+    page.reload()
+    expect(page.locator('.candidate-card')).to_contain_text('已入队')
+    link=page.get_by_role('link',name='查看主队列任务')
+    expect(link).to_have_attribute('href','/?view=production&tab=queue&search=00000000001')
+    main=tracker.db.get_video_by_youtube_id('00000000001')
+    assert main['source']=='KEYWORD' and main['status']=='PENDING'
+    evidence(page,'v04-admitted')
+    page.set_viewport_size(dict(width=390,height=900))
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#admission-button').click();page.locator('#action-confirm').click()
+    expect(page.locator('#collection-state')).to_contain_text('达标准入：关闭')
+    assert not tracker.db.claim_video_for_processing('00000000001')
+    evidence(page,'v04-narrow-admission-closed')
+    from fastapi.testclient import TestClient
+    from web import app as web_app
+    monkeypatch.setattr(web_app,'db',tracker.db)
+    main_client=TestClient(web_app.app,base_url=ORIGIN,client=('127.0.0.1',50000))
+    try:
+        flags['main_client']=main_client
+        page.get_by_role('link',name='查看主队列任务').click()
+        expect(page.locator('#workspace-title')).to_have_text('生产队列')
+        expect(page.locator('#video-filter-search')).to_have_value('00000000001')
+        expect(page.locator('#activity-count')).to_have_text('1')
+        expect(page.locator('.source-badge')).to_have_text('YouTube 关键词采集')
+        evidence(page,'v04-main-task-readback')
+    finally:
+        flags.pop('main_client',None);main_client.close()
+
+
+def test_k13_runtime_and_credential_failure_are_visible(ui):
+    page,tracker,flags=ui
+    from video_processing.utils.topic_search import SearchFailure
+    tracker.config.topic_scheduler_enabled=True
+    create(page)
+    page.reload();page.get_by_role('button',name='启用定时采集',exact=True).click()
+    expect(page.get_by_role('button',name='关闭定时采集',exact=True)).to_be_visible()
+    assert tracker.tick()=='RUNTIME_UNVERIFIED'
+    page.reload();expect(page.locator('#collection-state')).to_contain_text('运行来源未核实')
+    assert not tracker.adapter.calls
+    tracker.adapter.search_error=SearchFailure('API_CREDENTIALS','synthetic')
+    tracker.tick(verify_runtime=False)
+    page.reload();expect(page.locator('#jobs')).to_contain_text('官方凭据无效')
+    expect(page.locator('.topic-row')).to_contain_text('自动执行已阻挡')
+    evidence(page,'v04-runtime-credential-blocked')
+
+
+def test_k14_rule_language_selection_and_keyboard_save(ui):
+    page,tracker,flags=ui
+    page.set_viewport_size(dict(width=390,height=900))
+    page.locator('#new-topic').click()
+    page.locator('#topic-name').fill('合成健康报道')
+    page.locator('#topic-query').fill('synthetic health event')
+    select=page.locator('#topic-language')
+    select.focus();expect(select).to_be_focused()
+    # macOS headless shell 不呈现系统原生选项弹层；选择值与键盘提交分开验证。
+    select.select_option('zh')
+    page.keyboard.press('Tab')
+    expect(select).to_have_value('zh')
+    page.locator('#topic-duration').select_option('60')
+    evidence(page,'v04-rule-editor-narrow')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#topic-save').focus();page.keyboard.press('Enter')
+    expect(page.locator('#topic-editor')).not_to_be_visible()
+    record=tracker.db.topic_list(tracker.clock())[0]
+    assert record['language']=='zh' and record['min_duration']==60 and not record['auto_enabled']

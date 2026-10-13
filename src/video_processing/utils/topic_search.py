@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.0 | 2026-10-11 | Codex | 官方搜索/详情总超时、脱敏错误；仅显式请求读取 API 配置 |
 """
 from __future__ import annotations
@@ -17,6 +18,13 @@ class SearchFailure(TopicError):
     def __init__(self, code, message, *, retryable=False):
         super().__init__(code, message, 503)
         self.retryable = retryable
+
+
+class SearchItems(list):
+    """保留分页覆盖信息，同时兼容已有列表适配器。"""
+    def __init__(self, items, has_more=False):
+        super().__init__(items)
+        self.has_more = has_more
 
 
 class YouTubeTopicSearch:
@@ -59,7 +67,7 @@ class YouTubeTopicSearch:
             value = response.json()
             if not isinstance(value, dict) or not isinstance(value.get("items"), list):
                 raise SearchFailure("INVALID_RESPONSE", "官方响应资料不足")
-            return value["items"]
+            return SearchItems(value["items"], bool(value.get("nextPageToken")))
         except (httpx.HTTPError, TimeoutError) as exc:
             raise SearchFailure("NETWORK", "官方请求失败或超时", retryable=True) from exc
         except ValueError as exc:
@@ -67,7 +75,7 @@ class YouTubeTopicSearch:
 
     def search(self, topic, now, timeout):
         return asyncio.run(self._get("search", dict(part="snippet", type="video", order="date",
-            safeSearch="strict", relevanceLanguage="en", maxResults=25, q=topic["query"],
+            safeSearch="strict", relevanceLanguage=topic.get("language", "en"), maxResults=25, q=topic["query"],
             publishedAfter=stamp(now - timedelta(days=topic["lookback_days"])),
             publishedBefore=stamp(now)), timeout))
 

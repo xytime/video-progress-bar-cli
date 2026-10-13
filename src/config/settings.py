@@ -358,6 +358,8 @@ class Settings(BaseSettings):
         return dict(os.environ)
 
     # 专题候选：本轮仅开发和隔离验收，生产搜索保持关闭。
+    topic_scheduler_enabled: bool = Field(default=False, description="关键词定时采集宿主开关")
+    topic_admission_enabled: bool = Field(default=False, description="关键词达标准入及自动处理宿主开关")
     topic_search_enabled: bool = False
     topic_quota_verified: bool = False
     topic_quota_project: str = ""

@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-13T09:20:44.877228+00:00",
+  "method": "HTTP GET only; no production adoption",
+  "result": {
+    "page_status": 200,
+    "control": {
+      "mode": "OFF",
+      "version": 7
+    },
+    "search_open": false,
+    "can_enable": false,
+    "budget": {
+      "day": "2026-10-13",
+      "search": 0,
+      "general": 0
+    },
+    "jobs": 0,
+    "maintenance": {
+      "state": "RUNNING",
+      "phase": "IDLE"
+    }
+  }
+}

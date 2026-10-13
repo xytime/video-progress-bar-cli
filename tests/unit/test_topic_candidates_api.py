@@ -114,3 +114,22 @@ def test_a21_busy_topic_initialization_preserves_existing_routes(tracker, monkey
     monkeypatch.setattr(runtime, 'monotonic', lambda: observed + 61)
     with TestClient(app,base_url=ORIGIN,client=('127.0.0.1',50000)) as client:
         assert client.get('/topic-candidates').status_code==200
+
+
+def test_keyword_control_routes_csrf_flags_cas(topic_client):
+    client,tracker=topic_client
+    t=topic(tracker)
+    path='/api/topic-candidates/topics/'+t['id']+'/schedule'
+    body=dict(version=t['version'],enabled=True)
+    assert client.put(path,json=body).status_code==403
+    tracker.config.topic_scheduler_enabled=True
+    assert client.put(path,json=body,headers={'X-Topic-CSRF':'forged'}).status_code==403
+    assert client.put(path,json=body).status_code==200
+    assert client.put(path,json=body).status_code==409
+    control=dict(version=tracker.db.keyword_control()['version'],enabled=True)
+    assert client.put('/api/topic-candidates/admission',json=control).status_code==403
+    tracker.config.topic_admission_enabled=True
+    assert client.put('/api/topic-candidates/admission',json=control,headers={'Origin':'http://evil.invalid'}).status_code==403
+    assert client.put('/api/topic-candidates/admission',json=control).status_code==200
+    assert client.put('/api/topic-candidates/admission',json=control).status_code==409
+    assert not tracker.adapter.calls

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 锁故障脱敏，维护状态阻止模式开放与搜索 |
 | 1.0.0 | 2026-10-11 | Codex | 实现 v0.2 的 OFF/仅发现与有界停止；无主管线或发布调用 |
 """
@@ -19,7 +20,10 @@ from ..core.topic_candidates import (TopicError, utc_now, metadata, source_key,
 from ..utils.topic_search import SearchFailure
 
 
-class TopicTracker:
+from .collection import KeywordCollection
+
+
+class TopicTracker(KeywordCollection):
     def __init__(self, db, config, adapter, rules, *, clock=utc_now):
         self.db, self.config, self.adapter, self.rules, self.clock = db, config, adapter, rules, clock
         self.lock_path = Path(db.db_path + ".topic-search.lock")
@@ -139,7 +143,9 @@ class TopicTracker:
 
     def _timeout(self, job_id, deadline):
         self._ready()
-        self.db.topic_check_job(job_id, self.clock())
+        current_job = self.db.topic_check_job(job_id, self.clock())
+        if current_job["kind"] != "MANUAL" and not getattr(self.config,"topic_scheduler_enabled",False):
+            raise TopicError("STOPPED", "定时采集已关闭")
         remaining = min(20, deadline - time.monotonic())
         # 在保护窗口边界之前结束请求，不另建时间窗定义。
         from datetime import timedelta
@@ -162,11 +168,11 @@ class TopicTracker:
         timeout = self._timeout(job_id, deadline)
         return method(*args, timeout=timeout)
 
-    def _evaluate(self, meta):
+    def _evaluate(self, meta, topic=None):
         try:
             presence = self.db.topic_presence(meta["youtube_id"], meta["channel_id"])
             version = self.rules.version()
-            state, reason = eligibility(meta, self.rules.check, presence)
+            state, reason = eligibility(meta, self.rules.check, presence, (topic or {}).get("min_duration", 30))
             if self.rules.version() != version:
                 raise TopicError("RULE_CHANGED", "审查规则正在更新，请重新核实")
         except Exception:
@@ -201,9 +207,11 @@ class TopicTracker:
                         raise
                     details = self._request(job["id"], "general", deadline, self.adapter.details, ids)
                 by_id = {item.get("id"): item for item in details if item.get("id") in ids}
-                candidates = [self._evaluate(metadata(i, by_id.get(i))) for i in ids]
+                candidates = [self._evaluate(metadata(i, by_id.get(i)), topic) for i in ids]
             self._timeout(job["id"], deadline)
             self.db.topic_store_results(job["id"], candidates, self.clock())
+            self.db.keyword_job_coverage(job["id"], getattr(items, "has_more", False) or len(items)>25)
+            self.db.keyword_score_results(job["id"], self.config, self.clock())
             self._finish(job["id"], "COMPLETE", "OK")
         except TopicError as exc:
             state = "INTERRUPTED" if exc.code in ("STOPPED", "SEARCH_CLOSED", "GUARD_DISABLED", "GUARD_UNKNOWN", "MARKET_GUARD", "DEADLINE") else "PARTIAL" if phase == "details" else "FAILED"
@@ -244,14 +252,16 @@ class TopicTracker:
     def candidates(self, **filters):
         self.maintenance()
         result = self.db.topic_candidates(**filters)
+        observation_keys={r['key'] for r in self.db.keyword_observations(self.clock(),include_future=True)}
         for candidate in result["candidates"]:
-            current = self._evaluate(candidate["metadata"])
+            current = self._evaluate(candidate["metadata"], {"min_duration": self.db.keyword_min_duration(candidate["key"])})
             candidate.update(pipeline_present=current["pipeline_present"], pipeline_states=current["pipeline_states"])
             if current["content_version"] != candidate["content_version"]:
                 self.db.topic_refresh_rules(candidate["key"], candidate["revision"], current)
                 candidate["needs_review"] = candidate["state"] == "SAVED" and candidate["saved_version"] != current["content_version"]
                 candidate.update({k: current[k] for k in ("eligibility", "reason", "rule_version", "content_version")})
                 candidate["revision"] += 1
+            candidate["collection"] = self.db.keyword_candidate_state(candidate["key"], self.config, self.clock(),observation_keys=observation_keys)
             candidate["can_save"] = (candidate["eligibility"] == "CHECKABLE" and not candidate["pipeline_present"] and candidate["state"] != "REJECTED")
         return result
 
@@ -260,7 +270,7 @@ class TopicTracker:
         if body["state"] == "SAVED":
             if not row or not row["metadata"]:
                 raise TopicError("RECHECK", "资料已到期，需重新核实")
-            current = self._evaluate(row["metadata"])
+            current = self._evaluate(row["metadata"], {"min_duration": self.db.keyword_min_duration(key)})
             if current["eligibility"] != "CHECKABLE" or current["content_version"] != row["content_version"]:
                 raise TopicError("RECHECK", "资料或规则已变化，请重新载入并核实")
             rule_version = current["rule_version"]
@@ -284,7 +294,7 @@ class TopicTracker:
         search_open = can_enable and control["mode"] == "DISCOVERY_ONLY"
         from ..core.maintenance import gate
         maintenance = gate().status()
-        return dict(control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
+        return dict(collection=dict(scheduler_enabled=getattr(self.config,"topic_scheduler_enabled",False), admission_available=getattr(self.config,"topic_admission_enabled",False), automatic_used=self.db.keyword_auto_budget(self.config.topic_quota_project,self.clock()), **self.db.keyword_control()), control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),
                     search_open=search_open, can_enable=can_enable, search_gate=dict(code=reason_code, message=reason),
                     limits=dict(search=self.config.topic_search_daily_limit, general=self.config.topic_general_daily_limit))

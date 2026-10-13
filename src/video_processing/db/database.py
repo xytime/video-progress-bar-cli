@@ -8,6 +8,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
 | 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
@@ -305,6 +306,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         # 后续 DAL 连接静默失去 ON DELETE/ON UPDATE 约束。
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.row_factory = sqlite3.Row
+        conn.create_function("keyword_allowed", 2, lambda source, yid: int(self._keyword_allowed(conn, source, yid)))
         admission = {}
         if not self._initializing_schema and not self._read_only:
             from ..core.maintenance import gate, current, MaintenanceDenied
@@ -3650,7 +3652,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 UPDATE processed_videos SET status='PROCESSING', process_pid=?,
                     retry_count=retry_count+1, error_msg='CODEX_MEDIA_RECOVERY', updated_at=CURRENT_TIMESTAMP
                 WHERE youtube_id=? AND slice_index=0 AND status='FAILED' AND score>=75
-                  AND source<>'DISCOVERY' AND error_msg=? AND retry_count=? AND process_pid IS NULL
+                  AND source<>'DISCOVERY' AND keyword_allowed(source,youtube_id) AND error_msg=? AND retry_count=? AND process_pid IS NULL
                   AND updated_at >= datetime('now', '-48 hours')
                   AND NOT EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id=processed_videos.youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=processed_videos.id)
@@ -3791,7 +3793,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 WHERE youtube_id = ? AND slice_index = ?
                   AND status IN ('PENDING', 'PROCESSING', 'WECHAT_DEFERRED')
                   AND IFNULL(publication_review_required, 0) = 0
-                  AND COALESCE(source, 'AUTO') != 'DISCOVERY'
+                  AND COALESCE(source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive a WHERE a.video_id = processed_videos.id)
@@ -3902,7 +3904,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' AND keyword_allowed(source,youtube_id) "
                 "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
                 "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
@@ -3975,7 +3977,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 SELECT pv.*
                 FROM processed_videos pv
                 {join_channel}
-                WHERE pv.status = 'WECHAT_DEFERRED'
+                WHERE pv.status = 'WECHAT_DEFERRED' AND keyword_allowed(pv.source,pv.youtube_id)
                   AND NOT EXISTS (
                     SELECT 1
                     FROM wechat_publications_historical_archive archive
@@ -4635,7 +4637,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 '''SELECT pv.*
                    FROM processed_videos pv
                    WHERE pv.status = 'PENDING'
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -4714,7 +4716,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 '''SELECT pv.* FROM processed_videos pv
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
                      AND pv.status = 'PENDING'
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -4789,6 +4791,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 '''SELECT lease.* FROM manual_publish_leases lease
                    JOIN processed_videos pv ON pv.id = lease.video_id
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND keyword_allowed(pv.source,pv.youtube_id)
                      AND lease.platform = ? AND lease.claimed_at IS NULL
                      AND lease.revoked_at IS NULL AND lease.expires_at > CURRENT_TIMESTAMP
                    ORDER BY lease.issued_at DESC LIMIT 1''',
@@ -4996,7 +4999,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             FROM processed_videos pv
             WHERE pv.status = 'PENDING'
               AND pv.score < 75
-              AND IFNULL(pv.source, '') != 'DISCOVERY'
+              AND IFNULL(pv.source, '') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
               AND IFNULL(pv.is_manually_scored, 0) = 0
               AND (
                     pv.score_input_signature IS NULL
@@ -5082,7 +5085,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                    WHERE youtube_id = ?
                      AND slice_index = 0
                      AND status IN ('PENDING', 'EXPIRED', 'IGNORED')
-                     AND IFNULL(source, '') != 'DISCOVERY'
+                     AND IFNULL(source, '') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = processed_videos.id)""",
                 (score, youtube_id)
@@ -5358,7 +5361,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
               AND {rate_sql}
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
-              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
                               WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0
@@ -5414,7 +5417,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING'
-              AND pv.source = 'AUTO'
+              AND pv.source IN ('AUTO','KEYWORD') AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r

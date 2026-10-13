@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 连接及 PRAGMA 纳入完整故障边界，保证资源释放 |
 | 1.0.0 | 2026-10-11 | Codex | 候选/决定/作业/配额持久化；原子预算与 CAS；不写主表 |
 """
@@ -18,7 +19,10 @@ from ..core.topic_candidates import (TopicError, TERMINAL, REASONS, source_key,
                                      stamp, quota_day, topic_fields)
 
 
-class TopicCandidateDAL:
+from .keyword_collection import KeywordCollectionDAL
+
+
+class TopicCandidateDAL(KeywordCollectionDAL):
     """PipelineDB 的专题方法；不从应用层暴露 SQL 或连接。"""
 
     @contextmanager
@@ -64,6 +68,7 @@ class TopicCandidateDAL:
             ):
                 c.execute(ddl)
             c.execute("INSERT OR IGNORE INTO topic_control VALUES(1,'OFF',1)")
+            self._keyword_schema(c)
 
     @staticmethod
     def _topic_audit(c, actor, action, key, version, now, reason=None):
@@ -78,7 +83,7 @@ class TopicCandidateDAL:
         with self._topic_connection(write=True) as c:
             self._topic_expire(c, now)
             c.execute("DELETE FROM topic_sessions WHERE expires_at<=?", (stamp(now),))
-            c.execute("UPDATE topic_candidates SET youtube_id=NULL,metadata=NULL,fetched_at=NULL,expires_at=NULL,content_version=NULL,rule_version=NULL,eligibility='INCOMPLETE',reason='资料已到期，需再次手动搜索',revision=revision+1 WHERE expires_at<=?", (stamp(now),))
+            c.execute("UPDATE topic_candidates SET youtube_id=NULL,metadata=NULL,fetched_at=NULL,expires_at=NULL,content_version=NULL,rule_version=NULL,score=NULL,score_policy=NULL,score_inputs=NULL,next_refresh=NULL,eligibility='INCOMPLETE',reason='资料已到期，需再次手动搜索',revision=revision+1 WHERE expires_at<=?", (stamp(now),))
             if recover:
                 c.execute("UPDATE topic_jobs SET state='INTERRUPTED',code='RESTARTED',ended_at=? WHERE state IN ('RUNNING','STOPPING')", (stamp(now),))
 
@@ -119,6 +124,9 @@ class TopicCandidateDAL:
             return dict(row)
 
     def topic_save(self, value, actor, now, *, topic_id=None, expected_version=None):
+        if topic_id:
+            previous = self.topic_get(topic_id, now)
+            value = {**previous, **value}
         fields = topic_fields(value)
         with self._topic_connection(write=True) as c:
             self._topic_expire(c, now)
@@ -139,6 +147,8 @@ class TopicCandidateDAL:
             expires = stamp(now + timedelta(days=fields["valid_days"]))
             c.execute("INSERT INTO topic_definitions(id,name,query,category,lookback_days,valid_days,identity,expires_at,status,version) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,query=excluded.query,category=excluded.category,lookback_days=excluded.lookback_days,valid_days=excluded.valid_days,identity=excluded.identity,expires_at=excluded.expires_at,version=excluded.version",
                       (identity, fields["name"], fields["query"], fields["category"], fields["lookback_days"], fields["valid_days"], fields["identity"], expires, status, version))
+            c.execute("UPDATE topic_definitions SET language=?,min_duration=? WHERE id=?",
+                      (fields["language"], fields["min_duration"], identity))
             self._topic_audit(c, actor, "EDIT" if old else "CREATE", identity, version, now)
         return self.topic_get(identity, now)
 
@@ -175,7 +185,9 @@ class TopicCandidateDAL:
             return dict(pipeline_present=bool(rows), pipeline_states=[dict(r) for r in rows],
                         blacklisted=bool(blocked), channel_blocked=bool(channel and channel[0] == "BLACKLISTED"))
 
-    def topic_create_job(self, topic_id, version, idem, actor, now):
+    def topic_create_job(self, topic_id, version, idem, actor, now, *, kind="MANUAL"):
+        if kind not in ("MANUAL", "SCHEDULED", "REFRESH"):
+            raise TopicError("INVALID_JOB", "作业类型无效")
         with self._topic_connection(write=True) as c:
             self._topic_expire(c, now)
             existing = c.execute("SELECT * FROM topic_jobs WHERE idempotency=?", (idem,)).fetchone()
@@ -193,14 +205,20 @@ class TopicCandidateDAL:
                 raise TopicError("BUSY", "其他搜索正在进行，请稍后重试")
             cooldown = stamp(now - timedelta(minutes=15))
             recent = c.execute("SELECT COALESCE(ended_at,started_at) at FROM topic_jobs WHERE topic_id=? AND COALESCE(ended_at,started_at)>? ORDER BY at DESC LIMIT 1", (topic_id, cooldown)).fetchone()
-            if recent:
+            if recent and kind != "REFRESH":
                 from datetime import datetime
                 from zoneinfo import ZoneInfo
                 next_at = (datetime.fromisoformat(recent["at"]) + timedelta(minutes=15)).astimezone(ZoneInfo("Asia/Shanghai"))
                 raise TopicError("COOLDOWN", f"同专题需间隔 15 分钟，可于北京时间 {next_at:%m-%d %H:%M:%S} 再次搜索")
             job_id = uuid.uuid4().hex
             c.execute("INSERT INTO topic_jobs(id,topic_id,topic_version,control_version,idempotency,state,started_at) VALUES(?,?,?,?,?,'RUNNING',?)", (job_id, topic_id, version, control["version"], idem, stamp(now)))
-            c.execute("UPDATE topic_definitions SET last_run_at=? WHERE id=?", (stamp(now), topic_id))
+            c.execute("UPDATE topic_jobs SET kind=? WHERE id=?", (kind, job_id))
+            if kind == "SCHEDULED":
+                if not topic["auto_enabled"]:
+                    raise TopicError("STOPPED", "定时采集未启用")
+                c.execute("UPDATE topic_definitions SET next_run_at=? WHERE id=?", (stamp(now + timedelta(hours=4)), topic_id))
+            if kind != "REFRESH":
+                c.execute("UPDATE topic_definitions SET last_run_at=? WHERE id=?", (stamp(now), topic_id))
             self._topic_audit(c, actor, "SEARCH", topic_id, version, now)
             return dict(c.execute("SELECT * FROM topic_jobs WHERE id=?", (job_id,)).fetchone())
 
@@ -214,6 +232,8 @@ class TopicCandidateDAL:
         if (topic["status"] != "ACTIVE" or topic["version"] != job["topic_version"] or topic["expires_at"] <= stamp(now)
                 or control["mode"] != "DISCOVERY_ONLY" or control["version"] != job["control_version"]):
             raise TopicError("STOPPED", "专题或运行状态已改变")
+        if job['kind'] in ('SCHEDULED','REFRESH') and not topic['auto_enabled']:
+            raise TopicError('STOPPED', '定时采集已停止')
         return job
 
     def topic_check_job(self, job_id, now):
@@ -224,7 +244,11 @@ class TopicCandidateDAL:
         if bucket not in ("search", "general"):
             raise TopicError("INVALID_BUCKET", "预算桶无效", 422)
         with self._topic_connection(write=True) as c:
-            self._topic_check_job(c, job_id, now)
+            job = self._topic_check_job(c, job_id, now)
+            if bucket == "search" and job["kind"] == "SCHEDULED":
+                auto_used = c.execute("SELECT COUNT(*) FROM topic_budget b JOIN topic_jobs j ON j.id=b.job_id WHERE b.project=? AND b.bucket='search' AND b.day=? AND j.kind='SCHEDULED'", (project, quota_day(now))).fetchone()[0]
+                if auto_used >= min(18, max(0, limit - 2)):
+                    raise TopicError("BUDGET", "定时搜索额度已用完；保留手动搜索额度")
             used = c.execute("SELECT COALESCE(SUM(units),0) FROM topic_budget WHERE project=? AND bucket=? AND day=?", (project, bucket, quota_day(now))).fetchone()[0]
             if used >= limit:
                 raise TopicError("BUDGET", "本模块今日预算不足；请等待太平洋时间次日")
@@ -248,7 +272,7 @@ class TopicCandidateDAL:
                 counts["restricted"] += int(candidate["eligibility"] != "CHECKABLE")
                 c.execute("INSERT INTO topic_candidates(key,youtube_id,metadata,fetched_at,expires_at,content_version,rule_version,eligibility,reason) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET youtube_id=excluded.youtube_id,metadata=excluded.metadata,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at,content_version=excluded.content_version,rule_version=excluded.rule_version,eligibility=excluded.eligibility,reason=excluded.reason,revision=topic_candidates.revision+1", (key, meta["youtube_id"], json.dumps(meta, ensure_ascii=False), stamp(now), stamp(now + timedelta(days=30)), candidate["content_version"], candidate["rule_version"], candidate["eligibility"], candidate["reason"]))
                 c.execute("INSERT OR IGNORE INTO topic_decisions(key,state) VALUES(?,'NEW')", (key,))
-                c.execute("INSERT INTO topic_hits VALUES(?,?,?,?)", (key, job["topic_id"], job_id, job["topic_version"]))
+                c.execute("INSERT OR IGNORE INTO topic_hits VALUES(?,?,?,?)", (key, job["topic_id"], job_id, job["topic_version"]))
             c.execute("UPDATE topic_jobs SET counts=? WHERE id=?", (json.dumps(counts), job_id))
             return counts
 

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 单飞恢复、清理与退出隔离，提供本机脱敏健康状态 |
 | 1.0.0 | 2026-10-11 | Codex | v0.2 管理/候选/审计入口；默认拒绝生产搜索，无加工入口 |
 """
@@ -35,7 +36,9 @@ class TopicBody(StrictBody):
     name: str = Field(min_length=1, max_length=40)
     query: str = Field(min_length=1, max_length=120)
     category: str = Field(max_length=30)
-    lookback_days: int = 7
+    lookback_days: int = 1
+    language: str = "en"
+    min_duration: int = 30
     valid_days: int = 7
 
 
@@ -60,6 +63,11 @@ class DecisionBody(StrictBody):
     content_version: str = Field(pattern=r"^[a-f0-9]{64}$")
     state: str = Field(pattern="^(NEW|SAVED|REJECTED)$")
     reason: str | None = Field(default=None, max_length=30)
+
+
+class ToggleBody(StrictBody):
+    version: int = Field(ge=1)
+    enabled: bool
 
 
 class ModeBody(StrictBody):
@@ -170,7 +178,7 @@ def create_topic_candidates_router(service_factory, *, port):
 
     @router.put("/api/topic-candidates/topics/{topic_id}")
     def edit(topic_id: str, body: EditBody, actor=Depends(authorized)):
-        return call(service().db.topic_save, body.model_dump(), actor, service().clock(), topic_id=topic_id, expected_version=body.version)
+        return call(service().db.topic_save, body.model_dump(exclude_unset=True), actor, service().clock(), topic_id=topic_id, expected_version=body.version)
 
     @router.post("/api/topic-candidates/topics/{topic_id}/state")
     def transition(topic_id: str, body: StateBody, actor=Depends(authorized)):
@@ -179,6 +187,14 @@ def create_topic_candidates_router(service_factory, *, port):
     @router.post("/api/topic-candidates/topics/{topic_id}/search", status_code=202)
     def search(topic_id: str, body: SearchBody, actor=Depends(authorized)):
         return call(service().start, topic_id, body.version, body.idempotency, actor)
+
+    @router.put("/api/topic-candidates/topics/{topic_id}/schedule")
+    def schedule(topic_id: str, body: ToggleBody, actor=Depends(authorized)):
+        return call(service().schedule, topic_id, body.version, body.enabled, actor)
+
+    @router.put("/api/topic-candidates/admission")
+    def admission(body: ToggleBody, actor=Depends(authorized)):
+        return call(service().admission, body.enabled, body.version, actor)
 
     @router.put("/api/topic-candidates/mode")
     def mode(body: ModeBody, actor=Depends(authorized)):

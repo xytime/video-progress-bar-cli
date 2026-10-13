@@ -64,7 +64,8 @@ def protection_snapshot():
     from config.settings import settings
     names = ("enable_public_publish_windows", "market_guard_policy", "enable_market_hours_guard", "wechat_publishing_paused",
              "enable_douyin_browser_publishing", "enable_kuaishou_browser_publishing",
-             "enable_wechat_comment_interaction", "wechat_keepalive_enabled")
+             "enable_wechat_comment_interaction", "wechat_keepalive_enabled",
+             "topic_search_enabled", "topic_scheduler_enabled", "topic_admission_enabled")
     return {name: getattr(settings, name) for name in names}
 
 
@@ -185,13 +186,16 @@ def inspection(control, *, evidence=None, process_pids=None):
             from ..db.database import PipelineDB
             if PipelineDB.maintenance_active_work(output / "pipeline.db"):
                 unknown.append({"code": "UNFINISHED_LEDGER"})
-            if settings.topic_search_enabled or settings.topic_quota_verified or settings.topic_quota_project:
+            if (settings.topic_search_enabled or settings.topic_scheduler_enabled or settings.topic_admission_enabled
+                    or settings.topic_quota_verified or settings.topic_quota_project):
                 unknown.append({"code": "SEARCH_CLOSURE_UNCONFIRMED"})
             from ..db.topic_candidates import TopicCandidateDAL
             candidate_db = TopicCandidateDAL()
             candidate_db.db_path = str(output / "pipeline.db")
             if candidate_db.topic_control()["mode"] != "OFF":
                 unknown.append({"code": "SEARCH_CLOSURE_UNCONFIRMED"})
+            if candidate_db.keyword_control()['admission']:
+                unknown.append({"code": "ADMISSION_CLOSURE_UNCONFIRMED"})
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, TopicError, sqlite3.Error):
         unknown.append({"code": "INSPECTION_UNKNOWN"})
     return dict(state, workers=owners, unknown=unknown, phase="UNKNOWN" if unknown else state["phase"],

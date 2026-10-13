@@ -4,6 +4,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 3.71.0 | 2026-10-10 | Antigravity | 视频号发布支持自动挂载图书商品（enable_wechat_product_link），透传频道来源并强制要求商品绑定。 |
 | 3.70.0 | 2026-10-10 | Codex | 首尾清理只接入新 TED 整片；固定历史成片绑定及异常回退。 |
 | 3.69.2 | 2026-10-09 | Codex | 裁剪超时独立清理进程组；裁剪副本接入硬重置与受保护 TTL。 |
@@ -1663,22 +1664,8 @@ class PipelineManager:
             yid        = video['youtube_id']
             views      = max(0, video.get('view_count') or 0)
             likes      = max(0, video.get('like_count') or 0)
-            # [Claude_Opus_4.8 架构B] 评分曲线已抽至 scoring.compute_auto_score（纯函数，可单测）
-            score      = compute_auto_score(views, likes)
-
-            # [Claude_Opus_4.8] 受信任频道地板分：列入 settings.channel_score_floor_map 的频道
-            # 评分托底（如 @wstruthbombs 默认 80→必过发布线 ≥75，整批自动发布，不受低播放拖累）。
-            _floor = settings.channel_score_floor_map.get(video.get('channel_id'), 0)
-            if (
-                settings.ted_auto_publish_after_id > 0
-                and (video.get('parent_id') or video['id']) > settings.ted_auto_publish_after_id
-                and video.get('source') == 'AUTO'
-                and video.get('channel_id') in TED_AUTO_PUBLISH_CHANNEL_IDS
-            ):
-                _floor = max(_floor, settings.speech_publish_score_line)
-            if _floor > score:
-                logger.info(f"  [{yid}] trusted-channel score floor {_floor} applied (computed was {score})")
-                score = _floor
+            from .scoring import compute_policy_score
+            score = compute_policy_score(video, settings)
 
             if views > 0:
                 logger.info(f"  [{yid}] views={views} like_rate={likes / views * 100:.1f}% → score={score}")
@@ -4064,6 +4051,8 @@ class PipelineManager:
             raise ValueError("invalid video identity")
         try:
             with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
+                if not self.db.keyword_processing_allowed(yid, index):
+                    return False
                 start_current()
                 if claim and not self.db.claim_video_for_processing(yid, slice_index=index):
                     return False

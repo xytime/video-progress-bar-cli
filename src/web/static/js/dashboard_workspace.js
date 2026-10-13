@@ -7,11 +7,11 @@
   const label={waitlist:'待筛选',active:'制作中',ready:'待发布',error:'异常记录',wechat_deferred:'待微信恢复',review:'本地受理／待核实'};
   const listURL=tab=>`/?view=${groups[tab]}&tab=${tab}&created_window=all`;
   const overview=document.createElement('section'); overview.id='workspace-overview'; overview.setAttribute('aria-label','工作总览');
-  overview.innerHTML=`<div class="console-notice"><p id="console-search-state" role="status">正在核实关键词工作台状态…</p><a data-topic-entry href="/topic-candidates">关键词追踪 →</a></div>
+  overview.innerHTML=`<div class="console-notice"><p id="console-search-state" role="status">正在核实关键词工作台状态…</p><a data-topic-entry href="/topic-candidates">YouTube 关键词采集 →</a></div>
     <div class="console-metrics">${['waitlist','active','ready','error'].map(tab=>`<a class="console-metric" href="${listURL(tab)}"><span>${label[tab]}</span><strong id="overview-${tab}">—</strong><span>当前列表 · 全部入库时间</span></a>`).join('')}</div>
     <div class="console-overview-grid"><section class="console-panel"><h2>建议先查看</h2><p>按事项类型排序，非严重度评级 · 全部入库时间</p><div class="console-attention" id="attention-main">正在读取关注事项…</div><p>投递结果未核实前，请勿重复提交。</p>
     <div class="console-tasks"><h2>当前任务</h2><div id="overview-tasks" aria-live="polite">正在读取制作与待发布记录…</div></div><details class="console-observation"><summary>观察与历史</summary><p>根据现有错误记录分类；规则已阻止的事项可按需复核。</p><div id="attention-observation"></div><a href="${listURL('error')}">全部异常记录 →</a></details></section>
-    <aside class="console-panel console-shortcuts"><h2>常用入口</h2><a data-topic-entry href="/topic-candidates">关键词追踪 <span>→</span></a><a href="/?view=production&tab=queue">生产队列 <span>→</span></a><a href="/product-settings">商品挂载 <span>→</span></a><p id="overview-feedback" role="status">正在读取概览…</p><button type="button" id="overview-retry" class="btn-tool-prefs">重新读取</button></aside></div>`;
+    <aside class="console-panel console-shortcuts"><h2>常用入口</h2><a href="/?view=operations&tab=channels">频道白名单 <span>→</span></a><a data-topic-entry href="/topic-candidates">YouTube 关键词采集 <span>→</span></a><a href="/?view=production&tab=queue">生产队列 <span>→</span></a><a href="/product-settings">商品挂载 <span>→</span></a><p id="overview-feedback" role="status">正在读取概览…</p><button type="button" id="overview-retry" class="btn-tool-prefs">重新读取</button></aside></div>`;
   const app=document.querySelector('.app'); app.insertBefore(overview,$('global-funnel-panel'));
   const table=document.querySelector('.main-grid > .panel'); table.id='workspace-list';
   const channels=$('channel-list').closest('.panel'); channels.id='workspace-channels';
@@ -47,7 +47,7 @@
       const d=await readJSON('/api/console/capabilities');
       if(generation!==capabilityGeneration)return;
       if(typeof d.topic_available!=='boolean'||typeof d.search_enabled!=='boolean')throw new Error('状态格式不完整');
-      $('console-search-state').textContent=!d.topic_available?'关键词工作台仅限本机访问；请在本机打开后台。':d.search_enabled?'搜索配置已开放；是否可搜索以工作台门禁为准。':'生产搜索关闭；进入关键词追踪查看专题。';
+      $('console-search-state').textContent=!d.topic_available?'关键词工作台仅限本机访问；请在本机打开后台。':d.search_enabled?'搜索配置已开放；是否可搜索以工作台门禁为准。':'生产搜索关闭；进入YouTube 关键词采集查看专题。';
       document.querySelectorAll('a[href="/topic-candidates"]').forEach(a=>{a.removeAttribute('aria-disabled');if(!d.topic_available){a.setAttribute('aria-disabled','true');a.dataset.unavailable='true';}else delete a.dataset.unavailable;});
     } catch(error) {
       if(generation!==capabilityGeneration)return;

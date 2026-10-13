@@ -85,3 +85,16 @@ def test_d07_partial_adoption_recovery_is_unknown_not_repeated(tmp_path):
         raise DeploymentDenied("TARGET_RUNTIME_MISMATCH")
     instance.verify = refused
     assert instance.reconcile({"pending": "adopt"}) == "UNKNOWN"
+
+
+@pytest.mark.parametrize('flag',['topic_scheduler_enabled','topic_admission_enabled'])
+def test_keyword_flags_in_off_adoption_protection(monkeypatch,flag):
+    from config.settings import settings
+    instance=host.HostDeployment.__new__(host.HostDeployment)
+    instance.plan={'protections':host.protection_snapshot()}
+    monkeypatch.setattr(settings,flag,True)
+    with pytest.raises(DeploymentDenied,match='PROTECTION_DRIFT'):
+        instance.protections()
+    instance.plan={'protections':host.protection_snapshot()}
+    with pytest.raises(DeploymentDenied,match='SEARCH_CLOSURE_UNCONFIRMED'):
+        instance.protections()
