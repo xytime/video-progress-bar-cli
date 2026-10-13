@@ -17,7 +17,11 @@ created_at: 2026-09-08T11:46:30+08:00
 
 影子工作区可以使用正式工作区的 `.venv/bin/python`，依赖只读，源码来自当前 runner 所在工作区。`--timeout 180` 放在分隔符 `--` 之前，后面传 pytest 参数。返回值保留 pytest 退出码；超时为 124、启动失败 127、隔离不可用为 2。禁止降级为裸 pytest。
 
-每次创建 `/private/tmp/video-pytest-*/`，保留 `source-manifest.json`、`sandbox.sb`、`boundary-probe.log`、`pytest.log`、`receipt.json` 和 `sandbox/pytest.xml`。快照包含受维护的源码、测试与资源，也包含未提交且未被忽略的新文件；不复制正式 output、.env 及其变体、secrets。仅 `.env.example` 是公开模板例外；`data/` 仅精确纳入版本化公开种子 `data/comment_strategies.json`，不复制其余运行数据。源链接被拒绝，依赖 venv 是工具显式创建的只读映射。不要把生成目录加入仓库；测试完成后按需人工清理指定运行目录。
+每次创建 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-*/`。EXT2T 必须实际挂载；缺失或测试目录指向其他文件系统时明确拒绝，不回退主盘。成功、失败、超时、Ctrl-C、SIGTERM 及准备失败均回收本次 `sandbox/` 源码/浏览器/模型/临时产物副本，保留根目录的 `source-manifest.json`、`sandbox.sb`、`boundary-probe.log`、`pytest.log`、运行依赖清单和 `receipt.json`；JUnit 从 `sandbox/pytest.xml` 保存为根目录 `pytest.xml`。回执记录 `cleanup.status`、历史快照路径与退出码，快照路径默认已不存在。清理失败明确报告，原测试通过时返回 3；不把清理失败误报为完成。
+
+需要查看 QA 截图、媒体产物或排查快照时，在 `--` 前显式加 `--keep-sandbox`，副本仅保留在扩展盘并在回执标记 `retained`，之后按需人工回收该次 sandbox。SIGKILL、断电或扩展盘掉线无法保证完成回收，可能在扩展盘留下副本，绝不会主动回退主盘。日志/回执保留，不对历史归档或其他正在运行的测试进行清理。
+
+快照包含受维护的源码、测试与资源，也包含未提交且未被忽略的新文件；不复制正式 output、.env 及其变体、secrets。仅 `.env.example` 是公开模板例外；`data/` 仅精确纳入版本化公开种子 `data/comment_strategies.json`，不复制其余运行数据。源链接被拒绝，依赖 venv 是工具显式创建的只读映射。不要把生成目录加入仓库。
 
 测试子进程使用明确的环境允许清单，业务密钥、代理、PYTEST_ADDOPTS 和自动插件不会继承。显式加载现有 pytest-asyncio 插件。HOME 保持真实路径，供 Path.home() 常量解析，沙盒仍禁止读取或修改用户数据。系统目录、Python 和虚拟环境依赖只读；写入仅在本次 sandbox 根与 /dev/null。网络、向其他沙盒外进程发信号均被拒绝。默认模式拒绝所有 Mach lookup；浏览器模式只有下述 Chromium 名称例外。正式项目 output 的内容不在读取允许清单内。
 
