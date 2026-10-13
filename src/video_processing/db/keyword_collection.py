@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.3 | 2026-10-14 | Codex | 采集和刷新事务保存作业评分快照，支持阶段验收 |
 | 0.4.2 | 2026-10-14 | Codex | 首轮定时上限一条，开启与恢复原子校验，存量超限拒绝调用和准入 |
 | 0.4.1 | 2026-10-13 | Codex | 累计准入额度与插入共用事务，受控试运行最多一条 |
 | 0.4.0 | 2026-10-13 | Codex | 独立候选的持久调度、评分证据及受控准入 |
@@ -14,7 +15,10 @@ from ..core.topic_candidates import TopicError, stamp, topic_fields, quota_day
 from ..scoring import compute_policy_score, SCORE_POLICY_VERSION, PUBLISH_SCORE_LINE
 
 
-class KeywordCollectionDAL:
+from .keyword_evidence import KeywordEvidenceDAL
+
+
+class KeywordCollectionDAL(KeywordEvidenceDAL):
     @staticmethod
     def _keyword_schema(c):
         additions = {
@@ -36,6 +40,7 @@ class KeywordCollectionDAL:
         for name in ('runtime_code', 'runtime_at'):
             if name not in columns:
                 c.execute(f'ALTER TABLE keyword_control ADD COLUMN {name} TEXT')
+        KeywordEvidenceDAL._keyword_evidence_schema(c)
         c.execute('CREATE TABLE IF NOT EXISTS keyword_admissions (key TEXT PRIMARY KEY, video_id INTEGER NOT NULL, topic_id TEXT NOT NULL, topic_version INTEGER NOT NULL, score INTEGER NOT NULL, policy TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)')
         # 升级旧身份签名；不改规则版本、时长、收藏或历史命中。
         for row in c.execute('SELECT * FROM topic_definitions').fetchall():
@@ -120,6 +125,9 @@ class KeywordCollectionDAL:
                 c.execute('UPDATE topic_candidates SET first_seen=COALESCE(first_seen,?),next_refresh=?,score=?,score_policy=?,score_inputs=? WHERE key=?',
                           (stamp(now), stamp(now+timedelta(hours=4)), score, SCORE_POLICY_VERSION, json.dumps(inputs), row['key']))
 
+            keys = [r[0] for r in c.execute('SELECT DISTINCT key FROM topic_hits WHERE job_id=?', (job_id,))]
+            self._keyword_record_evidence(c, job_id, keys, now)
+
     def keyword_observations(self, now, *, include_future=False):
         """全局视频公平轮转；一份统计供多个规则复用，不按命中数重复请求。"""
         with self._topic_connection() as c:
@@ -145,6 +153,8 @@ class KeywordCollectionDAL:
                     eligibility=?,reason=?,rule_version=?,content_version=?,revision=revision+1 WHERE key=? AND revision=?''',
                     (json.dumps(meta),stamp(now),stamp(now+timedelta(days=30)),stamp(now+timedelta(hours=4)),score,SCORE_POLICY_VERSION,json.dumps(inputs),
                      current['eligibility'],current['reason'],current['rule_version'],current['content_version'],old['key'],old['revision']))
+
+            self._keyword_record_evidence(c, job_id, [old['key'] for old, _ in evaluated], now)
 
     def keyword_candidate_state(self, key, config, now, *, observation_keys=None):
         with self._topic_connection() as c:

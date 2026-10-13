@@ -28,7 +28,7 @@ def main(argv=None):
     parser.add_argument("--target")
     parser.add_argument("--tested-manifest", type=Path)
     parser.add_argument("--overlay", type=Path)
-    parser.add_argument("--keyword-stage", choices=["TRIAL", "OFF"])
+    parser.add_argument("--keyword-stage", choices=["TRIAL", "OFF", "MANUAL", "SCHEDULED", "ADMISSION"])
     parser.add_argument("--keyword-evidence", type=Path)
     args = parser.parse_args(argv)
     directory = args.directory.resolve()
@@ -46,12 +46,13 @@ def main(argv=None):
             if args.keyword_stage:
                 import time
                 from config.keyword_rollout import transition, expected_protections
-                from video_processing.core.keyword_rollout import values, verify_loaded
+                from video_processing.core.keyword_rollout import values, verify_loaded, KeywordTransition
                 verify_loaded(settings, complete=True)
                 evidence = read_json(args.keyword_evidence) if args.keyword_evidence else {}
                 plan["keyword_transition"] = transition(values(settings), args.keyword_stage, evidence, time.time())
                 plan["keyword_profile_before"] = settings.topic_rollout_snapshot()
                 expected_protections(plan["protections"], plan["keyword_transition"], time.time())
+                plan["keyword_job_proof"] = KeywordTransition(plan, directory, settings).job_proof(planning=True)
             else:
                 require(args.keyword_evidence is None, "KEYWORD_STAGE_REQUIRED")
             write_json(directory / "plan.json", plan)

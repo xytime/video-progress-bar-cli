@@ -117,3 +117,10 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 已将首轮定时上限从三条收紧为一条；启用与暂停恢复在 SQLite 写事务内检查，并在自动请求预留预算和准入前再次检查。存量多规则异常时整个调度轮停止，不自动选任意一条、不删除规则、不扩大调用。页面说明同步为首轮一条。
 - 并发启用、暂停恢复绕行、存量超限、已领取作业配置漂移、跨关键词去重与频道竞争，以及真实浏览器回归 **111 passed / 10 warnings**；[回执](evidence/youtube-keyword-live-rollout/single-rule-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/single-rule-20261014/pytest.log)。源码清单 SHA-256 `a0c0c1521991f5824b81c397cb14d94792142e1f7ece1515a61fcfa98214e371`。第一批旧测试仍同时开启两条，与最新首轮范围冲突，已调整为顺序切换规则后重验，未删除原去重和竞争断言。
 - 此补强目前仅隔离验证，尚未生产采用；生产仍为 `1958e2e` OFF。后续 MANUAL/SCHEDULED/ADMISSION 入口仍关闭，实际数据库试运行/刷新作业证据核验未完成。下一步可先完成证据核验的隔离工程；安全窗口到来后刷新现场配额，使用已采用协议生成新 TRIAL 计划并进行最多累计三次真实调用。首轮单规则补强必须在开放 SCHEDULED 前完成最终生产整合与原生采用。跟进保持 ACTIVE，不把 OFF 部署作为最终完成。
+
+## 2026-10-14 03:06 真实作业证据门禁整合通过
+
+- 补齐 MANUAL/SCHEDULED/ADMISSION 入口：每阶段读取实际数据库成功作业、官方调用预算、采集结果和可重算的统一评分快照，不能用字符串 ID 替代证据；快照与结果事务内写入，不为历史空记录补造。计划绑定证据，freeze/adopt 复核漂移。
+- 后续阶段必须继承原试运行作业链；准入还须同一候选在 SCHEDULED 阶段的定时采集与至少四小时后自然刷新。保留全部原生维护、来源、锁、排空、保护字段和恢复校验，没有降低评分阈值。
+- 隔离 396 项通过；保留生产七项 dirty 和额外受维护源码的最终整合 **475 passed / 13 warnings**，含真实 Chromium、部署恢复与并行数据库/字幕/生词片尾回归。两批不累加。最终清单 SHA-256 `e2024ac90e301862b8d92836dc915470c2d7eb60a502ddccdb940d6685ace1cd`，完成于 2026-10-13T19:05:41Z；[回执](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/pytest.log)、[保留清单](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/preparation.json)。
+- 当前尚未采用本轮代码；生产仍 1958e2e OFF，维护 active 为空、来源需原生冻结后正式核验。下一步先原生 OFF 采用，再于现场安全窗口刷新配额并创建 TRIAL 计划。测试里的受控适配器和 SQLite 仅证明门禁行为，不代表真实 YouTube 采集完成。

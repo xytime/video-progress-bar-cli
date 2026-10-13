@@ -24,7 +24,7 @@ from .task_lease import read_lease_owner
 
 def implementation():
     paths = [Path(__file__).with_name(n + ".py") for n in
-             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host", "keyword_rollout")]
+             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host", "keyword_rollout", "keyword_job_proof")]
     paths.append(Path(__file__).resolve().parents[2] / "config" / "keyword_rollout.py")
     return {str(p.relative_to(Path(__file__).resolve().parents[2])): sha(p.read_bytes()) for p in paths}
 
@@ -86,6 +86,7 @@ class HostDeployment:
         if getattr(self, "keyword", None) and step in {"baseline", "freeze", "adopt"}:
             from config.keyword_rollout import expected_protections
             expected_protections(self.plan["protections"], self.plan["keyword_transition"], time.time())
+            self.keyword.job_proof()
         self.protections()
         if step in {"baseline", "freeze"}:
             self.sources.baseline()

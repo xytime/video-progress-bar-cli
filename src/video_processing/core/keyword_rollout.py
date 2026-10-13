@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-14 | Codex | 后续阶段核对数据库原始作业快照及计划绑定 |
 | 1.0.0 | 2026-10-14 | Codex | 配置与部署日志身份绑定、漂移关闭和维护启动回读 |
 """
 from pathlib import Path
@@ -62,9 +63,21 @@ class KeywordTransition:
             verify_loaded(self.config)
         return expected
 
+    def job_proof(self, *, planning=False):
+        if self.transition['target'] in ('OFF', 'TRIAL'):
+            return {}
+        from ..db.database import PipelineDB
+        from .keyword_job_proof import job_proof
+        proof = job_proof(PipelineDB(self.config.default_output_dir / 'pipeline.db'),
+                          self.transition, self.config, self.config._topic_rollout_record, time.time())
+        if not planning:
+            require(proof == self.plan.get('keyword_job_proof'), 'KEYWORD_JOB_PROOF_DRIFT')
+        return proof
+
     def apply(self):
         """调用者负责原生来源/排空/备份检查，本方法额外绑定当前事务位置。"""
         validate_transition(self.transition, time.time(), fresh=True)
+        self.job_proof()
         journal = Deployment(self.plan, self.directory, None).status()
         require(journal["pending"] == "adopt" and journal["done"] == ["baseline", "freeze", "stop", "backup"],
                 "KEYWORD_ADOPT_ORDER_INVALID")
