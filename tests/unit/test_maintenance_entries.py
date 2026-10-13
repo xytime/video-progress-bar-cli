@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-12 | Codex | 真实控制/角色锁/子进程/账本；外部执行计数为零 |
+| 1.0.1 | 2026-10-13 | Codex | 验证精简 PATH 的真实 lsof 读取及工具失败仍阻断 |
 """
 import hashlib
 import json
@@ -227,7 +228,7 @@ def test_m04_web_maintenance_writes_refused_old_get_and_candidates_work(isolated
     calls = []
     real_popen = subprocess.Popen
     def dispatch(command, *args, **kwargs):
-        if command[0] in {'ps', 'lsof'}:
+        if command[0] in {'ps', 'lsof', '/usr/sbin/lsof'}:
             return real_popen(command, *args, **kwargs)
         calls.append('business-spawn')
         pytest.fail('维护中出现业务子进程')
@@ -240,6 +241,44 @@ def test_m04_web_maintenance_writes_refused_old_get_and_candidates_work(isolated
         status = client.get('/api/maintenance/status').json()
         assert status['safe'] is False and status['phase'] == 'UNKNOWN'
     assert calls == []
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS launchd PATH 回归')
+def test_inspection_lsof_with_launchd_path(tmp_path, isolated_running_maintenance, monkeypatch):
+    """真实工具能在精简 PATH 启动；cwd 输出模拟以保留沙盒进程隔离。"""
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    real_run = subprocess.run
+    observed = []
+    def run(command, **kwargs):
+        if command[0] == 'ps':
+            return subprocess.CompletedProcess(command, 0, '99999998 python -m cli.main\n', '')
+        # -v 不扫描宿主进程；裸 lsof 在这个 PATH 下会直接 FileNotFoundError。
+        version = real_run([command[0], '-v'], **kwargs)
+        assert version.returncode == 0 and 'lsof' in version.stderr
+        observed.append(command)
+        return subprocess.CompletedProcess(command, 0, 'n' + str(tmp_path) + '\n', '')
+    monkeypatch.setattr(subprocess, 'run', run)
+    before = isolated_running_maintenance.status()
+    result = inspection(isolated_running_maintenance)
+    assert len(observed) == 1
+    assert result['unknown'] == [{'code': 'SOURCES_NOT_VERIFIED'}]
+    assert not result['safe']
+    assert isolated_running_maintenance.status() == before
+
+
+@pytest.mark.parametrize('failure', ['missing', 'denied'])
+def test_inspection_lsof_failure_remains_closed(isolated_running_maintenance, monkeypatch, failure):
+    def run(command, **kwargs):
+        if command[0] == 'ps':
+            return subprocess.CompletedProcess(command, 0, '99999998 python -m cli.main\n', '')
+        if failure == 'missing':
+            raise FileNotFoundError('lsof unavailable')
+        return subprocess.CompletedProcess(command, 1, '', 'denied')
+    monkeypatch.setattr(subprocess, 'run', run)
+    result = inspection(isolated_running_maintenance)
+    expected = 'INSPECTION_UNKNOWN' if failure == 'missing' else 'PROCESS_CWD_UNKNOWN'
+    assert expected in {row['code'] for row in result['unknown']}
+    assert not result['safe']
 
 
 def test_m04_clues_refresh_registered_and_maintenance_cache_only(isolated_running_maintenance, monkeypatch):
