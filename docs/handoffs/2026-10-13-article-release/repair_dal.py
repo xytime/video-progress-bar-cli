@@ -32,6 +32,17 @@ class PipelineDB(BasePipelineDB):
     """一次性运维 DAL；不安装到生产业务路径，不允许通用目标参数。"""
 
     @staticmethod
+    def verify_recovery_backup(path, proof):
+        path = Path(path).resolve()
+        wal = Path(str(path) + '-wal')
+        if (str(path) != proof.get('path') or (wal.exists() and wal.stat().st_size)
+                or hashlib.sha256(path.read_bytes()).hexdigest() != proof.get('sha256')):
+            return False
+        # backup() 完成后封存的单文件副本不应尝试创建 WAL/SHM。
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro&immutable=1', uri=True)) as conn:
+            return conn.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+
+    @staticmethod
     def repair_snapshot(path, *, verified_backup=False):
         # immutable 只用于已验证的一致性备份；活库必须正常读取 WAL。
         suffix = "?mode=ro&immutable=1" if verified_backup else "?mode=ro"

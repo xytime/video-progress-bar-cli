@@ -115,8 +115,19 @@ def test_backup_verification_failure_precedes_database_mutation(record, tmp_path
     backup = tmp_path / 'backup.sqlite'
     proof = dal.PipelineDB.maintenance_backup(path, backup)
     backup.write_bytes(b'corrupt')
-    assert not dal.PipelineDB.maintenance_verify_backup(backup, proof)
+    assert not dal.PipelineDB.verify_recovery_backup(backup, proof)
     assert dal.PipelineDB.repair_snapshot(path) == before
+
+
+def test_sealed_backup_rejects_wal_and_relocation(record, tmp_path):
+    path, _, before = record
+    backup = tmp_path/'sealed backup.sqlite'
+    proof = dal.PipelineDB.maintenance_backup(path, backup)
+    assert dal.PipelineDB.verify_recovery_backup(backup, proof)
+    assert dal.PipelineDB.repair_snapshot(backup, verified_backup=True)==before
+    assert not dal.PipelineDB.verify_recovery_backup(backup, dict(proof,path='other'))
+    Path(str(backup)+'-wal').write_bytes(b'unsealed')
+    assert not dal.PipelineDB.verify_recovery_backup(backup, proof)
 
 
 @pytest.mark.parametrize('failure', [None,'source','schedule','backup','version','other_unknown','existing_intent'])

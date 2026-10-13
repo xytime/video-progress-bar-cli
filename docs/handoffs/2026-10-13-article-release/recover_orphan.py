@@ -26,7 +26,7 @@ def recover(directory):
     host = HostDeployment(read_json(directory / "plan.json"), directory)
     database = settings.default_output_dir / "pipeline.db"
     expected_file = directory / "ledger-inspection.sqlite"
-    require(PipelineDB.maintenance_verify_backup(expected_file, read_json(directory / "ledger-inspection-backup.json")), "EXPECTED_BACKUP_INVALID")
+    require(PipelineDB.verify_recovery_backup(expected_file, read_json(directory / "ledger-inspection-backup.json")), "EXPECTED_BACKUP_INVALID")
     expected = PipelineDB.repair_snapshot(expected_file, verified_backup=True)
     require(expected is not None, "EXPECTED_RECORD_MISSING")
     receipt = directory / "orphan-recovery.json"
@@ -47,7 +47,7 @@ def recover(directory):
         backup = directory / "before-orphan-recovery.sqlite"
         proof = PipelineDB.maintenance_backup(database, backup)
         write_json(directory / "before-orphan-recovery-backup.json", proof)
-        require(PipelineDB.maintenance_verify_backup(backup, proof), "BACKUP_INVALID")
+        require(PipelineDB.verify_recovery_backup(backup, proof), "BACKUP_INVALID")
         require(PipelineDB.repair_snapshot(backup, verified_backup=True) == expected, "BACKUP_RECORD_DRIFT")
         # 持维护互斥直到事务及回执完成，不能趁恢复切换 RUNNING 或领取新任务。
         with host.control._locked():
