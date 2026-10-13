@@ -124,3 +124,10 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 后续阶段必须继承原试运行作业链；准入还须同一候选在 SCHEDULED 阶段的定时采集与至少四小时后自然刷新。保留全部原生维护、来源、锁、排空、保护字段和恢复校验，没有降低评分阈值。
 - 隔离 396 项通过；保留生产七项 dirty 和额外受维护源码的最终整合 **475 passed / 13 warnings**，含真实 Chromium、部署恢复与并行数据库/字幕/生词片尾回归。两批不累加。最终清单 SHA-256 `e2024ac90e301862b8d92836dc915470c2d7eb60a502ddccdb940d6685ace1cd`，完成于 2026-10-13T19:05:41Z；[回执](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/pytest.log)、[保留清单](evidence/youtube-keyword-live-rollout/job-proof-integration-20261014/preparation.json)。
 - 当前尚未采用本轮代码；生产仍 1958e2e OFF，维护 active 为空、来源需原生冻结后正式核验。下一步先原生 OFF 采用，再于现场安全窗口刷新配额并创建 TRIAL 计划。测试里的受控适配器和 SQLite 仅证明门禁行为，不代表真实 YouTube 采集完成。
+
+### 03:08 补强 OFF 生产采用完成
+
+- 生产主干 `2fcb1d0becdbc45fe9b1501d0c4e4dc03729858f` 已推送；原生新计划 `5536f6d9014246c6866108dd6d433bbe` 九步全部 COMPLETE，无跳过或手工恢复。私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-proof-20261014-a/`。最终整合 475 项测试对应实际采用源码，七项 dirty 和 untracked 通过来源保留检查。
+- 重启后的正常页面会话 HTTP 200 回读：RUNNING/IDLE、OFF/version 17；搜索、试运行、定时、准入及配额门禁均 false，累计准入上限 1；试运行 search=0/3、general=0/6；阶段 identity=null/error=false。单规则和真实作业门禁代码已生效，但没有 TRIAL 配置或真实搜索。
+- 03:08:33 现场重算当前仍在宿主保护窗口，下一安全分钟 **04:15**。真实调用前重新核实窗口和 Cloud 非秘密配额；此时获取的配额会在 04:15 前过一小时有效期，因此不将旧配额包装成可放行证据。新阶段必须生成全新计划，不能复用本次 OFF 计划。
+- 后续 TRIAL→MANUAL→SCHEDULED→ADMISSION 入口已采用；仍需最多三次累计真实搜索，最多一条定时规则、至少四小时自然热度刷新、统一评分及最多一条真实达标新主任务证据。不能为赶进度降低阈值、伪造作业或扩大发布授权。自动跟进继续 ACTIVE。
