@@ -1,0 +1,40 @@
+{
+  "runtime": {
+    "control": {
+      "mode": "OFF",
+      "version": 11
+    },
+    "maintenance": {
+      "state": "RUNNING",
+      "phase": "IDLE"
+    },
+    "jobs": [],
+    "budget": {
+      "day": "2026-10-13",
+      "search": 0,
+      "general": 0
+    },
+    "search_open": false,
+    "can_enable": false
+  },
+  "state": "RUNNING",
+  "version": 16,
+  "active": [],
+  "unknown": [
+    {
+      "code": "UNREGISTERED_PROCESS",
+      "pid": 82214
+    },
+    {
+      "code": "SOURCES_NOT_VERIFIED"
+    }
+  ],
+  "source_hash": "f14bc7cc8034214816b0110786956880f7ebf510bb9b6b1330fe51b5f7d2982f",
+  "flags": {
+    "topic_search_enabled": false,
+    "topic_scheduler_enabled": false,
+    "topic_admission_enabled": false,
+    "topic_quota_verified": false
+  },
+  "schedules_restored": true
+}

@@ -1,0 +1,61 @@
+........................................................................ [ 12%]
+........................................................................ [ 24%]
+........................................................................ [ 36%]
+........................................................................ [ 48%]
+........................................................................ [ 61%]
+........................................................................ [ 73%]
+........................................................................ [ 85%]
+........................................................................ [ 97%]
+..............                                                           [100%]
+=============================== warnings summary ===============================
+src/web/app.py:1013
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/repo/src/web/app.py:1013: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../../MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+../../../../../../MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+src/web/app.py:1053
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/repo/src/web/app.py:1053: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+tests/unit/test_database_channel_funnel.py::test_get_channel_funnel_metrics_time_windows
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/repo/tests/unit/test_database_channel_funnel.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_funnel_metrics_24h_and_today_bj_windows
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/repo/tests/unit/test_database_channel_funnel.py:150: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_get_paginated_videos_created_window_filter
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/repo/tests/unit/test_database_channel_funnel.py:181: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/starlette/testclient.py:445: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+590 passed, 13 warnings in 221.57s (0:03:41)
