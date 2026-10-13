@@ -4,6 +4,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.99.0 | 2026-10-13 | Codex | 接入字幕绑定生词片尾及派生成片选择，不改变状态机与发布授权 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 3.72.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：受控开关控制、按视频挂接决策冻结并透传上传器。 |
 | 3.71.0 | 2026-10-10 | Antigravity | 视频号发布支持自动挂载图书商品（enable_wechat_product_link），透传频道来源并强制要求商品绑定。 |
@@ -2237,7 +2238,10 @@ class PipelineManager:
                 ".description",
             ]
             if subtitle_evidence_saved:
-                suffixes.extend([".ass", "_subtitle.txt"])
+                suffixes.append("_subtitle.txt")
+                # 已绑定片尾需保留规范 ASS，保证再次选片不会因 GC 丢失字幕而退回基础片。
+                if not (self._OUT_DIR / f"{prefix}_vocab.receipt.json").is_file():
+                    suffixes.append(".ass")
             
             for suffix in suffixes:
                 file_path = self._OUT_DIR / f"{prefix}{suffix}"
@@ -2296,7 +2300,28 @@ class PipelineManager:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    def _process_vocabulary_outro(self, prefix: str, yid: str, title: str, slice_index: int = 0):
+        """成片与字幕均就绪后，在发布前运行受 PID 跟踪的独立片尾子进程。"""
+        source = self._get_base_video_path(prefix)
+        subtitle = self._OUT_DIR / f"{prefix}.ass"
+        env = _build_subprocess_env()
+        env["PYTHONPATH"] = str(self._SRC_DIR)
+        self._run_tracked([
+            self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/render_vocabulary_outro.py"),
+            "--source", str(source), "--subtitle", str(subtitle),
+            "--output", str(self._OUT_DIR / f"{prefix}_vocab.mp4"), "--title", title,
+        ], yid, slice_index=slice_index, cwd=str(self._PRJ_ROOT), env=env,
+           capture_output=True, timeout=2100)
+
     def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
+        from .processors.vocabulary_outro import valid_outro
+        source = self._get_base_video_path(prefix, expected_duration)
+        output = self._OUT_DIR / f"{prefix}_vocab.mp4"
+        if valid_outro(source, self._OUT_DIR / f"{prefix}.ass", output):
+            return output
+        return source
+
+    def _get_base_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
         """
         [Project Runway-CTA] 返回最终发布的视频文件：
         开启互动层且成片有效时使用 interactive，否则平滑降级为 vertical。
@@ -2338,7 +2363,7 @@ class PipelineManager:
         """仅审查实际选用增强成片的脚本；发布执行者再次读取相同正文。"""
         if not settings.enable_deep_insight_enrichment:
             return ""
-        if self._get_published_video_path(prefix) != self._OUT_DIR / f"{prefix}_insight.mp4":
+        if self._get_base_video_path(prefix) != self._OUT_DIR / f"{prefix}_insight.mp4":
             return ""
         from .core.insight_script import InsightScript, InsightScriptV2
         raw_script = (self._OUT_DIR / f"{prefix}_insight.json").read_text(encoding="utf-8")
@@ -4828,6 +4853,8 @@ class PipelineManager:
                 # ── 2d. INTERACTION OVERLAY (Project Runway-CTA) ──────────────────
                 if settings.enable_interaction_overlay:
                     self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
+
+                self._process_vocabulary_outro(prefix, yid, render_title, slice_index=slice_index)
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
