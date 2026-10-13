@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-12 | Codex | 真实角色锁、未接入来源阻断及正常 SIGTERM 生命周期 |
 | 1.0.1 | 2026-10-13 | Codex | macOS 使用系统 lsof 路径，兼容 launchd 精简 PATH |
+| 1.0.2 | 2026-10-13 | Codex | 独立测试入口与真实 cwd 双重核实，排除仅借用生产解释器的测试 |
 """
 from __future__ import annotations
 from functools import wraps
@@ -13,6 +14,7 @@ import hashlib
 import json
 import os
 import signal
+import shlex
 import subprocess
 import time
 from .maintenance import gate, MaintenanceDenied
@@ -92,6 +94,30 @@ def registered(role):
     return decorate
 
 
+def _independent_test_root(command, root):
+    """仅识别可核实的隔离测试入口；解析歧义或生产参数仍按未知生产进程处理。"""
+    try:
+        args = shlex.split(command)
+        if len(args) < 2 or args[0] != str(root / '.venv/bin/python'):
+            return None
+        if any(str(root) in value for value in args[1:]):
+            return None
+        entry = Path(args[1])
+        if not entry.is_absolute() or not entry.is_file():
+            return None
+        entry = entry.resolve()
+        if entry.name != 'run_isolated_tests.py' or entry.parent.name != 'scripts':
+            return None
+        if entry.read_bytes() != (root / 'scripts/run_isolated_tests.py').read_bytes():
+            return None
+        candidate = entry.parent.parent
+        if candidate.is_relative_to(root.resolve()):
+            return None
+        return candidate
+    except (ValueError, OSError, RuntimeError):
+        return None
+
+
 def inspection(control, *, evidence=None, process_pids=None):
     """证据由另行批准的采用流程生成；哈希绑定被冻结的非秘密来源清单。
 
@@ -138,15 +164,18 @@ def inspection(control, *, evidence=None, process_pids=None):
                 pid, command = int(pieces[0]), pieces[1]
                 if pid == os.getpid() or not any(marker in command for marker in markers):
                     continue
-                if str(settings.project_root) in command:
+                test_root = _independent_test_root(command, settings.project_root)
+                if str(settings.project_root) in command and test_root is None:
                     process_pids.add(pid)
                 else:
                     lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
                     cwd = subprocess.run([lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
                                          text=True, capture_output=True, timeout=2)
-                    if cwd.returncode:
+                    directories = [line[1:] for line in cwd.stdout.splitlines() if line.startswith('n')]
+                    if cwd.returncode or len(directories) != 1 or not Path(directories[0]).is_absolute():
                         unknown.append({"code": "PROCESS_CWD_UNKNOWN", "pid": pid})
-                    elif "n" + str(settings.project_root) in cwd.stdout.splitlines():
+                    elif (Path(directories[0]).resolve().is_relative_to(settings.project_root.resolve())
+                          or (test_root is not None and Path(directories[0]).resolve() != test_root)):
                         process_pids.add(pid)
         owned = {row["pid"] for row in owners.values()} | active_pids
         for pid in process_pids - owned:

@@ -5,12 +5,14 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-12 | Codex | 真实控制/角色锁/子进程/账本；外部执行计数为零 |
 | 1.0.1 | 2026-10-13 | Codex | 验证精简 PATH 的真实 lsof 读取及工具失败仍阻断 |
+| 1.0.2 | 2026-10-13 | Codex | 独立测试双重归属与未知进程保护回归 |
 """
 import hashlib
 import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import subprocess
 import sys
 import threading
@@ -366,3 +368,46 @@ def test_ui_startup_preserves_uvicorn_sigterm_handler(isolated_running_maintenan
     assert signal.getsignal(signal.SIGTERM)==original
     assert web._maintenance_ui_lease is None
     assert not any(thread.is_alive() for thread in web._scheduler_threads)
+
+
+@pytest.mark.parametrize('case', ['independent', 'cwd_mismatch', 'cwd_denied', 'cwd_empty',
+                                  'production_entry', 'production_cwd', 'production_argument',
+                                  'changed_runner', 'symlink_entry', 'unparseable'])
+def test_independent_runner_requires_verified_entry_and_cwd(tmp_path, isolated_running_maintenance, monkeypatch, case):
+    root = settings.project_root
+    external = tmp_path / 'independent repo'
+    scripts = external / 'scripts'
+    scripts.mkdir(parents=True)
+    entry = scripts / 'run_isolated_tests.py'
+    original = root / 'scripts/run_isolated_tests.py'
+    entry.write_bytes(original.read_bytes())
+    if case == 'changed_runner':
+        entry.write_text('print("not the isolated runner")')
+    elif case == 'symlink_entry':
+        entry.unlink()
+        entry.symlink_to(original)
+    if case == 'production_entry':
+        entry = original
+    command = shlex.join([str(root / '.venv/bin/python'), str(entry), '--', '-q'])
+    if case == 'production_argument':
+        command += ' ' + shlex.quote(str(root / 'tests'))
+    if case == 'unparseable':
+        command += " '"
+    cwd = root if case == 'production_cwd' else tmp_path if case == 'cwd_mismatch' else external
+    def run(args, **kwargs):
+        if args[0] == 'ps':
+            return subprocess.CompletedProcess(args, 0, f'99999998 {command}\n', '')
+        return subprocess.CompletedProcess(args, 1 if case == 'cwd_denied' else 0,
+            '' if case == 'cwd_empty' else f'p99999998\nn{cwd}\n', '')
+    monkeypatch.setattr(subprocess, 'run', run)
+    before = isolated_running_maintenance.status()
+    result = inspection(isolated_running_maintenance)
+    codes = {row['code'] for row in result['unknown']}
+    if case == 'independent':
+        assert codes == {'SOURCES_NOT_VERIFIED'}
+    elif case in {'cwd_denied', 'cwd_empty'}:
+        assert 'PROCESS_CWD_UNKNOWN' in codes
+    else:
+        assert 'UNREGISTERED_PROCESS' in codes
+    assert not result['safe']
+    assert isolated_running_maintenance.status() == before
