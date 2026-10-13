@@ -40,6 +40,7 @@ from video_processing.utils.wechat_article_execution import (
 from video_processing.utils.wechat_product_picker import BindingIdentityUnavailable
 from scripts.wechat_uploader import (
     _compare_management_article_receipt,
+    _compare_management_product_receipt,
     _finalize_submission_attachments,
     _management_article_observation,
     _write_submission_receipt,
@@ -992,5 +993,187 @@ def test_p1_finalize_submission_attachments_routing(tmp_path):
             enable_article_link=True,
         )
         assert ok is False and code == 1
+
+        # 2e. expected_attachment="NONE" 但强制商品任务未满足 -> 必须返回 (False, 14)
+        mock_fin_none.return_value = False
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product={"require_product": True},
+            task_article=None,
+            expected_attachment="NONE",
+            require_bound_product=True,
+            enable_article_link=True,
+        )
+        assert ok is False and code == 14
+        mock_fin_none.reset_mock()
+
+
+def test_reviewer_reproduction_p1_none_branch_task_drift_rejected(tmp_path):
+    """P1 定向复现验收：当前任务与回执的 task_id、版本、摘要全不同，页面为空且可提交，新门禁必须返回 False。"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 磁盘上为历史旧任务回执（旧 task_id, 旧版本，旧摘要）
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "old_task_id",
+        "config_version": "v1.0",
+        "config_digest": "digest_old_sha256",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    # 本次任务快照为全新任务
+    current_product_task = {
+        "task_id": "current_task_id",
+        "config_version": "v2.0",
+        "config_digest": "digest_new_sha256",
+        "require_product": False,
+    }
+
+    # 必须坚决拒绝提交返回 False
+    result = finalize_none_before_submit(
+        tmp_path,
+        product_picker,
+        article_picker,
+        product_payload=current_product_task,
+        article_payload=None,
+    )
+    assert result is False
+
+
+def test_submission_receipt_none_preserves_product_unbound_confirmation(tmp_path):
+    """P2 门禁增强：expected_attachment='NONE' 时完整回读 product_pre_submit_readback 并保留对账字段。"""
+    from scripts.run_wallstreet_ab import product_submission_matches
+
+    task = {
+        "task_id": "task_wallstreet_unbound",
+        "config_version": "1.0.0",
+        "config_digest": "digest_123",
+        "require_product": False,
+        "reason": "WALLSTREET_SKIP",
+    }
+    (tmp_path / "product_task_decision.json").write_text(json.dumps(task), encoding="utf-8")
+    (tmp_path / "product_pre_submit_readback.json").write_text(json.dumps({
+        "final_verified": True,
+        "task_id": "task_wallstreet_unbound",
+        "config_version": "1.0.0",
+        "config_digest": "digest_123",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+        "actual_product_id": None,
+        "actual_title": None,
+        "identity_source": "FINAL_FORM_READBACK",
+    }), encoding="utf-8")
+
+    receipt_meta = {
+        "platform_post_id": "native_post_999",
+        "platform_object_nonce": "nonce_999",
+    }
+    _write_submission_receipt(tmp_path, receipt_meta, expected_attachment="NONE")
+
+    receipt_file = tmp_path / "submission_receipt.json"
+    receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+
+    # 校验基础属性
+    assert receipt["attachment_type"] == "NONE"
+    assert receipt["unbound_confirmed"] is True
+    assert receipt["product_binding_confirmed"] is False
+    assert receipt["product_unbound_confirmed"] is True
+    assert receipt["product_identity_source"] == "FINAL_FORM_READBACK"
+    assert receipt["product_id"] is None
+    assert receipt["product_title"] is None
+
+    # 校验 Wallstreet 对账契约通过
+    assert product_submission_matches(receipt, task) is True
+
+    # 校验作品管理页回读比较通过
+    record = {
+        "platform_post_id": "native_post_999",
+        "platform_object_nonce": "nonce_999",
+        "product_observation": {"state": "UNBOUND"},
+    }
+    cmp_res = _compare_management_product_receipt(record, receipt_file)
+    assert cmp_res["state"] == "MATCH"
+
+
+def test_article_downgrade_rejects_url_drift_and_mandatory_article(tmp_path):
+    """P1 门禁：文章降级路径核验 URL 漂移与强制文章禁止降级。"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 降级回执请求的 URL 与本次文章任务 URL 漂移 -> 拒绝提交
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "art_task_1",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "requested_url": "https://mp.weixin.qq.com/s/stale_article_123456",
+        "state": "UNBOUND",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    art_task_drift = {
+        "task_id": "art_task_1",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "url": VALID_MP_URL,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        article_payload=art_task_drift
+    ) is False
+
+    # 场景 2: 任务要求强制挂文章 (require_article=True) -> 严禁降级为 NONE
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "art_task_mandatory",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "requested_url": VALID_MP_URL,
+        "state": "UNBOUND",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    art_task_mandatory = {
+        "task_id": "art_task_mandatory",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "url": VALID_MP_URL,
+        "require_article": True,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        article_payload=art_task_mandatory
+    ) is False
+
+
+def test_finalize_none_rejects_unbound_receipt_with_residual_product_or_article(tmp_path):
+    """鲁棒性门禁：即使未传任务 payload，若回执标为 UNBOUND 但残留实际绑定 ID/URL，坚决拒绝提交。"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 商品回执标称 UNBOUND，但包含实际商品 ID 残留
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "state": "UNBOUND",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+        "actual_product_id": "residual_prod_id",
+    }), encoding="utf-8")
+    assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is False
+    (tmp_path / "product_selection_receipt.json").unlink()
+
+    # 场景 2: 文章回执标称 UNBOUND，但包含实际文章 URL 残留
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "state": "UNBOUND",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+        "actual_url": VALID_MP_URL,
+    }), encoding="utf-8")
+    assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is False
+
 
 

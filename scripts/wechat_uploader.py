@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.25.0 | 2026-10-12 | Antigravity | 修复 P1/P2 残留缺陷：_write_submission_receipt 补全 NONE 分支的商品未绑与 identity_source 回读；优化无参数 target_type 检测与多回执优先级；_finalize_submission_attachments 保留强制商品退出码 14；cli_article 补充完整版本摘要字段。 |
 | 5.24.0 | 2026-10-12 | Antigravity | 修复 P1/P2: 上传器执行边界严格落实 enable_wechat_article_link 开关，关闭时拒绝显式文章参数并保留既有流程；NONE 分支传入本次任务；_write_submission_receipt 限定读取本次提交回执，防御回执覆盖。 |
 | 5.23.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：商品优先与文章降级仲裁、超时安全清退、身份冲突阻断、独立发表前核验与管理页文章回读。 |
 | 5.22.0 | 2026-10-12 | Codex | 区分商家 outProductId 与视频号 productId；精确选中行或绑定原回执的原生对应关系才允许核验一致。 |
@@ -977,14 +978,32 @@ def _write_submission_receipt(
             # 若未显式传入 expected_attachment，按修改时间取最新生成的有效回执
             candidates = []
             if selection_path.exists():
-                candidates.append(("PRODUCT", selection_path.stat().st_mtime))
+                try:
+                    s_data = json.loads(selection_path.read_text(encoding="utf-8"))
+                    if s_data.get("final_verified") is True:
+                        s_type = "PRODUCT" if s_data.get("binding_confirmed") else "NONE"
+                        candidates.append((s_type, selection_path.stat().st_mtime))
+                except Exception:
+                    pass
             if article_selection_path.exists():
-                candidates.append(("ARTICLE", article_selection_path.stat().st_mtime))
+                try:
+                    a_data = json.loads(article_selection_path.read_text(encoding="utf-8"))
+                    if a_data.get("final_verified") is True and a_data.get("binding_confirmed") is not False:
+                        candidates.append(("ARTICLE", article_selection_path.stat().st_mtime))
+                except Exception:
+                    pass
             if none_selection_path.exists():
-                candidates.append(("NONE", none_selection_path.stat().st_mtime))
+                try:
+                    n_data = json.loads(none_selection_path.read_text(encoding="utf-8"))
+                    if n_data.get("final_verified") is True:
+                        candidates.append(("NONE", none_selection_path.stat().st_mtime))
+                except Exception:
+                    pass
             if candidates:
                 candidates.sort(key=lambda c: c[1], reverse=True)
                 target_type = candidates[0][0]
+            else:
+                target_type = "NONE"
 
         if target_type == "PRODUCT" and selection_path.exists():
             selection = json.loads(selection_path.read_text(encoding='utf-8'))
@@ -992,19 +1011,20 @@ def _write_submission_receipt(
             if product_task_path.exists():
                 valid = valid and all(selection.get(key) == product_task.get(key)
                                       for key in ('task_id', 'config_version', 'config_digest'))
-            if valid:
-                receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
+            if valid and selection.get('binding_confirmed'):
+                receipt = dict(receipt,
+                               product_binding_confirmed=True,
                                product_binding_required=selection.get('binding_required'),
-                               product_unbound_confirmed=selection.get('unbound_confirmed'),
-                               product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'),
-                               product_identity_source=selection.get('identity_source'))
+                               product_unbound_confirmed=False,
+                               product_id=selection.get('actual_product_id'),
+                               product_title=selection.get('actual_title'),
+                               product_identity_source=selection.get('identity_source', 'FINAL_FORM_READBACK'),
+                               attachment_type='PRODUCT')
                 if selection.get('actual_platform_product_id') is not None:
                     receipt.update(product_platform_id=selection['actual_platform_product_id'],
                                    product_platform_id_source='SELECTED_PUBLIC_ROW')
-                if selection.get('binding_confirmed'):
-                    receipt['attachment_type'] = 'PRODUCT'
-                elif selection.get('unbound_confirmed'):
-                    receipt['attachment_type'] = 'NONE'
+                if article_task_path.exists():
+                    receipt = dict(receipt, article_binding_confirmed=False, article_unbound_confirmed=True)
 
         elif target_type == "ARTICLE" and article_selection_path.exists():
             art_selection = json.loads(article_selection_path.read_text(encoding='utf-8'))
@@ -1014,13 +1034,45 @@ def _write_submission_receipt(
                                article_url=art_selection.get('actual_url'),
                                article_title=art_selection.get('actual_title'),
                                attachment_type='ARTICLE')
+                if product_task_path.exists():
+                    receipt = dict(receipt,
+                                   product_binding_confirmed=False,
+                                   product_unbound_confirmed=True,
+                                   product_identity_source='FINAL_FORM_READBACK')
 
-        elif target_type == "NONE" and none_selection_path.exists():
-            none_selection = json.loads(none_selection_path.read_text(encoding='utf-8'))
-            if none_selection.get('final_verified') is True:
-                receipt = dict(receipt,
-                               attachment_type='NONE',
-                               unbound_confirmed=True)
+        elif target_type == "NONE":
+            receipt = dict(receipt,
+                           attachment_type='NONE',
+                           unbound_confirmed=True)
+            if selection_path.exists():
+                selection = json.loads(selection_path.read_text(encoding='utf-8'))
+                valid = selection.get('final_verified') is True
+                if product_task_path.exists():
+                    valid = valid and all(selection.get(key) == product_task.get(key)
+                                          for key in ('task_id', 'config_version', 'config_digest'))
+                if valid:
+                    receipt = dict(receipt,
+                                   product_binding_confirmed=selection.get('binding_confirmed', False),
+                                   product_binding_required=selection.get('binding_required'),
+                                   product_unbound_confirmed=selection.get('unbound_confirmed', True),
+                                   product_id=selection.get('actual_product_id'),
+                                   product_title=selection.get('actual_title'),
+                                   product_identity_source=selection.get('identity_source', 'FINAL_FORM_READBACK'))
+                    if selection.get('actual_platform_product_id') is not None:
+                        receipt.update(product_platform_id=selection['actual_platform_product_id'],
+                                       product_platform_id_source='SELECTED_PUBLIC_ROW')
+            elif none_selection_path.exists():
+                none_selection = json.loads(none_selection_path.read_text(encoding='utf-8'))
+                if none_selection.get('final_verified') is True:
+                    if product_task_path.exists():
+                        receipt = dict(receipt,
+                                       product_binding_confirmed=False,
+                                       product_unbound_confirmed=True,
+                                       product_identity_source='FINAL_FORM_READBACK')
+                    if article_task_path.exists():
+                        receipt = dict(receipt,
+                                       article_binding_confirmed=False,
+                                       article_unbound_confirmed=True)
 
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
@@ -1078,7 +1130,7 @@ def _finalize_submission_attachments(
             article_payload=task_article,
             require_bound_product=require_bound_product,
         ):
-            return False, 1
+            return False, 14 if task_product is not None and task_product.get("require_product") and require_bound_product else 1
         return True, 0
     else:
         return False, 1
@@ -2527,6 +2579,8 @@ def run_uploader(
                     "task_id": "cli_article",
                     "url": article_url.strip(),
                     "title": (article_title or "").strip(),
+                    "config_version": "1.0.0",
+                    "config_digest": "",
                     "publisher_capability": "wechat-article-task-v1",
                 }
             else:
@@ -3889,15 +3943,14 @@ def run_uploader(
         )
         if not final_ok:
             logger.error("Final attachment state does not satisfy submission verification; stopping before submission.")
-            if expected_attachment == "PRODUCT" or not settings.enable_wechat_article_link:
-                if task_product is not None and task_product.get('require_product'):
-                    from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
-                    record_pre_submit_product_block(
-                        task_product, evidence_root, settings.wechat_product_status_path,
-                        state_file.parent, product_artifacts,
-                        'BOUND_PRODUCT_VERIFICATION_FAILED' if require_bound_product
-                        else 'BINDING_CHANGED_BEFORE_SUBMIT'
-                    )
+            if task_product is not None and task_product.get('require_product'):
+                from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
+                record_pre_submit_product_block(
+                    task_product, evidence_root, settings.wechat_product_status_path,
+                    state_file.parent, product_artifacts,
+                    'BOUND_PRODUCT_VERIFICATION_FAILED' if require_bound_product
+                    else 'BINDING_CHANGED_BEFORE_SUBMIT'
+                )
             browser.close()
             return final_code
 

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-12 | Antigravity | 强化 finalize_none 门禁：补全无 payload 路径下的 UNBOUND/SKIPPED、binding_confirmed=False 与残留字段核验；兼容 required 判定。 |
 | 1.2.0 | 2026-10-12 | Antigravity | 修复 P1: finalize_none 补全商品与文章任务一致性检查（task_id/config_version/digest/url/required/缺失回执拒绝）；清理竞争回执防御 P2。 |
 | 1.1.0 | 2026-10-12 | Antigravity | 修复 G2 漏洞与仲裁逃逸：严格检查 payload 一致性（task_id/config_version/digest/url）；finalize_none 坚决阻断 BLOCKED 状态；支持 require_article 强制文章不降级。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：文章注入执行、超时清退降级、身份冲突阻断、发表前独立核验与纯视频四项齐备核验。 |
@@ -315,7 +316,10 @@ def finalize_none_before_submit(
             prod_receipt = json.loads(product_receipt_path.read_text(encoding="utf-8"))
             if any(prod_receipt.get(k) != product_payload.get(k) for k in ("task_id", "config_version", "config_digest")):
                 return False
-            if prod_receipt.get("required") is not product_payload.get("require_product"):
+            expected_req = product_payload.get("require_product")
+            if expected_req is None and "required" in product_payload:
+                expected_req = product_payload.get("required")
+            if prod_receipt.get("required") is not expected_req and prod_receipt.get("required") != expected_req:
                 return False
             if require_bound_product or prod_receipt.get("binding_required") is True:
                 return False
@@ -327,13 +331,15 @@ def finalize_none_before_submit(
                 return False
         elif product_receipt_path.exists():
             prod_receipt = json.loads(product_receipt_path.read_text(encoding="utf-8"))
-            if prod_receipt.get("state") in ("BOUND", "BLOCKED"):
-                return False
-            if prod_receipt.get("binding_confirmed") is True:
-                return False
-            if prod_receipt.get("unbound_confirmed") is not True:
-                return False
-            if require_bound_product:
+            if (
+                require_bound_product
+                or prod_receipt.get("binding_required") is True
+                or prod_receipt.get("state") not in ("UNBOUND", "SKIPPED")
+                or prod_receipt.get("binding_confirmed") is not False
+                or prod_receipt.get("unbound_confirmed") is not True
+                or prod_receipt.get("actual_product_id")
+                or prod_receipt.get("actual_title")
+            ):
                 return False
 
         # 文章回执核验
@@ -361,13 +367,15 @@ def finalize_none_before_submit(
                 return False
         elif article_receipt_path.exists():
             art_receipt = json.loads(article_receipt_path.read_text(encoding="utf-8"))
-            if art_receipt.get("state") in ("BOUND", "BLOCKED"):
-                return False
-            if art_receipt.get("binding_confirmed") is True:
-                return False
-            if art_receipt.get("unbound_confirmed") is not True:
-                return False
-            if require_bound_article:
+            if (
+                require_bound_article
+                or art_receipt.get("binding_required") is True
+                or art_receipt.get("state") not in ("UNBOUND", "SKIPPED")
+                or art_receipt.get("binding_confirmed") is not False
+                or art_receipt.get("unbound_confirmed") is not True
+                or art_receipt.get("actual_url")
+                or art_receipt.get("actual_title")
+            ):
                 return False
 
         # 检查商品与文章实读均为 None
