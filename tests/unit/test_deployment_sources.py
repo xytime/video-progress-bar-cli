@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import pytest
 from video_processing.core.deployment import DeploymentDenied, write_json
-from video_processing.core.deployment_sources import prepare, Sources, runtime_manifest, sha, git
+from video_processing.core.deployment_sources import prepare, Sources, runtime_manifest, sha, git, public_path
 
 
 def commit(root, message):
@@ -97,3 +97,28 @@ def test_d08_secret_path_not_read(checkout, tmp_path):
     (root / ".env").write_text("changed fixture")
     with pytest.raises(DeploymentDenied, match="SECRET_OR_RUNTIME_PATH_REFUSED"):
         prepare(root, target, tmp_path / "private", manifest, overlay)
+
+
+@pytest.mark.parametrize('name', ['.env', '.env.local', '.env.example.bak', 'config/.env.example',
+                                 'secrets/.env.example', 'credentials/example.json', 'output/data.json'])
+def test_d08_template_exception_never_allows_sensitive_paths(name):
+    with pytest.raises(DeploymentDenied, match='SECRET_OR_RUNTIME_PATH_REFUSED'):
+        public_path(name)
+
+
+def test_d08_tracked_root_template_can_be_adopted(checkout, tmp_path):
+    root, target, overlay, manifest = checkout
+    # 真正 Git 提交内新增模板，保留 fixture 的另一项 dirty 与未跟踪工作。
+    (root / '.env.example').write_text('TOPIC_SCHEDULER_ENABLED=false\n')
+    git(root, 'add', '.env.example')
+    git(root, '-c', 'user.name=Isolation', '-c', 'user.email=isolation@invalid',
+        '-c', 'commit.gpgsign=false', 'commit', '-m', 'root template')
+    template_target=git(root, 'rev-parse', 'HEAD').decode().strip()
+    git(root, 'reset', '--soft', 'HEAD^')
+    git(root, 'reset', '--', '.env.example')
+    (root / '.env.example').unlink()
+    write_json(manifest, runtime_manifest(root))
+    plan=prepare(root, template_target, tmp_path / 'template', manifest)
+    Sources(root, tmp_path / 'template', plan).adopt()
+    assert (root / '.env.example').read_text()=='TOPIC_SCHEDULER_ENABLED=false\n'
+    assert (root / 'src/app.py').read_text()=='old plus user work\n'

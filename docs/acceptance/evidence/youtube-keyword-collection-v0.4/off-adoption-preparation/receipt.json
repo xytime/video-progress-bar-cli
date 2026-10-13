@@ -1,0 +1,57 @@
+{
+  "source": "/private/tmp/vp-v04-production-overlay-urg3_wvq/repo",
+  "snapshot": "/private/tmp/video-pytest-_ols5v6t/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.133
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_search_adapter.py",
+    "tests/unit/test_topic_runtime_failures.py",
+    "tests/unit/test_ted_future_score_floor.py",
+    "tests/unit/test_channel_score_caps.py",
+    "tests/unit/test_ready_publication_dispatch.py",
+    "tests/unit/test_source_subtitle_preparation.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/unit/test_pipeline_serialization.py",
+    "tests/unit/test_pipeline_pre_submit_retry.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_rescore_refresh.py",
+    "tests/unit/test_wechat_upload_recovery.py",
+    "tests/unit/test_database_channel_funnel.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_publication_provenance.py",
+    "tests/unit/test_publication_window_runner.py",
+    "tests/browser/test_dashboard_workspace.py",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/browser/test_manual_product_selection_browser.py",
+    "tests/unit/test_dashboard_interactions.py",
+    "tests/unit/test_vocabulary_export.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "483c6613a049c76453b7d8d6523bf00dc62929bbd579bb84f866f7642f9caee5",
+  "profile_sha256": "c2848d422f80a1cd4223a5221c1a2a5deb90f257387a47ceb37155b5cc6cb959",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-_ols5v6t/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "3fa7cc01fa02b96e33068c13388667e16587984d2fd64c3a1d54f99149bc9eba",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 125.779
+  },
+  "finished_at": "2026-10-13T09:44:46.101984+00:00"
+}

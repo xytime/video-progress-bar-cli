@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 主干快进、已测覆盖文件、dirty 保留及采用中断核验 |
+| 1.0.1 | 2026-10-13 | Codex | 允许仓库根配置模板，仍拒绝实际环境与敏感目录 |
 """
 from pathlib import Path
 import hashlib
@@ -23,7 +24,7 @@ def git(root, *args):
 def public_path(name):
     path = Path(name)
     require(not path.is_absolute() and ".." not in path.parts and path.parts, "SOURCE_PATH_INVALID")
-    require(not any(p.startswith(".env") or p.lower() in {"secrets", "credentials", "output", ".git"}
+    require(not any((p.startswith(".env") and path != Path(".env.example")) or p.lower() in {"secrets", "credentials", "output", ".git"}
                     for p in path.parts), "SECRET_OR_RUNTIME_PATH_REFUSED")
     return path
 
