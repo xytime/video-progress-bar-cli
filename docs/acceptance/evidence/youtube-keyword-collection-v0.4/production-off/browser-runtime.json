@@ -1,0 +1,86 @@
+{
+  "revision": "1223",
+  "version": "148.0.7778.96",
+  "metadata_sha256": "af53e32ffe35a024ddb34563700956b01ada00ac7e9270ba5df0604ec57e38e1",
+  "source": "/Volumes/EXT2T/AppDataOffload/ryusei/Library/Caches/ms-playwright/chromium_headless_shell-1223",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/browser/chromium_headless_shell-1223",
+  "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rtmfeojl/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell",
+  "files": {
+    "DEPENDENCIES_VALIDATED": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "INSTALLATION_COMPLETE": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "chrome-headless-shell-mac-arm64/ABOUT": {
+      "sha256": "34d078ce3003087a8374e7c6156fda374769b8047d6ddaf419d66414aa48edfb",
+      "bytes": 248
+    },
+    "chrome-headless-shell-mac-arm64/LICENSE.headless_shell": {
+      "sha256": "5b56ea1da88d0f3293fbc92f76684d05fa3e33014540a2c114acfa0e565e4a00",
+      "bytes": 1766022
+    },
+    "chrome-headless-shell-mac-arm64/PrivacySandboxAttestationsPreloaded/manifest.json": {
+      "sha256": "51c311a4ba03140bcd1c827f8d93dba50cadda736925903b26e95609275dbffd",
+      "bytes": 122
+    },
+    "chrome-headless-shell-mac-arm64/PrivacySandboxAttestationsPreloaded/privacy-sandbox-attestations.dat": {
+      "sha256": "59e345dc13aedee9ea46b92e58300ecaca944aaea9384c7af885400ac2ae8806",
+      "bytes": 7624
+    },
+    "chrome-headless-shell-mac-arm64/chrome-headless-shell": {
+      "sha256": "aa25f2e795c02d5cb5ef5d6987745cc5bbe7d8bea58827390c7a4c81c8d2dd7b",
+      "bytes": 157792208
+    },
+    "chrome-headless-shell-mac-arm64/headless_command_resources.pak": {
+      "sha256": "66cc2fdded0b16a0223f46aeef3b83ab9e0c5d940d3bd4a2c8a29385f844503b",
+      "bytes": 3033
+    },
+    "chrome-headless-shell-mac-arm64/headless_lib_data.pak": {
+      "sha256": "742694dbb3efff21a159a8615e168176502664fe36403b66271b5e04cf260029",
+      "bytes": 753348
+    },
+    "chrome-headless-shell-mac-arm64/headless_lib_strings.pak": {
+      "sha256": "741c37ecaffddd9cb70053d72c71260d5c9a02e1757e78839f9b7fc4d92926a7",
+      "bytes": 4249980
+    },
+    "chrome-headless-shell-mac-arm64/icudtl.dat": {
+      "sha256": "c5da2fc389d1bb0ecb13fe22a8e069b7abc491f8aa5d16eb65d4ff32c85a46b6",
+      "bytes": 10876464
+    },
+    "chrome-headless-shell-mac-arm64/libEGL.dylib": {
+      "sha256": "8095e1a5b561300a5798de7c4618b2c92bb756b14a10605f4944c7c50ec768ee",
+      "bytes": 91952
+    },
+    "chrome-headless-shell-mac-arm64/libGLESv2.dylib": {
+      "sha256": "5b84707e8ac49739203e16e005b4dc40f52797c7dd56dd7bdd5182d8ef736996",
+      "bytes": 6823296
+    },
+    "chrome-headless-shell-mac-arm64/libvk_swiftshader.dylib": {
+      "sha256": "0cf6cd71f10a59cf72f12668ebcfcef62778737407883d255c48958a4a226cf7",
+      "bytes": 16524720
+    },
+    "chrome-headless-shell-mac-arm64/resources/accessibility/reading_mode_gdocs_helper/content.js": {
+      "sha256": "6c0aeaaf9a71ad68aa45764c111e70bb23aa0fbf406644a375b6b709cbbe4b6e",
+      "bytes": 439
+    },
+    "chrome-headless-shell-mac-arm64/resources/accessibility/reading_mode_gdocs_helper/gdocs_script.js": {
+      "sha256": "d291adabcfcb1a4a4a2ffacdd9d04fdb473ab0d6903556bef7446be9c3646d86",
+      "bytes": 1425
+    },
+    "chrome-headless-shell-mac-arm64/resources/accessibility/reading_mode_gdocs_helper_manifest.json": {
+      "sha256": "325f69c21f8c3b3c7dffaf36ca25ebe1f02d5acc12147399ce12950474acdfa3",
+      "bytes": 2375
+    },
+    "chrome-headless-shell-mac-arm64/v8_context_snapshot.arm64.bin": {
+      "sha256": "d5594455daa58326ab7f6592d89d851d8daa18f8e9e89e76e77e23074832e676",
+      "bytes": 721176
+    },
+    "chrome-headless-shell-mac-arm64/vk_swiftshader_icd.json": {
+      "sha256": "d717d915e31e7c27948b80b36ab34e2d897888114c5c7d0af835f93eb53e58f5",
+      "bytes": 110
+    }
+  }
+}

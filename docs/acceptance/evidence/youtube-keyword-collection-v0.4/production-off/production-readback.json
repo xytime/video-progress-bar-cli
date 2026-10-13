@@ -1,0 +1,152 @@
+{
+  "at": "2026-10-13T21:18:37.683475+08:00",
+  "head": "ff317aed9c3503f0662a09f2fdb640f0064c024c",
+  "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+  "runtime": {
+    "control": {
+      "mode": "OFF",
+      "version": 10
+    },
+    "maintenance": {
+      "state": "RUNNING",
+      "phase": "IDLE"
+    },
+    "jobs": [],
+    "budget": {
+      "day": "2026-10-13",
+      "search": 0,
+      "general": 0
+    },
+    "search_open": false,
+    "can_enable": false
+  },
+  "flags": {
+    "topic_search_enabled": false,
+    "topic_scheduler_enabled": false,
+    "topic_admission_enabled": false,
+    "topic_quota_verified": false,
+    "enable_wechat_article_link": false
+  },
+  "workers": {
+    "ui": {
+      "role": "ui",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897266.055136",
+      "pid": 65510,
+      "started_at": "2026-10-13T13:14:28.156761+00:00"
+    },
+    "auto-pipeline": {
+      "role": "auto-pipeline",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897266.055136",
+      "pid": 65510,
+      "started_at": "2026-10-13T13:14:28.252986+00:00"
+    },
+    "queue-runner": {
+      "role": "queue-runner",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897266.055136",
+      "pid": 65510,
+      "started_at": "2026-10-13T13:14:28.253425+00:00"
+    },
+    "ready-supervisor": {
+      "role": "ready-supervisor",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897266.055136",
+      "pid": 65510,
+      "started_at": "2026-10-13T13:14:28.254242+00:00"
+    },
+    "keepalive-watchdog": {
+      "role": "keepalive-watchdog",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897266.055136",
+      "pid": 65510,
+      "started_at": "2026-10-13T13:14:28.254224+00:00"
+    },
+    "ready-worker": {
+      "role": "ready-worker",
+      "protocol": 1,
+      "source_hash": "6ee856f55a43f044d69a61dece1e62cd851552a2a6dbb75136100a7ec75b3dd6",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791897283.322050",
+      "pid": 65971,
+      "started_at": "2026-10-13T13:14:43.812642+00:00"
+    }
+  },
+  "active": [],
+  "unknown_without_freeze_proof": [
+    {
+      "code": "SOURCES_NOT_VERIFIED"
+    }
+  ],
+  "dirty": {
+    ".gitignore": {
+      "before": "984c5d29391118e6b85cb50b5392b2cacf7beb1da240e25856beb91136df8ebf",
+      "after": "984c5d29391118e6b85cb50b5392b2cacf7beb1da240e25856beb91136df8ebf",
+      "preserved": true
+    },
+    "config/wechat_products.json": {
+      "before": "9fabcb096826645c4efe70583028397ecf4d2142ee18a59a27bf005143ad89f0",
+      "after": "9fabcb096826645c4efe70583028397ecf4d2142ee18a59a27bf005143ad89f0",
+      "preserved": true
+    },
+    "scripts/submit_generic_douyin.py": {
+      "before": "588bfdc8dbbd5a60f02725738744ecdb0a2262e646776923d6919ec7359c37ad",
+      "after": "588bfdc8dbbd5a60f02725738744ecdb0a2262e646776923d6919ec7359c37ad",
+      "preserved": true
+    },
+    "src/video_processing/db/database.py": {
+      "before": "60be4e54550c8d1fd2ee41d75c1ae85cf07bdec5a7bd82209b96d7219932b076",
+      "after": "e7a1c2a70ca170f6b7ba7719cdfa14e231b417ec64f14efe2f5cec8b2a4382b8",
+      "preserved": true
+    },
+    "src/video_processing/processors/caption_processor.py": {
+      "before": "f263a496dac31a6fafc11c61a560cdb104bc2618819a81f0745ce54ed5875d04",
+      "after": "f263a496dac31a6fafc11c61a560cdb104bc2618819a81f0745ce54ed5875d04",
+      "preserved": true
+    },
+    "src/video_processing/utils/subtitle_translation_provider.py": {
+      "before": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8",
+      "after": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8",
+      "preserved": true
+    },
+    "src/video_processing/utils/vocab_helper.py": {
+      "before": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2",
+      "after": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2",
+      "preserved": true
+    }
+  },
+  "untracked_preserved": true,
+  "untracked_count": 1197,
+  "runtime_manifest_sha256": "388f0733324cf8640abd550d16a3e4cc227f2071126c10767e26169924eba5df",
+  "bootstrap_steps": [
+    "baseline",
+    "freeze",
+    "stop",
+    "backup",
+    "adopt",
+    "migrate",
+    "start",
+    "resume",
+    "restore",
+    "verify"
+  ],
+  "schedules_restored": true,
+  "backup": {
+    "path": "/Users/ryusei/Library/Application Support/VideoProcessing/deployments/youtube-keyword-v04-off-20261013-b/pipeline.sqlite",
+    "sha256": "5f65561dc0883a6f91e0174cf6fd1fe8de9f97580333332cdbd9f82b62385b40",
+    "integrity": "ok",
+    "bytes": 22847488
+  },
+  "tested_manifest_sha256": "eb42ae9498c971d35bbb9a2860a3dd7f5c2dc9d342e871967ec03ef9fd405b7a"
+}
