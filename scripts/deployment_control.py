@@ -1,8 +1,9 @@
-"""本机受控部署：plan/apply/status/recover；搜索始终保持关闭。
+"""本机受控部署：plan/apply/status/recover；部署期间搜索保持关闭。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-13 | Codex | 单入口顺序执行、私有回执与明确恢复 |
 """
 import argparse
@@ -27,6 +28,8 @@ def main(argv=None):
     parser.add_argument("--target")
     parser.add_argument("--tested-manifest", type=Path)
     parser.add_argument("--overlay", type=Path)
+    parser.add_argument("--keyword-stage", choices=["TRIAL", "OFF"])
+    parser.add_argument("--keyword-evidence", type=Path)
     args = parser.parse_args(argv)
     directory = args.directory.resolve()
     try:
@@ -40,6 +43,17 @@ def main(argv=None):
             require(ui["loaded"] and not ui["disabled"], "UI_ORIGINAL_STATE_UNSUPPORTED")
             plan = {"schema": 1, "id": uuid.uuid4().hex, "root": str(settings.project_root), "sources": sources,
                     "schedules": schedules, "protections": protection_snapshot(), "implementation": LOADED_IMPLEMENTATION}
+            if args.keyword_stage:
+                import time
+                from config.keyword_rollout import transition, expected_protections
+                from video_processing.core.keyword_rollout import values, verify_loaded
+                verify_loaded(settings, complete=True)
+                evidence = read_json(args.keyword_evidence) if args.keyword_evidence else {}
+                plan["keyword_transition"] = transition(values(settings), args.keyword_stage, evidence, time.time())
+                plan["keyword_profile_before"] = settings.topic_rollout_snapshot()
+                expected_protections(plan["protections"], plan["keyword_transition"], time.time())
+            else:
+                require(args.keyword_evidence is None, "KEYWORD_STAGE_REQUIRED")
             write_json(directory / "plan.json", plan)
             print(json.dumps({"planned": True, "id": plan["id"], "path": str(directory / "plan.json")}, ensure_ascii=False))
             return 0

@@ -1,6 +1,6 @@
 # YouTube 关键词采集：生产实际生效执行记录
 
-记录：Codex，2026-10-13。状态：执行中；生产外部门禁待核实，尚未真实搜索或开放。
+记录：Codex，2026-10-14。状态：执行中；凭据本机比对及无外部共享声明已取得，阶段协议整合验收中；尚未真实搜索或开放。以下按时间记录，最新进展见末尾。
 
 ## 最新授权
 
@@ -91,3 +91,15 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 ### 下一项仍须完成
 
 累计试运行预算是受控阶段转换的一个组件，**阶段转换本身尚未实现**，本轮修复尚未生产采用。继续补齐非秘密配置前后状态绑定、重启回读及恢复，保留排空/来源/锁/备份/漂移校验；然后整合最新生产 dirty 做最终隔离验收，按原生维护流程采用。仅在安全窗口和全部门禁通过后开始真实试运行。没有真实搜索、刷新、统一评分或新主任务准入证据，目标仍未完成，跟进保持 ACTIVE。
+
+## 2026-10-14 02:10 受控阶段协议隔离验收
+
+- 已实现非秘密阶段配置与原生部署计划、九步事务日志、有效保护字段及重启回读绑定。每次真实调用须验证部署 COMPLETE；单独设置环境开关不能开放。文件/计划/保护漂移、过期证据、跳阶段和未完成部署均拒绝。维护中仍要求持久 OFF、准入关闭、排空和来源证明，未删除原门禁。
+- 本轮入口只接受 OFF ↔ TRIAL。后续 MANUAL/SCHEDULED/ADMISSION 的合同已定义，实际作业证据核验和最多一条定时规则的约束仍须补齐，不能将合同定义当作后续阶段已完成。详见 [阶段协议](youtube-keyword-stage-transition.md)。
+- 最终隔离 **377 passed / 10 warnings**，包含真实 Chromium、非法配置/证据、实际 Settings 重载、原生维护来源证明、部署恢复及 OFF 往返。源码清单 SHA-256 `c30bcdaec9cf091cca60f337e87b4b0f7403a8e1c063f86c291e1b8644af43ec`；[回执](evidence/youtube-keyword-live-rollout/stage-transition-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/stage-transition-20261014/pytest.log)。
+- 最新生产仍为 `95d331e`，保留七项 dirty。生产渲染任务已结束；维护检查发现的剩余未登记 Python 进程经 PID/命令核对为本次隔离整合测试 runner，须等其结束后重新核查，不排除或绕过该进程检查。
+- 下一步：生产并行改动整合验收，原 OFF 原生九步采用协议，再创建全新阶段计划。04:15 仅为此前算出的下一安全分钟，真实试运行前须现场重算并刷新配额。没有真实搜索、刷新或准入证据，跟进继续 ACTIVE。
+
+### 最终生产整合验证
+
+扩展盘整合副本保留生产 `95d331e` 七项 dirty 与额外受维护源码，最终 **456 passed / 13 warnings**，不与 377 项累加。包含数据库、生词及片尾并行改动回归。完成于 2026-10-13T18:14:44Z，源码清单 SHA-256 `5279559455ec70ad65410778c05f7dc3a17b65958979dfd476a9818c357152f4`；[回执](evidence/youtube-keyword-live-rollout/stage-integration-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/stage-integration-20261014/pytest.log)、[保留清单](evidence/youtube-keyword-live-rollout/stage-integration-20261014/preparation.json)。测试沙盒已清理。测试 runner 退出后，生产 active 为空、未登记进程已消失；来源仍需原生部署冻结后的正式证明，不能把此状态当作门禁已通过。

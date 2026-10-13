@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 0.4.1 | 2026-10-14 | Codex | 试运行累计预算入账及错误配置关闭，提供非秘密用量回读 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 锁故障脱敏，维护状态阻止模式开放与搜索 |
@@ -77,6 +78,13 @@ class TopicTracker(KeywordCollection):
             raise TopicError(exc.code, str(exc), 503) from exc
         if not self.config.topic_search_enabled:
             raise TopicError("SEARCH_CLOSED", "生产搜索尚未开放", 403)
+        if hasattr(self.config, "topic_rollout_snapshot"):
+            from ..core.keyword_rollout import verify_loaded
+            try:
+                if not verify_loaded(self.config, complete=True):
+                    raise ValueError("KEYWORD_PROFILE_REQUIRED")
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+                raise TopicError("ROLLOUT_UNVERIFIED", "阶段配置或部署回执未通过核实，搜索保持关闭", 503) from exc
         if getattr(self.config, "topic_trial_mode", False) and (
                 getattr(self.config, "topic_scheduler_enabled", False) or
                 getattr(self.config, "topic_admission_enabled", False)):
@@ -300,7 +308,10 @@ class TopicTracker(KeywordCollection):
         search_open = can_enable and control["mode"] == "DISCOVERY_ONLY"
         from ..core.maintenance import gate
         maintenance = gate().status()
+        from config.keyword_rollout import FIELDS
         return dict(collection=dict(scheduler_enabled=getattr(self.config,"topic_scheduler_enabled",False), admission_available=getattr(self.config,"topic_admission_enabled",False), automatic_used=self.db.keyword_auto_budget(self.config.topic_quota_project,self.clock()), **self.db.keyword_control()), control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
+                    configuration={k: getattr(self.config, k, False if k.endswith(("enabled", "mode")) else 1) for k in FIELDS},
+                    rollout=self.config.topic_rollout_snapshot() if hasattr(self.config, "topic_rollout_snapshot") else None,
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),
                     search_open=search_open, can_enable=can_enable, search_gate=dict(code=reason_code, message=reason),
                     trial=dict(enabled=getattr(self.config, "topic_trial_mode", False), budget=self.db.topic_trial_budget()),

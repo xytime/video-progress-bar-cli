@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-13 | Codex | 来源证据、正常退出、一致性备份、维护启动和恢复 |
 """
 from pathlib import Path
@@ -23,8 +24,9 @@ from .task_lease import read_lease_owner
 
 def implementation():
     paths = [Path(__file__).with_name(n + ".py") for n in
-             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host")]
-    return {p.name: sha(p.read_bytes()) for p in paths}
+             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host", "keyword_rollout")]
+    paths.append(Path(__file__).resolve().parents[2] / "config" / "keyword_rollout.py")
+    return {str(p.relative_to(Path(__file__).resolve().parents[2])): sha(p.read_bytes()) for p in paths}
 
 
 LOADED_IMPLEMENTATION = implementation()
@@ -40,8 +42,14 @@ class HostDeployment:
         self.sources = Sources(self.root, self.directory, plan["sources"])
         self.schedules = schedules or Schedules(self.root, self.directory)
         self.lock_path = settings.default_output_dir / "deployment.lock"
+        from .keyword_rollout import KeywordTransition
+        self.keyword = KeywordTransition(plan, directory, settings) if plan.get("keyword_transition") else None
+        self.keyword_after = False
 
     def protections(self):
+        if getattr(self, "keyword", None):
+            self.keyword.protections(protection_snapshot(), after=self.keyword_after)
+            return
         require(protection_snapshot() == self.plan["protections"], "PROTECTION_DRIFT")
         require(not settings.topic_search_enabled and not settings.topic_scheduler_enabled and not settings.topic_admission_enabled and not settings.topic_trial_mode
                 and not settings.topic_quota_verified and not settings.topic_quota_project,
@@ -67,12 +75,17 @@ class HostDeployment:
             checks.append({"group": group, "kind": "file", "path": str(path), "sha256": sha(path.read_bytes())})
         proof = self.directory / "sources.json"
         write_json(proof, {"schema": 1, "version": raw["version"], "at": time.time(), "source_hash": code_hash(),
-                           "groups": sorted(SOURCE_GROUPS), "protections": protection_snapshot(), "checks": checks})
+                           "groups": sorted(SOURCE_GROUPS), "protections": protection_snapshot(), "checks": checks,
+                           "keyword_profile": settings.topic_rollout_snapshot()})
         result = inspection(self.control, evidence=proof)
         require(result["safe"], "MAINTENANCE_INSPECTION_REJECTED")
         return result
 
     def preflight(self, step):
+        self.keyword_after = step in {"start", "resume", "restore", "verify"}
+        if getattr(self, "keyword", None) and step in {"baseline", "freeze", "adopt"}:
+            from config.keyword_rollout import expected_protections
+            expected_protections(self.plan["protections"], self.plan["keyword_transition"], time.time())
         self.protections()
         if step in {"baseline", "freeze"}:
             self.sources.baseline()
@@ -121,6 +134,9 @@ class HostDeployment:
             return {"ok": True, "backup": receipt}
         if step == "adopt":
             self.sources.adopt()
+            if self.keyword:
+                self.keyword.apply()
+                self.keyword_after = True
             return {"ok": True, "source_hash": code_hash(), "target": self.plan["sources"]["target"]}
         if step == "start":
             row = next(r for r in self.plan["schedules"]["launchd"] if r["label"] == UI)
@@ -197,13 +213,26 @@ class HostDeployment:
             health = c.get("/api/topic-candidates/health")
             health.raise_for_status()
             require(health.json().get("ready") is True, "TOPIC_NOT_READY")
-            require(value["control"]["mode"] == "OFF" and value["search_open"] is False and value["can_enable"] is False
-                    and value["jobs"] == [], "SEARCH_RUNTIME_NOT_CLOSED")
+            if getattr(self, "keyword", None):
+                from .keyword_rollout import values
+                require(value.get("configuration") == values(settings)
+                        and value.get("rollout") == settings.topic_rollout_snapshot(), "KEYWORD_RUNTIME_CONFIG_MISMATCH")
+                require(value["control"]["mode"] == "OFF" and value["search_open"] is False
+                        and not value["collection"]["admission"]
+                        and not any(j["state"] in {"RUNNING", "STOPPING"} for j in value["jobs"]),
+                        "SEARCH_RUNTIME_NOT_CLOSED")
+            else:
+                require(value["control"]["mode"] == "OFF" and value["search_open"] is False and value["can_enable"] is False
+                        and value["jobs"] == [], "SEARCH_RUNTIME_NOT_CLOSED")
             if maintenance:
                 require(value["maintenance"]["state"] == maintenance, "RUNTIME_MAINTENANCE_MISMATCH")
-            return {k: value[k] for k in ("control", "maintenance", "jobs", "budget", "search_open", "can_enable")}
+            keys = ("control", "maintenance", "jobs", "budget", "search_open", "can_enable")
+            if getattr(self, "keyword", None):
+                keys += ("configuration", "rollout", "collection", "trial")
+            return {k: value[k] for k in keys}
 
     def verify(self, step, result):
+        self.keyword_after = step in {"adopt", "start", "resume", "restore", "verify"}
         if step == "baseline":
             self.sources.baseline()
         elif step == "freeze":
@@ -224,6 +253,9 @@ class HostDeployment:
             self.final_status()
 
     def reconcile(self, row):
+        if getattr(self, "keyword", None):
+            self.keyword_after = settings._topic_rollout_record is not None and (
+                settings._topic_rollout_record.get("deployment_id") == self.plan["id"])
         self.protections()
         pending = row["pending"]
         if pending is None:
@@ -246,6 +278,7 @@ class HostDeployment:
             return "UNKNOWN"
 
     def final_status(self):
+        self.keyword_after = True
         self.protections()
         self.sources.final()
         self.schedules.restored(self.plan["schedules"])
@@ -256,7 +289,11 @@ class HostDeployment:
             require(owner and owner["source_hash"] == expected and owner["cwd"] == str(self.root)
                     and process_birth(owner["pid"]) == owner["birth"], "FINAL_WORKER_MISMATCH")
         runtime = self.web_readback(maintenance="RUNNING")
-        previous = read_json(self.directory / "baseline.json")["runtime"]["budget"]
+        baseline = read_json(self.directory / "baseline.json")["runtime"]
+        if self.keyword:
+            require(runtime["trial"]["budget"] == baseline["trial"]["budget"], "SEARCH_BUDGET_CHANGED")
+            return runtime
+        previous = baseline["budget"]
         budget = runtime["budget"]
         require(budget == previous if budget["day"] == previous["day"] else budget["search"] == budget["general"] == 0,
                 "SEARCH_BUDGET_CHANGED")

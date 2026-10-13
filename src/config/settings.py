@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | maintenance-v1 | 2026-10-12 | Codex | 声明维护状态及仅继承 FD 可验证的单项子进程归属。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 增加原片首尾包装清理开关，生产核验后显式启用。 |
@@ -122,7 +123,7 @@ from pathlib import Path
 from typing import Optional, List, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
@@ -373,6 +374,43 @@ class Settings(BaseSettings):
     topic_quota_project: str = ""
     topic_search_daily_limit: int = Field(default=20, ge=1, le=20)
     topic_general_daily_limit: int = Field(default=40, ge=1, le=40)
+    topic_rollout_path: Path = _PROJECT_ROOT / "output" / "keyword-rollout.json"
+    _topic_rollout_record: dict | None = PrivateAttr(default=None)
+    _topic_rollout_error: bool = PrivateAttr(default=False)
+
+    def model_post_init(self, context):
+        self.reload_topic_rollout()
+
+    def reload_topic_rollout(self):
+        """仅覆盖固定的非秘密关键词字段；配置异常保持关闭，由门禁报告。"""
+        from .keyword_rollout import validate_transition, phase_values
+        import json
+        import time
+        previously_loaded = self._topic_rollout_record is not None or self._topic_rollout_error
+        self._topic_rollout_record = None
+        self._topic_rollout_error = False
+        try:
+            if not self.topic_rollout_path.exists():
+                if previously_loaded:
+                    raise ValueError("KEYWORD_PROFILE_REMOVED")
+                return
+            if self.topic_rollout_path.resolve() != self.topic_rollout_path.absolute():
+                raise ValueError("KEYWORD_PROFILE_SYMLINK")
+            record = json.loads(self.topic_rollout_path.read_text())
+            if not isinstance(record, dict) or set(record) != {"transition", "deployment_id", "directory"}:
+                raise ValueError("KEYWORD_PROFILE_INVALID")
+            values = validate_transition(record["transition"], time.time(), fresh=False)
+            self._topic_rollout_record = record
+        except (OSError, ValueError, TypeError, KeyError):
+            self._topic_rollout_error = True
+            values = phase_values("OFF")
+        for name, value in values.items():
+            setattr(self, name, value)
+
+    def topic_rollout_snapshot(self):
+        from .keyword_rollout import digest
+        return dict(path=str(self.topic_rollout_path), error=self._topic_rollout_error,
+                    identity=digest(self._topic_rollout_record) if self._topic_rollout_record else None)
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]

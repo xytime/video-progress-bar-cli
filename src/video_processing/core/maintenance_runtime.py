@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-12 | Codex | 真实角色锁、未接入来源阻断及正常 SIGTERM 生命周期 |
 | 1.0.1 | 2026-10-13 | Codex | macOS 使用系统 lsof 路径，兼容 launchd 精简 PATH |
 | 1.0.2 | 2026-10-13 | Codex | 独立测试入口与真实 cwd 双重核实，排除仅借用生产解释器的测试 |
@@ -65,15 +66,11 @@ def process_birth(pid):
     return value
 
 
-def protection_snapshot():
+def protection_snapshot(config=None):
     from config.settings import settings
-    names = ("enable_public_publish_windows", "market_guard_policy", "enable_market_hours_guard", "wechat_publishing_paused",
-             "enable_douyin_browser_publishing", "enable_kuaishou_browser_publishing",
-             "enable_wechat_comment_interaction", "wechat_keepalive_enabled",
-             "topic_search_enabled", "topic_scheduler_enabled", "topic_admission_enabled", "topic_trial_mode",
-             "topic_quota_verified", "topic_quota_project", "topic_search_daily_limit",
-             "topic_general_daily_limit", "topic_admission_total_limit")
-    return {name: getattr(settings, name) for name in names}
+    from config.keyword_rollout import protection_values
+    config = settings if config is None else config
+    return protection_values(config)
 
 
 def role_lease(role):
@@ -239,8 +236,12 @@ def inspection(control, *, evidence=None, process_pids=None):
             from ..db.database import PipelineDB
             if PipelineDB.maintenance_active_work(output / "pipeline.db"):
                 unknown.append({"code": "UNFINISHED_LEDGER"})
-            if (settings.topic_search_enabled or settings.topic_scheduler_enabled or settings.topic_admission_enabled or settings.topic_trial_mode
-                    or settings.topic_quota_verified or settings.topic_quota_project):
+            from .keyword_rollout import verify_loaded
+            if verify_loaded(settings):
+                if proof.get("keyword_profile") != settings.topic_rollout_snapshot():
+                    unknown.append({"code": "KEYWORD_PROFILE_PROOF_MISMATCH"})
+            elif (settings.topic_search_enabled or settings.topic_scheduler_enabled or settings.topic_admission_enabled or settings.topic_trial_mode
+                  or settings.topic_quota_verified or settings.topic_quota_project):
                 unknown.append({"code": "SEARCH_CLOSURE_UNCONFIRMED"})
             from ..db.topic_candidates import TopicCandidateDAL
             candidate_db = TopicCandidateDAL()

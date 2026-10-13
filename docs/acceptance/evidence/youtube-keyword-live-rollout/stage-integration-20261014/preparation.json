@@ -1,0 +1,37 @@
+{
+  "production_head": "95d331e5cff75c4918051ae74d9db0565654275a",
+  "candidate_parent": "132b547c62feca29379efd391f47830f1e213219",
+  "candidate_changed": [
+    ".env.example",
+    "docs/acceptance/evidence/youtube-keyword-live-rollout/trial-budget-20261014/pytest.log",
+    "docs/acceptance/evidence/youtube-keyword-live-rollout/trial-budget-20261014/receipt.json",
+    "docs/acceptance/evidence/youtube-keyword-live-rollout/trial-budget-20261014/source-manifest.json",
+    "docs/acceptance/youtube-keyword-live-rollout.md",
+    "docs/acceptance/youtube-keyword-stage-transition.md",
+    "scripts/deployment_control.py",
+    "src/config/keyword_rollout.py",
+    "src/config/settings.py",
+    "src/video_processing/core/deployment_host.py",
+    "src/video_processing/core/keyword_rollout.py",
+    "src/video_processing/core/maintenance_runtime.py",
+    "src/video_processing/db/topic_candidates.py",
+    "src/video_processing/topic_tracker/service.py",
+    "src/web/static/js/topic_candidates.js",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_keyword_rollout_contract.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_topic_trial_budget.py"
+  ],
+  "production_dirty": {
+    ".gitignore": "984c5d29391118e6b85cb50b5392b2cacf7beb1da240e25856beb91136df8ebf",
+    "config/wechat_products.json": "9fabcb096826645c4efe70583028397ecf4d2142ee18a59a27bf005143ad89f0",
+    "scripts/submit_generic_douyin.py": "588bfdc8dbbd5a60f02725738744ecdb0a2262e646776923d6919ec7359c37ad",
+    "src/video_processing/db/database.py": "e7a1c2a70ca170f6b7ba7719cdfa14e231b417ec64f14efe2f5cec8b2a4382b8",
+    "src/video_processing/processors/caption_processor.py": "f263a496dac31a6fafc11c61a560cdb104bc2618819a81f0745ce54ed5875d04",
+    "src/video_processing/utils/subtitle_translation_provider.py": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8",
+    "src/video_processing/utils/vocab_helper.py": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2"
+  },
+  "copied_production_sources": 1424,
+  "overlay": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/keyword-stage-integration-6kjktfm9/repo"
+}
