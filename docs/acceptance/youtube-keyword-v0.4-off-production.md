@@ -48,3 +48,5 @@
 - [隔离测试回执](evidence/youtube-keyword-collection-v0.4/production-off/receipt.json)、[日志](evidence/youtube-keyword-collection-v0.4/production-off/pytest.log)、[源码清单](evidence/youtube-keyword-collection-v0.4/production-off/source-manifest.json)。最终清单 SHA-256：`eb42ae9498c971d35bbb9a2860a3dd7f5c2dc9d342e871967ec03ef9fd405b7a`。
 - [生产回读与文件保留摘要](evidence/youtube-keyword-collection-v0.4/production-off/production-readback.json)，采集时间 2026-10-13 21:18:37 +08:00。
 - 凭据归属与共享配额仍未核实；下一阶段先核实这些门禁，再另行确认真实试运行、搜索和准入开放。当前可以人工维护采集规则，但规则启用不等于生产搜索已开放。
+
+最终文档收敛时，上述独立测试进程已自然退出，API unknown 仅剩正常运行期的 SOURCES_NOT_VERIFIED；在途发布任务完成、active 为空后才快进合入验收文档。合入前后运行源码指纹一致，未再重启生产。
