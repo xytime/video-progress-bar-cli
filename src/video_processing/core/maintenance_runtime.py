@@ -7,6 +7,7 @@
 | 1.0.1 | 2026-10-13 | Codex | macOS 使用系统 lsof 路径，兼容 launchd 精简 PATH |
 | 1.0.2 | 2026-10-13 | Codex | 独立测试入口与真实 cwd 双重核实，排除仅借用生产解释器的测试 |
 | 1.0.3 | 2026-10-13 | Codex | 相对测试入口仅按已核实的进程 cwd 解析 |
+| 1.0.4 | 2026-10-13 | Codex | 核实 cron shell 与唯一已登记子进程归属，保留未知阻断 |
 """
 from __future__ import annotations
 from functools import wraps
@@ -139,6 +140,7 @@ def inspection(control, *, evidence=None, process_pids=None):
     state = control.status()
     unknown = list(state["unknown"])
     owners = {}
+    commands = {}
     try:
         expected_hash = code_hash()
         for role in ROLES:
@@ -174,6 +176,7 @@ def inspection(control, *, evidence=None, process_pids=None):
                 if len(pieces) != 2 or not pieces[0].isdigit():
                     continue
                 pid, command = int(pieces[0]), pieces[1]
+                commands[pid] = command
                 if pid == os.getpid() or not any(marker in command for marker in markers):
                     continue
                 test_entry = _test_runner_entry(command, settings.project_root)
@@ -192,6 +195,10 @@ def inspection(control, *, evidence=None, process_pids=None):
                         process_pids.add(pid)
         owned = {row["pid"] for row in owners.values()} | active_pids
         for pid in process_pids - owned:
+            if sys.platform == 'darwin' and commands.get(pid, '').startswith('/bin/sh -c '):
+                from .maintenance_cron import verified_cron_shell
+                if verified_cron_shell(pid, commands[pid], settings.project_root, active_pids, commands, process_birth):
+                    continue
             unknown.append({"code": "UNREGISTERED_PROCESS", "pid": pid})
         if evidence is None:
             unknown.append({"code": "SOURCES_NOT_VERIFIED"})
