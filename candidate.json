@@ -1,52 +1,65 @@
 {
-  "status": "M3_EXECUTABLE_CANDIDATE_NOT_READY",
+  "status": "M3_LOCAL_FIXES_VERIFIED_PLATFORM_ACCESS_BLOCKED",
   "m3_ready": false,
   "authoritative": true,
-  "note": "唯一权威候选索引；随 code_commit 之后的提交入库。真实操作入口已接通并经隔离测试验证；真实平台适配仍缺真实样本，故不标 M3_READY。",
+  "note": "Codex 接手：两个代码阻断已修复并经183项隔离回归验证；真实平台只读访问被宿主站点安全策略拒绝，平台适配及身份/分页证据仍未关闭。",
   "baseline": "0419de5",
-  "m0_m2_accepted_by_codex": {"head": "fe10d00", "code_commit": "e947fd4", "tests": "170 passed (Codex 独立复跑)"},
-  "code_commit": "1a6905f9598bf80a055a71e8138fd812af23922d",
+  "m0_m2_accepted_by_codex": {
+    "head": "fe10d00",
+    "code_commit": "e947fd4",
+    "tests": "170 passed (Codex 独立复跑)"
+  },
+  "code_commit": "66b6bf79c4f4ccf1e1a64254399f5a16f6ff6a04",
   "branch": "task/secondary-reply-m0-m2",
   "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
   "pushed": false,
   "merged": false,
   "interpreter": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python (仅经 scripts/run_isolated_tests.py --browser)",
   "tests": {
-    "command": "cd <workspace> && <interpreter> scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_account_and_source.py tests/unit/test_secondary_reply_cli_readonly.py tests/unit/test_secondary_reply_cli_real_entry.py tests/unit/test_secondary_reply_contract_and_dal.py tests/unit/test_secondary_reply_orchestration.py tests/unit/test_secondary_reply_review_counterexamples.py tests/unit/test_secondary_reply_service_and_corpus.py tests/browser/test_secondary_reply_browser.py tests/browser/test_secondary_reply_orchestrated_browser.py tests/unit/test_wechat_interaction*.py",
-    "result": "177 passed, 0 failed, 0 skipped",
-    "log": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-zat2xvfe/pytest.log",
-    "log_sha256": "279ea070149dc3ca3678b3ccbc6489af9f39edc4326f3ed41ad1e309c49989f1",
-    "note": "该目录为 external-auto-cleanup，日志可能被清理；哈希供核对。含既有首评互动回归。"
+    "command": "<venv>/python scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_*.py tests/browser/test_secondary_reply_browser.py tests/browser/test_secondary_reply_orchestrated_browser.py tests/unit/test_wechat_interaction*.py",
+    "result": "183 passed, 0 failed, 0 skipped",
+    "log": "docs/evidence/secondary-reply-m3-20261013/full-pytest.log",
+    "log_sha256": "4b9ab95178b6a83213b9c21d0eedc3cf7c73a6278f8f5d38467136d03238eacd",
+    "receipt": "docs/evidence/secondary-reply-m3-20261013/full-receipt.json",
+    "source_manifest_sha256": "27f80e44f26edc3f4c4ec9ebbeb0aa2fb6f233676c8918dc69769fc3bfc6cf88",
+    "targeted_result": "12 passed",
+    "targeted_log": "docs/evidence/secondary-reply-m3-20261013/targeted-pytest.log"
   },
-  "diff_stat_vs_baseline": "32 files changed, 8324 insertions(+), 25 deletions(-)",
+  "diff_stat_vs_baseline": "39 files changed, 8545 insertions(+), 25 deletions(-)",
   "new_in_this_round": {
-    "real_entry": "scripts/wechat_secondary_reply.py 子命令 import-draft/preflight/approve/submit/reconcile-platform/status/stop/resume，全部经 SecondaryReplyOrchestrator；旧无子命令运行不再 exit 3，只打印用法且不发送",
-    "ops_module": "src/video_processing/interaction/secondary_reply_ops.py",
-    "approval": "本地人工审批：配置审批人 + 正文哈希前12位回填 + 一次性 token 原子消费，绑定目标/源评论快照/草稿版本/有效期；fixture provider 草稿不可批准",
-    "copy_source": "人工撰写导入（provider=manual_import，经确定性格式+政策终审）；不是自动生成能力",
-    "platform_reconcile": "reconcile-platform 经浏览器端口真实读取平台状态（需 --confirm-readonly-platform-access）；--reconcile 仅本地检视",
-    "stop": "stop/resume 停止文件，submit 在访问平台前拒绝",
-    "settings": "wechat_reply_account_key / wechat_reply_author_finder_id（settings.py + .env.example）"
+    "readonly_cli": "preflight/status 在 DAL 初始化之前确定 read_only，缺库/活动WAL无副作用拒绝",
+    "account_approval": "CLI显式传入账号，入口及DAL绑定/消费事务内检查一致性；错账号不得改变任务或Token",
+    "regressions": "新增6项反例及合法对照",
+    "handover": "docs/evidence/secondary-reply-m3-20261013/README.md"
   },
   "verification_tiers": {
     "isolated_tests": "通过：CLI 全流程（导入/预检/审批/提交/重复提交/开关与停止/平台对账/不重发）；隔离 Chromium：实际 CLI -> 统一编排 -> 浏览器端口 -> 夹具网络 -> 全新会话回读 -> 凭据",
-    "real_readonly_verification": "未做。仅有历史回执证明 create_comment 载荷含 _log_finder_id 与返回新 commentId",
+    "real_readonly_verification": "BLOCKED_BY_HOST_SITE_SAFETY_POLICY：已尝试绑定已有视频号浏览器标签，被拒绝；未取得真实样本，禁止绕过。见 docs/evidence/secondary-reply-m3-20261013/platform-readonly.json",
     "human_review": "材料 docs/specs/secondary_reply_human_review_sheet.md 已导出，结论列为空",
     "real_send": "未发生",
     "public_visibility": "未验证（凭据 public_visibility=NOT_CHECKED）"
   },
   "external_actions": [],
-  "flags_default": {"enable_wechat_secondary_reply": false, "enable_wechat_secondary_reply_live_submission": false},
+  "flags_default": {
+    "enable_wechat_secondary_reply": false,
+    "enable_wechat_secondary_reply_live_submission": false
+  },
   "consolidated_blockers": [
-    "真实页面/接口样本缺失：适配器页面选择器（作品标识、data-comment-id、data-author-id、二级回复容器、折叠/分页）来自夹具，真实页面未知，缺失时失败关闭；二级回复分页与完整性判断无含二级回复的真实样本。需一次性只读授权（见 canary 方案 §5-1）",
-    "account_key 与 finder_id 可信绑定：当前为配置声明 + 发送载荷 _log_finder_id 一致性校验；尚无从登录态只读读取作者原生标识的实现与验证",
-    "本地人工审批的操作者身份由本机运行者与配置共同声明，未独立验证；Telegram 真实传输未实现（仅 fake）",
-    "自动生成未交付：规则 provider 仅限 fixture，真实 provider 无工具/凭据隔离证明；仅人工撰写导入路径可用",
-    "人评结论未填"
+    "真实平台适配及只读证据未完成：当前作者原生身份与业务账号可信绑定、作品/父评论原生定位、二级回复折叠分页完整性仍待实际样本校准和独立回读。宿主策略禁止访问该站点及绕过；需先恢复允许的访问，已获用户只读授权无需重复申请。"
   ],
   "docs": {
     "canary_plan": "docs/specs/secondary_reply_m3_canary_plan.md",
     "human_review_sheet": "docs/specs/secondary_reply_human_review_sheet.md",
     "supersedes": "docs/specs/secondary_reply_m3_runbook.md（已删除）"
-  }
+  },
+  "platform_readonly_attempt": {
+    "authorized": true,
+    "result": "HOST_SITE_SAFETY_DENIED",
+    "evidence": "docs/evidence/secondary-reply-m3-20261013/platform-readonly.json"
+  },
+  "closed_blockers": [
+    "只读预检初始化可写数据库并修改无关任务",
+    "跨账号本地审批被接受"
+  ],
+  "real_canary_gate": "平台验证通过后，用户核对具体账号、作品、父评论及正文，明确授权单条真实发送；当前未获该具体发送授权。"
 }
