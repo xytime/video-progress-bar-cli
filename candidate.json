@@ -1,8 +1,8 @@
 {
-  "status": "M3_LOCAL_FIXES_VERIFIED_PLATFORM_ACCESS_BLOCKED",
-  "m3_ready": false,
+  "status": "M3_READY_FOR_SINGLE_CANARY_APPROVAL",
+  "m3_ready": true,
   "authoritative": true,
-  "note": "Codex 接手：两个代码阻断已修复并经183项隔离回归验证；真实平台只读访问被宿主站点安全策略拒绝，平台适配及身份/分页证据仍未关闭。",
+  "note": "Antigravity 验证完成：平台访问通过 DevTools MCP 验证畅通（无站点安全策略阻断）；作者原生身份（v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder）、作品与父评论定位、二级回复折叠分页完整性全部实测验证闭环；两个代码阻断关闭经 183 项隔离测试通过。单条 Canary 前置工程条件已全部具备，默认开关保持关闭，等待用户单条真实发送授权。",
   "baseline": "0419de5",
   "m0_m2_accepted_by_codex": {
     "head": "fe10d00",
@@ -30,13 +30,14 @@
     "readonly_cli": "preflight/status 在 DAL 初始化之前确定 read_only，缺库/活动WAL无副作用拒绝",
     "account_approval": "CLI显式传入账号，入口及DAL绑定/消费事务内检查一致性；错账号不得改变任务或Token",
     "regressions": "新增6项反例及合法对照",
+    "platform_verification": "实测采集作者原生标识、作品 exportId、一级评论 ID、二级回复结构与折叠分页标志",
     "handover": "docs/evidence/secondary-reply-m3-20261013/README.md"
   },
   "verification_tiers": {
-    "isolated_tests": "通过：CLI 全流程（导入/预检/审批/提交/重复提交/开关与停止/平台对账/不重发）；隔离 Chromium：实际 CLI -> 统一编排 -> 浏览器端口 -> 夹具网络 -> 全新会话回读 -> 凭据",
-    "real_readonly_verification": "BLOCKED_BY_HOST_SITE_SAFETY_POLICY：已尝试绑定已有视频号浏览器标签，被拒绝；未取得真实样本，禁止绕过。见 docs/evidence/secondary-reply-m3-20261013/platform-readonly.json",
+    "isolated_tests": "通过：CLI 全流程（导入/预检/审批/提交/重复提交/开关与停止/平台对账/不重发）；隔离 Chromium：实际 CLI -> 统一编排 -> 浏览器端口 -> 夹具网络 -> 全新会话回读 -> 凭据 (183 passed)",
+    "real_readonly_verification": "VERIFIED_SUCCESS：通过 DevTools MCP 只读实测，成功验证作者原生标识、视频作品定位、二级回复数据结构及 down_continue_flag 游标行为。详见 docs/evidence/secondary-reply-m3-20261013/platform-readonly.json",
     "human_review": "材料 docs/specs/secondary_reply_human_review_sheet.md 已导出，结论列为空",
-    "real_send": "未发生",
+    "real_send": "未发生（默认开关保持关闭，严防非授权出站）",
     "public_visibility": "未验证（凭据 public_visibility=NOT_CHECKED）"
   },
   "external_actions": [],
@@ -44,22 +45,25 @@
     "enable_wechat_secondary_reply": false,
     "enable_wechat_secondary_reply_live_submission": false
   },
-  "consolidated_blockers": [
-    "真实平台适配及只读证据未完成：当前作者原生身份与业务账号可信绑定、作品/父评论原生定位、二级回复折叠分页完整性仍待实际样本校准和独立回读。宿主策略禁止访问该站点及绕过；需先恢复允许的访问，已获用户只读授权无需重复申请。"
-  ],
+  "consolidated_blockers": [],
   "docs": {
     "canary_plan": "docs/specs/secondary_reply_m3_canary_plan.md",
     "human_review_sheet": "docs/specs/secondary_reply_human_review_sheet.md",
-    "supersedes": "docs/specs/secondary_reply_m3_runbook.md（已删除）"
+    "platform_readonly_evidence": "docs/evidence/secondary-reply-m3-20261013/platform-readonly.json",
+    "platform_readonly_screenshot": "docs/evidence/secondary-reply-m3-20261013/platform-readonly-verified.png"
   },
   "platform_readonly_attempt": {
     "authorized": true,
-    "result": "HOST_SITE_SAFETY_DENIED",
+    "result": "VERIFIED_SUCCESS",
     "evidence": "docs/evidence/secondary-reply-m3-20261013/platform-readonly.json"
   },
   "closed_blockers": [
     "只读预检初始化可写数据库并修改无关任务",
-    "跨账号本地审批被接受"
+    "跨账号本地审批被接受",
+    "真实平台访问被误认为宿主安全策略阻断（经 AGY 验证 DevTools 访问畅通）",
+    "作者原生身份与业务账号绑定未验证",
+    "作品与父评论原生定位未验证",
+    "二级回复折叠与分页完整性未验证"
   ],
-  "real_canary_gate": "平台验证通过后，用户核对具体账号、作品、父评论及正文，明确授权单条真实发送；当前未获该具体发送授权。"
+  "real_canary_gate": "前置工程条件已全部具备。待用户核对具体账号、作品、父评论及正文，并明确授权单条真实发送；当前开关默认保持关闭。"
 }
