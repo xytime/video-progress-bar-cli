@@ -103,3 +103,17 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 ### 最终生产整合验证
 
 扩展盘整合副本保留生产 `95d331e` 七项 dirty 与额外受维护源码，最终 **456 passed / 13 warnings**，不与 377 项累加。包含数据库、生词及片尾并行改动回归。完成于 2026-10-13T18:14:44Z，源码清单 SHA-256 `5279559455ec70ad65410778c05f7dc3a17b65958979dfd476a9818c357152f4`；[回执](evidence/youtube-keyword-live-rollout/stage-integration-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/stage-integration-20261014/pytest.log)、[保留清单](evidence/youtube-keyword-live-rollout/stage-integration-20261014/preparation.json)。测试沙盒已清理。测试 runner 退出后，生产 active 为空、未登记进程已消失；来源仍需原生部署冻结后的正式证明，不能把此状态当作门禁已通过。
+
+## 2026-10-14 02:17 协议 OFF 生产采用完成
+
+- 目标提交 `1958e2e` 已通过原生九步并推送 `origin/main`。部署 ID `e840ec6e90bc41ed839ab288db6d6cb8`，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-stage-20261014-a/`。
+- 首次 freeze 被 `MAINTENANCE_NOT_IDLE` 拒绝，源码尚未采用；复查 active 为空、未知进程消失后，通过原生 status/recover 核实冻结已完成，再执行剩余步骤，最终 journal COMPLETE。未手工改写日志、来源证明、锁或调度。
+- 正常会话生产回读：RUNNING/IDLE、OFF/version 16；搜索/试运行/定时/准入能力均 false，准入累计上限 1。试运行累计 search=0/3、general=0/6；关键词日用量仍 0。阶段配置 identity=null、error=false，说明协议代码已采用，但尚未采用 TRIAL 配置或搜索。
+- 现场 02:17:16 重新计算宿主窗口：当前受保护，下一安全分钟 04:15。真实试运行必须再次现场核实，不能提前调用。原七项 dirty 与额外源码仍保留。
+- 继续独立补齐后续阶段的单规则上限与真实作业证据校验；最多三次真实搜索、自然统计刷新与达标准入尚无证据，不能宣布目标完成。
+
+## 2026-10-14 02:21 首轮单规则限制隔离通过
+
+- 已将首轮定时上限从三条收紧为一条；启用与暂停恢复在 SQLite 写事务内检查，并在自动请求预留预算和准入前再次检查。存量多规则异常时整个调度轮停止，不自动选任意一条、不删除规则、不扩大调用。页面说明同步为首轮一条。
+- 并发启用、暂停恢复绕行、存量超限、已领取作业配置漂移、跨关键词去重与频道竞争，以及真实浏览器回归 **111 passed / 10 warnings**；[回执](evidence/youtube-keyword-live-rollout/single-rule-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/single-rule-20261014/pytest.log)。源码清单 SHA-256 `a0c0c1521991f5824b81c397cb14d94792142e1f7ece1515a61fcfa98214e371`。第一批旧测试仍同时开启两条，与最新首轮范围冲突，已调整为顺序切换规则后重验，未删除原去重和竞争断言。
+- 此补强目前仅隔离验证，尚未生产采用；生产仍为 `1958e2e` OFF。后续 MANUAL/SCHEDULED/ADMISSION 入口仍关闭，实际数据库试运行/刷新作业证据核验未完成。下一步可先完成证据核验的隔离工程；安全窗口到来后刷新现场配额，使用已采用协议生成新 TRIAL 计划并进行最多累计三次真实调用。首轮单规则补强必须在开放 SCHEDULED 前完成最终生产整合与原生采用。跟进保持 ACTIVE，不把 OFF 部署作为最终完成。

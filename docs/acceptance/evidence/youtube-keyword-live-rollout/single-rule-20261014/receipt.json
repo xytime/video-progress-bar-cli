@@ -1,0 +1,39 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "started_at": "2026-10-13T18:19:55.524636+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjgpss9j",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjgpss9j/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.094
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "a0c0c1521991f5824b81c397cb14d94792142e1f7ece1515a61fcfa98214e371",
+  "profile_sha256": "6245d9be1cb3ed8d9e595277cdb6b421c6ebb0b00fe679b03e638b74a0c5cb7f",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjgpss9j/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "851d8261b9f6d668f2d6ce8c9bf711f9d59018b74243844599d5a2d24a386c3c",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 46.883
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjgpss9j/sandbox"
+  },
+  "finished_at": "2026-10-13T18:20:43.439068+00:00"
+}

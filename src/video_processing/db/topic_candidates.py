@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.2 | 2026-10-14 | Codex | 规则恢复与每次自动调用验证首轮一条上限 |
 | 0.4.1 | 2026-10-14 | Codex | 试运行使用原子累计预算，跨日、重启和项目切换不重置 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 连接及 PRAGMA 纳入完整故障边界，保证资源释放 |
@@ -165,6 +166,8 @@ class TopicCandidateDAL(KeywordCollectionDAL):
                 raise TopicError("ARCHIVED", "已归档专题不能恢复")
             expires = old["expires_at"]
             if status == "ACTIVE":
+                if old['auto_enabled']:
+                    self._keyword_capacity(c, exclude=topic_id)
                 if old["status"] != "ACTIVE" and c.execute("SELECT COUNT(*) FROM topic_definitions WHERE status='ACTIVE'").fetchone()[0] >= 10:
                     raise TopicError("CAPACITY", "有效专题已达 10 个", 422)
                 if old["status"] == "EXPIRED":
@@ -233,8 +236,10 @@ class TopicCandidateDAL(KeywordCollectionDAL):
         if (topic["status"] != "ACTIVE" or topic["version"] != job["topic_version"] or topic["expires_at"] <= stamp(now)
                 or control["mode"] != "DISCOVERY_ONLY" or control["version"] != job["control_version"]):
             raise TopicError("STOPPED", "专题或运行状态已改变")
-        if job['kind'] in ('SCHEDULED','REFRESH') and not topic['auto_enabled']:
-            raise TopicError('STOPPED', '定时采集已停止')
+        if job['kind'] in ('SCHEDULED','REFRESH'):
+            KeywordCollectionDAL._keyword_capacity(c)
+            if not topic['auto_enabled']:
+                raise TopicError('STOPPED', '定时采集已停止')
         return job
 
     def topic_check_job(self, job_id, now):

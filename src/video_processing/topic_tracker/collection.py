@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.1 | 2026-10-14 | Codex | 存量规则超限时关闭本轮调度 |
 | 0.4.0 | 2026-10-13 | Codex | 全局串行定时采集、批量统计刷新和受控准入 |
 """
 from datetime import datetime
@@ -62,6 +63,7 @@ class KeywordCollection:
                 lock=self._lock()
                 if not lock: return 'BUSY'
                 self.db.topic_maintenance(self.clock(),recover=True)
+                self.db.keyword_check_capacity(self.clock())
                 # 非瞬时错误须显式调整规则/重新启用，不每轮重试凭据或官方配额。
                 blocked=self.db.keyword_blocked_rules()
                 due=[t for t in self.db.keyword_due(self.clock()) if (t['id'],t['version']) not in blocked]

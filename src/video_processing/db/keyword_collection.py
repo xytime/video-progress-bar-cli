@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.4.2 | 2026-10-14 | Codex | 首轮定时上限一条，开启与恢复原子校验，存量超限拒绝调用和准入 |
 | 0.4.1 | 2026-10-13 | Codex | 累计准入额度与插入共用事务，受控试运行最多一条 |
 | 0.4.0 | 2026-10-13 | Codex | 独立候选的持久调度、评分证据及受控准入 |
 """
@@ -74,6 +75,17 @@ class KeywordCollectionDAL:
             self._topic_audit(c, actor, 'ADMISSION_ON' if enabled else 'ADMISSION_OFF', 'control', version+1, now)
         return self.keyword_control()
 
+    @staticmethod
+    def _keyword_capacity(c, *, exclude=None):
+        count = c.execute("SELECT COUNT(*) FROM topic_definitions WHERE auto_enabled=1 AND status='ACTIVE' AND id!=?", (exclude or '',)).fetchone()[0]
+        if count >= (1 if exclude else 2):
+            raise TopicError('CAPACITY', '首轮最多启用 1 条定时采集规则；请先关闭其他规则')
+
+    def keyword_check_capacity(self, now):
+        with self._topic_connection(write=True) as c:
+            self._topic_expire(c, now)
+            self._keyword_capacity(c)
+
     def keyword_schedule(self, topic_id, version, enabled, actor, now):
         with self._topic_connection(write=True) as c:
             self._topic_expire(c, now)
@@ -82,8 +94,8 @@ class KeywordCollectionDAL:
                 raise TopicError('STALE', '采集规则已变化，请刷新')
             if enabled and row['status'] != 'ACTIVE':
                 raise TopicError('STOPPED', '请先恢复有效规则')
-            if enabled and not row['auto_enabled'] and c.execute("SELECT COUNT(*) FROM topic_definitions WHERE auto_enabled=1 AND status='ACTIVE'").fetchone()[0] >= 3:
-                raise TopicError('CAPACITY', '最多启用 3 条定时采集规则')
+            if enabled:
+                self._keyword_capacity(c, exclude=topic_id)
             if c.execute("SELECT 1 FROM topic_jobs WHERE topic_id=? AND state IN ('RUNNING','STOPPING')", (topic_id,)).fetchone():
                 raise TopicError('BUSY', '请等待当前作业结束后调整定时采集')
             c.execute('UPDATE topic_definitions SET auto_enabled=?,next_run_at=?,version=version+1 WHERE id=?', (int(enabled), stamp(now) if enabled else None, topic_id))
@@ -166,6 +178,7 @@ class KeywordCollectionDAL:
         with self._topic_connection(write=True) as c:
             from ..core.maintenance import gate
             gate().require_running()
+            self._keyword_capacity(c)
             control=c.execute('SELECT admission FROM keyword_control WHERE id=1').fetchone()
             mode=c.execute('SELECT mode FROM topic_control WHERE id=1').fetchone()
             if not getattr(config,'topic_admission_enabled',False) or not control['admission'] or mode['mode']=='OFF':

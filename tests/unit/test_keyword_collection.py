@@ -164,10 +164,42 @@ def test_api_credentials_stop_automatic_retry(tracker):
     assert len(tracker.adapter.calls)==1
 
 
-def test_three_rule_capacity(tracker):
-    for n in range(3):enable(tracker,query=f'query{n}')
-    t=topic(tracker,'fourth')
-    with pytest.raises(TopicError,match='3'):tracker.schedule(t['id'],t['version'],True,'test')
+def test_first_rollout_one_rule_capacity(tracker):
+    enable(tracker,query='first')
+    t=topic(tracker,'second')
+    with pytest.raises(TopicError,match='1'):tracker.schedule(t['id'],t['version'],True,'test')
+
+
+def test_paused_rule_cannot_resume_over_capacity(tracker):
+    first=enable(tracker,query='first')
+    paused=tracker.db.topic_transition(first['id'],first['version'],'PAUSED','test',tracker.clock())
+    enable(tracker,query='second')
+    with pytest.raises(TopicError,match='1'):
+        tracker.db.topic_transition(first['id'],paused['version'],'ACTIVE','test',tracker.clock())
+
+
+def test_concurrent_schedule_capacity_is_atomic(tracker):
+    tracker.config.topic_scheduler_enabled=True
+    candidates=[topic(tracker,query=f'concurrent{n}') for n in range(3)]
+    def attempt(t):
+        try:
+            tracker.schedule(t['id'],t['version'],True,'test')
+            return 'OK'
+        except TopicError as exc:
+            return exc.code
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results=list(pool.map(attempt,candidates))
+    assert results.count('OK')==1 and results.count('CAPACITY')==2
+
+
+def test_legacy_multiple_rules_fail_closed_without_requests(tracker):
+    enable(tracker,query='first')
+    second=topic(tracker,query='second')
+    with sqlite3.connect(tracker.db.db_path) as c:
+        c.execute('UPDATE topic_definitions SET auto_enabled=1 WHERE id=?',(second['id'],))
+    assert tracker.tick(verify_runtime=False)=='CAPACITY'
+    assert not tracker.adapter.calls
+
 
 
 def test_atomic_shared_budget_reserved_manual_and_details(tracker):
@@ -257,6 +289,7 @@ def test_admission_rechecks_current_boundaries(tracker,monkeypatch,change):
 
 def test_cross_keyword_and_channel_race_preserves_one_task(tracker,monkeypatch):
     first=enable(tracker);hot(tracker);tracker.tick(verify_runtime=False)
+    tracker.schedule(first['id'],first['version'],False,'test')
     second=enable(tracker,query='other event');tracker.tick(verify_runtime=False)
     admit(tracker,monkeypatch)
     row=tracker.db.keyword_admission_candidates(tracker.clock())[0]
@@ -328,3 +361,14 @@ def test_trial_admission_limit_is_atomic_and_survives_restart(tracker, monkeypat
     row = pending[0]
     tracker.db.add_video(row['youtube_id'], 'existing', 'UC-isolated', source='DISCOVERY')
     assert attempt(row) == 'EXISTING'
+
+
+def test_rule_drift_blocks_already_claimed_request(tracker):
+    first=enable(tracker,query='first')
+    job=tracker.db.topic_create_job(first['id'],first['version'],'drift-auto','test',tracker.clock(),kind='SCHEDULED')
+    second=topic(tracker,query='second')
+    with sqlite3.connect(tracker.db.db_path) as c:
+        c.execute('UPDATE topic_definitions SET auto_enabled=1 WHERE id=?',(second['id'],))
+    with pytest.raises(TopicError,match='1'):
+        tracker.db.topic_reserve(job['id'],'isolated-project','search',20,tracker.clock())
+    assert tracker.db.topic_budget('isolated-project',tracker.clock())['search']==0
