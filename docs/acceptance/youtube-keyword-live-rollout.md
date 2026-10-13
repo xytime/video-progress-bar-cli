@@ -54,3 +54,27 @@
 - 最终整合回归 **401 passed / 13 warnings**，包含关键词/API/真实浏览器、维护/部署、数据库兼容和生词超时；与历史批次不相加。测试完成时间 2026-10-13T14:41:00Z。源码清单 SHA-256 `8ef6d96acae885e8de41bb1456a098ca2e18e68e9f0069440ebab80d618ab531`。[回执](evidence/youtube-keyword-live-rollout/integration-20261013/receipt.json)、[保留摘要](evidence/youtube-keyword-live-rollout/integration-20261013/preparation.json)、[日志](evidence/youtube-keyword-live-rollout/integration-20261013/pytest.log)。沙盒已自动清理。
 - 原生部署器生成计划成功，ID `b1c5f885c4ec4f4788f677a2bc4a8f0a`，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-cap-20261013-c/`；验证最终运行源码与测试清单匹配。仅生成计划，尚未 apply。任何生产漂移均须重新核对，不能直接沿用旧计划。
 - 最新维护回查为 RUNNING/version 20，但有 `wallstreet-render` 在途任务和 UNREGISTERED_PROCESS，safe=false。没有冻结、停止、强杀或绕过；搜索/调度/准入仍关闭。需在采用前重新核查任务、未知进程、代码基线与全部门禁。
+
+## 用户本机核对通过后的生产推进
+
+用户提供核对脚本结果：production_file=MATCH、launchd_override=NOT_LISTED、result=CONFIG_MATCH_RESTART_REQUIRED，项目与资源 ID 均与上文相同。此为用户执行的本机核对证据；没有读取或接收密钥，不能描述为进程内存验证。
+
+在途任务结束后重新生成计划 `4bc789652c2b4cf2b0e821dcf61bd05d`（私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-cap-20261013-d/`），目标 `c797b6b`。原生部署器 baseline/freeze/stop/backup/adopt/start/resume/restore/verify 九步全部 COMPLETE，已完成正常重启和生产最终回读；main 已推送到该提交。保留原 dirty 和 untracked，沿用 401 项最终整合源码清单匹配证明。首轮累计准入上限补强已生产采用，仍为 OFF。
+
+Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。用户已确认没有外部共享调用者；本机既有调用仍计入观察余量。
+
+### 尚需完成的受控开放路径
+
+现场有效配置显示宿主保护开启、当前受保护；按现有配置计算的下一安全分钟为北京时间 **2026-10-14 04:15**，执行时必须重新计算，不可仅凭此时间表放行。
+
+现有 `deployment_host.protections/web_readback` 与 `maintenance_runtime.inspection` 都明确要求宿主搜索/调度/准入/配额绑定关闭；它们足以证明 OFF 部署，但不能承载已授权的分阶段开启。必须在隔离区补齐明确的配置状态转换与验证，不能直接改线上环境后跳过这些断言。该必要工程工作在用户已批准的实际生效范围内，不再请求同一范围授权。
+
+推荐最小实现与验收：
+
+1. 固定阶段：OFF → TRIAL（3 搜索/6 详情、调度和准入关）→ MANUAL（20/40）→ SCHEDULED（最多 1 条规则）→ ADMISSION（累计最多 1 条）。阶段跳跃、未知配置、凭据/共享配额证据缺失须拒绝。真实试运行次数持久记录，跨日不重置累计三次。
+2. 非秘密配置变更独立记录预期前后状态、原配置保留证明和恢复动作；不读取或改写密钥。不得修改旧部署回执来匹配新状态，不得把配置修改当来源验收。
+3. 保留原生排空、进程归属、锁、来源、备份、维护中启动与恢复检查。维护中持久搜索模式 OFF、准入关闭、无在途搜索和刷新；宿主能力开启仅能在明确匹配目标阶段的配置回执下启动，其他保护字段不得漂移。
+4. 新进程实际非秘密配置回读与计划一致后，才允许恢复调度；持久搜索模式仍须在 RUNNING 且保护窗口允许时单独启用。失败保持关闭并给出可核实恢复位置。
+5. 隔离覆盖非法阶段/过期证据/并发/配置漂移/启动失败/重启与跨日试运行累计上限，以及原 OFF 部署回归。全部通过、现场门禁复核后，再真实试运行和阶段开放。
+
+上述路径尚未实现或验收；当前没有发起真实搜索，不能宣称采集实际生效。
