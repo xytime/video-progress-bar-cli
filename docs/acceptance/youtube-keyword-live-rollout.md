@@ -204,3 +204,11 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 关闭持久模式后生成全新ADMISSION计划d4ba437c6ce748f09fc64be5f23d3c24，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-admission-20261014-a`，原生九步COMPLETE。来源/锁/排空/备份/保护/恢复全部通过；未改旧journal、删锁或强杀。实际重启及最终回读通过后正常控制面开启DISCOVERY_ONLY/version35、admission=1/version2，宿主累计准入上限1，日预算20/40、单规则保留。
 - 当前真实预算搜索3/详情4（仅首次1/1属于试运行，后续为已批准正式定时/刷新）；自然采集、自然热度刷新、统一评分、受控能力已生效。当前尚无达标新主任务，不能把准入配置打开当作自动准入验收完成。继续等待自然达标候选，75分、热度、内容门槛及外部发布授权不变；自动跟进保持ACTIVE。
 - 13:23进一步读回：30个观察候选中2条评分分别88/86，但均RESTRICTED（不满足180–1800秒时长），task_id均null；其余候选未全部达标。不能沿用此前“最高45/尚未75分”的旧结论，也不能仅凭高分强行准入。自然调度持续运行，准入限制按预期阻止这两条。
+
+## 2026-10-14 17:25 宿主重启后的恢复阻塞
+
+- 宿主 uptime 证明约16:43重启；topic审计08:43:23 UTC由host关闭模式为OFF/version36。当前UI于16:45重建，五角色源码与进程birth匹配，源码/保护检查通过。未发生新的关键词搜索或准入。
+- 原ADMISSION调度回读出现RESTORED_DEFINITION_MISMATCH：ai-cover-doer和english-world-forced-recovery改由原LaunchAgents plist加载，与部署临时恢复定义仅RunAtLoad不同。不能改旧journal或把旧计划复用为新恢复。
+- 17:24依用户既有授权原生maintenance_control enter暂停接纳，MAINTENANCE/version43，现场active=[]。未强杀、删锁或重启。发现两个ABANDONED_ADMISSION，均为重启前channel-monitor登记：92a92ed674bd4274b769201bb2d047bf/PID72320、f6616aa5205a49dfa7ce8127b047506e/PID63279；两PID均不存在。该状态不能当作安全空闲。
+- 当前代码仅检测ABANDONED_ADMISSION，没有原生显式回收命令。恢复必须先补齐受控、可审计的遗留登记对账路径，不得手工删除或伪造回执。搜索保持OFF，规则/准入上限/并行源码保持。需审阅恢复规格再实施，不能仅等待这些已无进程的登记自然消失。
+- 17:24 Cloud只读刷新：项目gen-lang-client-0993011647，API启用，搜索0/100，通用106/10000（配额日已切换）；未来执行仍须刷新有效期。观察回执见私有ADMISSION目录observation-20261014-1722.json。
