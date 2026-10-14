@@ -29,8 +29,42 @@
     window.ConsoleNavigation.select(view);
   }
   const legacy=window.DashboardLegacy;
+  // 每个列表独立记忆普通筛选；显式 URL 条件和历史导航始终优先。
+  const savedFilterKey='video_pipeline_filters_v1';
+  const rememberedKeys=['search','channel','sort','size','score_band','error_type','status',
+    'engagement_window_days','include_processed','include_expired','created_window','like_rate_min','like_rate_max'];
+  function rememberFilters(tab) {
+    if(!groups[tab]||['hotwords','manual'].includes(tab))return;
+    try {
+      let stored;
+      try {stored=JSON.parse(localStorage.getItem(savedFilterKey)||'{}');} catch (_) {stored={};}
+      const saved=stored&&typeof stored==='object'&&!Array.isArray(stored)?stored:{};
+      const query=new URLSearchParams(legacy.query()), filters=new URLSearchParams();
+      rememberedKeys.forEach(key=>{if(query.has(key))filters.set(key,query.get(key));});
+      saved[tab]=filters.toString();localStorage.setItem(savedFilterKey,JSON.stringify(saved));
+    } catch (_) { /* 禁用存储不影响筛选。 */ }
+  }
+  function restoreRememberedFilters(params,tab) {
+    if([...rememberedKeys,'page','funnel_stage','attention_kind'].some(key=>params.has(key)))return;
+    try {
+      const raw=JSON.parse(localStorage.getItem(savedFilterKey)||'{}')?.[tab];
+      if(typeof raw!=='string'||raw.length>4096)return;
+      const saved=new URLSearchParams(raw);
+      const allowed={sort:['source_published_at_desc','updated_at_desc','score_desc','views_desc','like_rate_desc'],
+        size:['20','50','100'],score_band:['all','unscored','below_50','50_74','80_plus'],
+        error_type:['all','channel_policy','login','youtube_403','copy_quality','censorship_p0','other'],
+        status:['all','PENDING','FAILED','SUBMITTED_BOUND','UNDER_REVIEW','UNCERTAIN'],
+        engagement_window_days:['1','3','7','30'],include_processed:['true','false'],include_expired:['true','false'],
+        created_window:['all','24h','today_bj','7d','30d']};
+      rememberedKeys.forEach(key=>{
+        const value=saved.get(key);
+        if(value!==null&&(!allowed[key]||allowed[key].includes(value)))params.set(key,value);
+      });
+    } catch (_) { /* 旧数据或存储不可用时使用默认筛选。 */ }
+  }
   function persist() {
     if(restoring||!['topics','production','publications'].includes(view))return;
+    rememberFilters(legacy.tab());
     const params=new URLSearchParams(legacy.query());params.set('view',view);
     const url='/?'+params.toString();if(location.pathname+location.search!==url)history.pushState(null,'',url);
     window.ConsoleNavigation.select(view);
@@ -115,8 +149,9 @@
     restoring=true;legacy.invalidate();
     const fallback={topics:'waitlist',production:'queue',publications:'review'}[view];
     const tab=groups[p.get('tab')]===view?p.get('tab'):fallback;
-    if(tab)legacy.restore(p,tab);
+    if(tab){restoreRememberedFilters(p,tab);legacy.restore(p,tab);}
     paint();restoring=false;
+    if(tab)rememberFilters(tab);
     if(view==='overview')refresh();
     if(view==='operations'){window.fetchChannels?.();legacy.audit();}
   }

@@ -93,11 +93,11 @@
       });
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/dashboard.css?v=20260926_2" />
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20261014-filters2" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js?v=20261013-04"></script>
-<script defer src="/static/js/dashboard_workspace.js?v=20261013-04"></script>
+<script defer src="/static/js/dashboard_workspace.js?v=20261014-filters2"></script>
 </head>
 <body>
 <div class="app">
@@ -287,7 +287,7 @@
       </div>
 
       <div id="video-filter-bar" aria-label="视频列表筛选与排序">
-        <input id="video-filter-search" type="search" placeholder="搜索中文/英文标题或 YouTube ID" onkeydown="if(event.key === 'Enter') applyVideoFilters()" />
+        <input id="video-filter-search" type="search" placeholder="搜索标题 / ID" aria-label="搜索中文或英文标题、YouTube ID" title="搜索中文/英文标题或 YouTube ID" onkeydown="if(event.key === 'Enter') applyVideoFilters()" />
         <select id="video-filter-channel" onchange="applyVideoFilters()"><option value="">全部频道</option></select>
         <select id="video-filter-sort" onchange="applyVideoFilters()"><option value="updated_at_desc">记录更新时间从新到旧</option>
           <option value="source_published_at_desc">来源发布日期：新到旧</option>
@@ -320,7 +320,7 @@
           <select id="video-filter-like-rate" aria-label="点赞率区间" onchange="selectLikeRateBand()">
             <option value="all">全部点赞率</option><option value="0,1">0–1%</option>
             <option value="1,3">1–3%</option><option value="3,5">3–5%</option>
-            <option value="5,10">5–10%</option><option value="10,100">10–100%</option>
+            <option value="5,10">5–10%</option><option value="10,100">10%+</option>
             <option value="custom">自定义区间</option>
           </select>
           <div id="like-rate-bounds" hidden>
@@ -1110,6 +1110,9 @@
     const enabled = min !== null || max !== null;
     const select = document.getElementById('video-filter-like-rate');
     const band = `${min},${max}`;
+    select.querySelector('[value="custom"]').textContent = enabled
+      ? (max === 100 || max === null ? `${min ?? 0}%+` : `${min ?? 0}%–${max}%`)
+      : '自定义区间';
     select.value = !enabled ? 'all' : [...select.options].some(option => option.value === band) ? band : 'custom';
     document.getElementById('like-rate-bounds').hidden = !enabled;
     for (const [side, value] of [['min', min ?? 0], ['max', max ?? 100]]) {

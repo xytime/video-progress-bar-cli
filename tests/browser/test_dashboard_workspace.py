@@ -258,3 +258,42 @@ def test_like_rate_presets_slider_url_reset_and_mobile(workspace):
     expect(page.locator('#video-filter-like-rate')).to_have_value('all')
     expect(page.locator('#like-rate-bounds')).to_be_hidden()
     assert 'like_rate_min' not in page.url and 'like_rate_max' not in page.url
+
+
+def test_filter_preferences_reopen_url_precedence_clear_and_rate_label(workspace):
+    page,client,state,db=workspace
+    entry='http://127.0.0.1:9100/?view=topics&tab=waitlist'
+    page.goto(entry)
+    search=page.locator('#video-filter-search')
+    assert search.bounding_box()['width'] <= 210
+    search.fill('运营');search.press('Enter')
+    page.locator('#video-filter-size').select_option('50')
+    page.locator('#video-filter-sort').select_option('views_desc')
+    page.locator('#video-filter-like-rate').select_option('10,100')
+    page.locator('#like-rate-min').fill('0.9');page.locator('#like-rate-min').press('Tab')
+    expect(page.locator('#video-filter-like-rate option:checked')).to_have_text('0.9%+')
+    page.goto(entry)
+    expect(page.locator('#video-filter-search')).to_have_value('运营')
+    expect(page.locator('#video-filter-size')).to_have_value('50')
+    expect(page.locator('#video-filter-sort')).to_have_value('views_desc')
+    expect(page.locator('#like-rate-min')).to_have_value('0.9')
+    expect(page.locator('#like-rate-max')).to_have_value('100')
+    expect(page.locator('#video-filter-like-rate option:checked')).to_have_text('0.9%+')
+    page.reload()
+    expect(page.locator('#like-rate-min')).to_have_value('0.9')
+    page.goto(entry+'&search=eligible&like_rate_min=0&like_rate_max=5')
+    expect(page.locator('#video-filter-search')).to_have_value('eligible')
+    expect(page.locator('#like-rate-min')).to_have_value('0')
+    expect(page.locator('#video-filter-like-rate option:checked')).to_have_text('0%–5%')
+    page.locator('.btn-filter-clear').click()
+    page.goto(entry)
+    expect(page.locator('#video-filter-search')).to_have_value('')
+    expect(page.locator('#video-filter-like-rate')).to_have_value('all')
+    page.evaluate("localStorage.setItem('video_pipeline_filters_v1','broken')")
+    page.goto(entry)
+    expect(page.locator('#video-filter-like-rate')).to_have_value('all')
+    page.locator('#video-filter-like-rate').select_option('10,100')
+    expect(page.locator('#video-filter-like-rate option:checked')).to_have_text('10%+')
+    page.goto(entry)
+    expect(page.locator('#video-filter-like-rate')).to_have_value('10,100')
+    evidence(page,'remembered-like-rate-desktop')
