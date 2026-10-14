@@ -1,6 +1,8 @@
 /* Modification History: 1.0.0 | 2026-10-11 | Codex | 候选工作台布局，复用后台主题与商品页控件。 */
 .topic-workbench section { margin-top: 18px; }
 .topic-workbench .page-header { position: static; }
+/* 主操作悬停保留主题底色，避免继承通用按钮的透明底色后文字失去对比。 */
+.topic-workbench button.primary:hover { background: var(--product-action); color: var(--bg); }
 .topic-workbench .topic-row, .topic-workbench .candidate-card { border-top: 1px solid var(--border); padding: 14px 0; overflow-wrap: anywhere; }
 .topic-workbench .topic-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
 .topic-workbench .topic-row h3, .topic-workbench .candidate-card h3 { font-size: 1rem; margin-bottom: 6px; }

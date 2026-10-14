@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-15 | Codex | 三种主题下主操作悬停文字对比回归 |
 | 1.1.0 | 2026-10-12 | Codex | M13 真实浏览器维护 CRUD、两次生命周期重启、版本与本机安全拒绝 |
 | 1.0.0 | 2026-10-11 | Codex | 候选完整任务、键盘/窄屏/错误/冲突/关闭验收及截图 |
 """
@@ -155,6 +156,32 @@ def test_display_preferences_and_keyboard_cancel(ui,theme,size):
     page.keyboard.press('Escape');expect(page.locator('#new-topic')).to_be_focused()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     evidence(page,'theme-'+theme)
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light', 'contrast'])
+def test_primary_action_hover_contrast(ui, theme):
+    page, tracker, flags = ui
+    page.evaluate('(theme)=>localStorage.setItem("vp-display-preferences",JSON.stringify({theme,size:"standard"}))', theme)
+    page.reload()
+    expect(page.locator('#new-topic')).to_be_enabled()
+    for selector in ('#new-topic', '#topic-save'):
+        if selector == '#topic-save':
+            page.locator('#new-topic').click()
+        page.locator(selector).hover()
+        ratio = page.locator(selector).evaluate('''el => {
+          const rgb = c => (c.match(/[\\d.]+/g) || []).map(Number);
+          function bg(e) {
+            if (!e) return [255,255,255];
+            const c = rgb(getComputedStyle(e).backgroundColor), p = bg(e.parentElement), a = c[3] ?? 1;
+            return c.slice(0,3).map((v,i) => v*a+p[i]*(1-a));
+          }
+          const l = c => c.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+            .reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+          const a = l(rgb(getComputedStyle(el).color)), b = l(bg(el));
+          return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+        }''')
+        assert ratio >= 4.5, (theme, selector, ratio)
+    evidence(page, 'primary-hover-'+theme)
 
 
 def test_filter_pagination_url_and_copy_fallback(ui):
