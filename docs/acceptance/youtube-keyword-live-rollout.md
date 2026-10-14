@@ -190,3 +190,9 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 09:20–09:21 Cloud只读观察：API启用，项目搜索1/100、通用270/10000。使用带时区的当前时间现场核实宿主保护窗口为false；不能把无时区本地时间传入会按美东解释的settings接口。09:21正常控制面恢复DISCOVERY_ONLY/version26；搜索20/日、详情40/日、单规则定时、admission=false均保持。
 - **09:21:38–09:21:40自然SCHEDULED作业fd2e71abfe5b404283e5f1d3e0a9002c COMPLETE/OK**：新增3、重复22、受限20，实际搜索1/详情1，总预算2/2。未手工调用tick。25条真实作业评分快照全部按现行统一公式重新计算一致，项目预算归属核对通过；原始DB证据保存在恢复目录scheduled-job-proof.json及scheduled-score-verification.json。
 - 尚需同一候选至少4小时后的自然REFRESH（理论不早于13:21:40，实际以DB采样时间和调度为准），再用真实作业证据、新配额和完整维护门禁生成ADMISSION计划。累计最多1条真正达标新主任务，75分、热度及内容门槛不降；不得扩大发布授权。当前实际定时采集已生效，但完整端到端验收未完成，跟进保持ACTIVE。
+
+## 2026-10-14 12:16 并行首页部署后的基线核实
+
+- 生产已由并行工作采用main e0e05af（筛选记忆/紧凑点赞率显示），此前7dca9bb补齐了保留已采用关键词配置的源码部署路径。私有目录filter-preferences-20261014的journal九步COMPLETE，最新Sources.final、保护字段和已恢复调度现场核对通过；不能再用09:22旧inventory差异直接认定异常或回退。
+- 当前运行hash cf252dbe7c561bc602e6b05e7c8a3f58327792cf7682215c000c5ac3c5b03e7b，登记worker源码及birth匹配。RUNNING、DISCOVERY_ONLY/version32，原SCHEDULED profile有效、日20/40、admission=false；两个真实成功作业和预算2/2保持，尚无REFRESH。25个候选自然刷新时间仍为13:21:40.517805，当前最高45分，不能降低75分门槛凑准入验收。
+- 12:15观察保存在keyword-source-recovery-20261014-a/observation-20261014-1215.json；其中inventory_preserved=false是与旧源码恢复基线比较，已通过最新正式部署清单解释。下一阶段应读取最新主干的部署实现与清单，保留并行修改；四小时自然刷新完成前不生成ADMISSION计划。
