@@ -219,3 +219,42 @@ def test_v031_cohort_zero_and_low_score_completion(workspace):
     expect(page.locator('#activity-count')).to_have_text('1')
     assert 'funnel_stage=published' in page.url
     evidence(page,'v031-local-records-drilldown')
+
+
+def test_like_rate_presets_slider_url_reset_and_mobile(workspace):
+    page, client, state, db = workspace
+    for yid, likes in [('low-rate', 20), ('mid-rate', 40), ('high-rate', 80)]:
+        db.add_video(yid, yid, 'rates', score=20, view_count=1000, like_count=likes)
+    page.goto('http://127.0.0.1:9100/?view=topics&tab=waitlist&created_window=all&page=2')
+    page.locator('#video-filter-like-rate').select_option('3,5')
+    expect(page.locator('#activity-count')).to_have_text('1')
+    expect(page.locator('#activity-body')).to_contain_text('mid-rate')
+    assert 'like_rate_min=3' in page.url and 'page=1' in page.url
+    page.reload()
+    expect(page.locator('#like-rate-min')).to_have_value('3')
+    expect(page.locator('#video-filter-like-rate')).to_have_value('3,5')
+    # 键盘改变滑块，提交后的 URL 和数字输入一致。
+    slider = page.locator('#like-rate-min-slider')
+    slider.focus(); slider.press('ArrowRight')
+    expect(page.locator('#like-rate-min')).to_have_value('3.1')
+    assert 'like_rate_min=3.1' in page.url
+    page.locator('#like-rate-min').fill('99')
+    page.locator('#like-rate-min').press('Tab')
+    expect(page.locator('#like-rate-min')).to_have_value('5')
+    expect(page.locator('#activity-body')).to_contain_text('当前点赞率区间没有匹配记录')
+    page.locator('#tab-high_likes').click()
+    expect(page.locator('#like-rate-min')).to_have_value('5')
+    for theme in ('light', 'dark', 'high-contrast'):
+        page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
+        page.set_viewport_size({'width': 390, 'height': 844})
+        assert page.locator('#like-rate-filter').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+        assert page.locator('#activity-body .empty-state').bounding_box()['width'] > 250
+    evidence(page, 'like-rate-mobile')
+    state['offline'] = True
+    page.locator('#video-filter-like-rate').select_option('1,3')
+    expect(page.locator('#activity-body')).to_contain_text('列表加载失败')
+    state['offline'] = False
+    page.locator('.btn-filter-clear').click()
+    expect(page.locator('#video-filter-like-rate')).to_have_value('all')
+    expect(page.locator('#like-rate-bounds')).to_be_hidden()
+    assert 'like_rate_min' not in page.url and 'like_rate_max' not in page.url

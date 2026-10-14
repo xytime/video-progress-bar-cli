@@ -315,6 +315,24 @@
           <select id="video-filter-status" onchange="applyVideoFilters()"><option value="all">全部处理阶段</option><option value="PENDING">待处理</option><option value="FAILED">失败</option><option value="SUBMITTED_BOUND">已提交，待确认发布</option><option value="UNDER_REVIEW">审核中</option><option value="UNCERTAIN">待核验</option></select>
           <select id="video-filter-window" onchange="applyVideoFilters()"><option value="1">近 1 天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
         </span>
+        <fieldset id="like-rate-filter" aria-describedby="like-rate-help">
+          <legend>点赞率</legend>
+          <select id="video-filter-like-rate" aria-label="点赞率区间" onchange="selectLikeRateBand()">
+            <option value="all">全部点赞率</option><option value="0,1">0–1%</option>
+            <option value="1,3">1–3%</option><option value="3,5">3–5%</option>
+            <option value="5,10">5–10%</option><option value="10,100">10–100%</option>
+            <option value="custom">自定义区间</option>
+          </select>
+          <div id="like-rate-bounds" hidden>
+            <label for="like-rate-min">下限 (%)</label>
+            <input id="like-rate-min" type="number" min="0" max="100" step="0.1" onchange="changeLikeRateBound('min', this.value)" />
+            <input id="like-rate-min-slider" type="range" min="0" max="100" step="0.1" aria-label="点赞率下限滑块" oninput="previewLikeRateBound('min', this.value)" onchange="changeLikeRateBound('min', this.value)" />
+            <label for="like-rate-max">上限 (%)</label>
+            <input id="like-rate-max" type="number" min="0" max="100" step="0.1" onchange="changeLikeRateBound('max', this.value)" />
+            <input id="like-rate-max-slider" type="range" min="0" max="100" step="0.1" aria-label="点赞率上限滑块" oninput="previewLikeRateBound('max', this.value)" onchange="changeLikeRateBound('max', this.value)" />
+          </div>
+          <small id="like-rate-help">点赞数 ÷ 观看数；区间含两端，缺失数据不匹配</small>
+        </fieldset>
         <button class="btn-filter-clear" onclick="clearVideoFilters()">清除筛选</button>
       </div>
 
@@ -1053,6 +1071,7 @@
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
     includeExpired: false,
     createdWindow: 'today_bj',
+    likeRateMin: null, likeRateMax: null,
     funnelStage: null,
     attentionKind: null,
   };
@@ -1071,6 +1090,8 @@
       include_expired: String(filterState.includeExpired),
       created_window: filterState.createdWindow || 'all',
     };
+    if (filterState.likeRateMin !== null) params.like_rate_min = String(filterState.likeRateMin);
+    if (filterState.likeRateMax !== null) params.like_rate_max = String(filterState.likeRateMax);
     if(filterState.attentionKind) params.attention_kind=filterState.attentionKind;
     if (filterState.funnelStage) {
       params.funnel_stage = filterState.funnelStage;
@@ -1084,7 +1105,54 @@
     return ++_videoRequestId;
   }
 
+  function syncLikeRateControls() {
+    const {likeRateMin: min, likeRateMax: max} = filterState;
+    const enabled = min !== null || max !== null;
+    const select = document.getElementById('video-filter-like-rate');
+    const band = `${min},${max}`;
+    select.value = !enabled ? 'all' : [...select.options].some(option => option.value === band) ? band : 'custom';
+    document.getElementById('like-rate-bounds').hidden = !enabled;
+    for (const [side, value] of [['min', min ?? 0], ['max', max ?? 100]]) {
+      document.getElementById(`like-rate-${side}`).value = value;
+      document.getElementById(`like-rate-${side}-slider`).value = value;
+      document.getElementById(`like-rate-${side}-slider`).setAttribute('aria-valuetext', `${value}%`);
+    }
+  }
+
+  function selectLikeRateBand() {
+    const band = document.getElementById('video-filter-like-rate').value;
+    [filterState.likeRateMin, filterState.likeRateMax] = band === 'all' ? [null, null]
+      : band === 'custom' ? [filterState.likeRateMin ?? 0, filterState.likeRateMax ?? 100]
+      : band.split(',').map(Number);
+    syncLikeRateControls();
+    currentPage = 1;
+    loadVideos();
+  }
+
+  function previewLikeRateBound(side, raw) {
+    const value = Number(raw);
+    const lower = side === 'min' ? 0 : (filterState.likeRateMin ?? 0);
+    const upper = side === 'max' ? 100 : (filterState.likeRateMax ?? 100);
+    const bounded = raw === '' || !Number.isFinite(value) ? (side === 'min' ? lower : upper)
+      : Math.round(Math.min(upper, Math.max(lower, value)) * 10) / 10;
+    document.getElementById(`like-rate-${side}`).value = bounded;
+    document.getElementById(`like-rate-${side}-slider`).value = bounded;
+    document.getElementById(`like-rate-${side}-slider`).setAttribute('aria-valuetext', `${bounded}%`);
+    return bounded;
+  }
+
+  function changeLikeRateBound(side, raw) {
+    const value = previewLikeRateBound(side, raw);
+    filterState.likeRateMin ??= 0;
+    filterState.likeRateMax ??= 100;
+    filterState[side === 'min' ? 'likeRateMin' : 'likeRateMax'] = value;
+    syncLikeRateControls();
+    currentPage = 1;
+    loadVideos();
+  }
+
   function syncFilterControls() {
+    syncLikeRateControls();
     document.getElementById('video-filter-search').value = filterState.search;
     document.getElementById('video-filter-channel').value = filterState.channel;
     document.getElementById('video-filter-sort').value = filterState.sort;
@@ -1140,6 +1208,7 @@
   }
 
   function clearVideoFilters() {
+    filterState.likeRateMin = null; filterState.likeRateMax = null;
     filterState.search = ''; filterState.channel = ''; filterState.sort = 'source_published_at_desc';
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
@@ -1420,6 +1489,7 @@
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
         else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
         else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已处理”查看历史';
+        if (filterState.likeRateMin !== null || filterState.likeRateMax !== null) emptyMsg = '当前点赞率区间没有匹配记录，请调整区间或清除筛选';
         tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
       }
@@ -3317,6 +3387,15 @@
         const value=params.get(keys[key] || key);
         filterState[key]=value===null?fallback:typeof fallback==='boolean'?value==='true':typeof fallback==='number'?Number(value)||fallback:value;
       });
+      const rateBounds = ['like_rate_min', 'like_rate_max'].map(key => {
+        const raw = params.get(key);
+        const value = Number(raw);
+        return raw !== null && raw.trim() !== '' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+      });
+      [filterState.likeRateMin, filterState.likeRateMax] = rateBounds;
+      if (rateBounds[0] !== null && rateBounds[1] !== null && rateBounds[0] > rateBounds[1]) {
+        filterState.likeRateMin = null; filterState.likeRateMax = null;
+      }
       if (![20,50,100].includes(filterState.size)) filterState.size=20;
       document.querySelectorAll('.tab-btn').forEach(el=>el.classList.toggle('active',el.id==='tab-'+tab));
       currentFunnelStage=filterState.funnelStage;

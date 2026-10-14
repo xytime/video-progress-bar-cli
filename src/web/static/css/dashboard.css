@@ -148,6 +148,15 @@
     }
     #video-filter-search { width: min(270px, 100%); }
     #video-filter-bar select { max-width: 180px; }
+    #like-rate-filter { flex: 1 1 100%; min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
+    #like-rate-filter legend { padding: 0 4px; color: var(--text2); font-size: 0.75rem; }
+    #like-rate-filter small { display: block; color: var(--text2); margin-top: 6px; font-size: 0.75rem; }
+    #like-rate-bounds { display: grid; grid-template-columns: auto 90px minmax(100px, 1fr); gap: 6px 10px; align-items: center; margin-top: 8px; }
+    #like-rate-bounds[hidden] { display: none; }
+    #like-rate-bounds label { font-size: 0.75rem; color: var(--text); }
+    #like-rate-bounds input { width: 100%; min-width: 0; box-sizing: border-box; }
+    #like-rate-bounds input[type=range] { padding: 0; accent-color: var(--accent); cursor: pointer; }
+    #like-rate-filter :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .filter-context { display: contents; }
     .filter-context[hidden] { display: none; }
     .btn-filter-clear { min-height: 32px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text2); background: transparent; cursor: pointer; font: inherit; font-size: 0.75rem; }
@@ -900,6 +909,7 @@
     .add-channel-feedback.loading { color: var(--text3); }
 
     .empty-state {
+      grid-column: 1 / -1; min-width: 0;
       padding: 32px 22px; text-align: center;
       color: var(--text3); font-size: 0.8125rem;
     }

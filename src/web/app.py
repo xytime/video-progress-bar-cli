@@ -1723,11 +1723,18 @@ def get_videos(
     created_window: str = "all",
     funnel_stage: Optional[str] = None,
     attention_kind: Optional[str] = None,
+    like_rate_min: Optional[float] = None,
+    like_rate_max: Optional[float] = None,
 ):
     """在服务端筛选和稳定排序后分页返回列表及准确总数。"""
     _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days, created_window, funnel_stage)
     if attention_kind and (attention_kind not in {"delivery","blocked","execution","review","policy"} or funnel_stage):
         raise HTTPException(422, "unknown or conflicting attention kind")
+    for bound in (like_rate_min, like_rate_max):
+        if bound is not None and not 0 <= bound <= 100:
+            raise HTTPException(422, "点赞率必须在 0–100% 之间")
+    if like_rate_min is not None and like_rate_max is not None and like_rate_min > like_rate_max:
+        raise HTTPException(422, "点赞率下限不能超过上限")
     page = max(1, page)
     videos, total_count = db.get_paginated_videos(
         tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
@@ -1736,6 +1743,7 @@ def get_videos(
         include_expired=include_expired,
         created_window=created_window,
         funnel_stage=funnel_stage, attention_kind=attention_kind,
+        like_rate_min=like_rate_min, like_rate_max=like_rate_max,
     )
     for video in videos:
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")

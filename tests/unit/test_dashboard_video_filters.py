@@ -152,3 +152,27 @@ def test_dal_source_published_sort_immune_to_corrupted_dates(tmp_path):
     # 非法或无日期的记录沉底
     assert ids[2:] == ["corrupted-date", "no-date"] or set(ids[2:]) == {"corrupted-date", "no-date"}
 
+
+
+def test_like_rate_range_filters_before_paging_and_excludes_unknown(tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / 'rate.db'))
+    samples = [('zero', 1000, 0), ('lower', 1000, 30), ('middle', 1000, 40),
+               ('upper', 1000, 50), ('outside', 1000, 51), ('missing', 1000, None),
+               ('no-views', 0, 20), ('no-count', None, 20), ('invalid', 10, 20)]
+    for yid, views, likes in samples:
+        db.add_video(yid, yid, 'rates', score=20, view_count=views, like_count=likes)
+    rows, total = db.get_paginated_videos('waitlist', 2, 1, like_rate_min=3, like_rate_max=5, sort='like_rate_desc')
+    assert total == 3
+    assert [row['youtube_id'] for row in rows] == ['middle']
+    rows, total = db.get_paginated_videos('waitlist', like_rate_min=0, like_rate_max=0)
+    assert total == 1 and rows[0]['youtube_id'] == 'zero'
+    assert db.get_paginated_videos('waitlist')[1] == len(samples)
+    monkeypatch.setattr(web_app, 'db', db)
+    with TestClient(web_app.app) as client:
+        data = client.get('/api/videos', params={'like_rate_min': 3, 'like_rate_max': 5, 'size': 20}).json()
+        assert data['total_count'] == 3 and data['total_pages'] == 1
+        assert {row['youtube_id'] for row in data['videos']} == {'lower', 'middle', 'upper'}
+        assert client.get('/api/videos?like_rate_min=5').json()['total_count'] == 2
+        for query in ('like_rate_min=-1', 'like_rate_max=101', 'like_rate_min=nan',
+                      'like_rate_max=inf', 'like_rate_min=5&like_rate_max=3', 'like_rate_min=nope'):
+            assert client.get('/api/videos?' + query).status_code == 422

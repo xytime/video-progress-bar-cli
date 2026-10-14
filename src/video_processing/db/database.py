@@ -6179,6 +6179,8 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         created_window: str = 'all',
         funnel_stage: Optional[str] = None,
         attention_kind: Optional[str] = None,
+        like_rate_min: Optional[float] = None,
+        like_rate_max: Optional[float] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
         if attention_kind:
@@ -6206,6 +6208,20 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             clauses = [condition]
             query_params: List[Any] = list(params)
 
+        # 百分数区间；缺失点赞数或无有效观看数不能作为 0% 参与匹配。
+        for bound in (like_rate_min, like_rate_max):
+            if bound is not None and not 0 <= bound <= 100:
+                raise ValueError("点赞率必须在 0–100% 之间")
+        if like_rate_min is not None and like_rate_max is not None and like_rate_min > like_rate_max:
+            raise ValueError("点赞率下限不能超过上限")
+        if like_rate_min is not None or like_rate_max is not None:
+            clauses.append("pv.view_count > 0 AND pv.like_count >= 0 AND pv.like_count <= pv.view_count")
+            if like_rate_min is not None:
+                clauses.append("100.0 * pv.like_count / pv.view_count >= ?")
+                query_params.append(like_rate_min)
+            if like_rate_max is not None:
+                clauses.append("100.0 * pv.like_count / pv.view_count <= ?")
+                query_params.append(like_rate_max)
         if search:
             escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             clauses.append("(pv.youtube_id LIKE ? ESCAPE '\\' OR pv.title LIKE ? ESCAPE '\\' OR COALESCE(pv.zh_title, '') LIKE ? ESCAPE '\\')")
