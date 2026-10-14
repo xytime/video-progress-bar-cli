@@ -232,3 +232,10 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 生产HEAD变为007dbd1（Telegram登录失败通知修复，涉及src/bot/pipeline_agent.py、telegram_bot.py及对应测试）。全部并行dirty/untracked保留，未回退或采用源码。
 - 当前RUNNING44、active=[]、轻量登记unknown=[]；但单独检查六个现存角色的真实birth均匹配，而source_hash均与磁盘不匹配。磁盘hash为3712d8d062eb84b4fa40f5d3af6295fb1aeb7a08e315acf6b0b3ac7286737363。轻量status为空不表示完整来源门禁通过；434项通过只覆盖此前快照。
 - 当前保护窗口仍有效，下一安全时间现场计算为10月15日04:15。保留搜索关闭，不强停、不改锁或登记；安全窗口先核实最新并行采用记录，若未完成则按已授权精确基线恢复及原生维护部署流程处理，重新验证当前快照，全部门禁通过再恢复采集。不得直接以007dbd1提交存在替代运行采用证据。
+
+## 2026-10-15 06:29 来源恢复已完成，搜索仍未恢复
+
+- 04:36原生enter暂停接纳，MAINTENANCE45，任务自然排空。最新生产快照437 passed/10 warnings，runner0且清理完成；证据video-pytest-15_tcfpa，清单bbdb4bdf2dbd515faaed49dcdcfe8dac1813ee2676a9cb22699830abd7d2b015。
+- 新私有恢复目录 `~/Library/Application Support/VideoProcessing/deployments/keyword-source-recovery-20261015-a` 完成prepare、freeze、精确旧基线还原、原生安全停止及备份、恢复全部新代码、维护启动、resume及原调度恢复。仅两份bot文件暂存还原，完整inventory原样保留，无强杀、改锁或旧journal重放。04:40最终来源/保护/调度/角色birth/hash回读通过，RUNNING46。
+- 04:40Cloud实际只读配额搜索0/100、通用239/10000、API启用；该证据到06:29已过期。搜索恢复尚未执行，不能把来源恢复当成采集恢复或完整上线。维护时准入正常关闭至version5；06:29当前OFF38、admission0、automatic_used0、六角色源码与birth全部匹配，active=[]、unknown=[]，runtime_code=MARKET_GUARD。
+- 下一步只剩刷新配额、现场窗口和完整恢复记录后，通过正常控制面恢复已授权搜索及累计1条准入，再读取自然作业及真实主任务；当前源码未变时不重复开发、重跑同一回归或再次来源恢复。规则今日14:33到期，若仍无自然达标候选，明确报告“功能生效但真实准入未验收”，不得降低阈值或自行延长规则。
