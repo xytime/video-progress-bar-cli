@@ -1,0 +1,88 @@
+........................................................................ [ 14%]
+........................................................................ [ 28%]
+........................................................................ [ 42%]
+........................................................................ [ 57%]
+........................................................................ [ 71%]
+........................................................................ [ 85%]
+................................................F....................... [100%]
+=================================== FAILURES ===================================
+________ test_short_subpage_and_short_event_do_not_crash_caption_pages _________
+
+tmp_path = PosixPath('/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/pytest-tmp/test_short_subpage_and_short_e0')
+
+    def test_short_subpage_and_short_event_do_not_crash_caption_pages(tmp_path):
+        source = tmp_path/'fast_subpage.ass'
+        subs = pysubs2.SSAFile()
+        long_en = ('First part of a long sentence with many words that spans multiple rows on screen '
+                   'and then a very fast tail at the end.')
+        long_zh = '第一部分是很长的一段话需要在屏幕上分成多行显示，然后结尾非常快地结束了整个句子。'
+        subs.events = [
+            pysubs2.SSAEvent(start=0, end=5000, text=long_en + r'\N' + long_zh),
+            pysubs2.SSAEvent(start=5200, end=5600, text=r'Right\N对吧'),
+        ]
+        subs.save(str(source))
+        words = [
+            dict(word='First part of a long sentence with many words that spans multiple rows on screen', start=0.0, end=4.8),
+            dict(word='and then a very fast tail at the end', start=4.8, end=5.0),
+            dict(word='Right', start=5.2, end=5.6),
+        ]
+        pages = mobile.caption_pages(source, words, 6)
+>       assert len(pages) >= 3
+E       AssertionError: assert 2 >= 3
+E        +  where 2 = len([{'end': 5.0, 'highlights': set(), 'positions': [{'char': 'F', 'end': 0.07272727272727272, 'line': 1077, 'start': 0.0,...rt': 5.4399999999999995, ...}, {'char': 't', 'end': 5.6, 'line': 1077, 'start': 5.52, ...}], 'rows': [['Right']], ...}])
+
+tests/unit/test_insight_mobile.py:97: AssertionError
+=============================== warnings summary ===============================
+tests/unit/test_maintenance_entries.py::test_m01_scheduler_periods_in_maintenance_do_not_dispatch
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo/src/web/app.py:1013: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/unit/test_maintenance_entries.py::test_m01_scheduler_periods_in_maintenance_do_not_dispatch
+tests/unit/test_maintenance_entries.py::test_m01_scheduler_periods_in_maintenance_do_not_dispatch
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/unit/test_maintenance_entries.py::test_m01_scheduler_periods_in_maintenance_do_not_dispatch
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo/src/web/app.py:1053: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/starlette/testclient.py:445: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+tests/unit/test_database_channel_funnel.py::test_get_channel_funnel_metrics_time_windows
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo/tests/unit/test_database_channel_funnel.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_funnel_metrics_24h_and_today_bj_windows
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo/tests/unit/test_database_channel_funnel.py:150: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_get_paginated_videos_created_window_filter
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo/tests/unit/test_database_channel_funnel.py:181: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_insight_mobile.py::test_short_subpage_and_short_event_do_not_crash_caption_pages
+1 failed, 503 passed, 13 warnings in 100.72s (0:01:40)
