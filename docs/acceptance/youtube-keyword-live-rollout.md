@@ -217,3 +217,12 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 
 - 已完成 `docs/specs/maintenance-orphan-reconciliation-v0.4.1.md`：仅本次两个channel-monitor遗留记录的显式对账、保留原件归档、崩溃恢复及原生全门禁重新验收；包含首次独立维护入口的身份绑定要求，禁止宽泛进程豁免。规格718877d已推送隔离分支，未开发或修改生产恢复逻辑。
 - 已集中请求用户确认新恢复范围，等待明确回复；未回复不得开发或归档。生产仍MAINTENANCE43/OFF36、active=[]。本次status出现短暂UNREGISTERED_PROCESS 28422，随后ps已不存在；这不是放宽检查的理由，正式执行仍须重新获取完整现场证据。
+
+## 2026-10-14 20:28 并行恢复已采用，独立回归通过
+
+- 已只读核实另一会话“排查YouTube连接与今日未发布原因”获得用户确认后完成恢复；生产main现为18b4cd1d80d5731c182f5838879011287b1dad29。本次两个遗留登记已通过其受控归档及原生部署恢复处理，不再等待18:25的同一恢复批准，也不重复归档或重放旧计划。v0.4.1通用增强规格并不因此自动视为全部实现。
+- 独立核验 `/Volumes/EXT2T/AppDataOffload/ryusei/continuity-deploy-20261014-1926`：journal COMPLETE、两个归档原件SHA与计划一致、源码最终检查及保护字段通过、五类worker真实birth及来源一致。运行hash为3c0dd414abb0307e7f8746e0d8e266eb41fe49d4c141cf328c6b9f06868ce109。新增翻译队列cron与回执cron.after-title-worker逐字节匹配，不能误用旧cron基线判定漂移。
+- 对最新生产快照独立执行关键词、维护、部署、浏览器回归：**434 passed / 10 warnings**，runner exit 0，沙箱清理完成。证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-h0k9wrsn`，源码清单SHA-256 34a3efcc726a403bd9f4f13ebe71866db76dad386d32c42bd1f77538f13f98a6。本次未改生产源码，保留全部并行工作。
+- 现场RUNNING/version44、unknown=[]，搜索仍OFF/version37；完整已采用关键词profile校验通过，恢复回执记载admission=1/version4。存在在途视频r-IlR86-iVc:0及queue-dispatch，不强停、不覆盖运行源码。20:26带时区计算当前尚未进入保护窗口，但20:30即受保护，下一安全分钟为2026-10-15 04:15北京时间；执行时必须重算。此刻不仓促开放，也不提前将整个流水线冻结一夜。
+- 下一安全窗口刷新非秘密Cloud配额，重新核实现场来源、调度、锁及保护；如需维护，用全新现场计划及preserve-keyword-profile路径，先暂停接纳、自然排空，保留全部门禁。不得复用旧完成计划。门禁通过后恢复已授权采集，再验收最多累计1条自然达标主任务。
+- 自然定时采集、四小时自然刷新、统一评分已有真实证据，但真实达标准入仍未完成。肺鼠疫规则于10月15日14:33北京时间到期，不自动延长或降低门槛。跟进保持ACTIVE。
