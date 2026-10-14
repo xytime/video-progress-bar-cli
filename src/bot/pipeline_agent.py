@@ -32,6 +32,7 @@ based on incoming Telegram messages and commands.
 | 1.17.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] download_video 捕获 TimeoutError 统一上报下载超时，与 download_strategy 契约对齐 |
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
+| 1.18.0 | 2026-10-15 | Codex | 登录子进程检查退出码并回报失败，刷新代理并向请求会话发送二维码。 |
 """
 import html
 import os
@@ -43,6 +44,7 @@ import subprocess
 import fcntl
 import time
 import inspect
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any, get_args, get_origin
 
@@ -56,6 +58,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from config.settings import settings
+from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.db import PipelineDB
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.utils.file_utils import clean_partial_downloads
@@ -829,18 +832,37 @@ class PipelineAgent:
             "--state",
             state,
         ]
-        # 注入 Telegram 凭据（wechat_uploader 经 os.environ 读取），使二维码能 sendPhoto 到 Telegram。
-        env = {**os.environ, "PYTHONPATH": str(self.project_root / "src")}
-        if settings.telegram_bot_token:
-            env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
-        if settings.active_telegram_chat_id:
-            env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+        # 每次请求重新探测代理；二维码回到发起命令的管理员会话。
+        extra_env = {"PYTHONPATH": str(self.project_root / "src")}
+        if getattr(self, "chat_id", None):
+            extra_env["TELEGRAM_CHAT_ID"] = str(self.chat_id)
+        env = build_subprocess_env(extra_env, include_gemini=False)
         try:
             # 后台 Bot 的终端可能已撤销，登录子进程不能继承失效的 stdin。
-            subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
-            return json.dumps({"ok": True, "message": "微信登录已启动（无头）。登录二维码将稍后发到这里，请用手机微信扫码；扫码成功后会自动保存登录态并继续。"})
+            proc = subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
+            try:
+                code = proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                threading.Thread(target=self._watch_wechat_login, args=(proc,), daemon=True).start()
+                return json.dumps({"ok": True, "message": "微信登录请求已受理，正在获取二维码；若快捷登录成功则无需扫码。失败会另行通知。"})
+            if code:
+                return json.dumps({"ok": False, "error": self._wechat_login_failure(code)})
+            return json.dumps({"ok": True, "message": "登录流程已完成，请用 /last_login 核对登录状态。"})
         except Exception as e:
-            return json.dumps({"ok": False, "error": f"Failed to launch WeChat login process: {e}"})
+            return json.dumps({"ok": False, "error": f"启动微信登录失败：{type(e).__name__}"})
+
+    @staticmethod
+    def _wechat_login_failure(code: int) -> str:
+        if code == 11:
+            return "未生成新二维码：视频号浏览器会话正被占用。请等待当前登录或上传结束后再发送 /wechat_login。"
+        return f"微信登录未完成（退出码 {code}），旧二维码不可继续使用。请重新发送 /wechat_login；如仍无图片，请检查登录日志与 Telegram 网络。"
+
+    def _watch_wechat_login(self, proc) -> None:
+        """接收子进程最终结果，避免启动成功掩盖稍后的占锁或扫码失败。"""
+        code = proc.wait()
+        logger.info("WeChat login process finished: pid=%s exit=%s", proc.pid, code)
+        if code:
+            self.send_telegram_message(self._wechat_login_failure(code))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
