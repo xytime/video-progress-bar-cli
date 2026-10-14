@@ -193,3 +193,69 @@ def test_explicit_off_transition_retains_previous_profile_for_recovery(rollout):
     assert values(settings) == phase_values("OFF")
     assert read_json(next_dir / "keyword-profile-before.json") == previous
     assert verify_loaded(settings)
+
+
+def preserved_host(rollout):
+    """已采用阶段的真实文件/日志；保留部署不重写原配置身份。"""
+    from video_processing.core.deployment_host import HostDeployment
+    adapter, original, directory = rollout
+    adapter.apply()
+    journal = read_json(directory / "journal.json")
+    journal.update(done=list(STEPS), pending=None, state="COMPLETE")
+    write_json(directory / "journal.json", journal)
+    host = HostDeployment.__new__(HostDeployment)
+    host.keyword = None
+    host.plan = dict(keyword_preserve=True, protections=protection_snapshot(),
+                     keyword_profile_before=settings.topic_rollout_snapshot())
+    return host
+
+
+def test_preserve_profile_keeps_original_identity_and_requires_complete(rollout):
+    host = preserved_host(rollout)
+    before = settings.topic_rollout_path.read_bytes()
+    host.protections()
+    assert settings.topic_rollout_path.read_bytes() == before
+    directory = rollout[2]
+    journal = read_json(directory / "journal.json")
+    journal.update(done=list(STEPS[:5]), pending="start", state="FAILED")
+    write_json(directory / "journal.json", journal)
+    with pytest.raises(DeploymentDenied, match="KEYWORD_DEPLOYMENT_INCOMPLETE"):
+        host.protections()
+
+
+@pytest.mark.parametrize("change", ["profile", "effective", "conflict"])
+def test_preserve_profile_rejects_drift_and_transition(rollout, monkeypatch, change):
+    host = preserved_host(rollout)
+    if change == "profile":
+        host.plan["keyword_profile_before"] = {}
+    elif change == "effective":
+        monkeypatch.setattr(settings, "topic_search_daily_limit", 999)
+    else:
+        host.plan["keyword_transition"] = {"target": "OFF"}
+    with pytest.raises(DeploymentDenied):
+        host.protections()
+
+
+@pytest.mark.parametrize("change", [None, "mode", "search", "admission", "job", "configuration", "rollout"])
+def test_preserve_runtime_requires_closed_search_and_exact_config(rollout, monkeypatch, change):
+    import httpx
+    from video_processing.core import deployment_host
+    host = preserved_host(rollout)
+    value = dict(configuration=values(settings), rollout=settings.topic_rollout_snapshot(),
+                 control={"mode": "OFF"}, search_open=False, can_enable=True,
+                 collection={"admission": False}, jobs=[{"state": "COMPLETE"}],
+                 maintenance={"state": "MAINTENANCE"}, budget={}, trial={"budget": {}})
+    if change == "mode": value["control"]["mode"] = "DISCOVERY_ONLY"
+    if change == "search": value["search_open"] = True
+    if change == "admission": value["collection"]["admission"] = True
+    if change == "job": value["jobs"].append({"state": "RUNNING"})
+    if change == "configuration": value["configuration"] = {}
+    if change == "rollout": value["rollout"] = {}
+    client = httpx.Client(base_url="http://localhost", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"ready": True} if request.url.path.endswith("health") else value)))
+    monkeypatch.setattr(deployment_host.httpx, "Client", lambda **kwargs: client)
+    if change:
+        with pytest.raises(DeploymentDenied):
+            host.web_readback(maintenance="MAINTENANCE")
+    else:
+        assert host.web_readback(maintenance="MAINTENANCE")["rollout"] == value["rollout"]

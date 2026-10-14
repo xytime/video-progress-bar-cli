@@ -1,8 +1,9 @@
-"""本机受控部署：plan/apply/status/recover；部署期间搜索保持关闭。
+"""本机受控部署：plan/apply/status/recover；部署期间搜索保持关闭，可原样保留已完成采用的阶段配置。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-14 | Codex | 显式保留已完成阶段配置，拒绝配置转换混用 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-13 | Codex | 单入口顺序执行、私有回执与明确恢复 |
 """
@@ -28,6 +29,7 @@ def main(argv=None):
     parser.add_argument("--target")
     parser.add_argument("--tested-manifest", type=Path)
     parser.add_argument("--overlay", type=Path)
+    parser.add_argument("--preserve-keyword-profile", action="store_true")
     parser.add_argument("--keyword-stage", choices=["TRIAL", "OFF", "MANUAL", "SCHEDULED", "ADMISSION"])
     parser.add_argument("--keyword-evidence", type=Path)
     args = parser.parse_args(argv)
@@ -36,6 +38,8 @@ def main(argv=None):
         require(not directory.is_relative_to(settings.project_root.resolve()), "PRIVATE_DIRECTORY_REQUIRED")
         if args.action == "plan":
             require(args.target and args.tested_manifest and not directory.exists(), "NEW_PLAN_ARGUMENTS_REQUIRED")
+            require(not args.preserve_keyword_profile or not (args.keyword_stage or args.keyword_evidence),
+                    "KEYWORD_DEPLOYMENT_MODE_CONFLICT")
             directory.mkdir(parents=True, mode=0o700)
             sources = prepare(settings.project_root, args.target, directory, args.tested_manifest, args.overlay)
             schedules = Schedules(settings.project_root, directory).snapshot()
@@ -43,6 +47,11 @@ def main(argv=None):
             require(ui["loaded"] and not ui["disabled"], "UI_ORIGINAL_STATE_UNSUPPORTED")
             plan = {"schema": 1, "id": uuid.uuid4().hex, "root": str(settings.project_root), "sources": sources,
                     "schedules": schedules, "protections": protection_snapshot(), "implementation": LOADED_IMPLEMENTATION}
+            if args.preserve_keyword_profile:
+                from video_processing.core.keyword_rollout import verify_loaded
+                require(verify_loaded(settings, complete=True), "KEYWORD_PROFILE_REQUIRED")
+                plan["keyword_preserve"] = True
+                plan["keyword_profile_before"] = settings.topic_rollout_snapshot()
             if args.keyword_stage:
                 import time
                 from config.keyword_rollout import transition, expected_protections

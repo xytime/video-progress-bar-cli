@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-14 | Codex | 已完成阶段配置可原样保留部署；仍验证持久 OFF、来源、备份及预算 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-13 | Codex | 来源证据、正常退出、一致性备份、维护启动和恢复 |
 """
@@ -46,11 +47,22 @@ class HostDeployment:
         self.keyword = KeywordTransition(plan, directory, settings) if plan.get("keyword_transition") else None
         self.keyword_after = False
 
+    def preserves_keyword_profile(self):
+        return self.plan.get("keyword_preserve") is True
+
     def protections(self):
+        require(not (self.preserves_keyword_profile() and self.plan.get("keyword_transition")),
+                "KEYWORD_DEPLOYMENT_MODE_CONFLICT")
         if getattr(self, "keyword", None):
             self.keyword.protections(protection_snapshot(), after=self.keyword_after)
             return
         require(protection_snapshot() == self.plan["protections"], "PROTECTION_DRIFT")
+        if self.preserves_keyword_profile():
+            from .keyword_rollout import verify_loaded
+            require(verify_loaded(settings, complete=True), "KEYWORD_PROFILE_REQUIRED")
+            require(settings.topic_rollout_snapshot() == self.plan["keyword_profile_before"],
+                    "KEYWORD_PROFILE_DRIFT")
+            return
         require(not settings.topic_search_enabled and not settings.topic_scheduler_enabled and not settings.topic_admission_enabled and not settings.topic_trial_mode
                 and not settings.topic_quota_verified and not settings.topic_quota_project,
                 "SEARCH_CLOSURE_UNCONFIRMED")
@@ -214,7 +226,7 @@ class HostDeployment:
             health = c.get("/api/topic-candidates/health")
             health.raise_for_status()
             require(health.json().get("ready") is True, "TOPIC_NOT_READY")
-            if getattr(self, "keyword", None):
+            if getattr(self, "keyword", None) or self.preserves_keyword_profile():
                 from .keyword_rollout import values
                 require(value.get("configuration") == values(settings)
                         and value.get("rollout") == settings.topic_rollout_snapshot(), "KEYWORD_RUNTIME_CONFIG_MISMATCH")
@@ -228,7 +240,7 @@ class HostDeployment:
             if maintenance:
                 require(value["maintenance"]["state"] == maintenance, "RUNTIME_MAINTENANCE_MISMATCH")
             keys = ("control", "maintenance", "jobs", "budget", "search_open", "can_enable")
-            if getattr(self, "keyword", None):
+            if getattr(self, "keyword", None) or self.preserves_keyword_profile():
                 keys += ("configuration", "rollout", "collection", "trial")
             return {k: value[k] for k in keys}
 
@@ -291,7 +303,7 @@ class HostDeployment:
                     and process_birth(owner["pid"]) == owner["birth"], "FINAL_WORKER_MISMATCH")
         runtime = self.web_readback(maintenance="RUNNING")
         baseline = read_json(self.directory / "baseline.json")["runtime"]
-        if self.keyword:
+        if self.keyword or self.preserves_keyword_profile():
             require(runtime["trial"]["budget"] == baseline["trial"]["budget"], "SEARCH_BUDGET_CHANGED")
             return runtime
         previous = baseline["budget"]
