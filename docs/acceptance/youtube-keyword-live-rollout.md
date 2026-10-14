@@ -212,3 +212,8 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 17:24依用户既有授权原生maintenance_control enter暂停接纳，MAINTENANCE/version43，现场active=[]。未强杀、删锁或重启。发现两个ABANDONED_ADMISSION，均为重启前channel-monitor登记：92a92ed674bd4274b769201bb2d047bf/PID72320、f6616aa5205a49dfa7ce8127b047506e/PID63279；两PID均不存在。该状态不能当作安全空闲。
 - 当前代码仅检测ABANDONED_ADMISSION，没有原生显式回收命令。恢复必须先补齐受控、可审计的遗留登记对账路径，不得手工删除或伪造回执。搜索保持OFF，规则/准入上限/并行源码保持。需审阅恢复规格再实施，不能仅等待这些已无进程的登记自然消失。
 - 17:24 Cloud只读刷新：项目gen-lang-client-0993011647，API启用，搜索0/100，通用106/10000（配额日已切换）；未来执行仍须刷新有效期。观察回执见私有ADMISSION目录observation-20261014-1722.json。
+
+## 2026-10-14 18:25 恢复规格待确认
+
+- 已完成 `docs/specs/maintenance-orphan-reconciliation-v0.4.1.md`：仅本次两个channel-monitor遗留记录的显式对账、保留原件归档、崩溃恢复及原生全门禁重新验收；包含首次独立维护入口的身份绑定要求，禁止宽泛进程豁免。规格718877d已推送隔离分支，未开发或修改生产恢复逻辑。
+- 已集中请求用户确认新恢复范围，等待明确回复；未回复不得开发或归档。生产仍MAINTENANCE43/OFF36、active=[]。本次status出现短暂UNREGISTERED_PROCESS 28422，随后ps已不存在；这不是放宽检查的理由，正式执行仍须重新获取完整现场证据。
