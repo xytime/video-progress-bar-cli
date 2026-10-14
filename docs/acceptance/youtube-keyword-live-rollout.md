@@ -196,3 +196,11 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 生产已由并行工作采用main e0e05af（筛选记忆/紧凑点赞率显示），此前7dca9bb补齐了保留已采用关键词配置的源码部署路径。私有目录filter-preferences-20261014的journal九步COMPLETE，最新Sources.final、保护字段和已恢复调度现场核对通过；不能再用09:22旧inventory差异直接认定异常或回退。
 - 当前运行hash cf252dbe7c561bc602e6b05e7c8a3f58327792cf7682215c000c5ac3c5b03e7b，登记worker源码及birth匹配。RUNNING、DISCOVERY_ONLY/version32，原SCHEDULED profile有效、日20/40、admission=false；两个真实成功作业和预算2/2保持，尚无REFRESH。25个候选自然刷新时间仍为13:21:40.517805，当前最高45分，不能降低75分门槛凑准入验收。
 - 12:15观察保存在keyword-source-recovery-20261014-a/observation-20261014-1215.json；其中inventory_preserved=false是与旧源码恢复基线比较，已通过最新正式部署清单解释。下一阶段应读取最新主干的部署实现与清单，保留并行修改；四小时自然刷新完成前不生成ADMISSION计划。
+
+## 2026-10-14 13:24 自然刷新验收及受控准入开放
+
+- 最新生产e0e05af完整运行源码清单e2156cc517bfcabfa0d2e1d95fa85c18cc8266a08425ffeaf88732d06afb8e20再次隔离验证：434 passed/10 warnings，含关键词、阶段转换、原生维护部署与真实浏览器；证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rmxuegsx`。保留所有并行dirty及untracked，没有修改产品代码。
+- 13:17 Cloud实际只读观察搜索2/100、通用374/10000；带时区现场宿主窗口允许。13:21:50自然第二次SCHEDULED作业57deff6653d14a3d86d8530b885859e9成功（新5/重复20/受限21）。13:22:07–08自然REFRESH作业73182ac657e44a9eab9771fdb9a5b552成功，刷新5条，详情1单位；与首次SCHEDULED的同一候选间隔至少四小时，经原生job_proof预算/时间/统一评分快照全部通过。搜索重复命中的20条重新排定刷新，未命中的5条自然到期完成独立REFRESH；未手工tick或改时间。
+- 关闭持久模式后生成全新ADMISSION计划d4ba437c6ce748f09fc64be5f23d3c24，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-admission-20261014-a`，原生九步COMPLETE。来源/锁/排空/备份/保护/恢复全部通过；未改旧journal、删锁或强杀。实际重启及最终回读通过后正常控制面开启DISCOVERY_ONLY/version35、admission=1/version2，宿主累计准入上限1，日预算20/40、单规则保留。
+- 当前真实预算搜索3/详情4（仅首次1/1属于试运行，后续为已批准正式定时/刷新）；自然采集、自然热度刷新、统一评分、受控能力已生效。当前尚无达标新主任务，不能把准入配置打开当作自动准入验收完成。继续等待自然达标候选，75分、热度、内容门槛及外部发布授权不变；自动跟进保持ACTIVE。
+- 13:23进一步读回：30个观察候选中2条评分分别88/86，但均RESTRICTED（不满足180–1800秒时长），task_id均null；其余候选未全部达标。不能沿用此前“最高45/尚未75分”的旧结论，也不能仅凭高分强行准入。自然调度持续运行，准入限制按预期阻止这两条。
