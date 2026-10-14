@@ -154,3 +154,88 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 06:02:57 实际宿主窗口重新为受保护状态；现场计算下一安全窗口为 **07:00 至20:30**，执行前仍须复核，不能沿用04:55的允许结论。
 - 配额控制台只读刷新为搜索0/100、通用240/10000，API已启用；未读取凭据值。生产正常页面会话保持 RUNNING/DRAINING、OFF/version17、试运行0/3和0/6。
 - 没有生成或执行TRIAL计划，没有停止在途或绕过门禁；下一轮同时核实07:00后窗口及新任务排空，重新刷新配额后继续。未获得真实搜索或端到端证据，自动跟进保持ACTIVE。
+
+## 2026-10-14 08:14 维护暂停接纳、真实试运行及定时阶段采用
+
+- 此前仅等待空闲而未先冻结接纳，运行中的 cron 和 queue-runner 会继续引入新任务，是迟迟无法排空的原因。本轮按用户指示使用原生部署 freeze：关闭接纳并冻结调度，排空、来源和锁检查通过后才 stop/adopt；未强杀在途任务或绕过断言。
+- 08:08 Cloud 非秘密配额实际观察：指定项目搜索0/100、通用269/10000；未查看凭据值。生产 main 已采用并推送 `28c8aee`，沿用实际整合475项通过的清单，保留七项 dirty 及额外文件。
+- TRIAL 新计划 `48600e880de7447b84e67038bf496fcf` 九步 COMPLETE，正常会话打开 DISCOVERY_ONLY。08:09:08–08:09:10 首次真实 YouTube 搜索作业 `dc6a28d3354a44b5b4baefc00b9bc815` COMPLETE/OK：新候选25、重复0、受限20，实际搜索1、详情1，结果/统计/统一评分快照落库。重放同一幂等键返回同一作业，预算未增加；随后通过正常控制面恢复 OFF。累计试运行使用1/3和1/6，未用完上限不影响通过。
+- MANUAL 首计划在 baseline 被 SOURCE_BASELINE_DRIFT 拒绝，无运行变更；核对仅有并行新增 `experiments/macro_data_atlas_demo/STEP1_STEP2_PROPOSAL.md`，运行源码未变，保留该文件后生成新计划。新计划 `14c5d34ee0c94eeebbda681b8616166f` 冻结后首次 stop 前检查拒绝；使用原生来源回执现场复查为 MAINTENANCE/IDLE、active=[]、unknown=[]、safe=true，再原生 recover，九步 COMPLETE。未手工修改回执或删除锁。
+- SCHEDULED 计划 `48ea710824c6411c8743803f521ed5c3` 九步 COMPLETE；实际成功试运行、预算和评分证据门禁通过。正常会话回读搜索20/日、详情40/日，scheduler=true、admission=false、累计准入上限1。08:13:12 打开 DISCOVERY_ONLY/version23，并仅开启既有“肺鼠疫”规则（id36de3a8eca584358851b05e5b9fdbf3f，version2）；另一规则仍暂停。
+- 08:13 调度器已自然运行，返回 COOLDOWN：同专题15分钟间隔从真实08:09:08搜索计算，预计08:24:09后才允许第一次定时搜索。没有绕过冷却、手工调用tick或修改时间。此时仍只有上述1个真实搜索作业，不能宣布定时采集或端到端完成。
+- 后续读取自然 SCHEDULED 成功作业，至少四小时后读取同一候选自然 REFRESH 和评分证据；再刷新配额、现场窗口与维护门禁，用新 ADMISSION 计划受控开放累计最多1条真实达标主任务。不得降低75分、热度或内容门槛。真实自然等待是验收条件，自动跟进保持 ACTIVE。
+- 私有部署目录分别为 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-trial-20261014-a`、`youtube-keyword-manual-20261014-b` 和 `youtube-keyword-scheduled-20261014-a`；阶段证据沿用原08:08观察时间，未伪造刷新时间。
+
+## 2026-10-14 08:16 上线后外部源码漂移，重新关闭并维护
+
+- 紧接上轮的自然调度回读出现 `RUNTIME_UNVERIFIED`。对 SCHEDULED 已采用清单逐项比较，生产 HEAD 仍28c8aee，但 `src/video_processing/db/wallstreet_experiment.py` 与 `src/video_processing/processors/insight_mobile.py` 新增署名 Antigravity 的重试退避/字幕分页修改，两个相关测试也在修改。这是上线后的并行磁盘源码变化，不是新任务再次占用窗口；本会话没有回退、覆盖或提交这些工作。
+- 已通过正常会话将搜索恢复 OFF/version24；原生 `maintenance_control.py enter` 将接纳闸门置为 MAINTENANCE/version35。active=[]，但六个角色 LEGACY_WORKER，UI PID53443 和子 ready-worker PID53884 被检查列为未登记；已只读核对这两个进程的命令，未停止它们。空闲不等于来源门禁通过。
+- 当前持久搜索关闭，宿主仍保留 SCHEDULED 配置，准入关闭；定时规则仍保留，不能继续把08:14的开启状态当作当前可运行。真实累计作业仍只有1次MANUAL成功，没有自然SCHEDULED/REFRESH/ADMISSION证据。
+- 已请求用户让正在改生产的 AGY 暂停写入，保留改动且不要自行重启/恢复。需稳定基线后才能安全组织来源恢复，禁止修改角色指纹、旧回执或直接排除进程；不能用已通过测试替代停机来源门禁。跟进继续ACTIVE，等待协调期间保持维护与搜索关闭。
+
+- 08:17 独立快照整合回归完成：**503 passed / 1 failed / 13 warnings**。失败为并行新增 `tests/unit/test_insight_mobile.py::test_short_subpage_and_short_event_do_not_crash_caption_pages`：期望至少3页，实际2页。没有删断言、修改该并行工作或声称新基线通过。四个相关代码/测试文件与测试快照哈希复查一致。证据：[回执](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/pytest.log)。关键词、维护和部署原回归通过不抵消该整合失败；需协调该工作后再验收。
+
+## 2026-10-14 08:22 用户确认分页工作已完成后的复验
+
+- 用户确认新增字幕分页已完成上线，不再以“仍在开发/等待暂停”为继续推进的前提。最新复核：两份运行源码未再改变，分页测试已补足实际触发多页的长样例，保持严格三页与时间边界断言。重跑完整整合隔离回归 **504 passed / 13 warnings**，替代08:17失败快照作为最新测试证据；未由本会话修改分页实现或测试。
+- [回执](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/receipt.json)及[日志](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/pytest.log)，源码清单SHA-256 `cc13fe9ee756dc715ef74cdbac8cc60ee47997e8b109b94bb241416eac92f764`。测试通过不等于当前后台进程采用。
+- 运行回读仍为原UI PID53443，08:12:57启动，真实birth匹配登记；登记源码指纹8fc3b33…，当前磁盘6ede58a…，因此维护仍拒绝。保持MAINTENANCE/version35、搜索OFF/version24，不将用户所述分页上线解释为整个关键词后台已完成重启验收。
+- 下一步沿用已授权运行来源恢复范围，保留新分页/重试及全部并行改动，准备精确旧运行基线的暂存/还原、原生安全停止和备份、恢复已测最新源码、维护启动和最终回读。不修改检查算法或角色锁，不把旧部署journal改成新采用证明。参考已实施的v0.3.1来源恢复记录；目前未执行任何源码还原或进程停止。定时搜索/自然刷新/准入仍待真实验收。
+
+## 2026-10-14 09:22 来源恢复完成，首个自然定时采集成功
+
+- 现场确认最新运行源码仍与504项通过清单一致；与旧进程登记基线只差两份分页/重试源码。保留完整inventory及两份新文件，精确重建旧源码hash 8fc3b33acd2ab7229ac0b2f48878d60ad211df86aaea09aae272d706b3dd133b 后，原生来源、排空、锁及保护检查通过，正常停止服务、校验数据库备份，再恢复全部新源码并维护启动。没有SIGKILL、删锁、改worker指纹或重放旧完成journal。
+- 独立来源恢复目录 `~/Library/Application Support/VideoProcessing/deployments/keyword-source-recovery-20261014-a/`，含prepare/freeze/restore-old/stop/stop-backup/restore-new/start/resume/restore-schedules及final-readback回执。这是保留既有SCHEDULED配置的来源恢复，不是伪造一次同阶段转换。全部11项dirty及untracked保留，原阶段配置identity保持56c2dc122e0cb19fb84848fb0f8f841eeba6889033d36e5ba9501f4cf6486142。
+- 新UI PID83486于09:17:59启动，五个核心角色及ready-worker、wallstreet-worker均登记当前hash 6ede58a30f9814ea009dda0c1818298ff3bcbac152ac3bfed7a8dad7c2d5c5d0；真实birth/cwd匹配。恢复RUNNING/version36、原调度，恢复过程中关键词预算维持1/1。正常业务在恢复后有已登记任务在途，不等于来源失配。
+- 09:20–09:21 Cloud只读观察：API启用，项目搜索1/100、通用270/10000。使用带时区的当前时间现场核实宿主保护窗口为false；不能把无时区本地时间传入会按美东解释的settings接口。09:21正常控制面恢复DISCOVERY_ONLY/version26；搜索20/日、详情40/日、单规则定时、admission=false均保持。
+- **09:21:38–09:21:40自然SCHEDULED作业fd2e71abfe5b404283e5f1d3e0a9002c COMPLETE/OK**：新增3、重复22、受限20，实际搜索1/详情1，总预算2/2。未手工调用tick。25条真实作业评分快照全部按现行统一公式重新计算一致，项目预算归属核对通过；原始DB证据保存在恢复目录scheduled-job-proof.json及scheduled-score-verification.json。
+- 尚需同一候选至少4小时后的自然REFRESH（理论不早于13:21:40，实际以DB采样时间和调度为准），再用真实作业证据、新配额和完整维护门禁生成ADMISSION计划。累计最多1条真正达标新主任务，75分、热度及内容门槛不降；不得扩大发布授权。当前实际定时采集已生效，但完整端到端验收未完成，跟进保持ACTIVE。
+
+## 2026-10-14 12:16 并行首页部署后的基线核实
+
+- 生产已由并行工作采用main e0e05af（筛选记忆/紧凑点赞率显示），此前7dca9bb补齐了保留已采用关键词配置的源码部署路径。私有目录filter-preferences-20261014的journal九步COMPLETE，最新Sources.final、保护字段和已恢复调度现场核对通过；不能再用09:22旧inventory差异直接认定异常或回退。
+- 当前运行hash cf252dbe7c561bc602e6b05e7c8a3f58327792cf7682215c000c5ac3c5b03e7b，登记worker源码及birth匹配。RUNNING、DISCOVERY_ONLY/version32，原SCHEDULED profile有效、日20/40、admission=false；两个真实成功作业和预算2/2保持，尚无REFRESH。25个候选自然刷新时间仍为13:21:40.517805，当前最高45分，不能降低75分门槛凑准入验收。
+- 12:15观察保存在keyword-source-recovery-20261014-a/observation-20261014-1215.json；其中inventory_preserved=false是与旧源码恢复基线比较，已通过最新正式部署清单解释。下一阶段应读取最新主干的部署实现与清单，保留并行修改；四小时自然刷新完成前不生成ADMISSION计划。
+
+## 2026-10-14 13:24 自然刷新验收及受控准入开放
+
+- 最新生产e0e05af完整运行源码清单e2156cc517bfcabfa0d2e1d95fa85c18cc8266a08425ffeaf88732d06afb8e20再次隔离验证：434 passed/10 warnings，含关键词、阶段转换、原生维护部署与真实浏览器；证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-rmxuegsx`。保留所有并行dirty及untracked，没有修改产品代码。
+- 13:17 Cloud实际只读观察搜索2/100、通用374/10000；带时区现场宿主窗口允许。13:21:50自然第二次SCHEDULED作业57deff6653d14a3d86d8530b885859e9成功（新5/重复20/受限21）。13:22:07–08自然REFRESH作业73182ac657e44a9eab9771fdb9a5b552成功，刷新5条，详情1单位；与首次SCHEDULED的同一候选间隔至少四小时，经原生job_proof预算/时间/统一评分快照全部通过。搜索重复命中的20条重新排定刷新，未命中的5条自然到期完成独立REFRESH；未手工tick或改时间。
+- 关闭持久模式后生成全新ADMISSION计划d4ba437c6ce748f09fc64be5f23d3c24，私有目录 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-admission-20261014-a`，原生九步COMPLETE。来源/锁/排空/备份/保护/恢复全部通过；未改旧journal、删锁或强杀。实际重启及最终回读通过后正常控制面开启DISCOVERY_ONLY/version35、admission=1/version2，宿主累计准入上限1，日预算20/40、单规则保留。
+- 当前真实预算搜索3/详情4（仅首次1/1属于试运行，后续为已批准正式定时/刷新）；自然采集、自然热度刷新、统一评分、受控能力已生效。当前尚无达标新主任务，不能把准入配置打开当作自动准入验收完成。继续等待自然达标候选，75分、热度、内容门槛及外部发布授权不变；自动跟进保持ACTIVE。
+- 13:23进一步读回：30个观察候选中2条评分分别88/86，但均RESTRICTED（不满足180–1800秒时长），task_id均null；其余候选未全部达标。不能沿用此前“最高45/尚未75分”的旧结论，也不能仅凭高分强行准入。自然调度持续运行，准入限制按预期阻止这两条。
+
+## 2026-10-14 17:25 宿主重启后的恢复阻塞
+
+- 宿主 uptime 证明约16:43重启；topic审计08:43:23 UTC由host关闭模式为OFF/version36。当前UI于16:45重建，五角色源码与进程birth匹配，源码/保护检查通过。未发生新的关键词搜索或准入。
+- 原ADMISSION调度回读出现RESTORED_DEFINITION_MISMATCH：ai-cover-doer和english-world-forced-recovery改由原LaunchAgents plist加载，与部署临时恢复定义仅RunAtLoad不同。不能改旧journal或把旧计划复用为新恢复。
+- 17:24依用户既有授权原生maintenance_control enter暂停接纳，MAINTENANCE/version43，现场active=[]。未强杀、删锁或重启。发现两个ABANDONED_ADMISSION，均为重启前channel-monitor登记：92a92ed674bd4274b769201bb2d047bf/PID72320、f6616aa5205a49dfa7ce8127b047506e/PID63279；两PID均不存在。该状态不能当作安全空闲。
+- 当前代码仅检测ABANDONED_ADMISSION，没有原生显式回收命令。恢复必须先补齐受控、可审计的遗留登记对账路径，不得手工删除或伪造回执。搜索保持OFF，规则/准入上限/并行源码保持。需审阅恢复规格再实施，不能仅等待这些已无进程的登记自然消失。
+- 17:24 Cloud只读刷新：项目gen-lang-client-0993011647，API启用，搜索0/100，通用106/10000（配额日已切换）；未来执行仍须刷新有效期。观察回执见私有ADMISSION目录observation-20261014-1722.json。
+
+## 2026-10-14 18:25 恢复规格待确认
+
+- 已完成 `docs/specs/maintenance-orphan-reconciliation-v0.4.1.md`：仅本次两个channel-monitor遗留记录的显式对账、保留原件归档、崩溃恢复及原生全门禁重新验收；包含首次独立维护入口的身份绑定要求，禁止宽泛进程豁免。规格718877d已推送隔离分支，未开发或修改生产恢复逻辑。
+- 已集中请求用户确认新恢复范围，等待明确回复；未回复不得开发或归档。生产仍MAINTENANCE43/OFF36、active=[]。本次status出现短暂UNREGISTERED_PROCESS 28422，随后ps已不存在；这不是放宽检查的理由，正式执行仍须重新获取完整现场证据。
+
+## 2026-10-14 20:28 并行恢复已采用，独立回归通过
+
+- 已只读核实另一会话“排查YouTube连接与今日未发布原因”获得用户确认后完成恢复；生产main现为18b4cd1d80d5731c182f5838879011287b1dad29。本次两个遗留登记已通过其受控归档及原生部署恢复处理，不再等待18:25的同一恢复批准，也不重复归档或重放旧计划。v0.4.1通用增强规格并不因此自动视为全部实现。
+- 独立核验 `/Volumes/EXT2T/AppDataOffload/ryusei/continuity-deploy-20261014-1926`：journal COMPLETE、两个归档原件SHA与计划一致、源码最终检查及保护字段通过、五类worker真实birth及来源一致。运行hash为3c0dd414abb0307e7f8746e0d8e266eb41fe49d4c141cf328c6b9f06868ce109。新增翻译队列cron与回执cron.after-title-worker逐字节匹配，不能误用旧cron基线判定漂移。
+- 对最新生产快照独立执行关键词、维护、部署、浏览器回归：**434 passed / 10 warnings**，runner exit 0，沙箱清理完成。证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-h0k9wrsn`，源码清单SHA-256 34a3efcc726a403bd9f4f13ebe71866db76dad386d32c42bd1f77538f13f98a6。本次未改生产源码，保留全部并行工作。
+- 现场RUNNING/version44、unknown=[]，搜索仍OFF/version37；完整已采用关键词profile校验通过，恢复回执记载admission=1/version4。存在在途视频r-IlR86-iVc:0及queue-dispatch，不强停、不覆盖运行源码。20:26带时区计算当前尚未进入保护窗口，但20:30即受保护，下一安全分钟为2026-10-15 04:15北京时间；执行时必须重算。此刻不仓促开放，也不提前将整个流水线冻结一夜。
+- 下一安全窗口刷新非秘密Cloud配额，重新核实现场来源、调度、锁及保护；如需维护，用全新现场计划及preserve-keyword-profile路径，先暂停接纳、自然排空，保留全部门禁。不得复用旧完成计划。门禁通过后恢复已授权采集，再验收最多累计1条自然达标主任务。
+- 自然定时采集、四小时自然刷新、统一评分已有真实证据，但真实达标准入仍未完成。肺鼠疫规则于10月15日14:33北京时间到期，不自动延长或降低门槛。跟进保持ACTIVE。
+
+## 2026-10-15 02:31 并行修复后的运行来源差异
+
+- 生产HEAD变为007dbd1（Telegram登录失败通知修复，涉及src/bot/pipeline_agent.py、telegram_bot.py及对应测试）。全部并行dirty/untracked保留，未回退或采用源码。
+- 当前RUNNING44、active=[]、轻量登记unknown=[]；但单独检查六个现存角色的真实birth均匹配，而source_hash均与磁盘不匹配。磁盘hash为3712d8d062eb84b4fa40f5d3af6295fb1aeb7a08e315acf6b0b3ac7286737363。轻量status为空不表示完整来源门禁通过；434项通过只覆盖此前快照。
+- 当前保护窗口仍有效，下一安全时间现场计算为10月15日04:15。保留搜索关闭，不强停、不改锁或登记；安全窗口先核实最新并行采用记录，若未完成则按已授权精确基线恢复及原生维护部署流程处理，重新验证当前快照，全部门禁通过再恢复采集。不得直接以007dbd1提交存在替代运行采用证据。
+
+## 2026-10-15 06:29 来源恢复已完成，搜索仍未恢复
+
+- 04:36原生enter暂停接纳，MAINTENANCE45，任务自然排空。最新生产快照437 passed/10 warnings，runner0且清理完成；证据video-pytest-15_tcfpa，清单bbdb4bdf2dbd515faaed49dcdcfe8dac1813ee2676a9cb22699830abd7d2b015。
+- 新私有恢复目录 `~/Library/Application Support/VideoProcessing/deployments/keyword-source-recovery-20261015-a` 完成prepare、freeze、精确旧基线还原、原生安全停止及备份、恢复全部新代码、维护启动、resume及原调度恢复。仅两份bot文件暂存还原，完整inventory原样保留，无强杀、改锁或旧journal重放。04:40最终来源/保护/调度/角色birth/hash回读通过，RUNNING46。
+- 04:40Cloud实际只读配额搜索0/100、通用239/10000、API启用；该证据到06:29已过期。搜索恢复尚未执行，不能把来源恢复当成采集恢复或完整上线。维护时准入正常关闭至version5；06:29当前OFF38、admission0、automatic_used0、六角色源码与birth全部匹配，active=[]、unknown=[]，runtime_code=MARKET_GUARD。
+- 下一步只剩刷新配额、现场窗口和完整恢复记录后，通过正常控制面恢复已授权搜索及累计1条准入，再读取自然作业及真实主任务；当前源码未变时不重复开发、重跑同一回归或再次来源恢复。规则今日14:33到期，若仍无自然达标候选，明确报告“功能生效但真实准入未验收”，不得降低阈值或自行延长规则。

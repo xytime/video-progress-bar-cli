@@ -1,0 +1,60 @@
+{
+  "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "started_at": "2026-10-14T00:16:00.483420+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.129
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_job_proof.py",
+    "tests/unit/test_keyword_rollout_contract.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_database_channel_funnel.py",
+    "tests/unit/test_database_codex_text_recovery.py",
+    "tests/unit/test_dubbing_database.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/unit/test_vocabulary_outro.py",
+    "tests/unit/test_insight_mobile.py",
+    "tests/unit/test_wallstreet_experiment.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "dc900d899aec6d006dce99e8a218e3f4707281594556309629c4873c76947237",
+  "profile_sha256": "94ba66c2467f0ae69b4400f21a662d2180be5ce50f80c90a40b1e798e72334aa",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "e6cf50d522ab19ca4fed768e745b3059a967c8cf665ea240572c7aeaa1de8803",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 1,
+    "seconds": 102.124
+  },
+  "exit_code": 1,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lkndikot/sandbox"
+  },
+  "finished_at": "2026-10-14T00:17:44.868959+00:00"
+}
