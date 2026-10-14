@@ -174,3 +174,10 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 已请求用户让正在改生产的 AGY 暂停写入，保留改动且不要自行重启/恢复。需稳定基线后才能安全组织来源恢复，禁止修改角色指纹、旧回执或直接排除进程；不能用已通过测试替代停机来源门禁。跟进继续ACTIVE，等待协调期间保持维护与搜索关闭。
 
 - 08:17 独立快照整合回归完成：**503 passed / 1 failed / 13 warnings**。失败为并行新增 `tests/unit/test_insight_mobile.py::test_short_subpage_and_short_event_do_not_crash_caption_pages`：期望至少3页，实际2页。没有删断言、修改该并行工作或声称新基线通过。四个相关代码/测试文件与测试快照哈希复查一致。证据：[回执](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/pytest.log)。关键词、维护和部署原回归通过不抵消该整合失败；需协调该工作后再验收。
+
+## 2026-10-14 08:22 用户确认分页工作已完成后的复验
+
+- 用户确认新增字幕分页已完成上线，不再以“仍在开发/等待暂停”为继续推进的前提。最新复核：两份运行源码未再改变，分页测试已补足实际触发多页的长样例，保持严格三页与时间边界断言。重跑完整整合隔离回归 **504 passed / 13 warnings**，替代08:17失败快照作为最新测试证据；未由本会话修改分页实现或测试。
+- [回执](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/receipt.json)及[日志](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/pytest.log)，源码清单SHA-256 `cc13fe9ee756dc715ef74cdbac8cc60ee47997e8b109b94bb241416eac92f764`。测试通过不等于当前后台进程采用。
+- 运行回读仍为原UI PID53443，08:12:57启动，真实birth匹配登记；登记源码指纹8fc3b33…，当前磁盘6ede58a…，因此维护仍拒绝。保持MAINTENANCE/version35、搜索OFF/version24，不将用户所述分页上线解释为整个关键词后台已完成重启验收。
+- 下一步沿用已授权运行来源恢复范围，保留新分页/重试及全部并行改动，准备精确旧运行基线的暂存/还原、原生安全停止和备份、恢复已测最新源码、维护启动和最终回读。不修改检查算法或角色锁，不把旧部署journal改成新采用证明。参考已实施的v0.3.1来源恢复记录；目前未执行任何源码还原或进程停止。定时搜索/自然刷新/准入仍待真实验收。
