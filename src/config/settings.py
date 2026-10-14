@@ -664,6 +664,13 @@ class Settings(BaseSettings):
     background_preparation_batch_limit: int = 1
     source_subtitle_languages: str = "en.*,en"
     source_subtitle_retry_hours: int = 6
+    source_audio_preflight_enabled: bool = True
+    source_audio_model_path: Path = Path.home() / ".cache/whisper/base.pt"
+    source_audio_preflight_timeout_seconds: int = 600
+    source_audio_max_duration_seconds: int = 1800
+    source_audio_max_attempts: int = 3
+    ai_cover_provider_cooldown_seconds: int = 900
+    monitor_translation_timeout_seconds: int = 30
 
     # 公开视频提交窗口。默认关闭，避免成片在等待窗口时落后于同类内容；
     # 如需恢复定时发布，可在 .env 将开关显式设为 true。

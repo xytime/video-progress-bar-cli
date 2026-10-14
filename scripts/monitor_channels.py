@@ -133,7 +133,8 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3)
 
         for video in catalog.videos:
             # 翻译标题（阿里云 MT 优先）
-            zh_title = _translate_title_or_source(video.youtube_id, video.title)
+            from video_processing.utils.monitor_translation_queue import cached_or_enqueue
+            zh_title = cached_or_enqueue(settings.default_output_dir / "monitor_title_queue", video.title)
 
             result = db.upsert_monitored_video(
                 video.youtube_id, video.title, channel_id,
@@ -388,7 +389,14 @@ def main():
         action="store_true",
         help="首次初始化：所有批准频道立即轮询，并将窗口放宽到最近 5 天",
     )
+    parser.add_argument("--translate-pending", action="store_true", help="独立补全标题翻译缓存，不采集频道")
     args = parser.parse_args()
+    if args.translate_pending:
+        from video_processing.utils.monitor_translation_queue import drain
+        with gate().admit("channel-monitor", "title-translation"):
+            print(drain(settings.default_output_dir / "monitor_title_queue",
+                        settings.monitor_translation_timeout_seconds))
+        return
     db = PipelineDB()
 
     # 1. 先拉取已有白名单的新视频，避免探索流量耗尽额度后拖死高价值频道。

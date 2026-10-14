@@ -41,6 +41,7 @@ from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db import PipelineDB
 from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.utils.cover_agy import run_process, QUALITY_VERSION
+from video_processing.utils.provider_circuit import ProviderCircuit
 
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,8 @@ def reconcile() -> int:
                 PROJECT_ROOT / settings.ai_cover_finish_dir,
             )
             db = PipelineDB()
+            circuit = ProviderCircuit(PROJECT_ROOT / "output" / "agy_cover_health.json",
+                                      cooldown=settings.ai_cover_provider_cooldown_seconds)
             resolved = 0
             for task in queue.list_tasks():
                 video = db.get_video_by_youtube_id(str(task.payload["youtube_id"]), slice_index=int(task.payload["slice_index"]))
@@ -340,13 +343,15 @@ def reconcile() -> int:
                     visual is None
                     and (task.primary_provider == "agy" or settings.enable_antigravity_cover_fallback)
                     and queue.antigravity_due(task)
+                    and not circuit.blocked()
                 ):
                     _run_antigravity(task)
                     visual = queue.accepted_visual(task)
                     generated_by = queue.accepted_source(task)
+                    circuit.record(visual is not None)
                 if (visual is None and getattr(settings, "enable_codex_luna_cover_fallback", False)
                         and task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT
-                        and queue.antigravity_exhausted(task)
+                        and (queue.antigravity_exhausted(task) or circuit.blocked())
                         and not (task.finish_dir / "luna_attempt.json").exists()
                         and not queue._has_fresh_claim(task, datetime.now(timezone.utc))
                         and (task.generation_deadline - datetime.now(timezone.utc)).total_seconds()

@@ -126,7 +126,9 @@ class MaintenanceGate:
             with self._locked():
                 value = self._read()
                 active, unknown = self._leases()
-                return dict(value, active=active, unknown=unknown,
+                age = max(0, time.time() - value.get("at", time.time())) if value["state"] == "MAINTENANCE" else 0
+                return dict(value, maintenance_age_seconds=round(age), maintenance_overdue=age >= 3600,
+                            active=active, unknown=unknown,
                             phase="UNKNOWN" if unknown else "DRAINING" if active else "IDLE")
         except MaintenanceDenied:
             return {"state": "UNKNOWN", "phase": "UNKNOWN", "active": [], "unknown": [{"code": "CONTROL_UNKNOWN"}]}

@@ -1864,7 +1864,7 @@ class PipelineManager:
                     if attempt == 0 and self._refresh_youtube_cookie_after_auth_failure(yid, slice_index, stderr):
                         continue
                     return self._mark_source_subtitle_unavailable(
-                        yid, slice_index, stderr or "yt-dlp 未返回可用源字幕",
+                        yid, slice_index, "VTT_FETCH_FAILED: " + (stderr or "yt-dlp 未返回可用源字幕"),
                     )
                 except (subprocess.TimeoutExpired, TimeoutError):
                     return self._mark_source_subtitle_unavailable(
@@ -1876,11 +1876,17 @@ class PipelineManager:
             subtitle_text = read_webvtt_text(subtitle_files)
 
         if len(subtitle_text.strip()) < _SOURCE_SUBTITLE_MIN_CHARS:
-            return self._mark_source_subtitle_unavailable(
-                yid,
-                slice_index,
-                "未找到可审查的 VTT 源字幕；视频下载未启动，将在后续轮次重试。",
-            )
+            if settings.source_audio_preflight_enabled and settings.enable_censorship_engine:
+                from .utils.source_audio_preflight import transcript
+                try:
+                    subtitle_text = transcript(video, self._OUT_DIR, self._run_tracked,
+                                               self._VENV_PYTHON, settings)
+                except (ValueError, OSError, subprocess.SubprocessError, TimeoutError) as exc:
+                    return self._mark_source_subtitle_unavailable(
+                        yid, slice_index, f"NO_MATCHING_VTT / {type(exc).__name__}: {str(exc)[:160]}")
+            else:
+                return self._mark_source_subtitle_unavailable(
+                    yid, slice_index, "NO_MATCHING_VTT: 未找到指定语言的可审查源字幕；音频备用未启用。")
 
         if not settings.enable_censorship_engine:
             return self._mark_source_subtitle_unavailable(

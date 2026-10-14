@@ -231,3 +231,21 @@ def test_route_rejection_releases_claim_preserves_cache_and_cools_down(tmp_path,
 def verified_youtube_route(monkeypatch):
     # These tests isolate downstream behavior; test_youtube_route covers rejection.
     monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})
+
+
+def test_audio_fallback_is_screened_before_video_download(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    video = _add_candidate(manager.db, 'audio-fallback')
+    manager._run_tracked = lambda *a, **kw: None
+    monkeypatch.setattr(settings, 'source_audio_preflight_enabled', True)
+    monkeypatch.setattr(settings, 'enable_censorship_engine', True)
+    monkeypatch.setattr('video_processing.utils.source_audio_preflight.transcript',
+                        lambda *a: 'A full transcript from local audio recognition.')
+    observed = []
+    def reject(*a, **kw):
+        observed.append(kw['subtitle_text'])
+        return True
+    manager._check_censorship = reject
+    assert manager._ensure_source_subtitle_preflight(video) is False
+    assert observed == ['A full transcript from local audio recognition.']
+    assert not list(tmp_path.glob('*.mp4'))
