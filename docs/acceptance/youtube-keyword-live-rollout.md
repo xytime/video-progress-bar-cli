@@ -154,3 +154,14 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 06:02:57 实际宿主窗口重新为受保护状态；现场计算下一安全窗口为 **07:00 至20:30**，执行前仍须复核，不能沿用04:55的允许结论。
 - 配额控制台只读刷新为搜索0/100、通用240/10000，API已启用；未读取凭据值。生产正常页面会话保持 RUNNING/DRAINING、OFF/version17、试运行0/3和0/6。
 - 没有生成或执行TRIAL计划，没有停止在途或绕过门禁；下一轮同时核实07:00后窗口及新任务排空，重新刷新配额后继续。未获得真实搜索或端到端证据，自动跟进保持ACTIVE。
+
+## 2026-10-14 08:14 维护暂停接纳、真实试运行及定时阶段采用
+
+- 此前仅等待空闲而未先冻结接纳，运行中的 cron 和 queue-runner 会继续引入新任务，是迟迟无法排空的原因。本轮按用户指示使用原生部署 freeze：关闭接纳并冻结调度，排空、来源和锁检查通过后才 stop/adopt；未强杀在途任务或绕过断言。
+- 08:08 Cloud 非秘密配额实际观察：指定项目搜索0/100、通用269/10000；未查看凭据值。生产 main 已采用并推送 `28c8aee`，沿用实际整合475项通过的清单，保留七项 dirty 及额外文件。
+- TRIAL 新计划 `48600e880de7447b84e67038bf496fcf` 九步 COMPLETE，正常会话打开 DISCOVERY_ONLY。08:09:08–08:09:10 首次真实 YouTube 搜索作业 `dc6a28d3354a44b5b4baefc00b9bc815` COMPLETE/OK：新候选25、重复0、受限20，实际搜索1、详情1，结果/统计/统一评分快照落库。重放同一幂等键返回同一作业，预算未增加；随后通过正常控制面恢复 OFF。累计试运行使用1/3和1/6，未用完上限不影响通过。
+- MANUAL 首计划在 baseline 被 SOURCE_BASELINE_DRIFT 拒绝，无运行变更；核对仅有并行新增 `experiments/macro_data_atlas_demo/STEP1_STEP2_PROPOSAL.md`，运行源码未变，保留该文件后生成新计划。新计划 `14c5d34ee0c94eeebbda681b8616166f` 冻结后首次 stop 前检查拒绝；使用原生来源回执现场复查为 MAINTENANCE/IDLE、active=[]、unknown=[]、safe=true，再原生 recover，九步 COMPLETE。未手工修改回执或删除锁。
+- SCHEDULED 计划 `48ea710824c6411c8743803f521ed5c3` 九步 COMPLETE；实际成功试运行、预算和评分证据门禁通过。正常会话回读搜索20/日、详情40/日，scheduler=true、admission=false、累计准入上限1。08:13:12 打开 DISCOVERY_ONLY/version23，并仅开启既有“肺鼠疫”规则（id36de3a8eca584358851b05e5b9fdbf3f，version2）；另一规则仍暂停。
+- 08:13 调度器已自然运行，返回 COOLDOWN：同专题15分钟间隔从真实08:09:08搜索计算，预计08:24:09后才允许第一次定时搜索。没有绕过冷却、手工调用tick或修改时间。此时仍只有上述1个真实搜索作业，不能宣布定时采集或端到端完成。
+- 后续读取自然 SCHEDULED 成功作业，至少四小时后读取同一候选自然 REFRESH 和评分证据；再刷新配额、现场窗口与维护门禁，用新 ADMISSION 计划受控开放累计最多1条真实达标主任务。不得降低75分、热度或内容门槛。真实自然等待是验收条件，自动跟进保持 ACTIVE。
+- 私有部署目录分别为 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-trial-20261014-a`、`youtube-keyword-manual-20261014-b` 和 `youtube-keyword-scheduled-20261014-a`；阶段证据沿用原08:08观察时间，未伪造刷新时间。
