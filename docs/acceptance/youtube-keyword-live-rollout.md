@@ -252,3 +252,11 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 06:38观察的低对比已确认根因为通用button:hover覆盖主按钮底色。新增真实浏览器回归在dark/light/contrast三种主题均失败，证据video-pytest-lsyv8xjx；只在关键词页保留主按钮悬停底色和文字配对，并更新CSS资源版本，没有改变采集规则或后端行为。
 - 隔离分支首页及关键词浏览器36项通过；随后用当前生产全部受维护源码（含并行dirty/untracked）加本次三文件覆盖，独立快照再次36 passed/10 warnings、runner0、清理完成。最终证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-05uzgw4r`，清单a922de3f90f6a6052fcf7c7f371ab22c3a47d7036115c9028b92302733728e87。覆盖两种主操作的悬停对比、表单、导航、失败重试、权限和窄屏路径；不替代437项后端历史证据。
 - 修复此时仍未采用到生产。下一安全窗口用全新preserve-keyword-profile计划完成正常维护部署，再按已授权范围恢复采集与准入。不得将本次静态资源修复误称为源码指纹再次故障；Python运行hash保持不变。
+
+## 2026-10-15 07:00 新增并行 AGY 修改，维护暂停接纳
+
+- 06:57部署前 `Sources.baseline()` 拒绝 SOURCE_BASELINE_DRIFT。相对06:41计划，新增四份运行源码修改：settings.py、agy_copy_service.py、agy_provider.py、insight_planner.py，以及两份相关测试；修改署名Antigravity，内容为超时、诊断与长字幕策划。当前磁盘hash443870c698481864cd3728bf540ac74a1560d948058dd566ca3647ae29453c55，七个存活角色birth匹配但source_hash均不匹配。与已完成04:40恢复是两次不同事件，不能复用437项旧快照证明本次新代码通过。
+- 计划dfc3d099ca9f4cdebc0e41bbb1f056f8尚未apply；没有停机、采用、回退并行源码或修改旧回执。只读核对最近Codex会话未找到这批新源码的采用证明，已集中请求用户协调正在做上述新修改的AGY暂停生产写入、保留所有工作，以便统一整合。此前字幕分页完成的确认不能替代本次新工作的协调。
+- 07:00:25带时区现场保护窗口已解除，使用原生maintenance gate.enter暂停新接纳，MAINTENANCE/version47。queue-dispatch、视频ZV6pUX8kJwg:0及wallstreet-render pair:4仍在途，允许自然完成；未强杀、删锁或直接排除子进程。搜索保持OFF38，准入关闭，真实准入仍为0。
+- 06:42 Cloud非秘密配额实际观察搜索0/100、通用300/10000，API已启用；私有计划目录内quota-observation.json保留原观察时间，后续采用须按1小时有效期重新核实，不能改时间。新整合快照保留生产全部维护源码并叠加三份关键词按钮修复，正在隔离验收；最终采用须基线稳定、新计划及完整来源恢复门禁通过。
+- 07:01整合隔离验收完成：490 passed / 10 warnings，runner exit0、沙箱清理完成，证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lk96fx38`，清单SHA-256 ac04c2dcb15b6107c0467ae884a3f91eae3ffeda9fe9bb53fec5062bc28ed136。07:02当前所有运行源码与该清单匹配；只证明该快照通过，不证明写入方已经停止或进程采用。三个在途登记仍在，维护保持；等待本次写入协调及自然排空后再统一恢复。用户验收和回滚说明见 `docs/acceptance/youtube-keyword-user-acceptance.md`。
