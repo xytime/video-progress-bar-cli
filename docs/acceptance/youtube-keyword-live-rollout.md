@@ -181,3 +181,12 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - [回执](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/receipt.json)及[日志](evidence/youtube-keyword-live-rollout/pagination-integrated-20261014/pytest.log)，源码清单SHA-256 `cc13fe9ee756dc715ef74cdbac8cc60ee47997e8b109b94bb241416eac92f764`。测试通过不等于当前后台进程采用。
 - 运行回读仍为原UI PID53443，08:12:57启动，真实birth匹配登记；登记源码指纹8fc3b33…，当前磁盘6ede58a…，因此维护仍拒绝。保持MAINTENANCE/version35、搜索OFF/version24，不将用户所述分页上线解释为整个关键词后台已完成重启验收。
 - 下一步沿用已授权运行来源恢复范围，保留新分页/重试及全部并行改动，准备精确旧运行基线的暂存/还原、原生安全停止和备份、恢复已测最新源码、维护启动和最终回读。不修改检查算法或角色锁，不把旧部署journal改成新采用证明。参考已实施的v0.3.1来源恢复记录；目前未执行任何源码还原或进程停止。定时搜索/自然刷新/准入仍待真实验收。
+
+## 2026-10-14 09:22 来源恢复完成，首个自然定时采集成功
+
+- 现场确认最新运行源码仍与504项通过清单一致；与旧进程登记基线只差两份分页/重试源码。保留完整inventory及两份新文件，精确重建旧源码hash 8fc3b33acd2ab7229ac0b2f48878d60ad211df86aaea09aae272d706b3dd133b 后，原生来源、排空、锁及保护检查通过，正常停止服务、校验数据库备份，再恢复全部新源码并维护启动。没有SIGKILL、删锁、改worker指纹或重放旧完成journal。
+- 独立来源恢复目录 `~/Library/Application Support/VideoProcessing/deployments/keyword-source-recovery-20261014-a/`，含prepare/freeze/restore-old/stop/stop-backup/restore-new/start/resume/restore-schedules及final-readback回执。这是保留既有SCHEDULED配置的来源恢复，不是伪造一次同阶段转换。全部11项dirty及untracked保留，原阶段配置identity保持56c2dc122e0cb19fb84848fb0f8f841eeba6889033d36e5ba9501f4cf6486142。
+- 新UI PID83486于09:17:59启动，五个核心角色及ready-worker、wallstreet-worker均登记当前hash 6ede58a30f9814ea009dda0c1818298ff3bcbac152ac3bfed7a8dad7c2d5c5d0；真实birth/cwd匹配。恢复RUNNING/version36、原调度，恢复过程中关键词预算维持1/1。正常业务在恢复后有已登记任务在途，不等于来源失配。
+- 09:20–09:21 Cloud只读观察：API启用，项目搜索1/100、通用270/10000。使用带时区的当前时间现场核实宿主保护窗口为false；不能把无时区本地时间传入会按美东解释的settings接口。09:21正常控制面恢复DISCOVERY_ONLY/version26；搜索20/日、详情40/日、单规则定时、admission=false均保持。
+- **09:21:38–09:21:40自然SCHEDULED作业fd2e71abfe5b404283e5f1d3e0a9002c COMPLETE/OK**：新增3、重复22、受限20，实际搜索1/详情1，总预算2/2。未手工调用tick。25条真实作业评分快照全部按现行统一公式重新计算一致，项目预算归属核对通过；原始DB证据保存在恢复目录scheduled-job-proof.json及scheduled-score-verification.json。
+- 尚需同一候选至少4小时后的自然REFRESH（理论不早于13:21:40，实际以DB采样时间和调度为准），再用真实作业证据、新配额和完整维护门禁生成ADMISSION计划。累计最多1条真正达标新主任务，75分、热度及内容门槛不降；不得扩大发布授权。当前实际定时采集已生效，但完整端到端验收未完成，跟进保持ACTIVE。
