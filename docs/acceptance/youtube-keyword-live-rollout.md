@@ -165,3 +165,12 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 08:13 调度器已自然运行，返回 COOLDOWN：同专题15分钟间隔从真实08:09:08搜索计算，预计08:24:09后才允许第一次定时搜索。没有绕过冷却、手工调用tick或修改时间。此时仍只有上述1个真实搜索作业，不能宣布定时采集或端到端完成。
 - 后续读取自然 SCHEDULED 成功作业，至少四小时后读取同一候选自然 REFRESH 和评分证据；再刷新配额、现场窗口与维护门禁，用新 ADMISSION 计划受控开放累计最多1条真实达标主任务。不得降低75分、热度或内容门槛。真实自然等待是验收条件，自动跟进保持 ACTIVE。
 - 私有部署目录分别为 `~/Library/Application Support/VideoProcessing/deployments/youtube-keyword-trial-20261014-a`、`youtube-keyword-manual-20261014-b` 和 `youtube-keyword-scheduled-20261014-a`；阶段证据沿用原08:08观察时间，未伪造刷新时间。
+
+## 2026-10-14 08:16 上线后外部源码漂移，重新关闭并维护
+
+- 紧接上轮的自然调度回读出现 `RUNTIME_UNVERIFIED`。对 SCHEDULED 已采用清单逐项比较，生产 HEAD 仍28c8aee，但 `src/video_processing/db/wallstreet_experiment.py` 与 `src/video_processing/processors/insight_mobile.py` 新增署名 Antigravity 的重试退避/字幕分页修改，两个相关测试也在修改。这是上线后的并行磁盘源码变化，不是新任务再次占用窗口；本会话没有回退、覆盖或提交这些工作。
+- 已通过正常会话将搜索恢复 OFF/version24；原生 `maintenance_control.py enter` 将接纳闸门置为 MAINTENANCE/version35。active=[]，但六个角色 LEGACY_WORKER，UI PID53443 和子 ready-worker PID53884 被检查列为未登记；已只读核对这两个进程的命令，未停止它们。空闲不等于来源门禁通过。
+- 当前持久搜索关闭，宿主仍保留 SCHEDULED 配置，准入关闭；定时规则仍保留，不能继续把08:14的开启状态当作当前可运行。真实累计作业仍只有1次MANUAL成功，没有自然SCHEDULED/REFRESH/ADMISSION证据。
+- 已请求用户让正在改生产的 AGY 暂停写入，保留改动且不要自行重启/恢复。需稳定基线后才能安全组织来源恢复，禁止修改角色指纹、旧回执或直接排除进程；不能用已通过测试替代停机来源门禁。跟进继续ACTIVE，等待协调期间保持维护与搜索关闭。
+
+- 08:17 独立快照整合回归完成：**503 passed / 1 failed / 13 warnings**。失败为并行新增 `tests/unit/test_insight_mobile.py::test_short_subpage_and_short_event_do_not_crash_caption_pages`：期望至少3页，实际2页。没有删断言、修改该并行工作或声称新基线通过。四个相关代码/测试文件与测试快照哈希复查一致。证据：[回执](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/receipt.json)、[日志](evidence/youtube-keyword-live-rollout/post-rollout-drift-20261014/pytest.log)。关键词、维护和部署原回归通过不抵消该整合失败；需协调该工作后再验收。
