@@ -268,3 +268,17 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 09:31会话“排查封面退化并调整生成策略”完成提交2a36ba1并推送main，新增三份封面运行源码变化；该会话已结束。其独立封面真实验收不替代整个后台来源恢复。最新磁盘hashd45c421ab70e9495eaf7fd36cfee3bbc5b5b6285091c725f33450bd456e03a84与09:26进程不同；保留该提交和全部20项dirty及untracked，不能回退封面修复。
 - 先前最终快照video-pytest-7xmtaugm已528 passed/10 warnings、runner0及清理完成，清单0ca1ddbf63b1c8880b2ee468f3ae7ff1335e3e8240cb0fd806fffb3c7e2d2dbe；因它不含09:31三个新文件，正在用keyword-final-integration-20261015-c补齐封面接力整合回归，证据video-pytest-bq6mx0ld。隔离分支已合入2a36ba1，后续采用不丢弃该并行工作。
 - 09:31Cloud实际只读观察API启用，搜索0/100、通用317/10000；配额证据一小时有效，执行仍现场检查窗口。搜索OFF39、准入关闭、累计真实准入0。新来源恢复目录keyword-source-recovery-20261015-c仅针对此次三文件差异，禁止重放旧b回执。
+
+## 2026-10-15 09:41 实际上线及真实准入验收完成
+
+- 最新完整快照（含2a36ba1封面修复、全部20项并行dirty/untracked及三文件关键词按钮修复）隔离验收 **570 passed / 10 warnings**；runner0、清理完成。证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-bq6mx0ld`，清单SHA-256 `87d83fde28c90fb93fd7686dabafd4c6e11ca6a2ad55455227703a999f6377ce`。不重复沿用旧528项快照作最终证据。
+- 新来源恢复c完成精确旧基线暂存、原生停止备份、还原全部新代码、维护启动与恢复调度。随后新preserve-keyword-profile计划 `c35f69bec00d4dd49c100036ae72e39b` 九步COMPLETE，生产采用main `e12b214`。回执 `~/Library/Application Support/VideoProcessing/deployments/keyword-ui-hover-20261015-b`；没有重放旧计划、强杀、删锁或丢弃并行工作。
+- 09:41再次独立验证源码、保护字段、调度恢复及六个现存角色真实birth/source一致，UI PID49660，运行hash `d45c421ab70e9495eaf7fd36cfee3bbc5b5b6285091c725f33450bd456e03a84`。RUNNING52、unknown=[]；原有流水线已继续运行，有真实在途任务。开放后的检查没有调用仅允许OFF的部署web_readback而误判正常运行。
+- 09:36正常控制面开放DISCOVERY_ONLY/version42及准入1/version6；profile保持ADMISSION，日20搜索/40详情、最多1条定时规则、累计准入上限1，未降低任何评分/时长/内容门槛。09:31Cloud非秘密配额已刷新，真实执行前现场窗口通过。
+- **09:36:50自然SCHEDULED** `bb1b790cabbb4d7eb867f3dac74c2534` COMPLETE/OK，新25、重复0、受限23，项目预算1搜索/1详情，25条持久评分快照逐条复算通过。
+- **09:37:08自然REFRESH** `957790514db54ff4a5a0eb1c3868012d` COMPLETE/OK，30条持久评分快照逐条复算通过，0搜索/1详情。既有同候选至少4小时自然刷新证据仍由10月14日SCHEDULED/REFRESH链证明；不把新候选刚搜索后的刷新声称为四小时观察。
+- **09:37:08.989604真实自动准入**：scheduler审计58，候选 `e7af5a820ea52bea299125f8daac84e484011f99baf26ca7af27ba49e31196bf`，YouTube `X79tE-S-Aow`，评分86、292秒、CHECKABLE；创建新主任务 **5947**，source=KEYWORD、slice_index=0、score=86、created_at=2026-10-15 01:37:08 UTC。09:40主任务PENDING；表示已接入原流水线，不代表已经制作或公开发布。
+- 当前累计准入automatic_used=1，等于上限1；之后新达标候选仍受ADMISSION_LIMIT限制，不自行扩容。当前太平洋配额日2026-10-14，本模块累计1搜索/2详情；历史TRIAL仍仅1次，不把正式定时作业算成额外试运行。
+- 实际浏览器首页入口、工作台列表、受限原因、预算与作业回读通过；候选显示“已入队 / 86分”，点击“查看主队列任务”准确到达仅含 `X79tE-S-Aow` 的生产队列。主按钮三主题悬停与异常/权限/重试路径已包含最终隔离浏览器回归。未在生产注入故障或创建测试规则。
+- 本次范围“关键词真实采集→自然热度刷新→统一评分→累计最多一条达标新主任务”已闭环。肺鼠疫规则仍于今日14:33:42北京时间到期，未延期；后续扩容/续期须另行确认。现有主任务按原流水线处理，外部发布权限未扩大。
+- 最终证据另见上述私有目录 `natural-job-readback.json`、`admission-complete-readback.json`、`post-open-runtime-proof.json`；恢复方式和用户验收路径见 `youtube-keyword-user-acceptance.md`。本次上线跟进可结束。
