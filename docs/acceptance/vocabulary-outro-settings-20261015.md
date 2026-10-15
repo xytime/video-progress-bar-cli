@@ -37,3 +37,13 @@
 15:08 回读：维护状态 RUNNING；UI PID56417、ready-worker PID56855，六个角色归属与源码摘要一致，摘要 `0f67206a83836837c0c298e4119bb9dd5b4af196d0f8b849292ca54f3eec60e9`，无 LEGACY_WORKER/UNREGISTERED_PROCESS。正常 RUNNING 时未提供冻结来源回执，原生命令仍会显示 SOURCES_NOT_VERIFIED/safe=false；不将它误解成部署失败或维护可停机。
 
 线上证据：上述本地验收目录中的 `production-readback.json` 与 `production-runtime.json`。目前完成代码、隔离验收、运行采用和后台回读；下一条自然视频的实际片尾仍待自然产出，未为验收重新处理、上传或发布历史视频。
+
+## 导航缓存修正与自然发布跟进
+
+19:52 回读：共享导航已包含“配置与运维 → 生词片尾”，但首页、商品页与采集页仍引用旧版本 `console_navigation.js?v=20261013-04`；线上该地址响应 `public, max-age=31536000, immutable`，会使已有浏览器继续使用旧菜单。首页工作区脚本也存在相同风险。三处模板改用无固定版本的共享导航/工作区脚本，复用现有 `no-cache, must-revalidate` 与 ETag 条件验证；生词片尾独立页面原本即采用此方式。
+
+后台规定的真实 Chromium 回归 **125 passed / 10 warnings**，隔离边界探针通过、runner exit=0、临时沙箱已回收；严格静态审计 0 errors / 0 warnings。证据 `video-pytest-j6re0hpw`，源码清单 SHA-256 `7e9f856847965f30d6496a61839f29b723eb2d408e386ad008d413222ed92e23`。已人工检查隔离首页截图，桌面侧栏默认显示子菜单。
+
+这次运行采用仅更新逐请求读取的三份 HTML 模板，没有改动 Python、JS、CSS、运营配置或进程。四个线上页面 GET 均 200 且采用新引用；两个共享脚本均返回 `no-cache, must-revalidate`，再次携带 ETag 请求均为 304。保存于 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/vocabulary-menu-cache-20261015/production-readback.json`，同目录保留静态审计、模板前后摘要和隔离首页截图。生产当时还有其他发布任务及源码漂移，本次没有尝试重启或修复这些无关运行状态；没有通过生产浏览器界面操作或宣称用户现有标签页已刷新。
+
+复用并更新原有 `automation-6`，每30分钟在当前聊天只读跟进。新基线为北京时间2026-10-15 19:48:37，旧作品 `publication_id=1515 / video_id=5946 / Bt1KsG-BXCU` 不作为新样本。等待下一条自然视频号发布后核对冻结配置、词汇/字幕、实际片尾和上传媒体摘要，区分平台受理、管理确认与公开可见；不适用的独立学习卡明确说明后继续等待首条适用样本。没有新结果保持安静，完成或确认故障后通知并暂停跟进；不为验收触发加工或发布。
