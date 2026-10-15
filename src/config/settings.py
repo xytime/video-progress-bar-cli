@@ -318,6 +318,8 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-v4-flash"
     # DeepSeek 一体化翻译+vocabulary 候选：完成 A/B 对比前保持关闭。
     enable_deepseek_vocab_fallback: bool = True
+    # 后台生词片尾配置独立于商品和公众号文章；每个任务在片尾开始时冻结。
+    vocabulary_outro_policy_path: Path = _PROJECT_ROOT / "config" / "vocabulary_outro.json"
     # 单条字幕任务用于 DeepSeek 对比候选的总预算；超出后保留此前可用候选并继续成片。
     deepseek_subtitle_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     # Gemini 主字幕候选的整片总预算；单请求超时会按剩余预算自动收紧。

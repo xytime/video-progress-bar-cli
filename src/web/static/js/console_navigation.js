@@ -8,7 +8,7 @@
       ['手动加入生产队列', '/?view=topics&tab=manual']]],
     ['production', '生产队列', '/?view=production&tab=queue', []],
     ['publications', '发布记录', '/?view=publications&tab=review', []],
-    ['operations', '配置与运维', '/?view=operations', []],
+    ['operations', '配置与运维', '/?view=operations', [['生词片尾', '/vocabulary-outro-settings']]],
   ];
   const root = location.pathname === '/';
   const rail = document.createElement('aside'); rail.className = 'console-rail';

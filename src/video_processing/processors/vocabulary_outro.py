@@ -117,12 +117,23 @@ def valid_outro(source: Path, subtitle: Path, output: Path, title: str | None = 
         return False
 
 
+def valid_empty_receipt(source: Path, subtitle: Path, output: Path) -> bool:
+    """只有与当前素材绑定的独立复核空结果，才能明确不追加片尾。"""
+    try:
+        receipt = json.loads(receipt_path(output).read_text())
+        return (receipt['status'] == 'no_suitable_terms' and receipt['recovery_checked'] is True
+                and receipt['items'] == []
+                and receipt['inputs'] == fingerprint(source, subtitle, receipt['inputs']['title']))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def probe(path: Path) -> dict:
     return json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_streams',
                       '-show_format', '-of', 'json', str(path)], text=True, timeout=30))
 
 
-def build(source: Path, subtitle: Path, output: Path, title: str) -> Path:
+def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_empty: bool = False) -> Path:
     """只写独立派生成片；失败不留下可选中的半成品，重复运行不重复追加。"""
     if source.resolve() == output.resolve():
         raise ValueError('片尾输出不得覆盖源视频')
@@ -132,13 +143,24 @@ def build(source: Path, subtitle: Path, output: Path, title: str) -> Path:
     inputs = fingerprint(source, subtitle, title)
     if valid_outro(source, subtitle, output, title):
         return output
+    if recover_empty and valid_empty_receipt(source, subtitle, output):
+        return source
     items = extract_items(subtitle)
     info = probe(source)
     duration = float(info['format']['duration'])
     items = [i for i in items if i['start'] < duration]
+    recovered = False
+    if not items and recover_empty:
+        from video_processing.utils.vocabulary_recovery import recover_items
+        items = recover_items(subtitle, duration)
+        recovered = True
     if not items:
         # 旧片尾不可继续被选中；基础视频保留。
         receipt_path(output).unlink(missing_ok=True)
+        if recover_empty:
+            from video_processing.utils.wechat_product_config import atomic_json
+            atomic_json(receipt_path(output), dict(inputs=inputs, status='no_suitable_terms',
+                                                  recovery_checked=True, items=[]))
         return source
     enrich_items(items, subtitle)
     from .vocabulary_outro_layout import render_cards, render_outro
@@ -172,7 +194,7 @@ def build(source: Path, subtitle: Path, output: Path, title: str) -> Path:
         if fingerprint(source, subtitle, title) != inputs:
             raise ValueError('渲染中源视频或字幕变化')
         receipt = dict(inputs=inputs, status='rendered', items=items, pages=len(cards),
-                       duration=actual, output_sha256=sha256(pending))
+                       duration=actual, output_sha256=sha256(pending), recovery_checked=recovered)
         for number, card in enumerate(cards, 1):
             card.save(temp / f'page-{number}.png')
         pending.replace(output)

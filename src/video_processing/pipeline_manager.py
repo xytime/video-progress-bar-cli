@@ -2308,23 +2308,51 @@ class PipelineManager:
 
     def _process_vocabulary_outro(self, prefix: str, yid: str, title: str, slice_index: int = 0):
         """成片与字幕均就绪后，在发布前运行受 PID 跟踪的独立片尾子进程。"""
+        from .utils.vocabulary_outro_policy import freeze, read_record, update_record
+        from .utils.wechat_product_context import video_product_context
+        from .processors.vocabulary_outro import valid_outro
         source = self._get_base_video_path(prefix)
         subtitle = self._OUT_DIR / f"{prefix}.ass"
+        output = self._OUT_DIR / f"{prefix}_vocab.mp4"
+        # 配置只影响尚未开始片尾的新任务；历史已完成素材保持原样。
+        if read_record(self._OUT_DIR, prefix) is None and valid_outro(source, subtitle, output):
+            return
+        video = self.db.get_video_by_youtube_id(yid, slice_index=slice_index) if getattr(self, 'db', None) else None
+        context = video_product_context(self._OUT_DIR, video or {'youtube_id': yid, 'slice_index': slice_index})
+        decision = freeze(self._OUT_DIR, prefix, settings.vocabulary_outro_policy_path, context)
+        if not decision['enabled']:
+            logger.info('[VocabularyOutro] %s 配置关闭，类型=%s', prefix, decision['group'])
+            return
         env = _build_subprocess_env()
         env["PYTHONPATH"] = str(self._SRC_DIR)
-        self._run_tracked([
-            self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/render_vocabulary_outro.py"),
-            "--source", str(source), "--subtitle", str(subtitle),
-            "--output", str(self._OUT_DIR / f"{prefix}_vocab.mp4"), "--title", title,
-        ], yid, slice_index=slice_index, cwd=str(self._PRJ_ROOT), env=env,
-           capture_output=True, timeout=2100)
+        try:
+            self._run_tracked([
+                self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/render_vocabulary_outro.py"),
+                "--source", str(source), "--subtitle", str(subtitle),
+                "--output", str(output), "--title", title,
+                "--recover-empty", "--record-policy",
+            ], yid, slice_index=slice_index, cwd=str(self._PRJ_ROOT), env=env,
+               capture_output=True, timeout=2100)
+            # 子进程失败或超时不能留下可被发布入口接受的旧缓存。
+            self._get_published_video_path(prefix)
+        except Exception as exc:
+            if read_record(self._OUT_DIR, prefix).get('status') != 'FAILED':
+                update_record(self._OUT_DIR, prefix, 'FAILED', error_code=type(exc).__name__)
+            raise
 
     def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
-        from .processors.vocabulary_outro import valid_outro
+        from .processors.vocabulary_outro import valid_outro, valid_empty_receipt
+        from .utils.vocabulary_outro_policy import read_record
         source = self._get_base_video_path(prefix, expected_duration)
+        decision = read_record(self._OUT_DIR, prefix)
+        if decision and not decision['enabled']:
+            return source
         output = self._OUT_DIR / f"{prefix}_vocab.mp4"
-        if valid_outro(source, self._OUT_DIR / f"{prefix}.ass", output):
+        subtitle = self._OUT_DIR / f"{prefix}.ass"
+        if (not decision or decision.get('status') == 'RENDERED') and valid_outro(source, subtitle, output):
             return output
+        if decision and not (decision.get('status') == 'NO_SUITABLE_TERMS' and valid_empty_receipt(source, subtitle, output)):
+            raise RuntimeError(f'[VocabularyOutro] {prefix} 片尾未完成或已失效，请检查片尾执行记录')
         return source
 
     def _get_base_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:

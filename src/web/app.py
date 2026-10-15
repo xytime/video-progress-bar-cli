@@ -187,6 +187,11 @@ async def reject_untrusted_browser_origins(request, call_next):
 
 # 使用全局 DB 实例（每次方法调用内部创建新连接，线程安全）
 db = PipelineDB()
+from web.vocabulary_outro_settings import create_vocabulary_outro_settings_router
+app.include_router(create_vocabulary_outro_settings_router(
+    active=settings.vocabulary_outro_policy_path,
+    output=Path(__file__).resolve().parents[2] / 'output', videos=db.get_product_preview_videos,
+))
 from web.product_settings import create_product_settings_router
 app.include_router(create_product_settings_router(
     active=settings.wechat_product_policy_path, status=settings.wechat_product_status_path,

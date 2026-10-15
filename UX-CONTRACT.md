@@ -2,6 +2,8 @@
 
 业务证据：`docs/specs/wechat-product-link-2026-10-10.md`；服务契约由 `src/web/product_settings.py`、配置/目录/资料校验器负责。页面保存不等于发布器采用，已登记来源不等于现场平台核验，库存仅为采集时观测。此次只重构管理交互，不改变发布门禁。
 
+生词片尾是独立配置变体，使用原生 checkbox/select/dialog，复用现有表单视觉。配置事实源为 `config/vocabulary_outro.json`，接口与草稿所有者分别为 `src/web/vocabulary_outro_settings.py`、`src/web/static/js/vocabulary_outro_settings.js`。CAS 冲突保留草稿并要求重新载入，独立只读重试不清除写入错误；过期预览不覆盖新表单。离开及重新载入需确认丢弃，Escape 保留草稿并恢复焦点。记录、最近任务和配置的读取分别反馈。保存只影响未开始片尾步骤的任务，冻结记录不代表上传/发布。独立英语世界学习卡不经过此步骤，实际任务预览明确标注不适用。验证所有者为 `tests/browser/test_vocabulary_outro_settings_browser.py`。
+
 ## Canonical UI Map
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |

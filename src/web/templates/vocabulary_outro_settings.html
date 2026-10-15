@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生词片尾 · 视频控制台</title>
+<script>
+(() => {const root=document.documentElement;const system=matchMedia('(prefers-color-scheme: dark)');let prefs={};try{prefs=JSON.parse(localStorage.getItem('vp-display-preferences')||'{}')||{};}catch(_){}const theme=['system','dark','light','contrast'].includes(prefs.theme)?prefs.theme:'system';const apply=()=>{root.dataset.theme=theme==='system'?(system.matches?'dark':'light'):theme;root.dataset.textSize=['standard','large','xlarge'].includes(prefs.size)?prefs.size:'large';};apply();system.addEventListener('change',apply);})();
+</script>
+<link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css">
+<link rel="stylesheet" href="/static/css/vocabulary_outro_settings.css"><link rel="stylesheet" href="/static/css/console_workspace.css">
+<script defer src="/static/js/vocabulary_outro_settings.js"></script><script defer src="/static/js/console_navigation.js"></script>
+</head><body><main class="product-settings vocabulary-settings">
+<nav class="breadcrumbs" aria-label="当前位置"><a id="back" href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">生词片尾</span></nav>
+<header class="page-header"><div><h1>生词片尾</h1><p class="hint">按视频类型决定是否在视频末尾追加生词表。</p></div><div class="header-actions"><span id="dirty-state" role="status">正在载入…</span><button id="reload" type="button" disabled>重新载入</button><button id="save" class="primary" type="button" disabled>保存更改</button></div></header>
+<p id="feedback" role="status" aria-live="polite"></p>
+<p class="hint">保存后仅影响尚未开始制作片尾的任务。已经生成片尾、上传中和已发布的视频保持原样。</p>
+<form id="settings-form" novalidate><fieldset id="editor" disabled><legend class="sr-only">生词片尾配置</legend>
+<div class="outro-layout"><div><section><h2>启用范围</h2><label class="outro-toggle" for="enabled"><span><strong>生成生词片尾</strong><small class="hint">总开关关闭时，所有类型均不追加片尾。</small></span><input id="enabled" type="checkbox"></label>
+<div id="profiles"></div><p id="effective-state" class="hint" role="status"></p><p class="hint">适用于主流水线追加的生词片尾。独立制作的英语世界学习卡已有随片词卡，不经过本步骤；这里不改变学习卡的内容和时长。</p><p class="hint">每页 3 个生词，每页 3 秒。启用后如全片零生词，会独立补提取并校验；处理失败会记录异常并阻止该任务静默跳过片尾。</p></section>
+<details class="advanced"><summary>类型识别条件</summary><p class="hint">英语世界优先按内容类型识别；华尔街、TED、AI 资讯按来源频道匹配。AI 也接受显式主题 AI。其余归入“其他”。这里的设置独立于商品挂载和公众号文章。</p><p class="hint">请输入完整 UC 频道 ID，多个 ID 用逗号或换行分隔；同一频道不能归入多个类型。</p><div id="channel-fields"></div></details></div>
+<section class="preview-panel"><h2>预览匹配结果</h2><p class="hint">预览使用当前表单，包括尚未保存的修改。</p><label for="video">最近任务（最多 100 条）</label><select id="video"><option value="">使用样例上下文</option></select><p id="videos-state" class="hint" role="status"></p><button id="reload-videos" type="button" disabled>刷新视频列表</button>
+<details id="sample-context" open><summary>样例上下文</summary><label for="content-type">内容类型</label><select id="content-type"><option value="GENERAL">普通视频</option><option value="ENGLISH_WORLD_SHORT">英语世界短视频</option></select><label for="channel">来源频道 ID</label><input id="channel" type="text" maxlength="100"><label for="topic">显式主题</label><select id="topic"><option value="">未标注</option><option value="AI">AI</option></select></details>
+<button id="preview" type="button" disabled>预览匹配</button><div id="preview-result" role="status" aria-live="polite">选择视频或填写样例，查看类型、匹配原因和是否追加。</div></section></div>
+</fieldset></form>
+<section><div class="section-head"><h2>最近执行记录</h2><button id="reload-records" type="button" disabled>刷新记录</button></div><p id="records-state" class="hint" role="status">正在读取…</p><div id="records"></div><p class="hint">记录表示本地片尾步骤的结果，不代表视频已上传或发布。此前未记录的历史任务不在此列表。</p></section>
+<dialog id="discard-dialog" aria-labelledby="discard-heading"><h2 id="discard-heading">有尚未保存的修改</h2><p>继续会丢弃当前表单中的修改。</p><div class="dialog-foot"><button id="keep-editing" type="button" autofocus disabled>继续编辑</button><button id="discard" type="button" disabled>丢弃修改并继续</button></div></dialog>
+</main></body></html>

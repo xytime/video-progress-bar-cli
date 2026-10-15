@@ -108,13 +108,16 @@ def test_pipeline_tracked_hook_and_actual_selection(tmp_path,monkeypatch):
         captured.append((command,yid,kwargs))
         output=tmp_path/'abc_s2_vocab.mp4';output.write_bytes(b'derived')
         vo.receipt_path(output).write_text(json.dumps({'inputs':vo.fingerprint(source,ass,'title'),'status':'rendered','output_sha256':vo.sha256(output)}))
+        from video_processing.utils.vocabulary_outro_policy import update_record
+        update_record(tmp_path, 'abc_s2', 'RENDERED')
     monkeypatch.setattr(manager,'_run_tracked',tracked)
     manager._process_vocabulary_outro('abc_s2','abc','title',slice_index=2)
     assert captured[0][1]=='abc' and captured[0][2]['slice_index']==2
     assert str(ass) in captured[0][0] and '--publish' not in captured[0][0]
     assert manager._get_published_video_path('abc_s2')==tmp_path/'abc_s2_vocab.mp4'
     source.write_bytes(b'new base')
-    assert manager._get_published_video_path('abc_s2')==source
+    with pytest.raises(RuntimeError, match='失效'):
+        manager._get_published_video_path('abc_s2')
 
 
 def test_mismatched_source_identity_rejected(tmp_path):

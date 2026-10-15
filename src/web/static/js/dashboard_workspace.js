@@ -19,6 +19,7 @@
   const tools=document.createElement('section'); tools.id='operations-tools'; tools.className='panel'; tools.setAttribute('aria-label','运行与诊断');
   [$('ai-audit-mini'),$('btn-wechat-login'),$('btn-run-pipeline')].forEach(el=>tools.append(el));
   const products=document.createElement('a'); products.href='/product-settings';products.textContent='商品挂载';products.className='btn-tool-prefs';tools.prepend(products);app.append(tools);
+  const vocabulary=document.createElement('a'); vocabulary.href='/vocabulary-outro-settings';vocabulary.textContent='生词片尾';vocabulary.className='btn-tool-prefs';tools.prepend(vocabulary);
   function paint(tab=legacy.tab()) {
     $('workspace-title').textContent=titles[view];document.title=titles[view]+' · 视频运营工作台';
     overview.hidden=view!=='overview';$('global-funnel-panel').hidden=view!=='overview';
