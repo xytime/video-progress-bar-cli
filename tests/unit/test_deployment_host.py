@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | PID 复用、退出等待、来源拒绝和备份前置门禁 |
+| 1.1.0 | 2026-10-15 | Codex | 真实旧角色锁的已完成部署证明、维护限定、身份漂移与在途保护 |
 """
 from types import SimpleNamespace
 from pathlib import Path
@@ -11,6 +12,7 @@ import os
 import signal
 import subprocess
 import sys
+import json
 
 import pytest
 from video_processing.core.deployment import DeploymentDenied
@@ -98,3 +100,82 @@ def test_keyword_flags_in_off_adoption_protection(monkeypatch,flag):
     instance.plan={'protections':host.protection_snapshot()}
     with pytest.raises(DeploymentDenied,match='SEARCH_CLOSURE_UNCONFIRMED'):
         instance.protections()
+
+
+def completed_previous(directory, owner):
+    from video_processing.core.deployment import STEPS, digest, write_json
+    from config.settings import settings
+    plan = {"schema": 1, "root": str(settings.project_root), "sources": {"target": "previous"}}
+    write_json(directory / "plan.json", plan)
+    write_json(directory / "journal.json", {"schema": 1, "plan": digest(plan), "state": "COMPLETE",
+                                            "done": list(STEPS), "pending": None})
+    write_json(directory / "adopt.json", {"ok": True, "target": "previous", "source_hash": owner["source_hash"]})
+    write_json(directory / "start.json", {"ok": True, "inspection": {"safe": True, "workers": {"ui": owner}}})
+
+
+def test_only_exact_proven_old_worker_retires_in_maintenance(tmp_path, monkeypatch, isolated_running_maintenance):
+    from config.settings import settings
+    from video_processing.core import maintenance_runtime as runtime
+    from video_processing.core.task_lease import read_lease_owner
+    # lsof 扫描进程被测试沙盒禁止；真实角色锁/birth 保留，仅模拟 cwd 观察。
+    def observe_cwd(command, **kwargs):
+        assert command[1:] == ['-a', '-p', str(os.getpid()), '-d', 'cwd', '-Fn']
+        return subprocess.CompletedProcess(command, 0, 'n' + str(Path.cwd()) + '\n', '')
+    monkeypatch.setattr(runtime.subprocess, 'run', observe_cwd)
+    monkeypatch.setattr(runtime, 'code_hash', lambda: 'a' * 64)
+    with runtime.role_lease('ui'):
+        owner = read_lease_owner(settings.maintenance_state_path.with_suffix('.workers') / 'ui.lock')
+        previous = tmp_path / 'previous'
+        completed_previous(previous, owner)
+        proof = host.retirement_snapshot(settings.project_root, previous)
+        monkeypatch.setattr(runtime, 'code_hash', lambda: 'b' * 64)
+        options = {'process_pids': {os.getpid()}, 'retiring_workers': host.retirement_owners(proof)}
+        assert {'code': 'LEGACY_WORKER', 'role': 'ui'} in runtime.inspection(isolated_running_maintenance, **options)['unknown']
+        with isolated_running_maintenance.admit('video', 'new-video:0') as ticket:
+            ticket.start()
+            isolated_running_maintenance.enter('等待当前任务')
+            monkeypatch.chdir(tmp_path)
+            assert not runtime.inspection(isolated_running_maintenance, **options)['workers']
+            monkeypatch.chdir(settings.project_root)
+            active = runtime.inspection(isolated_running_maintenance, **options)
+            assert active['workers'].get('ui') == owner, active
+            assert active['active'] and not active['safe']
+        checked = runtime.inspection(isolated_running_maintenance, **options)
+        assert checked['workers']['ui'] == owner
+        assert checked['unknown'] == [{'code': 'SOURCES_NOT_VERIFIED'}]
+        assert {'code': 'LEGACY_WORKER', 'role': 'ui'} in runtime.inspection(
+            isolated_running_maintenance, process_pids={os.getpid()})['unknown']
+        changed = dict(owner, birth='reused-pid')
+        refused = runtime.inspection(isolated_running_maintenance, process_pids={os.getpid()}, retiring_workers={'ui': changed})
+        assert not refused['workers']
+        assert {'code': 'UNREGISTERED_PROCESS', 'pid': os.getpid()} in refused['unknown']
+        unknown = runtime.inspection(isolated_running_maintenance, process_pids={os.getpid(), 99999999},
+                                     retiring_workers=proof['owners'])
+        assert {'code': 'UNREGISTERED_PROCESS', 'pid': 99999999} in unknown['unknown']
+        (previous / 'adopt.json').write_text('{}')
+        with pytest.raises(DeploymentDenied, match='RETIREMENT_PROOF_DRIFT'):
+            host.retirement_owners(proof)
+
+
+@pytest.mark.parametrize('fault', ['incomplete', 'source', 'owner', 'root'])
+def test_retirement_requires_completed_matching_deployment(tmp_path, monkeypatch, isolated_running_maintenance, fault):
+    from config.settings import settings
+    from video_processing.core import maintenance_runtime as runtime
+    from video_processing.core.task_lease import read_lease_owner
+    with runtime.role_lease('ui'):
+        owner = read_lease_owner(settings.maintenance_state_path.with_suffix('.workers') / 'ui.lock')
+        completed_previous(tmp_path, owner)
+        name = {'incomplete': 'journal', 'source': 'adopt', 'owner': 'start', 'root': 'plan'}[fault] + '.json'
+        path = tmp_path / name
+        value = json.loads(path.read_text())
+        if fault == 'incomplete':
+            value.update(state='FAILED', done=[], pending=None)
+        elif fault == 'source':
+            value['source_hash'] = 'f' * 64
+        elif fault == 'owner':
+            value['inspection']['workers']['ui']['birth'] = 'other'
+        else:
+            value['root'] = str(tmp_path)
+        path.write_text(json.dumps(value))
+        with pytest.raises(DeploymentDenied):
+            host.retirement_snapshot(settings.project_root, tmp_path)

@@ -25,3 +25,11 @@
 - 生产组合源码：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/cover-provenance-combined-20261015`，保留线上已有未提交改动，不覆盖它们。
 - 运行采用尚未完成：2026-10-15 本机维护检查为 RUNNING / UNKNOWN / safe=false；报告 LEGACY_WORKER 与仍在运行的 run_ready_publications.py。未绕过门禁重启，也未改变维护状态。
 - 未进行真实 Telegram 发送、历史补发或任何视频发布操作。真实渠道回执需后续正常新任务产生，不能把隔离传输测试称为真实发送成功。
+
+## 上线阻塞修复
+
+- 根因：后台六个角色仍持有上次已完成部署的来源哈希；磁盘后续改动造成哈希漂移，维护检查因此把可识别的旧进程视为未知，原生部署器无法正常退役。
+- 修复：新计划仅可引用已完成原生部署，绑定其计划、日志、采用和启动回执哈希，并快照旧角色锁。仅维护状态允许这些精确身份退役；每步复核 PID、内核启动时间、真实 cwd、角色锁与来源证据。普通后台检查、未知进程、业务锁和在途任务仍闭锁。
+- 最终组合回归：262 passed，4 warnings；覆盖部署、维护准入、来源采用、封面接力、投稿绑定、Telegram、切片，以及 1366px/390px Chromium 展示。
+- 证据：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-65k1hr_m/receipt.json`、`source-manifest.json`、`pytest.xml`。
+- 新任务验收候选：#5968 / `ymNCzBEuhBo`，当天进入队列且尚未投稿。真实加工遵守现有美股盘中重负载保护，不用历史任务替代，不绕过保护。

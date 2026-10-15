@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.2.0 | 2026-10-14 | Codex | 已完成阶段配置可原样保留部署；仍验证持久 OFF、来源、备份及预算 |
+| 1.3.0 | 2026-10-15 | Codex | 绑定已完成部署与精确角色快照，安全退役源码漂移的旧 worker |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-13 | Codex | 来源证据、正常退出、一致性备份、维护启动和恢复 |
 """
@@ -15,22 +16,57 @@ import httpx
 
 from config.settings import settings
 from video_processing.db.database import PipelineDB
-from .deployment import require, write_json, read_json, digest, DeploymentDenied
+from .deployment import Deployment, require, write_json, read_json, digest, DeploymentDenied
 from .deployment_sources import Sources, sha
 from .deployment_schedules import Schedules, UI
 from .maintenance import gate
-from .maintenance_runtime import inspection, code_hash, protection_snapshot, process_birth, SOURCE_GROUPS
+from .maintenance_runtime import inspection, code_hash, protection_snapshot, process_birth, SOURCE_GROUPS, ROLES, PROTOCOL
 from .task_lease import read_lease_owner
 
 
 def implementation():
     paths = [Path(__file__).with_name(n + ".py") for n in
-             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host", "keyword_rollout", "keyword_job_proof")]
+             ("deployment", "deployment_sources", "deployment_schedules", "deployment_host", "maintenance_runtime", "keyword_rollout", "keyword_job_proof")]
     paths.append(Path(__file__).resolve().parents[2] / "config" / "keyword_rollout.py")
     return {str(p.relative_to(Path(__file__).resolve().parents[2])): sha(p.read_bytes()) for p in paths}
 
 
 LOADED_IMPLEMENTATION = implementation()
+
+
+def retirement_snapshot(root, directory):
+    """仅已完成原生部署可证明旧来源；不允许调用方提供任意可信哈希。"""
+    directory = Path(directory).resolve()
+    previous = read_json(directory / "plan.json")
+    require(Path(previous["root"]).resolve() == Path(root).resolve(), "RETIREMENT_ROOT_MISMATCH")
+    require(Deployment(previous, directory, None).status()["state"] == "COMPLETE", "RETIREMENT_DEPLOYMENT_INCOMPLETE")
+    adopted = read_json(directory / "adopt.json")
+    started = read_json(directory / "start.json")["inspection"]
+    require(adopted.get("ok") is True and adopted.get("target") == previous["sources"]["target"]
+            and started.get("safe") is True, "RETIREMENT_PROOF_INVALID")
+    source_hash = adopted["source_hash"]
+    require(len(source_hash) == 64 and all(c in "0123456789abcdef" for c in source_hash)
+            and started["workers"].get("ui", {}).get("source_hash") == source_hash, "RETIREMENT_SOURCE_UNPROVEN")
+    owners = {}
+    for role in ROLES:
+        row = read_lease_owner(settings.maintenance_state_path.with_suffix(".workers") / (role + ".lock"))
+        if row and row.get("source_hash") == source_hash:
+            require(row.get("protocol") == PROTOCOL and row.get("cwd") == str(root)
+                    and process_birth(row["pid"]) == row.get("birth"), "RETIREMENT_OWNER_CHANGED")
+            owners[role] = row
+    require(owners and owners.get("ui") == started["workers"].get("ui"), "RETIREMENT_UI_UNPROVEN")
+    return {"directory": str(directory), "owners": owners,
+            "files": {name: sha((directory / name).read_bytes()) for name in
+                      ("plan.json", "journal.json", "adopt.json", "start.json")}}
+
+
+def retirement_owners(proof):
+    if not proof:
+        return {}
+    directory = Path(proof["directory"])
+    require(all(sha((directory / name).read_bytes()) == value for name, value in proof["files"].items()),
+            "RETIREMENT_PROOF_DRIFT")
+    return proof["owners"]
 
 
 class HostDeployment:
@@ -70,7 +106,9 @@ class HostDeployment:
     def safe(self, *, started=False):
         self.protections()
         self.schedules.frozen(self.plan["schedules"], ui_started=started)
-        raw = inspection(self.control)
+        retiring = retirement_owners(self.plan.get("retirement"))
+        options = {"retiring_workers": retiring} if retiring else {}
+        raw = inspection(self.control, **options)
         require(not raw["active"] and raw["unknown"] == [{"code": "SOURCES_NOT_VERIFIED"}], "MAINTENANCE_NOT_IDLE")
         require(raw["state"] == "MAINTENANCE", "MAINTENANCE_REQUIRED")
         checks = [{"group": "cron", "kind": "cron", "sha256": sha(self.schedules.cron())}]
@@ -89,7 +127,7 @@ class HostDeployment:
         write_json(proof, {"schema": 1, "version": raw["version"], "at": time.time(), "source_hash": code_hash(),
                            "groups": sorted(SOURCE_GROUPS), "protections": protection_snapshot(), "checks": checks,
                            "keyword_profile": settings.topic_rollout_snapshot()})
-        result = inspection(self.control, evidence=proof)
+        result = inspection(self.control, evidence=proof, **options)
         require(result["safe"], "MAINTENANCE_INSPECTION_REJECTED")
         return result
 

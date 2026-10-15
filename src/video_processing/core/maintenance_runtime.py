@@ -9,6 +9,7 @@
 | 1.0.2 | 2026-10-13 | Codex | 独立测试入口与真实 cwd 双重核实，排除仅借用生产解释器的测试 |
 | 1.0.3 | 2026-10-13 | Codex | 相对测试入口仅按已核实的进程 cwd 解析 |
 | 1.0.4 | 2026-10-13 | Codex | 核实 cron shell 与唯一已登记子进程归属，保留未知阻断 |
+| 1.0.5 | 2026-10-15 | Codex | 维护中只允许已完成部署证明的精确旧进程退役，仍核对真实 cwd 与 birth |
 """
 from __future__ import annotations
 from functools import wraps
@@ -130,7 +131,7 @@ def _independent_test_root(entry, root, cwd):
         return None
 
 
-def inspection(control, *, evidence=None, process_pids=None):
+def inspection(control, *, evidence=None, process_pids=None, retiring_workers=None):
     """证据由另行批准的采用流程生成；哈希绑定被冻结的非秘密来源清单。
 
     每次操作重新检查真实角色锁/业务锁/PID。文件回执缺失不推断来源受控。
@@ -145,7 +146,13 @@ def inspection(control, *, evidence=None, process_pids=None):
         for role in ROLES:
             row = read_lease_owner(control.path.with_suffix(".workers") / (role + ".lock"))
             if row:
-                if (row.get("protocol") != PROTOCOL or row.get("source_hash") != expected_hash
+                retiring = (state["state"] == "MAINTENANCE" and row == (retiring_workers or {}).get(role))
+                if retiring:
+                    lsof = "/usr/sbin/lsof" if sys.platform == "darwin" else "lsof"
+                    cwd = subprocess.run([lsof, "-a", "-p", str(row["pid"]), "-d", "cwd", "-Fn"],
+                                         text=True, capture_output=True, timeout=2, check=True)
+                    retiring = [line[1:] for line in cwd.stdout.splitlines() if line.startswith("n")] == [str(settings.project_root)]
+                if (row.get("protocol") != PROTOCOL or (row.get("source_hash") != expected_hash and not retiring)
                         or row.get("cwd") != str(settings.project_root)
                         or row.get("birth") != process_birth(row["pid"])):
                     unknown.append({"code": "LEGACY_WORKER", "role": role})
