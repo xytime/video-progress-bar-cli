@@ -4,15 +4,15 @@
 <meta name="topic-csrf" content="__TOPIC_CSRF__"><title>YouTube 关键词采集 · 视频控制台</title>
 <script src="/static/js/topic_display_preferences.js?v=1"></script>
 <link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
-<link rel="stylesheet" href="/static/css/topic_candidates.css?v=20261015-01"><script defer src="/static/js/topic_candidates.js?v=20261013-04"></script>
+<link rel="stylesheet" href="/static/css/topic_candidates.css?v=20261015-01"><script defer src="/static/js/topic_candidates.js?v=20261015-05"></script>
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261013-04"><script defer src="/static/js/console_navigation.js"></script></head><body><main class="product-settings topic-workbench">
 <nav class="breadcrumbs" aria-label="当前位置"><a href="/">视频控制台</a><span aria-hidden="true"> / </span><span aria-current="page">YouTube 关键词采集</span></nav>
 <header class="page-header"><div><h1>YouTube 关键词采集</h1><p class="hint">跨频道搜索事件报道，跟踪热度并按现有规则筛选。</p></div><div class="header-actions"><button disabled id="reload" type="button">重新载入</button><button id="new-topic" class="primary" type="button" disabled>新建采集规则</button></div></header>
 <div class="status-banner"><div><p id="mode-state" role="status">正在读取运行状态…</p><p id="gate-reason" class="hint"></p><p id="budget" class="hint"></p><p id="collection-state" class="hint"></p></div><button id="mode-button" type="button" disabled>开启搜索</button></div>
-<div class="read-feedback"><p class="hint">达标准入开放后可进入现有自动制作发布流程。</p><button id="admission-button" type="button" disabled>开启达标准入</button></div>
+<div class="read-feedback"><div><p class="hint">达标准入开放后可进入现有自动制作发布流程。</p><p id="admission-usage" class="hint" role="status"></p></div><button id="admission-button" type="button" disabled>开启达标准入</button></div>
 <div class="read-feedback"><p id="state-feedback" role="status" aria-live="polite"></p><button disabled id="state-retry" type="button">重试运行状态</button></div>
 <p id="feedback" role="status" aria-live="polite"></p>
-<section aria-labelledby="topics-heading"><div class="section-head"><h2 id="topics-heading">采集规则</h2><span class="hint">最多 10 个有效采集规则；首轮最多 1 条定时规则；保存后默认不自动采集。</span></div><div id="topics" aria-busy="true"><p>正在载入采集规则…</p></div></section>
+<section aria-labelledby="topics-heading"><div class="section-head"><h2 id="topics-heading">采集规则</h2><span class="hint">最多 10 个有效采集规则；同时最多 1 条定时规则；保存后默认不自动采集。</span></div><div id="topics" aria-busy="true"><p>正在载入采集规则…</p></div></section>
 <section aria-labelledby="pool-heading"><div class="section-head"><h2 id="pool-heading">候选池</h2><span class="hint">收藏仅保存选题意向。</span></div>
 <form id="filters" class="candidate-filters" novalidate>
 <div><label for="topic-filter">采集规则</label><select id="topic-filter"><option value="">全部采集规则</option></select></div>

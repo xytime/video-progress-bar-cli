@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.5.0 | 2026-10-15 | Codex | 长期独立额度、到期提示及续期冲突/键盘/窄屏 |
 | 1.1.1 | 2026-10-15 | Codex | 三种主题下主操作悬停文字对比回归 |
 | 1.1.0 | 2026-10-12 | Codex | M13 真实浏览器维护 CRUD、两次生命周期重启、版本与本机安全拒绝 |
 | 1.0.0 | 2026-10-11 | Codex | 候选完整任务、键盘/窄屏/错误/冲突/关闭验收及截图 |
@@ -72,6 +73,42 @@ def test_trial_budget_exhaustion_has_cumulative_explanation(ui):
     expect(page.get_by_role('button', name='搜索候选', exact=True)).to_be_disabled()
     expect(page.locator('.topic-row')).to_contain_text('试运行累计额度已用完')
     evidence(page, 'trial-budget-exhausted')
+
+
+@pytest.mark.parametrize('theme',['dark','light','contrast'])
+def test_long_term_renew_conflict_quota_and_expiry_warning(ui,theme):
+    from config.keyword_rollout import phase_values
+    from tests.unit.test_keyword_long_term import historical
+    page,tracker,flags=ui
+    for name,value in phase_values('LONG_TERM','isolated-project').items():setattr(tracker.config,name,value)
+    selected=topic(tracker,valid_days=1)
+    historical(tracker,tracker.clock(),status='FAILED')
+    page.evaluate('(theme)=>document.documentElement.dataset.theme=theme',theme)
+    page.locator('#reload').click()
+    expect(page.locator('#admission-usage')).to_contain_text('1 / 2 条')
+    expect(page.locator('#admission-usage')).to_contain_text('滚动 168 小时：1 / 6 条')
+    expect(page.locator('#admission-usage')).to_contain_text('在途主任务：0 / 2 条')
+    expect(page.locator('.topic-row')).to_contain_text('24 小时内到期')
+    page.get_by_role('button',name='续期',exact=True).focus();page.keyboard.press('Enter')
+    expect(page.locator('#action-cancel')).to_be_focused()
+    expect(page.locator('#renew-days')).to_have_value('7')
+    page.locator('#renew-days').fill('8')
+    flags['conflict']=True;page.locator('#action-confirm').click()
+    expect(page.locator('#action-feedback')).to_contain_text('已更新')
+    expect(page.locator('#renew-days')).to_have_value('8')
+    flags['conflict']=False;page.locator('#renew-days').fill('7');page.locator('#action-confirm').click()
+    expect(page.locator('#action-dialog')).not_to_be_visible()
+    expect(page.locator('.topic-row')).not_to_contain_text('24 小时内到期')
+    page.get_by_role('button',name='暂停',exact=True).click()
+    expect(page.locator('.topic-row')).to_contain_text('已暂停')
+    page.get_by_role('button',name='续期',exact=True).click()
+    expect(page.locator('#action-description')).to_contain_text('保持暂停')
+    page.locator('#action-confirm').click();expect(page.locator('#action-dialog')).not_to_be_visible()
+    expect(page.locator('.topic-row')).to_contain_text('已暂停')
+    page.set_viewport_size(dict(width=390,height=900))
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert not tracker.adapter.calls
+    evidence(page,'long-term-'+theme)
 
 
 def test_a20_complete_task_desktop_and_narrow(ui):

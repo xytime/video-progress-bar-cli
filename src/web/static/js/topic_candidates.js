@@ -1,6 +1,7 @@
 /* Modification History: 1.0.0 | 2026-10-11 | Codex | 本机候选交互、CAS、错误恢复、筛选与分页；无自动搜索。 */
 /* Modification History: 1.0.1 | 2026-10-12 | Codex | 显示持久化维护状态，保留本地专题管理。 */
 /* Modification History: 0.4.0 | 2026-10-13 | Codex | 采集规则、热度证据、调度及受控准入状态。 */
+/* Modification History: 0.5.0 | 2026-10-15 | Codex | 显式续期、24小时提示及独立日周在途额度。 */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -12,6 +13,7 @@
   let stateGeneration=0, stateController=null, stateHealthy=false, stateSuccess='', candidateSuccess='', successfulParams='';
   const statusNames = {ACTIVE:'有效', PAUSED:'已暂停', EXPIRED:'已到期', ARCHIVED:'已归档', NEW:'未整理', SAVED:'收藏', REJECTED:'排除', CHECKABLE:'可人工核实', INCOMPLETE:'资料不足', RESTRICTED:'规则受限', UNAVAILABLE:'不可用', RUNNING:'执行中', STOPPING:'正在停止', COMPLETE:'完成', PARTIAL:'部分完成', FAILED:'失败', INTERRUPTED:'已中断'};
   const failures = {ROLLOUT_UNVERIFIED:'阶段配置或部署回执未通过核实，搜索保持关闭', TRIAL_BUDGET:'试运行累计额度已用完，不随跨日或重启恢复', TRIAL_CONFIG:'试运行必须关闭定时采集和准入', RECHECK:'资料或规则变化，等待重新核实', STALE_METADATA:'报道或统计已过期', LOW_SCORE:'当前评分政策下未达标', INCOMPLETE:'统计资料不足', BLACKLISTED:'视频或频道已排除', ADMISSION_CLOSED:'准入已关闭', ADMISSION_LIMIT:'已达到累计准入上限，等待管理员评审扩容', RUNTIME_UNVERIFIED:"运行来源未核实，请完成维护检查", SCHEDULER_CLOSED:"定时采集尚未开放", COOLDOWN:"搜索冷却中，稍后按计划重试", MAINTENANCE:"维护中，等待恢复", NO_API:"官方 API 尚未配置", NETWORK:'官方请求失败或超时', API_QUOTA:'官方项目配额已耗尽', API_CREDENTIALS:'官方凭据无效', API_ACCESS:'官方访问受限', API_RATE_LIMIT:'官方请求限流', API_ERROR:'官方服务暂不可用', BUDGET:'今日预算不足', MARKET_GUARD:'宿主保护窗口', GUARD_UNKNOWN:'宿主保护状态无法确认', GUARD_DISABLED:'宿主保护未开启', DEADLINE:'时间不足，搜索已停止', DATABASE_BUSY:'数据库忙，请稍后重试', DATABASE_ERROR:'数据库操作未完成', STOPPED:'采集规则或运行状态已改变', SEARCH_CLOSED:'搜索已关闭', RESTARTED:'服务重启，本轮未自动续跑', INTERNAL_ERROR:'本轮未完成，请重新载入查看状态', INVALID_RESPONSE:'官方资料不足'};
+  Object.assign(failures,{ADMISSION_DAILY:'今日准入已满，等待北京时间次日额度',ADMISSION_ROLLING:'滚动 7 天准入已满，等待额度释放',ADMISSION_INFLIGHT:'关键词在途已满，等待任务结束',ADMISSION_LEDGER_UNVERIFIED:'准入账本未通过核实，新增准入已停止',DURATION_LIMIT:'准入时长需为 180–1800 秒'});
   const text = (tag, value, className) => { const el=document.createElement(tag); el.textContent=value; if(className) el.className=className; return el; };
   const when = value => { const date=new Date(value); return value && !Number.isNaN(date.valueOf()) ? date.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}) : '未知'; };
   const say = (value, id='feedback') => { $(id).textContent=value; };
@@ -104,6 +106,15 @@
     $('admission-button').disabled=!stateHealthy || (!model.collection?.admission && (!model.collection?.admission_available || !model.search_open));
     $('admission-button').textContent=model.collection?.admission?'关闭达标准入':'开启达标准入';
     $('collection-state').textContent=`定时采集：${model.collection?.scheduler_enabled?'宿主已允许，需逐条启用':'尚未开放'} · 达标准入：${model.collection?.admission && model.collection?.admission_available && model.search_open?'已开放':'关闭'} · 每 4 小时计划一次，维护与保护时段顺延`;
+    const usage=model.admission_usage;
+    if(usage?.verified) {
+      const limits=usage.limits;
+      $('admission-usage').textContent=limits.profile==='v0.5' ? `准入额度 · 北京时间 ${usage.day}：${usage.daily_used} / ${limits.daily} 条 · 滚动 168 小时：${usage.rolling_used} / ${limits.rolling} 条 · 在途主任务：${usage.inflight} / ${limits.inflight} 条 · 失败或删除不退还日／周额度` : `首轮累计准入：${usage.total_used} / ${limits.total} 条`;
+      if(usage.code!=='OK') $('admission-usage').textContent+=' · '+(failures[usage.code]||'等待核实')+(usage.next_at?' · 最早释放 '+when(usage.next_at)+'（北京时间）':'');
+    } else {
+      $('admission-usage').textContent=failures.ADMISSION_LEDGER_UNVERIFIED;
+      if(!model.collection?.admission) $('admission-button').disabled=true;
+    }
     if(model.collection?.runtime_code && !['SEARCH','REFRESH_OR_ADMISSION','BUSY'].includes(model.collection.runtime_code)) $('collection-state').textContent+=' · 最近调度：'+(failures[model.collection.runtime_code]||'等待核实')+' · '+when(model.collection.runtime_at);
     $('mode-button').disabled=!stateHealthy || (model.control.mode==='OFF' && !model.can_enable);
     const options=$('topic-filter'), selected=options.value;
@@ -115,6 +126,8 @@
     model.topics.forEach(topic=>{
       const row=text('article','', 'topic-row'); row.dataset.topic=topic.id;
       const main=text('div',''); main.append(text('h3',topic.name),text('p',topic.query),text('p',`${statusNames[topic.status]} · ${topic.category} · 到期 ${when(topic.expires_at)} · ${topic.candidate_count} 个历史候选`,'hint'),text('p',`最近搜索：${topic.last_run_at?when(topic.last_run_at):'尚未搜索'}`,'hint'));
+      const remaining=new Date(topic.expires_at)-new Date(model.observed_at);
+      if(['ACTIVE','PAUSED'].includes(topic.status)&&remaining>0&&remaining<=86400000) main.append(text('p','24 小时内到期；到期后停止采集，请按需续期。','hint'));
       const actions=text('div','', 'topic-actions');
       const reason=searchReason(topic);
       if(reason) main.append(text('p','搜索不可用：'+reason,'hint'));
@@ -133,10 +146,11 @@
       },busy || (!topic.auto_enabled && (Boolean(reason)||!model.collection?.scheduler_enabled))));
       actions.append(button('编辑',()=>openEditor(topic),topic.status==='ARCHIVED'||busy));
       if(topic.status!=='ARCHIVED') {
-        actions.append(button(topic.status==='ACTIVE'?'暂停':'恢复',async()=>{
-          if(topic.status==='EXPIRED') { openAction('恢复采集规则',`为“${topic.name}”设置新的有效期。`,false,true,()=>request(`/topics/${topic.id}/state`,{version:topic.version,state:'ACTIVE',valid_days:Number($('renew-days').value)},'POST')); return; }
+        actions.append(button(topic.status==='ACTIVE'?'暂停':topic.status==='EXPIRED'?'续期并恢复':'恢复',async()=>{
+          if(topic.status==='EXPIRED') { openRenew(topic); return; }
           if(await mutation(()=>request(`/topics/${topic.id}/state`,{version:topic.version,state:topic.status==='ACTIVE'?'PAUSED':'ACTIVE'},'POST'),'采集规则状态已保存。')) await load();
-        }));
+        },busy && topic.status==='EXPIRED'));
+        if(topic.status!=='EXPIRED') actions.append(button('续期',()=>openRenew(topic),busy));
         actions.append(button('归档',()=>openAction('归档采集规则',`归档“${topic.name}”后停止搜索并保留历史记录，首期不提供恢复。`,false,false,()=>request(`/topics/${topic.id}/state`,{version:topic.version,state:'ARCHIVED'},'POST'))));
       }
       row.append(main,actions); list.append(row);
@@ -207,7 +221,8 @@
   function invalid(key,message) { $(key+'-error').textContent=message;$('topic-'+key).setAttribute('aria-invalid','true'); }
   function fieldError(error) { const key={INVALID_NAME:'name',INVALID_QUERY:'query',INVALID_EXPIRY:'days'}[error.code]; if(key) invalid(key,error.message); for(const field of error.fields||[]){const mapped={name:'name',query:'query',valid_days:'days'}[field.loc?.at(-1)];if(mapped)invalid(mapped,'请检查此字段');} document.querySelector('#topic-form [aria-invalid="true"]')?.focus(); }
   function closeEditor(event) { if(pending){event?.preventDefault();return;} if(JSON.stringify(draft())!==initialDraft){event?.preventDefault();$('discard-dialog').showModal();return;} $('topic-editor').close(); }
-  function openAction(title,description,reason,renew,fn) { action=fn;$('action-confirm').textContent=title;$('action-title').textContent=title;$('action-description').textContent=description;$('reason-field').hidden=!reason;$('renew-field').hidden=!renew;say('','action-feedback');$('action-dialog').showModal();$('action-cancel').focus(); }
+  function openRenew(topic) { const restore=topic.status==='EXPIRED';openAction(restore?'续期并恢复':'续期采集规则',`“${topic.name}”从本次保存起重新计算有效期；${topic.status==='PAUSED'?'保持暂停':restore?'恢复有效状态，已启用的定时采集按计划执行':'保持当前有效状态'}。历史候选和准入消费保留，新版本需重新搜索后才能准入。`,false,true,()=>request(`/topics/${topic.id}/renew`,{version:topic.version,valid_days:Number($('renew-days').value),restore},'POST')); }
+  function openAction(title,description,reason,renew,fn) { action=fn;$('action-confirm').textContent=title;$('action-title').textContent=title;$('action-description').textContent=description;$('reason-field').hidden=!reason;$('renew-field').hidden=!renew;if(renew)$('renew-days').value=7;say('','action-feedback');$('action-dialog').showModal();$('action-cancel').focus(); }
   $('topic-form').addEventListener('submit',async event=>{event.preventDefault();clearErrors();const value=draft();if(!value.name.trim())invalid('name','请填写采集规则名称');if(!value.query.trim())invalid('query','请填写查询词');if(!Number.isInteger(value.valid_days)||value.valid_days<1||value.valid_days>30)invalid('days','有效期应为 1–30 天');const first=document.querySelector('#topic-form [aria-invalid="true"]');if(first){first.focus();return;}const savedMessage=editing?.auto_enabled?'采集规则已更新，定时设置保持启用；下一轮按新规则执行。':'采集规则已保存，不会自动搜索。';const okay=await mutation(()=>request(editing?'/topics/'+editing.id:'/topics',editing?{...value,version:editing.version}:value,editing?'PUT':'POST'),savedMessage,'form-feedback');if(okay){$('topic-editor').close();say(savedMessage);await load();}});
   $('action-form').addEventListener('submit',async event=>{event.preventDefault();if(!$('renew-field').hidden&&(!Number.isInteger(Number($('renew-days').value))||Number($('renew-days').value)<1||Number($('renew-days').value)>30)){say('新有效期应为 1–30 天','action-feedback');$('renew-days').focus();return;}if(await mutation(action,'操作已保存。','action-feedback')){$('action-dialog').close();say('操作已保存。');await load();}});
   $('state-retry').addEventListener('click',loadState);

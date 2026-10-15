@@ -309,7 +309,9 @@ class TopicTracker(KeywordCollection):
         from ..core.maintenance import gate
         maintenance = gate().status()
         from config.keyword_rollout import FIELDS
-        return dict(collection=dict(scheduler_enabled=getattr(self.config,"topic_scheduler_enabled",False), admission_available=getattr(self.config,"topic_admission_enabled",False), automatic_used=self.db.keyword_auto_budget(self.config.topic_quota_project,self.clock()), **self.db.keyword_control()), control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
+        return dict(admission_usage=self.db.keyword_admission_usage(self.config,self.clock()),
+                    observed_at=self.clock().isoformat(),
+                    collection=dict(scheduler_enabled=getattr(self.config,"topic_scheduler_enabled",False), admission_available=getattr(self.config,"topic_admission_enabled",False), automatic_used=self.db.keyword_auto_budget(self.config.topic_quota_project,self.clock()), **self.db.keyword_control()), control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
                     configuration={k: getattr(self.config, k, False if k.endswith(("enabled", "mode")) else 1) for k in FIELDS},
                     rollout=self.config.topic_rollout_snapshot() if hasattr(self.config, "topic_rollout_snapshot") else None,
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),

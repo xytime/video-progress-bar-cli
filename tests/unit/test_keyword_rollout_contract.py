@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-15 | Codex | 新旧合同兼容、长期精确额度与回退 |
 | 1.0.0 | 2026-10-14 | Codex | 阶段跳跃、过期、类型、额度、项目及保护字段漂移反例 |
 """
 from copy import deepcopy
@@ -120,3 +121,22 @@ def test_unknown_configuration_is_not_normalized_into_approval(field, value):
     config = phase_values("OFF"); config[field] = value
     with pytest.raises(RolloutDenied, match="KEYWORD_CONFIGURATION_UNKNOWN"):
         identify(config)
+
+
+def test_long_term_is_versioned_and_can_rollback_without_enlarging_other_flags():
+    before=phase_values('ADMISSION',PROJECT)
+    plan=transition(before,'LONG_TERM',evidence(),NOW)
+    assert plan['schema']==2 and identify(validate_transition(plan,NOW))=='LONG_TERM'
+    assert {k for k in FIELDS if plan['after'][k]!=before[k]}=={'topic_admission_total_limit'}
+    rollback=transition(plan['after'],'ADMISSION',evidence(),NOW)
+    assert rollback['schema']==2 and validate_transition(rollback,NOW)==before
+    legacy=transition(phase_values('SCHEDULED',PROJECT),'ADMISSION',evidence(),NOW)
+    assert legacy['schema']==1
+    altered=deepcopy(plan);altered['schema']=1
+    with pytest.raises(RolloutDenied,match='DRIFT'):validate_transition(altered,NOW)
+
+
+@pytest.mark.parametrize('limit',[0,2,3,5,7,True])
+def test_long_term_does_not_accept_unapproved_limits(limit):
+    config=phase_values('LONG_TERM',PROJECT);config['topic_admission_total_limit']=limit
+    with pytest.raises(RolloutDenied,match='CONFIGURATION_UNKNOWN'):identify(config)

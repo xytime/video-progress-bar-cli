@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 0.5.0 | 2026-10-15 | Codex | 显式续期CSRF、严格请求、CAS与暂停保持 |
 | 1.0.0 | 2026-10-11 | Codex | 真实会话/来源/CSRF/CAS/禁止准入测试 |
 """
 from fastapi import FastAPI
@@ -43,6 +44,20 @@ def test_a01_real_api_create_edit_persist(topic_client):
     changed=client.put('/api/topic-candidates/topics/'+row['id'],json=dict(data,version=row['version'],name='健康追踪'))
     assert changed.status_code==200
     assert client.put('/api/topic-candidates/topics/'+row['id'],json=dict(data,version=row['version'])).status_code==409
+    assert not tracker.adapter.calls
+
+
+def test_explicit_renew_endpoint_keeps_paused_and_enforces_cas_and_csrf(topic_client):
+    client,tracker=topic_client
+    selected=topic(tracker)
+    paused=tracker.db.topic_transition(selected['id'],selected['version'],'PAUSED','test',tracker.clock())
+    path='/api/topic-candidates/topics/'+selected['id']+'/renew'
+    body=dict(version=paused['version'],valid_days=7,restore=False)
+    assert client.post(path,json=body,headers={'X-Topic-CSRF':'bad'}).status_code==403
+    response=client.post(path,json=body)
+    assert response.status_code==200 and response.json()['status']=='PAUSED'
+    assert client.post(path,json=body).status_code==409
+    assert client.post(path,json=dict(body,version=response.json()['version'],restore=1)).status_code==422
     assert not tracker.adapter.calls
 
 

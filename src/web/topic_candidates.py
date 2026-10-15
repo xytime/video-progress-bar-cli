@@ -57,6 +57,12 @@ class SearchBody(StrictBody):
     idempotency: str = Field(pattern=r"^[a-zA-Z0-9_-]{16,80}$")
 
 
+class RenewBody(StrictBody):
+    version: int = Field(ge=1)
+    valid_days: int = Field(default=7, ge=1, le=30)
+    restore: bool = False
+
+
 class DecisionBody(StrictBody):
     revision: int = Field(ge=1)
     decision_revision: int = Field(ge=1)
@@ -187,6 +193,10 @@ def create_topic_candidates_router(service_factory, *, port):
     @router.post("/api/topic-candidates/topics/{topic_id}/search", status_code=202)
     def search(topic_id: str, body: SearchBody, actor=Depends(authorized)):
         return call(service().start, topic_id, body.version, body.idempotency, actor)
+
+    @router.post("/api/topic-candidates/topics/{topic_id}/renew")
+    def renew(topic_id: str, body: RenewBody, actor=Depends(authorized)):
+        return call(service().db.topic_renew, topic_id, body.version, body.valid_days, body.restore, actor, service().clock())
 
     @router.put("/api/topic-candidates/topics/{topic_id}/schedule")
     def schedule(topic_id: str, body: ToggleBody, actor=Depends(authorized)):

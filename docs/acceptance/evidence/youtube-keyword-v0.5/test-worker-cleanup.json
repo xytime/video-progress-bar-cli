@@ -1,0 +1,7 @@
+{
+  "test_pid": 61869,
+  "command_verified": true,
+  "normal_sigterm": true,
+  "exited": true,
+  "production_processes_signaled": 0
+}

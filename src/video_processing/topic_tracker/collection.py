@@ -26,6 +26,8 @@ class KeywordCollection:
             self._ready()
             if not getattr(self.config,'topic_admission_enabled',False):
                 raise TopicError('ADMISSION_CLOSED','宿主准入尚未开放',403)
+            if not self.db.keyword_admission_usage(self.config,self.clock())['verified']:
+                raise TopicError('ADMISSION_LEDGER_UNVERIFIED','准入账本未通过核实，新增准入已停止',503)
         return self.db.keyword_set_admission(enabled,version,actor,self.clock())
 
     def _verify_runtime(self):

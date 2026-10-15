@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 验证真实字幕抽取和受控渲染串联，不调用上传器 |
+| 1.0.1 | 2026-10-15 | Codex | 流水线连接使用显式测试策略，保留生产独立类型开关 |
 """
 import json
 from pathlib import Path
@@ -98,7 +99,11 @@ def test_empty_vocab_invalidates_old_receipt_without_touching_base(tmp_path,monk
 
 
 def test_pipeline_tracked_hook_and_actual_selection(tmp_path,monkeypatch):
+    from config.settings import settings
     from video_processing.pipeline_manager import PipelineManager
+    active=tmp_path/'policy.json'
+    active.write_bytes((Path(__file__).resolve().parents[1]/'fixtures/vocabulary_outro_v1.json').read_bytes())
+    monkeypatch.setattr(settings,'vocabulary_outro_policy_path',active)
     manager=PipelineManager.__new__(PipelineManager);manager._OUT_DIR=tmp_path
     source=tmp_path/'abc_s2_vertical.mp4';source.write_bytes(b'base')
     ass=subtitle(tmp_path/'abc_s2.ass')

@@ -122,6 +122,15 @@ def test_scheduled_search_natural_refresh_and_admission_proof(tracker):
     transition.update(source='SCHEDULED',target='ADMISSION')
     transition['evidence'].update(scheduled_job_ids=[scheduled['id']],refresh_job_ids=[refresh['id']])
     assert len(check(tracker,transition,prior))==3
+    # 长期配置必须沿用此前通过的自然作业链，并重新核实原始快照。
+    old_transition=deepcopy(transition)
+    long_prior=dict(transition=dict(old_transition,created_at=tracker.clock().timestamp()+1))
+    transition.update(source='ADMISSION',target='LONG_TERM')
+    assert len(check(tracker,transition,long_prior))==3
+    transition['evidence']['scheduled_job_ids']=['a'*32]
+    with pytest.raises(DeploymentDenied,match='KEYWORD_COLLECTION_CHAIN_MISMATCH'):
+        check(tracker,transition,long_prior)
+    transition=old_transition
     # 时间链不完整不能借一个成功详情作业宣称自然刷新验收。
     with sqlite3.connect(tracker.db.db_path) as c:
         snapshot=json.loads(c.execute('SELECT snapshot FROM keyword_job_evidence WHERE job_id=?',(refresh['id'],)).fetchone()[0])

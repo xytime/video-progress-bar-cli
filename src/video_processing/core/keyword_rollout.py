@@ -68,8 +68,13 @@ class KeywordTransition:
             return {}
         from ..db.database import PipelineDB
         from .keyword_job_proof import job_proof
-        proof = job_proof(PipelineDB(self.config.default_output_dir / 'pipeline.db'),
+        db = PipelineDB(self.config.default_output_dir / 'pipeline.db')
+        proof = job_proof(db,
                           self.transition, self.config, self.config._topic_rollout_record, time.time())
+        if 'LONG_TERM' in (self.transition['source'], self.transition['target']):
+            from ..core.topic_candidates import utc_now
+            require(db.keyword_admission_usage(self.config, utc_now())['verified'], 'KEYWORD_ADMISSION_LEDGER_UNVERIFIED')
+            proof['_admission_ledger'] = db.keyword_admission_ledger()
         if not planning:
             require(proof == self.plan.get('keyword_job_proof'), 'KEYWORD_JOB_PROOF_DRIFT')
         return proof

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-14 | Codex | 成功作业、项目预算、统一评分及自然刷新间隔核验 |
+| 1.1.0 | 2026-10-15 | Codex | 长期采用沿用并复验原自然作业证据链 |
 """
 from datetime import datetime
 import json
@@ -32,8 +33,12 @@ def job_proof(db, transition, config, previous, now):
     trial_ids = evidence['trial_job_ids']
     if transition['source'] != 'TRIAL':
         require(trial_ids == prior['evidence']['trial_job_ids'], 'KEYWORD_TRIAL_CHAIN_MISMATCH')
+    if transition['source'] in ('ADMISSION', 'LONG_TERM'):
+        # 长期迁移沿用已验收阶段的真实自然作业链，不能换成任意较老作业。
+        for name in ('scheduled_job_ids', 'refresh_job_ids'):
+            require(evidence[name] == prior['evidence'][name], 'KEYWORD_COLLECTION_CHAIN_MISMATCH')
     groups = [('trial_job_ids', 'MANUAL')]
-    if target == 'ADMISSION':
+    if target in ('ADMISSION', 'LONG_TERM'):
         groups += [('scheduled_job_ids', 'SCHEDULED'), ('refresh_job_ids', 'REFRESH')]
     ids = [i for name, _ in groups for i in evidence[name]]
     require(len(ids) == len(set(ids)), 'KEYWORD_JOB_ID_REUSED')
@@ -47,7 +52,7 @@ def job_proof(db, transition, config, previous, now):
             start, end = timestamp(job['started_at']), timestamp(job['ended_at'])
             recorded = timestamp(job['snapshot']['recorded_at'])
             require(start <= recorded <= end <= now, 'KEYWORD_JOB_TIME_INVALID')
-            if transition['source'] == 'TRIAL' or kind != 'MANUAL':
+            if transition['source'] == 'TRIAL' or kind != 'MANUAL' and transition['source'] not in ('ADMISSION', 'LONG_TERM'):
                 require(start >= prior['created_at'], 'KEYWORD_JOB_PRECEDES_STAGE')
             budget = job['budget']
             require(budget and all(b['project'] == evidence['project'] and
@@ -71,7 +76,7 @@ def job_proof(db, transition, config, previous, now):
                         and candidate['score'] == compute_policy_score(inputs, config), 'KEYWORD_JOB_SCORE_MISMATCH')
                 valid += 1
             require(valid > 0, 'KEYWORD_JOB_SCORE_MISSING')
-    if target == 'ADMISSION':
+    if target in ('ADMISSION', 'LONG_TERM'):
         searched = {r['key']: timestamp(r['fetched_at']) for i in evidence['scheduled_job_ids']
                     for r in rows[i]['snapshot']['rows']}
         refreshed = [r for i in evidence['refresh_job_ids'] for r in rows[i]['snapshot']['rows']]

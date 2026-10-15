@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 0.4.3 | 2026-10-14 | Codex | 采集和刷新事务保存作业评分快照，支持阶段验收 |
+| 0.5.0 | 2026-10-15 | Codex | 原子长期额度、硬时长与持久幂等、确定性准入顺序 |
 | 0.4.2 | 2026-10-14 | Codex | 首轮定时上限一条，开启与恢复原子校验，存量超限拒绝调用和准入 |
 | 0.4.1 | 2026-10-13 | Codex | 累计准入额度与插入共用事务，受控试运行最多一条 |
 | 0.4.0 | 2026-10-13 | Codex | 独立候选的持久调度、评分证据及受控准入 |
@@ -16,9 +17,10 @@ from ..scoring import compute_policy_score, SCORE_POLICY_VERSION, PUBLISH_SCORE_
 
 
 from .keyword_evidence import KeywordEvidenceDAL
+from .keyword_admission import KeywordAdmissionDAL
 
 
-class KeywordCollectionDAL(KeywordEvidenceDAL):
+class KeywordCollectionDAL(KeywordAdmissionDAL):
     @staticmethod
     def _keyword_schema(c):
         additions = {
@@ -42,6 +44,7 @@ class KeywordCollectionDAL(KeywordEvidenceDAL):
                 c.execute(f'ALTER TABLE keyword_control ADD COLUMN {name} TEXT')
         KeywordEvidenceDAL._keyword_evidence_schema(c)
         c.execute('CREATE TABLE IF NOT EXISTS keyword_admissions (key TEXT PRIMARY KEY, video_id INTEGER NOT NULL, topic_id TEXT NOT NULL, topic_version INTEGER NOT NULL, score INTEGER NOT NULL, policy TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)')
+        KeywordAdmissionDAL._keyword_admission_schema(c)
         # 升级旧身份签名；不改规则版本、时长、收藏或历史命中。
         for row in c.execute('SELECT * FROM topic_definitions').fetchall():
             identity = topic_fields(dict(row))['identity']
@@ -171,6 +174,11 @@ class KeywordCollectionDAL(KeywordEvidenceDAL):
             elif row['fetched_at']<=stamp(now-timedelta(hours=4)): state='WAIT_REFRESH'
             elif row['score']>=75: state='QUALIFIED'
             meta=json.loads(row['metadata'] or '{}')
+            from config.keyword_rollout import admission_limits
+            minimum=admission_limits(config)['min_duration']
+            duration=meta.get('duration')
+            if state in ('QUALIFIED','OBSERVING','WAIT_REFRESH') and minimum and (duration is None or not minimum<=duration<=1800):
+                state='RESTRICTED'
             published=meta.get('published_at')
             if state in ('QUALIFIED','OBSERVING','WAIT_REFRESH') and published:
                 age=datetime.fromisoformat(published.replace('Z','+00:00'))
@@ -203,8 +211,13 @@ class KeywordCollectionDAL(KeywordEvidenceDAL):
                 raise TopicError('RECHECK','当前规则尚未命中该视频')
             meta=json.loads(r['metadata'])
             published=datetime.fromisoformat(meta['published_at'].replace('Z','+00:00'))
+            from config.keyword_rollout import admission_limits
+            profile_minimum = admission_limits(config)['min_duration']
+            minimum = max(t['min_duration'], profile_minimum or 0)
+            if profile_minimum and (meta['duration'] is None or not minimum<=meta['duration']<=1800):
+                raise TopicError('DURATION_LIMIT','准入时长需为180–1800秒；候选保留供查看')
             if (not r['first_seen'] or r['first_seen']<=stamp(now-timedelta(hours=72)) or not now-timedelta(hours=72)<=published<=now
-                    or r['fetched_at']<=stamp(now-timedelta(hours=4)) or not t['min_duration']<=meta['duration']<=1800):
+                    or r['fetched_at']<=stamp(now-timedelta(hours=4)) or not minimum<=meta['duration']<=1800):
                 raise TopicError('STALE_METADATA','资料或报道已过期，等待刷新或重新采集')
             if meta['views'] is None or meta['likes'] is None: raise TopicError('INCOMPLETE','统计资料不足')
             score=compute_policy_score(dict(view_count=meta['views'],like_count=meta['likes'],channel_id=meta['channel_id'],source='KEYWORD'),config)
@@ -212,17 +225,18 @@ class KeywordCollectionDAL(KeywordEvidenceDAL):
             if (c.execute('SELECT 1 FROM blacklisted_videos WHERE youtube_id=?',(meta['youtube_id'],)).fetchone()
                 or c.execute("SELECT 1 FROM recommended_channels WHERE channel_id=? AND status='BLACKLISTED'",(meta['channel_id'],)).fetchone()):
                 raise TopicError('BLACKLISTED','视频或频道已排除')
+            prior=c.execute('SELECT * FROM keyword_admissions WHERE key=?',(key,)).fetchone()
+            if prior:
+                # 删除或规则续期不允许重建已准入的根任务，也不改写原始消耗。
+                return dict(video_id=prior['video_id'],result='EXISTING')
             old=c.execute('SELECT id FROM processed_videos WHERE youtube_id=? ORDER BY slice_index LIMIT 1',(meta['youtube_id'],)).fetchone()
             if old: video_id,result=old['id'],'EXISTING'
             else:
-                # 在同一写事务中计算累计额度；跨日、重启和删除主任务都不退款。
-                used=c.execute("SELECT COUNT(*) FROM keyword_admissions WHERE result='ADMITTED'").fetchone()[0]
-                if used>=getattr(config,'topic_admission_total_limit',1):
-                    raise TopicError('ADMISSION_LIMIT','已达到累计准入上限，等待管理员评审扩容')
+                self._keyword_require_admission_capacity(c,config,now)
                 cursor=c.execute("""INSERT INTO processed_videos(youtube_id,slice_index,title,channel_id,score,status,source,duration_sec,view_count,like_count,source_published_at,upload_date,disable_slicing,category)
                     VALUES(?,0,?,?,?,'PENDING','KEYWORD',?,?,?,?,?,0,?)""",(meta['youtube_id'],meta['title'],meta['channel_id'],score,meta['duration'],meta['views'],meta['likes'],meta['published_at'],published.strftime('%Y%m%d'),t['category']))
                 video_id,result=cursor.lastrowid,'ADMITTED'
-            c.execute('INSERT OR IGNORE INTO keyword_admissions VALUES(?,?,?,?,?,?,?,?)',(key,video_id,topic_id,topic_version,score,SCORE_POLICY_VERSION,stamp(now),result))
+            c.execute('INSERT INTO keyword_admissions(key,video_id,topic_id,topic_version,score,policy,at,result,youtube_id) VALUES(?,?,?,?,?,?,?,?,?)',(key,video_id,topic_id,topic_version,score,SCORE_POLICY_VERSION,stamp(now),result,meta['youtube_id']))
             if result=='ADMITTED': c.execute('UPDATE topic_candidates SET admitted_id=? WHERE key=?',(video_id,key))
             self._topic_audit(c,'scheduler',result,key,revision,now)
             return dict(video_id=video_id,result=result)
@@ -260,7 +274,7 @@ class KeywordCollectionDAL(KeywordEvidenceDAL):
                 AND NOT EXISTS(SELECT 1 FROM keyword_admissions a WHERE a.key=c.key)
                 AND t.status='ACTIVE' AND t.expires_at>? AND h.topic_version=t.version
                 AND c.first_seen>? AND c.fetched_at>?
-                ORDER BY c.fetched_at DESC""",(stamp(now),stamp(now-timedelta(hours=72)),stamp(now-timedelta(hours=4)))).fetchall()
+                ORDER BY c.score DESC,julianday(json_extract(c.metadata,'$.published_at')) DESC,c.key""",(stamp(now),stamp(now-timedelta(hours=72)),stamp(now-timedelta(hours=4)))).fetchall()
             return [dict(r,metadata=json.loads(r['metadata'])) for r in rows if r['n']==1][:200]
 
     def keyword_min_duration(self, key):

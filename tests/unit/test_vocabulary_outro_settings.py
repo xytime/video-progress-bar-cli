@@ -1,4 +1,10 @@
-"""片尾配置、独立复核与真实路由的隔离回归；不调用任何发布入口。"""
+"""片尾配置、独立复核与真实路由的隔离回归；不调用任何发布入口。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.1 | 2026-10-15 | Codex | 使用独立测试策略，不依赖生产各类型片尾的运营开关 |
+"""
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +23,7 @@ from web.vocabulary_outro_settings import create_vocabulary_outro_settings_route
 
 @pytest.fixture
 def config():
-    return json.loads((Path(__file__).resolve().parents[2]/'config/vocabulary_outro.json').read_text())
+    return json.loads((Path(__file__).resolve().parents[1]/'fixtures/vocabulary_outro_v1.json').read_text())
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 0.4.2 | 2026-10-14 | Codex | 规则恢复与每次自动调用验证首轮一条上限 |
+| 0.5.0 | 2026-10-15 | Codex | 显式续期恢复、暂停保持、忙碌拒绝与审计 |
 | 0.4.1 | 2026-10-14 | Codex | 试运行使用原子累计预算，跨日、重启和项目切换不重置 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 连接及 PRAGMA 纳入完整故障边界，保证资源释放 |
@@ -153,6 +154,37 @@ class TopicCandidateDAL(KeywordCollectionDAL):
                       (fields["language"], fields["min_duration"], identity))
             self._topic_audit(c, actor, "EDIT" if old else "CREATE", identity, version, now)
         return self.topic_get(identity, now)
+
+    def topic_renew(self, topic_id, version, valid_days, restore, actor, now):
+        """明确续期；过期恢复须主动选择，暂停规则不因续期自动启用。"""
+        if type(valid_days) is not int or not 1 <= valid_days <= 30 or type(restore) is not bool:
+            raise TopicError('INVALID_EXPIRY', '续期需设置1–30天有效期', 422)
+        with self._topic_connection(write=True) as c:
+            self._topic_expire(c, now)
+            old = c.execute('SELECT * FROM topic_definitions WHERE id=?', (topic_id,)).fetchone()
+            if not old or old['version'] != version:
+                raise TopicError('STALE', '采集规则已变化，请重新载入')
+            if old['status'] == 'ARCHIVED':
+                raise TopicError('ARCHIVED', '已归档规则不能续期')
+            if c.execute("SELECT 1 FROM topic_jobs WHERE topic_id=? AND state IN ('RUNNING','STOPPING')", (topic_id,)).fetchone():
+                raise TopicError('BUSY', '等待当前作业结束后续期')
+            if old['status'] == 'EXPIRED' and not restore:
+                raise TopicError('RESTORE_REQUIRED', '过期规则需明确选择续期并恢复')
+            status = 'ACTIVE' if old['status'] == 'EXPIRED' else old['status']
+            if status == 'ACTIVE':
+                if old['auto_enabled']:
+                    self._keyword_capacity(c, exclude=topic_id)
+                if c.execute("SELECT COUNT(*) FROM topic_definitions WHERE status='ACTIVE' AND id!=?", (topic_id,)).fetchone()[0] >= 10:
+                    raise TopicError('CAPACITY', '有效规则已达10个')
+                if c.execute("SELECT 1 FROM topic_definitions WHERE identity=? AND id!=? AND status IN ('ACTIVE','PAUSED')", (old['identity'],topic_id)).fetchone():
+                    raise TopicError('DUPLICATE', '已有相同条件的有效规则')
+            c.execute('''UPDATE topic_definitions SET status=?,valid_days=?,expires_at=?,
+                next_run_at=?,version=version+1 WHERE id=?''',
+                (status,valid_days,stamp(now+timedelta(days=valid_days)),
+                 stamp(now) if status=='ACTIVE' and old['auto_enabled'] else old['next_run_at'],topic_id))
+            self._topic_audit(c,actor,'RENEW_RESTORE' if old['status']=='EXPIRED' else 'RENEW',topic_id,version+1,now,
+                              f'{valid_days}天；{status}；原准入消耗保留')
+        return self.topic_get(topic_id,now)
 
     def topic_transition(self, topic_id, version, status, actor, now, valid_days=None):
         if status not in ("ACTIVE", "PAUSED", "ARCHIVED"):
