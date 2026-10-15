@@ -260,3 +260,11 @@ Cloud 最新只读回查：搜索 0/100，通用 135/10,000，API 已启用。�
 - 07:00:25带时区现场保护窗口已解除，使用原生maintenance gate.enter暂停新接纳，MAINTENANCE/version47。queue-dispatch、视频ZV6pUX8kJwg:0及wallstreet-render pair:4仍在途，允许自然完成；未强杀、删锁或直接排除子进程。搜索保持OFF38，准入关闭，真实准入仍为0。
 - 06:42 Cloud非秘密配额实际观察搜索0/100、通用300/10000，API已启用；私有计划目录内quota-observation.json保留原观察时间，后续采用须按1小时有效期重新核实，不能改时间。新整合快照保留生产全部维护源码并叠加三份关键词按钮修复，正在隔离验收；最终采用须基线稳定、新计划及完整来源恢复门禁通过。
 - 07:01整合隔离验收完成：490 passed / 10 warnings，runner exit0、沙箱清理完成，证据 `/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-lk96fx38`，清单SHA-256 ac04c2dcb15b6107c0467ae884a3f91eae3ffeda9fe9bb53fec5062bc28ed136。07:02当前所有运行源码与该清单匹配；只证明该快照通过，不证明写入方已经停止或进程采用。三个在途登记仍在，维护保持；等待本次写入协调及自然排空后再统一恢复。用户验收和回滚说明见 `docs/acceptance/youtube-keyword-user-acceptance.md`。
+
+## 2026-10-15 09:35 写入协调确认与新增封面改动整合
+
+- 用户已明确确认生产目录停止写入，并授权保留全部并行改动后整合、补测及维护上线；不再等待此前AGY协调回复。
+- 09:26来源恢复目录keyword-source-recovery-20261015-b已完成，当前基线f54fd94、运行hash3ddb510279971c8a7931daa6d5a81e89c9732792fee1653f2e86bcae73423270，原生停止备份、恢复全部代码、维护启动及最终回读有独立记录。09:29实际回读七角色birth/hash匹配；恢复调度后又有在途，已原生enter暂停接纳至MAINTENANCE49。09:33在途自然排空，没有强杀或删锁。
+- 09:31会话“排查封面退化并调整生成策略”完成提交2a36ba1并推送main，新增三份封面运行源码变化；该会话已结束。其独立封面真实验收不替代整个后台来源恢复。最新磁盘hashd45c421ab70e9495eaf7fd36cfee3bbc5b5b6285091c725f33450bd456e03a84与09:26进程不同；保留该提交和全部20项dirty及untracked，不能回退封面修复。
+- 先前最终快照video-pytest-7xmtaugm已528 passed/10 warnings、runner0及清理完成，清单0ca1ddbf63b1c8880b2ee468f3ae7ff1335e3e8240cb0fd806fffb3c7e2d2dbe；因它不含09:31三个新文件，正在用keyword-final-integration-20261015-c补齐封面接力整合回归，证据video-pytest-bq6mx0ld。隔离分支已合入2a36ba1，后续采用不丢弃该并行工作。
+- 09:31Cloud实际只读观察API启用，搜索0/100、通用317/10000；配额证据一小时有效，执行仍现场检查窗口。搜索OFF39、准入关闭、累计真实准入0。新来源恢复目录keyword-source-recovery-20261015-c仅针对此次三文件差异，禁止重放旧b回执。
