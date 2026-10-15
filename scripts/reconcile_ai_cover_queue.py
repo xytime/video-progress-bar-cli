@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.9.1 | 2026-10-10 | Codex | 封面正常完成与回执恢复均原子入二创队列，传递启用平台和源文件路径。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
 | 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
@@ -63,6 +64,8 @@ def _write_resolution(task: AICoverTask, source: str, visual_path: Path | None) 
         "provenance_sha256": hashlib.sha256(Path(task.payload["provenance_path"]).read_bytes()).hexdigest(),
         "resolved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "visual_filename": visual_path.name if visual_path else None,
+        "fallback_reason": None if visual_path else "AI_GENERATION_OR_LAYOUT_FAILED",
+        "luna_handoff": AICoverQueue.luna_handoff(task),
     }
     temporary = task.finish_dir / ".resolution.tmp"
     temporary.write_text(
@@ -350,15 +353,26 @@ def reconcile() -> int:
                     generated_by = queue.accepted_source(task)
                     circuit.record(visual is not None)
                 if (visual is None and getattr(settings, "enable_codex_luna_cover_fallback", False)
-                        and task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT
-                        and (queue.antigravity_exhausted(task) or circuit.blocked())
+                        and queue.prepare_luna_handoff(
+                            task, circuit_open=circuit.blocked(),
+                            budget_seconds=settings.codex_luna_cover_timeout_seconds
+                            + settings.codex_luna_cover_review_timeout_seconds + 90)
                         and not (task.finish_dir / "luna_attempt.json").exists()
                         and not queue._has_fresh_claim(task, datetime.now(timezone.utc))
-                        and (task.generation_deadline - datetime.now(timezone.utc)).total_seconds()
-                        >= settings.codex_luna_cover_timeout_seconds + settings.codex_luna_cover_review_timeout_seconds + 30):
+                        and datetime.now(timezone.utc) < queue.luna_deadline(task)):
                     _run_luna(task)
                     visual = queue.accepted_visual(task)
                     generated_by = queue.accepted_source(task)
+                    if visual is None and not queue._has_fresh_claim(task, datetime.now(timezone.utc)):
+                        attempt_path = task.finish_dir / "luna_attempt.json"
+                        try:
+                            attempt = json.loads(attempt_path.read_text())
+                        except (OSError, ValueError):
+                            attempt = {}
+                        if attempt.get("status") != "failed":
+                            attempt_path.write_text(json.dumps({"task_id": task.task_id,
+                                "status": "failed", "error": "CODEX_NO_ACCEPTED_RESULT",
+                                "previous_status": attempt.get("status")}))
                 visual_source = {
                     "antigravity_imagegen": "antigravity_ai_visual",
                     "codex_luna_imagegen": "codex_luna_ai_visual",
