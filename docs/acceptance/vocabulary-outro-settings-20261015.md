@@ -11,9 +11,12 @@
 - 首轮片尾、配置与共享分类单元测试 **42 passed**。
 - 后台必需回归 **125 passed / 10 warnings**，覆盖首页、商品、采集规则、手动选品、新片尾页面；非本次新增的弃用警告保留。
 - 包含生产现有改动的最终整合副本 **219 passed / 4 warnings**，覆盖片尾、补提取、既有词汇导出、商品、AGY、insight、部署与真实 Chromium。此次与前两轮有重叠，不累计为独立用例数。runner exit=0、OS 边界探针通过、沙箱清理完成。
+- 生产随后出现视频号管理页回查改动；保留该源码及测试，重新整合后 **284 passed / 4 warnings**，新增投稿身份回查回归。最终 runner exit=0、探针通过、沙箱清理完成；不累计重叠用例。
 - premium 严格静态检查 0 errors / 0 warnings；真实浏览器验证保存、重载、预览、冲突、故障保留、过期响应、键盘、390px 窄屏与三主题。桌面及手机截图已人工检查。
 
 整合测试证据：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-junhyh6x`；源码清单 SHA-256 `1572dd011a9bd6db1b4bca6fbad30a0adf3fddf53f581d46ef7dfbc6bb761437`。首次后台回归：`video-pytest-obxp2fi4`。另有两次测试参数误指不存在文件，未执行用例；更正后上述整合测试通过，不将误调用计为验收。
+
+上线采用的最终整合证据：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-mtg2v_k0`；源码清单 SHA-256 `d52e82553a48d9974af2446aaa493135a89005f3ca5e293c3bd39878cb0adb75`。
 
 ## 问题视频本地验收
 
@@ -21,12 +24,16 @@
 
 证据及可播放成片：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/vocabulary-outro-acceptance-20261015/`。该目录保存 acceptance.json、恢复词条、派生 MP4、10 张片尾图和管理页三主题截图。
 
-## 生产采用：尚未执行
+## 生产采用：已完成
 
-已通过原生部署入口生成只读计划，target=`fe677a9`，使用上述已测整合副本，并选择保留当前关键词阶段配置。计划目录：`~/Library/Application Support/VideoProcessing/deployments/vocabulary-outro-20261015`。没有执行 apply，也没有进入维护、停服务、改生产源码、改搜索配置或重试投稿。
+2026-10-15 15:05（北京时间）通过原生部署入口完成九步 `baseline → freeze → stop → backup → adopt → start → resume → restore → verify`，journal=`COMPLETE`、pending=null。部署 target=`80a8877`；目录 `~/Library/Application Support/VideoProcessing/deployments/vocabulary-outro-20261015-live`，部署 ID `0363370c00a943f9800555c5c7c4b128`。原先只读计划 `vocabulary-outro-20261015` 未执行，已被此新计划取代。
 
-原生 `maintenance status` 当前为 RUNNING52、active=[]，但 safe=false：六个角色报告 LEGACY_WORKER，UI PID49660 与 ready-worker PID49987 同时报 UNREGISTERED_PROCESS。独立核实六个角色的真实启动标识仍匹配，启动时源码指纹均为 `d45c421ab70e9495eaf7fd36cfee3bbc5b5b6285091c725f33450bd456e03a84`，磁盘源码指纹为 `44db5fc4626992778ca8834195ef51f5e63b9bff9b8e821d664da4f2af2ad810`。
+部署前发现的源码漂移已受控恢复。除原有 `src/config/settings.py` 代理改动，复核时又出现 `scripts/wechat_uploader.py` 管理回查改动。均先按摘要备份原文件，冻结入口后仅临时恢复与实际进程指纹完全匹配的已部署源码；原生 inspection.safe=true 后正常停机、备份数据库，再完整恢复原改动。未强杀、删锁或伪造指纹。恢复目录 `~/Library/Application Support/VideoProcessing/deployments/vocabulary-source-recovery-20261015` 保留逐步回执及原始文件。
 
-与上次完成部署的 expected_runtime 逐文件比较，**唯一漂移文件是生产现有未提交的 `src/config/settings.py`**，内容包含 AGY 默认模型/运行环境等改动，发生在本任务采用前。本次新增功能仍仅在独立工作区。不能把 active=[] 或测试通过当作维护来源门禁通过。
+生产原为 `DISCOVERY_ONLY`、自动准入开启；部署窗口使用现有 CAS 接口临时关闭，部署完成后恢复原值。采集规则、阶段配置、定时配置和配额计数保持不变，运行回读 `REFRESH_OR_ADMISSION`。生产原有未提交文件逐项摘要保留；唯一重叠的 settings.py 使用已测整合版本保存原改动。
 
-下一步须先对现有源码漂移及这两个存活进程完成受控恢复，使原生维护检查恢复一致，再重新生成有效部署计划并按正常九步采用。当前未强杀、删锁、伪造指纹或绕过检查；主干与原开发改动保留。后台生产入口尚未安装，不把只读计划称为上线。
+线上页面 `http://localhost:9100/vocabulary-outro-settings` 返回 200；相同有效配置保存后重新读取，摘要与值一致。五类匹配与各类型关闭草稿预览均通过，未保存关闭草稿。总开关及五类开关仍全部开启。保存仅规范化 JSON 排版，不改变有效配置。
+
+15:08 回读：维护状态 RUNNING；UI PID56417、ready-worker PID56855，六个角色归属与源码摘要一致，摘要 `0f67206a83836837c0c298e4119bb9dd5b4af196d0f8b849292ca54f3eec60e9`，无 LEGACY_WORKER/UNREGISTERED_PROCESS。正常 RUNNING 时未提供冻结来源回执，原生命令仍会显示 SOURCES_NOT_VERIFIED/safe=false；不将它误解成部署失败或维护可停机。
+
+线上证据：上述本地验收目录中的 `production-readback.json` 与 `production-runtime.json`。目前完成代码、隔离验收、运行采用和后台回读；下一条自然视频的实际片尾仍待自然产出，未为验收重新处理、上传或发布历史视频。
