@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| cover-source-v1 | 2026-10-15 | Codex | 列表返回统一封面来源，缩略图读取投稿冻结文件。 |
 | maintenance-v1 | 2026-10-12 | Codex | 共用持久化准入、调度角色互斥、单项线程归属和资源等待；维护启动保留本地候选管理。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 挂载本机候选独立路由，生产搜索默认关闭；不接入主流水线。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 统计 API 回读当前进程的原片清理开关及配方，用于运行采用核验。 |
@@ -1428,20 +1429,30 @@ def get_ai_audit_video(youtube_id: str, slice_index: int = 0, limit: int = 20):
 
 # ── 封面图片 API ─────────────────────────────────────────────────────────
 @app.get("/api/covers/{youtube_id}")
-def get_cover(youtube_id: str):
+def get_cover(youtube_id: str, slice_index: int = 0):
     """[Gemini_2.5_Pro_planning] 返回指定视频 ID 的封面图片（JPEG）。
     若封面文件不存在则返回 404，前端可据此显示占位符。
     """
     # 安全校验：youtube_id 只允许字母/数字/连字符/下划线
     if not re.match(r'^[A-Za-z0-9_\-]+$', youtube_id):
         raise HTTPException(status_code=400, detail="Invalid youtube_id")
-    cover_path = _OUT_DIR / f"{youtube_id}_cover.jpg"
+    if slice_index < 0:
+        raise HTTPException(status_code=400, detail="Invalid slice_index")
+    prefix = youtube_id if slice_index == 0 else f"{youtube_id}_s{slice_index}"
+    context = db.get_cover_context(youtube_id, slice_index)
+    if context.get("binding") == "submission" and context.get("version_id"):
+        cover_path = Path(context["evidence_path"]) / "submitted_cover.jpg"
+        import hashlib
+        if not cover_path.is_file() or hashlib.sha256(cover_path.read_bytes()).hexdigest() != context.get("cover_sha256"):
+            raise HTTPException(status_code=404, detail="Bound cover unavailable")
+    else:
+        cover_path = _OUT_DIR / f"{prefix}_cover.jpg"
     if not cover_path.exists():
         raise HTTPException(status_code=404, detail="Cover not found")
     return FileResponse(
         str(cover_path),
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -1751,6 +1762,7 @@ def get_videos(
         like_rate_min=like_rate_min, like_rate_max=like_rate_max,
     )
     for video in videos:
+        video['cover_provenance'] = db.get_cover_context(video['youtube_id'], video.get('slice_index') or 0)
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
     _attach_publish_display_fields(videos)
     _attach_ready_publication_fields(videos)
@@ -1772,6 +1784,8 @@ def get_confirmed_published_videos(start: int = 1, end: int = 10):
     if start < 1 or end < start or end > MAX_SQLITE_INTEGER or end - start + 1 > 100:
         raise HTTPException(status_code=422, detail="invalid published-video range")
     videos = db.get_recent_confirmed_published_videos(offset=start - 1, limit=end - start + 1)
+    for video in videos:
+        video["cover_provenance"] = db.get_cover_context(video["youtube_id"], video.get("slice_index") or 0)
     return {
         "videos": videos,
         "start": start,
@@ -1793,6 +1807,8 @@ def set_engagement_reviewed(youtube_id: str, req: EngagementReviewedRequest, sli
 def get_slices(youtube_id: str):
     """[Gemini_3.5_Flash_High_planning] 获取指定 YouTube ID 的所有切片子任务"""
     slices = db.get_slices_by_parent_yid(youtube_id)
+    for video in slices:
+        video["cover_provenance"] = db.get_cover_context(video["youtube_id"], video.get("slice_index") or 0)
     _attach_publish_display_fields(slices)
     _attach_ready_publication_fields(slices)
     return {"slices": slices}

@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
@@ -1752,6 +1753,14 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 "ON english_world_douyin_attempts(review_id, started_at DESC)"
             )
 
+            cursor.execute("""CREATE TABLE IF NOT EXISTS cover_versions (
+                version_id TEXT PRIMARY KEY, youtube_id TEXT, slice_index INTEGER NOT NULL DEFAULT 0,
+                cover_sha256 TEXT NOT NULL, payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cover_versions_video ON cover_versions(youtube_id, slice_index)")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS cover_submission_bindings (
+                evidence_path TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES cover_versions(version_id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
             cursor.execute('''
@@ -1767,6 +1776,8 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            if "cover_context_json" not in {row[1] for row in cursor.execute("PRAGMA table_info(telegram_notification_receipts)")}:
+                cursor.execute("ALTER TABLE telegram_notification_receipts ADD COLUMN cover_context_json TEXT")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_telegram_notification_receipts_dedupe "
                 "ON telegram_notification_receipts(event_type, content_sha256, created_at DESC)"
@@ -4165,6 +4176,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     bool(reconciled), error_message,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
@@ -4221,6 +4233,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     clean_evidence_path,
                 ),
             )
+            self._bind_cover_evidence(conn, clean_evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
@@ -4334,6 +4347,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("Failed to persist WeChat submission task state")
+            self._bind_cover_evidence(conn, clean_evidence_path)
             conn.commit()
             publication = conn.execute(
                 "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
@@ -4425,6 +4439,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     normalized_state, clean_platform_post_id, clean_platform_url, bool(reconciled), error_message,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_publications WHERE subject_id = ?", (clean_subject_id,)
@@ -4480,6 +4495,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     clean_evidence_path,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
@@ -9401,6 +9417,63 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             ).fetchone()
             return int(row["cnt"]) if row else 0
 
+    @staticmethod
+    def _store_cover_version(conn, value):
+        from video_processing.cover_provenance import canonical, version
+        if version(value)["version_id"] != value.get("version_id"):
+            raise ValueError("Invalid cover version identity")
+        conn.execute("INSERT OR IGNORE INTO cover_versions (version_id, youtube_id, slice_index, cover_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
+                     (value["version_id"], value.get("youtube_id"), value.get("slice_index", 0), value["cover_sha256"], canonical(value)))
+
+    def record_cover_version(self, value):
+        with self.get_connection() as conn:
+            self._store_cover_version(conn, value)
+            conn.commit()
+
+    @staticmethod
+    def _bind_cover_evidence(conn, evidence_path):
+        from video_processing.cover_provenance import read_json
+        if not evidence_path:
+            return
+        value = read_json(Path(evidence_path) / "cover_binding.json")
+        if not value:
+            return
+        import hashlib
+        frozen = Path(evidence_path) / "submitted_cover.jpg"
+        if not frozen.is_file() or hashlib.sha256(frozen.read_bytes()).hexdigest() != value.get("cover_sha256"):
+            logging.warning("Submission cover snapshot invalid; retaining platform acceptance with unknown cover")
+            return
+        try:
+            PipelineDB._store_cover_version(conn, value)
+        except (ValueError, KeyError):
+            logging.warning("Submission cover metadata invalid; retaining platform acceptance")
+            return
+        existing = conn.execute("SELECT version_id FROM cover_submission_bindings WHERE evidence_path = ?", (evidence_path,)).fetchone()
+        if existing and existing[0] != value["version_id"]:
+            logging.warning("Submission cover binding conflict; retaining original immutable binding")
+            return
+        conn.execute("INSERT OR IGNORE INTO cover_submission_bindings (evidence_path, version_id) VALUES (?, ?)", (evidence_path, value["version_id"]))
+        conn.execute("UPDATE wechat_submission_attempts SET cover_sha256 = ? WHERE evidence_path = ? AND cover_sha256 IS NULL", (value["cover_sha256"], evidence_path))
+
+    def get_cover_context(self, youtube_id, slice_index=0):
+        from video_processing.cover_provenance import presentation
+        with self.get_connection() as conn:
+            publication = conn.execute("SELECT w.evidence_path, w.platform_post_id, w.video_id FROM wechat_publications w JOIN processed_videos v ON w.video_id = v.id WHERE v.youtube_id = ? AND v.slice_index = ?", (youtube_id, slice_index)).fetchone()
+            if publication:
+                row = conn.execute("""SELECT c.payload_json, b.evidence_path, a.attempt_id FROM cover_submission_bindings b
+                    JOIN cover_versions c USING(version_id)
+                    JOIN wechat_submission_attempts a ON a.evidence_path = b.evidence_path
+                    WHERE a.video_id = ? AND ((? IS NOT NULL AND a.platform_post_id = ?) OR
+                    (? IS NULL AND a.evidence_path = ?)) ORDER BY a.created_at DESC LIMIT 1""",
+                    (publication["video_id"], publication["platform_post_id"], publication["platform_post_id"], publication["platform_post_id"], publication["evidence_path"])).fetchone()
+                value = json.loads(row["payload_json"]) if row else {}
+                value.update(binding="submission", evidence_path=row["evidence_path"] if row else publication[0], platform_post_id=publication["platform_post_id"], attempt_id=row["attempt_id"] if row else None)
+            else:
+                row = conn.execute("SELECT payload_json FROM cover_versions WHERE youtube_id = ? AND slice_index = ? ORDER BY rowid DESC LIMIT 1", (youtube_id, slice_index)).fetchone()
+                value = json.loads(row[0]) if row else {}
+                value["binding"] = "generation"
+            return presentation(value)
+
     def record_telegram_notification_receipt(
         self,
         *,
@@ -9410,6 +9483,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         delivery_state: str,
         telegram_message_id: Optional[str] = None,
         error_kind: Optional[str] = None,
+        cover_context: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """记录 Telegram API 投递结果；不把 API 接受等同于用户设备已读。"""
         allowed_priorities = {"P0", "P1", "P2"}
@@ -9421,8 +9495,8 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """INSERT INTO telegram_notification_receipts
-                   (event_type, priority, content_sha256, delivery_state, telegram_message_id, error_kind)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (event_type, priority, content_sha256, delivery_state, telegram_message_id, error_kind, cover_context_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     (event_type or "unknown")[:120],
                     priority,
@@ -9430,6 +9504,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     delivery_state,
                     (telegram_message_id or "")[:80] or None,
                     (error_kind or "")[:120] or None,
+                    json.dumps(cover_context, ensure_ascii=False) if cover_context else None,
                 ),
             )
             conn.commit()

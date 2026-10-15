@@ -2,6 +2,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                              |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
 | 5.25.0 | 2026-10-12 | Antigravity | 修复 P1/P2 残留缺陷：_write_submission_receipt 补全 NONE 分支的商品未绑与 identity_source 回读；优化无参数 target_type 检测与多回执优先级；_finalize_submission_attachments 保留强制商品退出码 14；cli_article 补充完整版本摘要字段。 |
 | 5.24.0 | 2026-10-12 | Antigravity | 修复 P1/P2: 上传器执行边界严格落实 enable_wechat_article_link 开关，关闭时拒绝显式文章参数并保留既有流程；NONE 分支传入本次任务；_write_submission_receipt 限定读取本次提交回执，防御回执覆盖。 |
@@ -1079,6 +1080,11 @@ def _write_submission_receipt(
                                        article_binding_confirmed=False,
                                        article_unbound_confirmed=True)
 
+        from video_processing.cover_provenance import read_json
+        cover_binding = read_json(evidence_dir / "cover_binding.json")
+        if cover_binding:
+            receipt = dict(receipt, cover_version_id=cover_binding["version_id"],
+                           cover_sha256=cover_binding["cover_sha256"])
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -2482,6 +2488,9 @@ def run_uploader(
     state_file = Path(state_path)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
+    if not evidence_dir and not login_only and not verify_only:
+        from uuid import uuid4
+        evidence_root = evidence_root / uuid4().hex
     task_product = None
     product_artifacts = None
     task_article = None
@@ -2536,6 +2545,8 @@ def run_uploader(
             str(Path(cover_path).resolve())
             if cover_path and Path(cover_path).exists() else None
         )
+        from video_processing.cover_provenance import freeze_submission
+        cover_abs = str(freeze_submission(Path(cover_abs), evidence_root).resolve())
         category   = (
             Path(category_path).read_text(encoding="utf-8").strip()
             if category_path and Path(category_path).exists() else None

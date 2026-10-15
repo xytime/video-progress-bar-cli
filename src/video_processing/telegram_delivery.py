@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date | Author | Description |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增自动通知回执、去重与秘密安全的错误分类。 |
 | 1.1.0 | 2026-08-24 | Codex | UNKNOWN 不再被视为已送达；仅有 message_id 的 Bot API 响应可记为 ACCEPTED。 |
@@ -54,11 +55,13 @@ def _fingerprint(event_type: str, dedupe_key: str, attachment: Path | None = Non
 def _record(
     *, event_type: str, priority: str, fingerprint: str, state: str,
     message_id: str | None = None, error_kind: str | None = None, db: PipelineDB | None = None,
+    cover_context: dict | None = None,
 ) -> None:
     try:
         (db or PipelineDB()).record_telegram_notification_receipt(
             event_type=event_type, priority=priority, content_sha256=fingerprint,
             delivery_state="FAILED" if state == "NOT_SENT" else state, telegram_message_id=message_id, error_kind=error_kind,
+            **({"cover_context": cover_context} if cover_context else {}),
         )
     except Exception as exc:  # 回执故障不能影响主业务，但不得记录可能含 URL 的异常文本。
         logger.error("Telegram receipt recording failed: %s", type(exc).__name__)
@@ -141,18 +144,23 @@ def send_text(
     reply_markup: dict[str, Any] | None = None, timeout_seconds: int = 20,
     dedupe_key: str | None = None, db: PipelineDB | None = None,
     token: str | None = None, chat_id: str | None = None,
+    cover_context: dict | None = None,
 ) -> TelegramDeliveryResult:
     """发送文字并记录回执；不会记录 token、URL、响应正文或消息内容。"""
+    if cover_context:
+        from html import escape
+        from video_processing.cover_provenance import notification_text
+        text += "\n" + escape(notification_text(cover_context))
     fingerprint = _fingerprint(event_type, dedupe_key or text)
     if _should_suppress(event_type=event_type, fingerprint=fingerprint, cooldown_seconds=cooldown_seconds, db=db):
-        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="SUPPRESSED", error_kind="DEDUPE", db=db)
+        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="SUPPRESSED", error_kind="DEDUPE", db=db, cover_context=cover_context)
         return TelegramDeliveryResult(state="SUPPRESSED", error_kind="DEDUPE", suppressed=True)
 
     token, chat_id = (token or "").strip(), (chat_id or "").strip()
     if not token or not chat_id:
         token, chat_id = _credentials()
     if not token or not chat_id:
-        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="FAILED", error_kind="CONFIG_MISSING", db=db)
+        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="FAILED", error_kind="CONFIG_MISSING", db=db, cover_context=cover_context)
         return TelegramDeliveryResult(state="FAILED", error_kind="CONFIG_MISSING")
     payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
@@ -163,7 +171,7 @@ def send_text(
     except requests.RequestException as exc:
         state, error_kind = _transport_error(exc)
         message_id = None
-    _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
+    _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db, cover_context=cover_context)
     return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)
 
 
@@ -197,14 +205,19 @@ def send_document(
 def send_video(
     *, event_type: str, priority: str, path: Path, caption: str, timeout_seconds: int = 120,
     db: PipelineDB | None = None, token: str | None = None, chat_id: str | None = None,
+    cover_context: dict | None = None,
 ) -> TelegramDeliveryResult:
     """发送审核视频并记录 API 回执；不会将异常 URL 写入日志。"""
+    if cover_context:
+        from html import escape
+        from video_processing.cover_provenance import notification_text
+        caption += "\n" + escape(notification_text(cover_context))
     fingerprint = _fingerprint(event_type, caption, path)
     token, chat_id = (token or "").strip(), (chat_id or "").strip()
     if not token or not chat_id:
         token, chat_id = _credentials()
     if not token or not chat_id:
-        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="FAILED", error_kind="CONFIG_MISSING", db=db)
+        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="FAILED", error_kind="CONFIG_MISSING", db=db, cover_context=cover_context)
         return TelegramDeliveryResult(state="FAILED", error_kind="CONFIG_MISSING")
     try:
         with path.open("rb") as source:
@@ -217,7 +230,7 @@ def send_video(
     except (OSError, requests.RequestException) as exc:
         state, error_kind = _transport_error(exc)
         message_id = None
-    _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
+    _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db, cover_context=cover_context)
     return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)
 
 

@@ -2238,3 +2238,15 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
     ::-webkit-scrollbar-thumb:active { background: var(--scroll-active); }
     @media (forced-colors: active) { :root { scrollbar-color: auto; } }
+
+/* 封面来源复用主题；原生 details 支持键盘及手机展开。 */
+.cover-source { position: relative; font-size: .75rem; color: var(--text2); max-width: 180px; }
+.cover-source summary { cursor: pointer; padding: 6px 0; color: var(--text); }
+.cover-source summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cover-source > div {
+  position: absolute; z-index: 30; top: 100%; left: 0;
+  width: min(320px, calc(100vw - 80px)); max-height: 320px; overflow: auto;
+  padding: 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); box-sizing: border-box;
+  overflow-wrap: anywhere; text-align: left; line-height: 1.6;
+}

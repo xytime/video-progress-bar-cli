@@ -3,6 +3,7 @@
 
 # Modification History
 | Version | Date | Author | Description |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | --- | --- | --- | --- |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.9.1 | 2026-10-10 | Codex | 封面正常完成与回执恢复均原子入二创队列，传递启用平台和源文件路径。 |
@@ -260,6 +261,10 @@ def _render_locked(
         visual_source or ("codex_ai_visual" if visual_path else "deterministic_fallback"),
         visual_path,
     )
+    from video_processing.cover_provenance import generation_record, read_json, source_path, canonical
+    record = generation_record(task, read_json(task.finish_dir / "resolution.json"))
+    source_path(target).write_text(canonical(record), encoding="utf-8")
+    db.record_cover_version(record)
     if not _mark_cover_ready(task, db):
         logger.warning("[%s] cover rendered but video status changed before requeue; leaving row unchanged", task.task_id)
         return False
@@ -291,6 +296,10 @@ def _recover_resolution(task, db):
             return False
     except (OSError, ValueError, TypeError):
         return False
+    from video_processing.cover_provenance import generation_record, source_path, canonical
+    record = generation_record(task, receipt)
+    source_path(target).write_text(canonical(record), encoding="utf-8")
+    db.record_cover_version(record)
     return _mark_cover_ready(task, db)
 
 

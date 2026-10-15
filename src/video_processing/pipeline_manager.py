@@ -3,6 +3,7 @@
 # Modification History
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.99.0 | 2026-10-13 | Codex | 接入字幕绑定生词片尾及派生成片选择，不改变状态机与发布授权 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
@@ -593,6 +594,20 @@ class PipelineManager:
             dedupe_key = normalized
         return event_type, priority, (0 if priority == "P2" else 24 * 60 * 60), dedupe_key
 
+    def _telegram_cover_context(self, text: str):
+        platform = re.search(r"platform\s*:\s*([^\s<]+)", text, re.IGNORECASE)
+        if platform and platform.group(1).lower() not in {"wechat", "视频号"}:
+            return None
+        match = _TELEGRAM_YOUTUBE_SUBJECT_RE.search(text)
+        if not match:
+            return None
+        try:
+            return self.db.get_cover_context(match.group("youtube_id"), int(match.group("slice_index") or 0))
+        except Exception:
+            logger.warning("Cannot read cover source for Telegram receipt")
+            from .cover_provenance import presentation
+            return presentation()
+
     def _enrich_telegram_video_context(self, text: str) -> str:
         """为每条可识别的原视频回执补充标题和安全来源链接；查库失败不阻断告警。"""
         match = _TELEGRAM_YOUTUBE_SUBJECT_RE.search(text)
@@ -624,16 +639,17 @@ class PipelineManager:
         """发送 P1 管线提醒；P2 只记录为已抑制，避免状态消息淹没审批。"""
         event_type, priority, cooldown_seconds, dedupe_key = self._telegram_notification_policy(text)
         fingerprint = hashlib.sha256(f"{event_type}\0{dedupe_key}".encode("utf-8")).hexdigest()
+        cover_context = self._telegram_cover_context(text)
         if priority == "P2":
             self.db.record_telegram_notification_receipt(
                 event_type=event_type, priority="P2", content_sha256=fingerprint,
-                delivery_state="SUPPRESSED", error_kind="POLICY_P2",
+                delivery_state="SUPPRESSED", error_kind="POLICY_P2", cover_context=cover_context,
             )
             logger.info("Telegram P2 notification suppressed: %s", event_type)
             return True
         text = self._enrich_telegram_video_context(text)
         result = send_telegram_text(
-            event_type=event_type, priority=priority, text=text,
+            event_type=event_type, priority=priority, text=text, cover_context=cover_context,
             cooldown_seconds=cooldown_seconds, timeout_seconds=10, dedupe_key=dedupe_key, db=self.db,
             token=self.telegram_token, chat_id=self.telegram_chat_id,
         )
@@ -650,10 +666,11 @@ class PipelineManager:
         if not video_path.is_file():
             logger.warning("Telegram review video missing: %s", video_path)
             return False
+        cover_context = self._telegram_cover_context(caption)
         caption = self._enrich_telegram_video_context(caption)
         result = send_telegram_review_video(
             event_type="pipeline.wechat_review_video", priority="P1", path=video_path,
-            caption=caption, timeout_seconds=120, db=self.db,
+            caption=caption, timeout_seconds=120, db=self.db, cover_context=cover_context,
             token=self.telegram_token, chat_id=self.telegram_chat_id,
         )
         if result.state != "ACCEPTED":
@@ -780,6 +797,7 @@ class PipelineManager:
                     event_type="wechat_review_video",
                     priority="P1",
                     content_sha256=content_hash,
+                    cover_context=self._telegram_cover_context(f"ID: {prefix}"),
                     delivery_state=state,
                 )
             except Exception:
@@ -795,6 +813,7 @@ class PipelineManager:
                     event_type="wechat_review_video",
                     priority="P1",
                     content_sha256=content_hash,
+                    cover_context=self._telegram_cover_context(f"ID: {prefix}"),
                     delivery_state="UNKNOWN",
                     error_kind=type(exc).__name__,
                 )
