@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-10-01 | Codex | AGY 耗尽后的 Luna 最低档文件协议生成与质量回执 |
 """
 
@@ -93,18 +94,23 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
     result_path = task.finish_dir / "result.json"
     resolution_path = task.finish_dir / "resolution.json"
     attempt_path = task.finish_dir / "luna_attempt.json"
-    if result_path.exists() or resolution_path.exists() or attempt_path.exists():
+    if resolution_path.exists() or attempt_path.exists():
         return 0
     if (task.primary_provider != "agy"
             or task.payload.get("luna_fallback_contract") != LUNA_FALLBACK_CONTRACT
-            or not queue.antigravity_exhausted(task)):
+            or not queue.luna_authorized(task)):
         return 0
-    remaining = (task.generation_deadline - _now()).total_seconds()
+    remaining = (queue.luna_deadline(task) - _now()).total_seconds()
     if remaining < args.timeout_seconds + args.review_timeout_seconds + 30:
         return 0
     claim_path = task.finish_dir / "claim.json"
     if queue._has_fresh_claim(task, _now()):
         return 0
+    if result_path.exists():
+        if queue.accepted_visual(task) is not None:
+            return 0
+        # 不合格 AGY 回执保留取证，但不能阻断已授权的 Codex 接力。
+        result_path.replace(task.finish_dir / f"rejected_result_{time.time_ns()}.json")
     claim_path.unlink(missing_ok=True)
     _write_json(claim_path, {"task_id": task.task_id, "provider": "codex_luna",
                             "claimed_at": _iso(_now()),
@@ -138,7 +144,7 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
             raise RuntimeError("CODEX_NO_IMAGE_ARTIFACT")
         width, height = _dimensions(candidate)
         digest = _sha256(candidate)
-        if _now() >= task.generation_deadline:
+        if _now() >= queue.luna_deadline(task):
             raise RuntimeError("LUNA_DEADLINE_EXHAUSTED")
         stage = "quality_review"
         schema_path = work_dir / "quality_schema.json"
@@ -155,7 +161,7 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
         review_command = _codex_command(args, work_dir) + [
             "--image", str(candidate), "--output-schema", str(schema_path),
             "--output-last-message", str(review_path), review_prompt]
-        review_timeout = min(args.review_timeout_seconds, int((task.generation_deadline - _now()).total_seconds()) - 10)
+        review_timeout = min(args.review_timeout_seconds, int((queue.luna_deadline(task) - _now()).total_seconds()) - 10)
         if review_timeout <= 0:
             raise RuntimeError("LUNA_REVIEW_DEADLINE_EXHAUSTED")
         review_tokens = _run_cli(review_command, work_dir, review_timeout)
@@ -163,7 +169,7 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
         if not valid_quality(review) or _sha256(candidate) != digest:
             raise RuntimeError("LUNA_QUALITY_REJECTED")
         completed_at = _now()
-        if completed_at >= task.generation_deadline:
+        if completed_at >= queue.luna_deadline(task):
             raise RuntimeError("LUNA_DEADLINE_EXHAUSTED")
         visual = task.finish_dir / "visual.png"
         temporary = task.finish_dir / ".visual.luna.tmp.png"

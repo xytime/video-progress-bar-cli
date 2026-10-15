@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-07-31 | Codex | 新增 Markdown 任务单、完成物验收与超时降级判定 |
 | 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
 | 1.2.0 | 2026-08-03 | Codex | 任务协议写明已有底图优先复用与高消耗生成需确认的执行边界 |
@@ -244,8 +245,8 @@ class AICoverQueue:
             if (task.primary_provider != "agy"
                     or task.payload.get("quality_contract") != QUALITY_VERSION
                     or task.payload.get("luna_fallback_contract") != LUNA_FALLBACK_CONTRACT
-                    or not self.antigravity_exhausted(task)
-                    or completed_at >= task.generation_deadline
+                    or not self.luna_authorized(task)
+                    or completed_at >= self.luna_deadline(task)
                     or result.get("transport") != "codex_cli"
                     or result.get("model") != "gpt-5.6-luna"
                     or result.get("reasoning_effort") != "none"
@@ -286,9 +287,67 @@ class AICoverQueue:
             return False
         if task.primary_provider == "codex":
             return current >= task.fallback_after
+        if task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT:
+            # Codex 未交接/未实际结束，不能以 AGY 超时作为本地兜底依据。
+            handoff = self.luna_handoff(task)
+            if not handoff:
+                return False
+            try:
+                attempt = json.loads((task.finish_dir / "luna_attempt.json").read_text())
+            except (OSError, ValueError):
+                attempt = {}
+            return attempt.get("status") == "failed" or current >= self.luna_deadline(task)
         if current >= task.antigravity_deadline:
             return True
         return self.antigravity_exhausted(task)
+
+    @staticmethod
+    def luna_handoff(task: AICoverTask) -> dict:
+        try:
+            value = json.loads((task.finish_dir / "luna_handoff.json").read_text())
+            if value.get("task_id") != task.task_id:
+                return {}
+            if value.get("reason") not in {"agy_failed", "agy_circuit_open", "agy_deadline"}:
+                return {}
+            if _parse_time(value["deadline_at"]) <= _parse_time(value["handed_off_at"]):
+                return {}
+            return value
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+
+    def luna_deadline(self, task: AICoverTask) -> datetime:
+        handoff = self.luna_handoff(task)
+        return _parse_time(handoff["deadline_at"]) if handoff else task.generation_deadline
+
+    def luna_authorized(self, task: AICoverTask) -> bool:
+        return bool(self.luna_handoff(task)) or self.antigravity_exhausted(task)
+
+    def prepare_luna_handoff(self, task: AICoverTask, *, circuit_open: bool,
+                             budget_seconds: int, now: Optional[datetime] = None) -> bool:
+        """协调器持锁调用；独立预算只创建一次，重启不得延长期限。"""
+        current = now or _utc_now()
+        if task.payload.get("luna_fallback_contract") != LUNA_FALLBACK_CONTRACT:
+            return False
+        if (task.finish_dir / "luna_handoff.json").exists():
+            return bool(self.luna_handoff(task))
+        if self._has_fresh_claim(task, current):
+            return False
+        try:
+            attempt = json.loads((task.finish_dir / "antigravity_attempt.json").read_text())
+        except (OSError, ValueError):
+            attempt = {}
+        reason = ("agy_failed" if attempt.get("status") == "failed" else
+                  "agy_circuit_open" if circuit_open else
+                  "agy_deadline" if current >= task.antigravity_deadline else None)
+        if not reason:
+            return False
+        payload = {"task_id": task.task_id, "reason": reason, "handed_off_at": _iso(current),
+                   "deadline_at": _iso(current + timedelta(seconds=budget_seconds))}
+        path = task.finish_dir / "luna_handoff.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        temporary.replace(path)
+        return True
 
     @staticmethod
     def antigravity_exhausted(task: AICoverTask) -> bool:
@@ -302,6 +361,8 @@ class AICoverQueue:
     def antigravity_due(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
         """首选立即执行，旧任务仍只在备用窗口执行；失败最多三次。"""
         current = now or _utc_now()
+        if self.luna_handoff(task):
+            return False
         if current >= task.antigravity_deadline or self._has_fresh_claim(task, current):
             return False
         if task.primary_provider == "codex" and current < task.generation_deadline:
@@ -314,6 +375,9 @@ class AICoverQueue:
         try:
             attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
             count = int(attempt.get("attempt_number", 1))
+            if (task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT
+                    and attempt.get("status") == "failed"):
+                return False
         except (OSError, ValueError, TypeError):
             return False
         return (task.primary_provider == "agy" and attempt.get("status") in {"failed", "running"}
