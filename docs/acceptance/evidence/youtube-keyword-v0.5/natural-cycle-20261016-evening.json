@@ -1,0 +1,976 @@
+{
+  "author": "Codex",
+  "observed_at": "2026-10-16T10:16:32.281233+00:00",
+  "production_head": "623d59951db571681e414de4c2595587ab350012",
+  "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+  "loaded_profile_verified": true,
+  "workers": [
+    {
+      "role": "ui",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "auto-pipeline",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "queue-runner",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "ready-supervisor",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "keepalive-watchdog",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "ready-worker",
+      "pid": 79446,
+      "birth_matches": true,
+      "source_matches": true,
+      "cwd_matches": true
+    }
+  ],
+  "maintenance": {
+    "schema": 1,
+    "version": 64,
+    "state": "RUNNING",
+    "reason": "部署 855157080503440a839f6daf0f0c0a90",
+    "at": 1792135481.3831758,
+    "maintenance_age_seconds": 0,
+    "maintenance_overdue": false,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE"
+  },
+  "state": {
+    "control": {
+      "mode": "DISCOVERY_ONLY",
+      "version": 56
+    },
+    "collection": {
+      "scheduler_enabled": true,
+      "admission_available": true,
+      "automatic_used": 1,
+      "id": 1,
+      "admission": 1,
+      "version": 14,
+      "runtime_code": "REFRESH_OR_ADMISSION",
+      "runtime_at": "2026-10-16T10:16:28.028081+00:00"
+    },
+    "budget": {
+      "day": "2026-10-16",
+      "search": 1,
+      "general": 2
+    },
+    "topics": [
+      {
+        "id": "36de3a8eca584358851b05e5b9fdbf3f",
+        "name": "肺鼠疫",
+        "query": "'Pneumonic plague'|plague",
+        "category": "健康科学",
+        "lookback_days": 1,
+        "valid_days": 7,
+        "identity": "7dd736e160b16a33057f563fc77b295256c284c83ec70629a6719aaddf43818e",
+        "expires_at": "2026-10-22T21:30:37.255626+00:00",
+        "status": "ACTIVE",
+        "version": 7,
+        "last_run_at": "2026-10-16T09:31:11.454511+00:00",
+        "language": "en",
+        "min_duration": 180,
+        "auto_enabled": 1,
+        "next_run_at": "2026-10-16T13:31:11.454511+00:00",
+        "candidate_count": 94
+      },
+      {
+        "id": "523824a166d24a59bba04d4f146c50fc",
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "category": "科技产业",
+        "lookback_days": 7,
+        "valid_days": 7,
+        "identity": "f81edce338bbe2a0038718aced6f4e4c80219a5db2416d10159c3e4a66511be4",
+        "expires_at": "2026-10-19T06:05:39.340958+00:00",
+        "status": "PAUSED",
+        "version": 3,
+        "last_run_at": null,
+        "language": "en",
+        "min_duration": 180,
+        "auto_enabled": 0,
+        "next_run_at": null,
+        "candidate_count": 0
+      }
+    ],
+    "configuration": {
+      "topic_trial_mode": false,
+      "topic_quota_project": "gen-lang-client-0993011647",
+      "topic_scheduler_enabled": true,
+      "topic_search_daily_limit": 20,
+      "topic_admission_enabled": true,
+      "topic_admission_total_limit": 6,
+      "topic_quota_verified": true,
+      "topic_search_enabled": true,
+      "topic_general_daily_limit": 40
+    },
+    "search_open": true
+  },
+  "jobs": {
+    "153611f8a50b40aeac10f18cf61524f2": {
+      "id": "153611f8a50b40aeac10f18cf61524f2",
+      "kind": "REFRESH",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T09:31:29.640241+00:00",
+      "ended_at": "2026-10-16T09:31:30.556930+00:00",
+      "counts": {},
+      "search_requests": 0,
+      "general_units": 1,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 7
+    },
+    "b7f27cbcc559484f9e5554deb5d31898": {
+      "id": "b7f27cbcc559484f9e5554deb5d31898",
+      "kind": "SCHEDULED",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T09:31:11.454511+00:00",
+      "ended_at": "2026-10-16T09:31:13.521470+00:00",
+      "counts": {
+        "new": 1,
+        "duplicate": 23,
+        "restricted": 21
+      },
+      "search_requests": 1,
+      "general_units": 1,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 7
+    }
+  },
+  "job_proofs": {
+    "b7f27cbcc559484f9e5554deb5d31898": {
+      "id": "b7f27cbcc559484f9e5554deb5d31898",
+      "kind": "SCHEDULED",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T09:31:11.454511+00:00",
+      "ended_at": "2026-10-16T09:31:13.521470+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-16T09:31:13.504003+00:00",
+        "rows": [
+          {
+            "key": "0d996f334e029a147712cca57cb26ad29e62ba28e8771efb72d655455855fb58",
+            "youtube_id": "vLlWX0_kVj8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2, \"like_count\": 0, \"channel_id\": \"UCCin3EEf4hhJsDDBxp93U1w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 1
+          },
+          {
+            "key": "1881bf79fe67c33997f5c463d40e7ddc377f161c9e8206170c496a496961c2ab",
+            "youtube_id": "T_9Vl_ZX9Wk",
+            "score": 12,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 333, \"like_count\": 8, \"channel_id\": \"UC8kgJmbp29LHRZ_z5xf5bog\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "1a4a0e734243aa1548e50e8950584a219b5f7e8a48bfbd39680d7a2fb5fd04ae",
+            "youtube_id": "Mr4gI-P32vo",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 11, \"like_count\": 0, \"channel_id\": \"UCF_emlwEUFxJvFm2Eqy2ZOQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "3258d281c4497bc6d38731a678f0e5287769375e5e70f403ec64bf13aa45acc8",
+            "youtube_id": "dVTJgxY7WUI",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 4, \"like_count\": 0, \"channel_id\": \"UCDzgOazgxot_8pWK9P8tdyw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 2
+          },
+          {
+            "key": "42489e3a3f3ade5b6203be153f5c890a7c987064e1ea3a05fe433aaf99e49c11",
+            "youtube_id": "c01wtJbp7zc",
+            "score": 5,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2529, \"like_count\": 5, \"channel_id\": \"UCNBmxc6FvKyxtCpUygcdINA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "447d22cbea29ae42960e2b805bf9e8d8869138bead26ed8463f0676bdf48f701",
+            "youtube_id": "PRI270SHzeE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 27, \"like_count\": 0, \"channel_id\": \"UCknjIkcQ7jkbYHi6w0_VaWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 2
+          },
+          {
+            "key": "461489927577d9b2e6f25cd03fa4fe459afe2046f9a0d916c0f64e4c8e19837e",
+            "youtube_id": "jUDL9xswJyE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 17, \"like_count\": 0, \"channel_id\": \"UCoqHwXvG38b0pwLbPVfey4A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "5cef19cc83c144f8d3d392fde39867c891d930bbf70f61ff88381d490a987d21",
+            "youtube_id": "ecqD3_pDYhk",
+            "score": 62,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1581, \"like_count\": 42, \"channel_id\": \"UCjbwkE_9W3moW2VKRymcKIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "707f11328748359ecfab2821c22bce903bc8463590804b165c0148c4a8fe26f5",
+            "youtube_id": "UT6UJ-jLW_Y",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 239, \"like_count\": 0, \"channel_id\": \"UCeX20-rTnN46DUD6C7IplWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 2
+          },
+          {
+            "key": "7755bc6b63d5c123aaceb6ce6289d65ee24033c057ba2fcc0749478727668bc0",
+            "youtube_id": "ugfE8koA8_U",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 66, \"like_count\": 4, \"channel_id\": \"UCL3lgQgdpw5N2o0ap2iUxig\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "78f7c02ef9ea829a2ad3b1846197736047982545d948efe1954066978531c23a",
+            "youtube_id": "hH6vxZ5RevE",
+            "score": 50,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1119, \"like_count\": 32, \"channel_id\": \"UCBqccx6BFMyG-2uakdCBfIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "84c62cb7deebc360641f8777d675331929e6dd8b6c00571f6a9e9f575fa67773",
+            "youtube_id": "i-zWpOJox1A",
+            "score": 16,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1753, \"like_count\": 12, \"channel_id\": \"UCaLjq8bBXAA7lLlHaGHvI8w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 3
+          },
+          {
+            "key": "8621cadc19807f312fc6492e586881d887ca0a22271f0f22478a3ee4f95d67d2",
+            "youtube_id": "Fvn23UesRk8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 30, \"like_count\": 0, \"channel_id\": \"UCz76yprlUpoaHVHt0ld78tA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 2
+          },
+          {
+            "key": "8d100f978697425dad50f9f589d4907695c45d9f5548c274edf1a9d1c31f3045",
+            "youtube_id": "LpADgdc9SHk",
+            "score": 8,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 281, \"like_count\": 5, \"channel_id\": \"UCUMX1rd8A3sCG7mW0QtuN6g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "a1fe817178f7ea3ffdedf3ca5e17f671352b9265131023a5b55176b8e226eb8a",
+            "youtube_id": "F0d7m6OQYwU",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 29, \"like_count\": 2, \"channel_id\": \"UCtcR3cRksA7VXpsXD_iTAQQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "a31b86454b28ae262cbaefb4167c43e8f572bf3783046a2d4343c0d9d18ee808",
+            "youtube_id": "oNCiB4kwocs",
+            "score": 19,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 678, \"like_count\": 12, \"channel_id\": \"UC3wA6LjGyATzIav4r2FBtFA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "c6f8983157045dc2a8341017fd1b9eff711542092b92f3ba3ef26e4050c863e1",
+            "youtube_id": "elORkcfdD-s",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 19, \"like_count\": 0, \"channel_id\": \"UCGlBT7KUE__eFJ1xAcuHh_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 3
+          },
+          {
+            "key": "ca1e64607a2323aa16f55afb72d371a78c1b3f02c2aaeb9b887c462686523f19",
+            "youtube_id": "mll96LRa9FE",
+            "score": 6,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 208, \"like_count\": 4, \"channel_id\": \"UCP4imkUyehirv5gAue80L_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 2
+          },
+          {
+            "key": "cf3dfd11c55f6a1c3d906feedeceab03000287b6d91e56da1536e517fb2d2937",
+            "youtube_id": "SIL9vjaSgkY",
+            "score": 6,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 345, \"like_count\": 4, \"channel_id\": \"UCzOKP6OwCCZX5eo9pIwtYhg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "d431096ff58d6b456f5f0f99f4d0703515f8d48b5839baf525705d98b88ff2fa",
+            "youtube_id": "d_HZbOTiwSU",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 27, \"like_count\": 1, \"channel_id\": \"UCxOwFzvSeAgX-Axfvp_q-Yg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+            "youtube_id": "jD_5JhBOJWg",
+            "score": 49,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1054, \"like_count\": 134, \"channel_id\": \"UCqHBhR4PZlqXLBQeroBHyYw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 3
+          },
+          {
+            "key": "f49de6e0c6d388f836e16f471a82e64c558852b891ae52623dbec0926c5e341a",
+            "youtube_id": "DsX_SpgmGe4",
+            "score": 63,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2011, \"like_count\": 54, \"channel_id\": \"UCqVHGwQCmmGa2hjS7ydN4sQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "f4c34069db27dce618adc0420bdc61e017bb5ac36764b2135f79fe968a5325eb",
+            "youtube_id": "EcWWY9n0V8k",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 57, \"like_count\": 0, \"channel_id\": \"UC1tVcWFcKQaU3gZzyZoDJAw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 4
+          },
+          {
+            "key": "f7fda4c843af175bce54f682525544aad86f7ccd6b6120a5651208aa8c106cc4",
+            "youtube_id": "rNWZQazNBj0",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 188, \"like_count\": 1, \"channel_id\": \"UCSoAZhsSeqGUCe9BLHeM2Mw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:13.481933+00:00",
+            "revision": 3
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        },
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "search",
+          "units": 1
+        }
+      ]
+    },
+    "153611f8a50b40aeac10f18cf61524f2": {
+      "id": "153611f8a50b40aeac10f18cf61524f2",
+      "kind": "REFRESH",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T09:31:29.640241+00:00",
+      "ended_at": "2026-10-16T09:31:30.556930+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-16T09:31:30.540079+00:00",
+        "rows": [
+          {
+            "key": "0024375d7cee48d56b2f798fe9c5eca03e952279575c7c7f07ac36255873b012",
+            "youtube_id": "V8Hco_6deFA",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 9, \"like_count\": 1, \"channel_id\": \"UC0KS3eUCso1SxN4JZHjDNkA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          },
+          {
+            "key": "0255ab1ef8c678dd0d0de2c85b91b81765b1672dfa509562ca167d18c65472f1",
+            "youtube_id": "oHOj-Rb0BfE",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 59, \"like_count\": 2, \"channel_id\": \"UCK2qSWHdjtBUKuIU62bhJKA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          },
+          {
+            "key": "090f6e5525f7885bb3b71c3501ca68a1957195d0b27d1832533031b5139e6388",
+            "youtube_id": "9TL8rVDOdec",
+            "score": 11,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 793, \"like_count\": 7, \"channel_id\": \"UCBop-nGNfOlhvTYwEkZIOhA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          },
+          {
+            "key": "3949ed46535c6668ae9d48e2426f395fe9edd2630024a7054a4bab9c3365a5ee",
+            "youtube_id": "_tCqepIeNfk",
+            "score": 10,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 213, \"like_count\": 12, \"channel_id\": \"UCzKxXybN5gXZ-iA5Vr_E8zg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 6
+          },
+          {
+            "key": "3e155d833ddc99b549df0d879a771002729d73178852a41afc84adf70a9296d0",
+            "youtube_id": "M2j4qjpFHWo",
+            "score": 4,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 77, \"like_count\": 3, \"channel_id\": \"UCrRN_hpt2L5tUMJcTrG6bgA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 6
+          },
+          {
+            "key": "47f27a66b92c67865c815ff632b8a1a5d53368e80733d8799c26999b5ac770d4",
+            "youtube_id": "EeX_bjNBuXA",
+            "score": null,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": null, \"like_count\": null, \"channel_id\": \"\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 2
+          },
+          {
+            "key": "8c333dbd7379008c1f926cb4d45f6c86ef53eeb9de715b77f504be03b41e32e0",
+            "youtube_id": "SaXi6CLheT8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2, \"like_count\": 0, \"channel_id\": \"UCE4IQdeSxbFq2_eUcsrYD_A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 5
+          },
+          {
+            "key": "a25ae2b8c4ceb5a95aeba782212e0d5691c3ef364370867ad3c9b708e283ceae",
+            "youtube_id": "hF9Rri87hUY",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 53, \"like_count\": 1, \"channel_id\": \"UCTTL2cgco_X9y3qWv0JwDcQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          },
+          {
+            "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+            "youtube_id": "I-wLIXC21wI",
+            "score": 90,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 138087, \"like_count\": 5115, \"channel_id\": \"UC_9iG1I_ic5jUOyzR9vTMBg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 6
+          },
+          {
+            "key": "d6d8ae3b65951f78dec6a45a25d96a2cc8e631a5ddc5e408ea6a72f6018c84eb",
+            "youtube_id": "fscWxLLzAlk",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 17, \"like_count\": 0, \"channel_id\": \"UCiPeMgxBzzE4pcI_Q1CxGrA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          },
+          {
+            "key": "f52277ce438064821a313e571786da3dd4e2b13f21a31fa286af9c216017aae9",
+            "youtube_id": "b8S04YlQlMQ",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 15, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 5
+          },
+          {
+            "key": "fd6c28e6958c70bc0dfbb439b7ff8fdb6c646e07dc32739372a4a97877407c3e",
+            "youtube_id": "v5YrLAYft9w",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 4, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T09:31:30.540079+00:00",
+            "revision": 4
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        }
+      ]
+    }
+  },
+  "score_recalculations": [
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "0d996f334e029a147712cca57cb26ad29e62ba28e8771efb72d655455855fb58",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "1881bf79fe67c33997f5c463d40e7ddc377f161c9e8206170c496a496961c2ab",
+      "stored": 12,
+      "recalculated": 12,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "1a4a0e734243aa1548e50e8950584a219b5f7e8a48bfbd39680d7a2fb5fd04ae",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "3258d281c4497bc6d38731a678f0e5287769375e5e70f403ec64bf13aa45acc8",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "42489e3a3f3ade5b6203be153f5c890a7c987064e1ea3a05fe433aaf99e49c11",
+      "stored": 5,
+      "recalculated": 5,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "447d22cbea29ae42960e2b805bf9e8d8869138bead26ed8463f0676bdf48f701",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "461489927577d9b2e6f25cd03fa4fe459afe2046f9a0d916c0f64e4c8e19837e",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "5cef19cc83c144f8d3d392fde39867c891d930bbf70f61ff88381d490a987d21",
+      "stored": 62,
+      "recalculated": 62,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "707f11328748359ecfab2821c22bce903bc8463590804b165c0148c4a8fe26f5",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "7755bc6b63d5c123aaceb6ce6289d65ee24033c057ba2fcc0749478727668bc0",
+      "stored": 3,
+      "recalculated": 3,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "78f7c02ef9ea829a2ad3b1846197736047982545d948efe1954066978531c23a",
+      "stored": 50,
+      "recalculated": 50,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "84c62cb7deebc360641f8777d675331929e6dd8b6c00571f6a9e9f575fa67773",
+      "stored": 16,
+      "recalculated": 16,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "8621cadc19807f312fc6492e586881d887ca0a22271f0f22478a3ee4f95d67d2",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "8d100f978697425dad50f9f589d4907695c45d9f5548c274edf1a9d1c31f3045",
+      "stored": 8,
+      "recalculated": 8,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "a1fe817178f7ea3ffdedf3ca5e17f671352b9265131023a5b55176b8e226eb8a",
+      "stored": 1,
+      "recalculated": 1,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "a31b86454b28ae262cbaefb4167c43e8f572bf3783046a2d4343c0d9d18ee808",
+      "stored": 19,
+      "recalculated": 19,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "c6f8983157045dc2a8341017fd1b9eff711542092b92f3ba3ef26e4050c863e1",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "ca1e64607a2323aa16f55afb72d371a78c1b3f02c2aaeb9b887c462686523f19",
+      "stored": 6,
+      "recalculated": 6,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "cf3dfd11c55f6a1c3d906feedeceab03000287b6d91e56da1536e517fb2d2937",
+      "stored": 6,
+      "recalculated": 6,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "d431096ff58d6b456f5f0f99f4d0703515f8d48b5839baf525705d98b88ff2fa",
+      "stored": 1,
+      "recalculated": 1,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+      "stored": 49,
+      "recalculated": 49,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "f49de6e0c6d388f836e16f471a82e64c558852b891ae52623dbec0926c5e341a",
+      "stored": 63,
+      "recalculated": 63,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "f4c34069db27dce618adc0420bdc61e017bb5ac36764b2135f79fe968a5325eb",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "b7f27cbcc559484f9e5554deb5d31898",
+      "key": "f7fda4c843af175bce54f682525544aad86f7ccd6b6120a5651208aa8c106cc4",
+      "stored": 2,
+      "recalculated": 2,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "0024375d7cee48d56b2f798fe9c5eca03e952279575c7c7f07ac36255873b012",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "0255ab1ef8c678dd0d0de2c85b91b81765b1672dfa509562ca167d18c65472f1",
+      "stored": 3,
+      "recalculated": 3,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "090f6e5525f7885bb3b71c3501ca68a1957195d0b27d1832533031b5139e6388",
+      "stored": 11,
+      "recalculated": 11,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "3949ed46535c6668ae9d48e2426f395fe9edd2630024a7054a4bab9c3365a5ee",
+      "stored": 10,
+      "recalculated": 10,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "3e155d833ddc99b549df0d879a771002729d73178852a41afc84adf70a9296d0",
+      "stored": 4,
+      "recalculated": 4,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "47f27a66b92c67865c815ff632b8a1a5d53368e80733d8799c26999b5ac770d4",
+      "stored": null,
+      "recalculated": null,
+      "matches": true,
+      "missing_statistics": true
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "8c333dbd7379008c1f926cb4d45f6c86ef53eeb9de715b77f504be03b41e32e0",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "a25ae2b8c4ceb5a95aeba782212e0d5691c3ef364370867ad3c9b708e283ceae",
+      "stored": 2,
+      "recalculated": 2,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+      "stored": 90,
+      "recalculated": 90,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "d6d8ae3b65951f78dec6a45a25d96a2cc8e631a5ddc5e408ea6a72f6018c84eb",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "f52277ce438064821a313e571786da3dd4e2b13f21a31fa286af9c216017aae9",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    },
+    {
+      "job_id": "153611f8a50b40aeac10f18cf61524f2",
+      "key": "fd6c28e6958c70bc0dfbb439b7ff8fdb6c646e07dc32739372a4a97877407c3e",
+      "stored": 0,
+      "recalculated": 0,
+      "matches": true,
+      "missing_statistics": false
+    }
+  ],
+  "natural_refresh_intervals": [
+    {
+      "key": "0024375d7cee48d56b2f798fe9c5eca03e952279575c7c7f07ac36255873b012",
+      "youtube_id": "V8Hco_6deFA",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "0255ab1ef8c678dd0d0de2c85b91b81765b1672dfa509562ca167d18c65472f1",
+      "youtube_id": "oHOj-Rb0BfE",
+      "previous_at": "2026-10-16T05:31:04.546665+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14425.993414
+    },
+    {
+      "key": "090f6e5525f7885bb3b71c3501ca68a1957195d0b27d1832533031b5139e6388",
+      "youtube_id": "9TL8rVDOdec",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "3949ed46535c6668ae9d48e2426f395fe9edd2630024a7054a4bab9c3365a5ee",
+      "youtube_id": "_tCqepIeNfk",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "3e155d833ddc99b549df0d879a771002729d73178852a41afc84adf70a9296d0",
+      "youtube_id": "M2j4qjpFHWo",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "47f27a66b92c67865c815ff632b8a1a5d53368e80733d8799c26999b5ac770d4",
+      "youtube_id": "EeX_bjNBuXA",
+      "previous_at": "2026-10-16T05:31:04.546665+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14425.993414
+    },
+    {
+      "key": "8c333dbd7379008c1f926cb4d45f6c86ef53eeb9de715b77f504be03b41e32e0",
+      "youtube_id": "SaXi6CLheT8",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "a25ae2b8c4ceb5a95aeba782212e0d5691c3ef364370867ad3c9b708e283ceae",
+      "youtube_id": "hF9Rri87hUY",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+      "youtube_id": "I-wLIXC21wI",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "d6d8ae3b65951f78dec6a45a25d96a2cc8e631a5ddc5e408ea6a72f6018c84eb",
+      "youtube_id": "fscWxLLzAlk",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "f52277ce438064821a313e571786da3dd4e2b13f21a31fa286af9c216017aae9",
+      "youtube_id": "b8S04YlQlMQ",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    },
+    {
+      "key": "fd6c28e6958c70bc0dfbb439b7ff8fdb6c646e07dc32739372a4a97877407c3e",
+      "youtube_id": "v5YrLAYft9w",
+      "previous_at": "2026-10-16T05:31:20.618934+00:00",
+      "refreshed_at": "2026-10-16T09:31:30.540079+00:00",
+      "seconds": 14409.921145
+    }
+  ],
+  "current_candidate_state_counts": {
+    "RESTRICTED": 33,
+    "OBSERVING": 3
+  },
+  "current_high_score_candidates": [
+    {
+      "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+      "youtube_id": "I-wLIXC21wI",
+      "duration": 2669,
+      "state": "RESTRICTED",
+      "score": 90,
+      "policy": "heat-v1-channel-policy-v1",
+      "next_refresh": null,
+      "admission_code": null,
+      "inputs": {
+        "view_count": 138087,
+        "like_count": 5115,
+        "channel_id": "UC_9iG1I_ic5jUOyzR9vTMBg",
+        "source": "KEYWORD"
+      },
+      "task_id": null
+    }
+  ],
+  "incomplete_statistics": [],
+  "usage": {
+    "verified": true,
+    "limits": {
+      "profile": "v0.5",
+      "daily": 2,
+      "rolling": 6,
+      "inflight": 2,
+      "total": null,
+      "timezone": "Asia/Shanghai",
+      "rolling_hours": 168,
+      "min_duration": 180
+    },
+    "daily_used": 0,
+    "rolling_used": 1,
+    "total_used": 1,
+    "inflight": 0,
+    "day": "2026-10-16",
+    "code": "OK",
+    "next_at": null
+  },
+  "ledger": [
+    {
+      "key": "e7af5a820ea52bea299125f8daac84e484011f99baf26ca7af27ba49e31196bf",
+      "video_id": 5947,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 2,
+      "score": 86,
+      "policy": "heat-v1-channel-policy-v1",
+      "at": "2026-10-15T01:37:08.989604+00:00",
+      "result": "ADMITTED",
+      "youtube_id": "X79tE-S-Aow"
+    }
+  ],
+  "completion": {
+    "long_term_running": true,
+    "new_v05_admitted_count": 0,
+    "full_acceptance": false,
+    "public_publication_claimed": false
+  }
+}
