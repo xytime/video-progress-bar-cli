@@ -15,7 +15,8 @@ from tests.browser_fixtures import chromium, dashboard, _payload, _video
 
 @pytest.mark.parametrize('slice_index', [0, 2])
 @pytest.mark.parametrize('severity', ['high', 'critical'])
-def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity):
+@pytest.mark.parametrize('viewport', [(1440, 1000), (390, 844)])
+def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity, viewport):
     """无震动 API 的浏览器也能复核；打开/取消弹窗不发起放行。"""
     from playwright.sync_api import expect
     page, state = dashboard
@@ -36,6 +37,7 @@ def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity
     page.locator('#tab-error').click()
     if slice_index:
         page.locator('#btn-toggle-first').click()
+    page.set_viewport_size({'width': viewport[0], 'height': viewport[1]})
     row = page.locator('.child-row-first' if slice_index else '#row-first')
     row.get_by_role('button', name='🔓 复核放行', exact=True).click()
     modal = page.locator('#bypass-modal')
