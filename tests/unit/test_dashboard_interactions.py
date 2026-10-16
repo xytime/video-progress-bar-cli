@@ -13,6 +13,49 @@ import pytest
 from tests.browser_fixtures import chromium, dashboard, _payload, _video
 
 
+@pytest.mark.parametrize('slice_index', [0, 2])
+@pytest.mark.parametrize('severity', ['high', 'critical'])
+def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity):
+    """无震动 API 的浏览器也能复核；打开/取消弹窗不发起放行。"""
+    from playwright.sync_api import expect
+    page, state = dashboard
+    page.evaluate("Object.defineProperty(navigator, 'vibrate', {value: undefined})")
+    video = dict(_video('first', status='FAILED'),
+                 error_msg='Censorship P0 Reject' if severity == 'critical' else 'Channel Policy Reject')
+    parent = dict(_video('first', status='SEGMENTED'), slices_count=1)
+    state['payload'] = _payload([parent if slice_index else video], total=1)
+    page.route('**/api/videos/first/slices', lambda route: route.fulfill(
+        json={'slices': [dict(video, slice_index=slice_index)]}))
+    page.route(f'**/api/videos/first/censor-keywords?slice_index={slice_index}',
+               lambda route: route.fulfill(json={
+                   'success': True, 'severity': severity, 'layer_label': '测试审查',
+                   'error_msg': '测试拦截原因', 'matched': [{'term': '测试词', 'layer': 'P0'}],
+                   'keywords': [], 'has_subtitle': False,
+               }))
+    page.locator('.console-primary[data-section=production]').click()
+    page.locator('#tab-error').click()
+    if slice_index:
+        page.locator('#btn-toggle-first').click()
+    row = page.locator('.child-row-first' if slice_index else '#row-first')
+    row.get_by_role('button', name='🔓 复核放行', exact=True).click()
+    modal = page.locator('#bypass-modal')
+    expect(modal).to_be_visible(timeout=2000)
+    expect(modal.locator('#bypass-banner')).to_contain_text('测试拦截原因')
+    expect(modal.locator('#bypass-matched')).to_contain_text('测试词')
+    confirm = modal.locator('#btn-confirm-bypass')
+    if severity == 'critical':
+        expect(confirm).to_be_disabled()
+        modal.locator('#bypass-p0-review-checkbox').check()
+        expect(confirm).to_be_disabled()
+        modal.locator('#bypass-p0-resume-checkbox').check()
+        expect(confirm).to_be_enabled()
+    else:
+        expect(confirm).to_be_enabled()
+    modal.get_by_role('button', name='取消', exact=True).click()
+    expect(modal).to_be_hidden()
+    assert state['writes'] == []
+
+
 @pytest.mark.parametrize('slice_index', [None, 2])
 @pytest.mark.parametrize('status,payload,expected', [
     (503, {'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},

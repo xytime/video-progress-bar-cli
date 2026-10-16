@@ -2631,7 +2631,7 @@
   let _bypassSlice = 0;
   let _bypassSeverity = 'low';
   async function openBypassModal(youtubeId, sliceIndex = 0) {
-    navigator.vibrate(15);
+    if (typeof navigator.vibrate === 'function') navigator.vibrate(15);
     _bypassYid = youtubeId;
     _bypassSlice = sliceIndex || 0;
     const modal = document.getElementById('bypass-modal');
