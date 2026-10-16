@@ -287,6 +287,7 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "字幕阶段看门狗终止",
     "auto-caption timed out",
     "字幕转录/翻译/渲染超时",
+    "codextexterror: codex_text:timeout",
 )
 _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
 _TELEGRAM_YOUTUBE_SUBJECT_RE = re.compile(
