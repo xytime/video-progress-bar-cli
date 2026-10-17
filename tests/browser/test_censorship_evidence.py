@@ -55,7 +55,13 @@ def review(chromium, tmp_path, monkeypatch):
             route.fulfill(status=404, body='离线验收')
         else:
             response = client.get(url.path + ('?' + url.query if url.query else ''))
-            route.fulfill(status=response.status_code, body=response.content, headers=dict(response.headers))
+            if url.path.endswith('/censor-keywords') and response.status_code == 200:
+                data = response.json()
+                # 生产标签云会包含长规则名；需覆盖真实手机最小宽度。
+                data['keywords'].insert(0, {'word': 'china_sensitive_negative_news', 'weight': 100, 'flagged': True})
+                route.fulfill(status=200, json=data)
+            else:
+                route.fulfill(status=response.status_code, body=response.content, headers=dict(response.headers))
 
     page.route('**/*', route_handler)
     yield page, state, db
@@ -91,6 +97,8 @@ def test_actual_evidence_responsive_and_p0_unchanged(review, theme):
         assert not page.evaluate('Boolean(window.evidenceInjection)')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert evidence.evaluate('el=>el.scrollWidth<=el.clientWidth')
+        assert page.locator('#bypass-cloud').evaluate('el=>el.scrollWidth<=el.clientWidth')
+        assert page.locator('#bypass-modal > div').evaluate('el=>el.scrollWidth<=el.clientWidth')
         button = page.locator('#btn-confirm-bypass')
         expect(button).to_be_disabled()
         page.locator('#bypass-p0-review-checkbox').check()
