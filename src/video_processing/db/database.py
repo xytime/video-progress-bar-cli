@@ -12,6 +12,8 @@
 | 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
 | 3.96.0 | 2026-10-12 | Codex | 新增视频号二级回复观众评论、任务状态机、防重账本与尝试历史 DAL，支持原子预占与配额检查。 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
+| 3.96.1 | 2026-10-11 | Antigravity | 增强 vocabulary_json_path DAL 读写支持切片视频前缀与索引自适应解析 |
+| 3.96.0 | 2026-10-11 | Antigravity | 新增 processed_videos.vocabulary_json_path 字段自迁移及 DAL 读写方法，支持视频生词汇总数据资产持久化与挂接 |
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
 | 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
@@ -529,6 +531,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                             source_subtitle_status TEXT DEFAULT 'PENDING',
                             source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
                             enrichment_status TEXT NOT NULL DEFAULT 'NONE',
+                            vocabulary_json_path TEXT DEFAULT NULL,
                             UNIQUE(youtube_id, slice_index),
                             FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                         )
@@ -611,6 +614,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                         source_subtitle_status TEXT DEFAULT 'PENDING',
                         source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
                         enrichment_status TEXT NOT NULL DEFAULT 'NONE',
+                        vocabulary_json_path TEXT DEFAULT NULL,
                         UNIQUE(youtube_id, slice_index),
                         FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                     )
@@ -748,6 +752,14 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             if columns and "enrichment_status" not in columns:
                 self._logger.info("[Migration] Adding enrichment_status column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN enrichment_status TEXT NOT NULL DEFAULT 'NONE';")
+                conn.commit()
+
+            # [Vocabulary Ecosystem] 结构化生词文件路径 (vocabulary_json_path)
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "vocabulary_json_path" not in columns:
+                self._logger.info("[Migration] Adding vocabulary_json_path column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN vocabulary_json_path TEXT DEFAULT NULL;")
                 conn.commit()
 
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
@@ -3452,6 +3464,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         censor_tag: Optional[str] = None,           # [Gemini_3.5_Flash_planning] 新增：敏感词标签
         censor_score: Optional[int] = None,         # [Gemini_3.5_Flash_planning] 新增：敏感词得分
         product_intent: str = 'AUTO', product_id: Optional[str] = None, product_title: Optional[str] = None,
+        vocabulary_json_path: Optional[str] = None,
     ) -> bool:
         normalized_content_type = normalize_content_type(content_type)
         from ..core.wechat_product_attachment import validate_intent
@@ -3470,11 +3483,11 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
-                        tts_provider, category, content_type, censor_tag, censor_score, product_intent, product_id, product_title)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tts_provider, category, content_type, censor_tag, censor_score, product_intent, product_id, product_title, vocabulary_json_path)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
                      duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
-                     tts_provider, category, normalized_content_type, censor_tag, censor_score, product_intent, product_id, product_title)  # [Gemini_3.5_Flash_planning]
+                     tts_provider, category, normalized_content_type, censor_tag, censor_score, product_intent, product_id, product_title, vocabulary_json_path)  # [Gemini_3.5_Flash_planning]
                 )
                 conn.commit()
                 return True
@@ -3690,6 +3703,55 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             )
             row = cursor.fetchone()
             return row[0] if row and row[0] else "NONE"
+
+    def update_vocabulary_json_path(self, youtube_id: str, path: Optional[str], slice_index: int = 0) -> bool:
+        """更新指定视频的结构化生词文件路径 (vocabulary_json_path)。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET vocabulary_json_path = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (str(path) if path else None, youtube_id, slice_index)
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                return True
+            if slice_index == 0:
+                import re
+                m = re.match(r"^(.*?)(?:[_\-#](?:s|part)?(\d+))$", youtube_id)
+                if m:
+                    base_yid, s_idx = m.group(1), int(m.group(2))
+                    cursor = conn.execute(
+                        "UPDATE processed_videos SET vocabulary_json_path = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE youtube_id = ? AND slice_index = ?",
+                        (str(path) if path else None, base_yid, s_idx)
+                    )
+                    conn.commit()
+                    return cursor.rowcount > 0
+            return False
+
+    def get_vocabulary_json_path(self, youtube_id: str, slice_index: int = 0) -> Optional[str]:
+        """获取指定视频的结构化生词文件路径。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT vocabulary_json_path FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+            if slice_index == 0:
+                import re
+                m = re.match(r"^(.*?)(?:[_\-#](?:s|part)?(\d+))$", youtube_id)
+                if m:
+                    base_yid, s_idx = m.group(1), int(m.group(2))
+                    cursor = conn.execute(
+                        "SELECT vocabulary_json_path FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                        (base_yid, s_idx)
+                    )
+                    sub_row = cursor.fetchone()
+                    if sub_row and sub_row[0]:
+                        return sub_row[0]
+            return None
 
     def update_video_zh_title(self, youtube_id: str, zh_title: str, slice_index: int = 0) -> bool:
         """更新单条任务的源标题译文，不改变其处理或发布状态。"""

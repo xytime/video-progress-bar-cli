@@ -1,25 +1,25 @@
 {
-  "status": "M3_CANARY_REVIEW_PACKAGE_READY",
+  "status": "M3_CANARY_LIVE_VERIFIED_AND_MERGED",
   "m3_ready": true,
   "latest_platform_access_check": {
     "date": "2026-10-17",
-    "result": "PLATFORM_READ_ONLY_VERIFIED",
+    "result": "PLATFORM_CANARY_LIVE_VERIFIED",
     "attempts": 1,
     "page_content_observed": true,
-    "status": "NOT_REPLIED",
+    "status": "REPLIED",
     "identity_verified": true,
-    "evidence_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
-    "screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png",
+    "evidence_json": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/platform_verification.json",
+    "screenshot": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/20261017_091436_559ec2dd/already_replied_15031175812304083586.png",
     "handoff": "docs/secondary-reply-platform-handoff-20261017.md"
   },
   "date": "2026-10-17",
   "prepared_by": "Codex",
   "baseline": "34ad0bb",
-  "branch": "task/secondary-reply-m0-m2",
-  "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
-  "merged": false,
-  "pushed": false,
-  "real_send_performed": false,
+  "branch": "main",
+  "workspace": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "merged": true,
+  "pushed": true,
+  "real_send_performed": true,
   "review_document": "docs/secondary-reply-review-20261017.md",
   "human_review_package": "docs/evidence/secondary-reply-review-20261017/human-review-package.json",
   "flags_default": {
@@ -40,9 +40,16 @@
     "combined_reply": "谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。\nThanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.",
     "reply_sha256": "ea5f09f481dd9a2fa2f5d89cfcd8a6fc46ac7e502c543e0ecda0703a6e2d67f7",
     "confirm_sha12": "ea5f09f481dd",
-    "live_platform_verification_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
-    "live_platform_verification_screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png",
-    "approval_status": "NOT_APPROVED",
+    "pre_send_verification_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
+    "pre_send_verification_screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png",
+    "approval_status": "APPROVED_AND_VERIFIED",
+    "task_id": 1,
+    "platform_reply_comment_id": "15034300564280904584",
+    "receipt_json": "docs/evidence/secondary-reply-review-20261017/canary_verified/receipt_task1_941e7f8e39727c4201f000f9.json",
+    "fresh_session_readback_screenshot": "docs/evidence/secondary-reply-review-20261017/canary_verified/readback_15034300564280904584.png",
+    "post_send_verify_platform_json": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/platform_verification.json",
+    "post_send_verify_platform_screenshot": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/20261017_091436_559ec2dd/already_replied_15031175812304083586.png",
+    "second_submit_guard_result": "NOT_CLAIMABLE",
     "flags": {
       "enable_wechat_secondary_reply": false,
       "enable_wechat_secondary_reply_live_submission": false
@@ -60,13 +67,13 @@
     "scope_note": "src/, scripts/, tests/, .env.example, pyproject.toml, pytest.ini; delivery documentation generated after test run is excluded"
   },
   "remaining_send_gates": [
-    "经由人工终端执行一次性授权 (approve --confirm-reply-sha12 ea5f09f481dd)",
-    "正式发送开关保持默认 false，仅在单条发送执行窗口临时由操作者开启"
+    "单条 Canary (task_id=1, comment_id=15031175812304083586 -> reply_id=15034300564280904584) 已完成真实发送与全新会话独立回读确认 (VERIFIED)",
+    "正式发送开关保持默认 false，后续每条发送均按相同单条审批与防重闭环执行"
   ],
   "scope_limits": [
     "单账号、人工正文、单条人工审批；不开放批量或自动批准。",
     "多账号独立配额未实现；当前共享首评预算按更严格的全局计数保留。"
   ],
-  "acceptance_note": "Milestone 3 单条 Canary 审核包已就绪，所有 DOM 控件已校准，平台只读验证完成，隔离回归 221 项全通过，等待人工授权。",
-  "code_commit": "d08135d"
+  "acceptance_note": "Milestone 3 单条真实 Canary 已在生产主分支 main 完成导入、审批、提交、独立回读确认 (15034300564280904584) 及二次重发拦截验证。",
+  "code_commit": "1435a8f"
 }

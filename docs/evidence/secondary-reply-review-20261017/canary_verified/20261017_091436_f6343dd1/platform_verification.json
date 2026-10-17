@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "status": "REPLIED",
+  "channel_profile": {
+    "account_key": "sphjAH8AbMh8oYP",
+    "finder_id": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
+    "native_username": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
+    "channel_nickname": "六维时空号",
+    "identity_verified": true
+  },
+  "target": {
+    "post_id": "export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ",
+    "comment_id": "15031175812304083586",
+    "video_title": "面对癌症，财富究竟能带来什么？",
+    "author_nickname": "隽永",
+    "comment_text": "B 我保留意见，大多数人都不具备演讲者的医学背景或者查询更多资料的条件以及跟专家讨论的能力，决定权还是在于治疗的医生。当然，财富确实可以获得更多的信息，更有助于自我的判断，以及心理安慰。另外，不同癌症的特点和治疗方式以及生存期都是不一样的，特别是像这种晚期肺癌，包括胰腺癌，经过统计存活率是很低的。所以我觉得她的观点比较泛泛。",
+    "text_matched": true,
+    "fresh": true
+  },
+  "controls_calibration": {},
+  "evidence_files": {
+    "json": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/platform_verification.json",
+    "screenshot": "docs/evidence/secondary-reply-review-20261017/canary_verified/20261017_091436_f6343dd1/20261017_091436_559ec2dd/already_replied_15031175812304083586.png"
+  },
+  "mode": "PLATFORM_READ_ONLY_CALIBRATION_AND_VERIFICATION"
+}

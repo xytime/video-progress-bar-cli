@@ -1,0 +1,13 @@
+{
+  "task_id": 1,
+  "account_key": "sphjAH8AbMh8oYP",
+  "attempt_id": "reconcile",
+  "source": "reconcile",
+  "platform_post_id": "export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ",
+  "root_comment_id": "15031175812304083586",
+  "platform_reply_comment_id": "15034300564280904584",
+  "reply_text_sha256": "ea5f09f481dd9a2fa2f5d89cfcd8a6fc46ac7e502c543e0ecda0703a6e2d67f7",
+  "readback_layer": "fresh_session_admin_view",
+  "public_visibility": "NOT_CHECKED",
+  "screenshot_after_refresh": "/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/secondary_reply_evidence/20261017_091245_51c4a31c/readback_15034300564280904584.png"
+}
