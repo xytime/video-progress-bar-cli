@@ -171,6 +171,37 @@ def test_a16_untrusted_text_and_off_page(ui):
     evidence(page,'closed-search-untrusted-text')
 
 
+@pytest.mark.parametrize('theme', ['dark', 'light', 'contrast'])
+def test_policy_reason_field_excerpt_and_safe_mobile_wrapping(ui, theme):
+    from video_processing.utils.topic_search import ExistingTopicRules
+    page, tracker, flags = ui
+    tracker.rules = ExistingTopicRules()
+    tracker.adapter.items = [video(title='健康科学')]
+    tracker.adapter.items[0]['snippet']['description'] = (
+        '原文 ' + 'x' * 300 + ' 美国Ｃ Ｉ Ａ调查 <img src=x onerror="window.injected=true">')
+    run(tracker)
+    page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
+    page.locator('#reload').click()
+    expect(page).to_have_title('YouTube 关键词采集 · 视频控制台')
+    card = page.locator('.candidate-card')
+    reason = card.locator('.candidate-reason')
+    expect(reason).to_contain_text('拦截原因：CP / 频道内容策略')
+    expect(reason).to_contain_text('命中词：CIA')
+    expect(reason).to_contain_text('来源：原始描述')
+    expect(reason).to_contain_text('Ｃ Ｉ Ａ')
+    expect(reason).to_contain_text('规则版本：' + tracker.rules.version())
+    assert card.locator('img').count() == 0 and page.evaluate('window.injected') is None
+    expect(card.get_by_role('button', name='收藏', exact=True)).to_be_disabled()
+    for width, height in ((1280, 900), (390, 844)):
+        page.set_viewport_size(dict(width=width, height=height))
+        reason.scroll_into_view_if_needed()
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        assert reason.evaluate('el=>el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth')
+        card.get_by_role('link', name='打开原视频').focus()
+        expect(card.get_by_role('link', name='打开原视频')).to_be_focused()
+        evidence(page, f'policy-reason-{theme}-{width}')
+
+
 def test_a20_filter_empty_clear_and_zero_success(ui):
     page,tracker,flags=ui
     create(page);tracker.adapter.items=[]

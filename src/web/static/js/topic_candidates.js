@@ -186,7 +186,7 @@
         const evidence=text('details','');evidence.append(text('summary','评分依据'),text('p',`播放量 ${progress.inputs?.view_count??'未知'} · 点赞 ${progress.inputs?.like_count??'未知'} · 统计时间 ${when(candidate.fetched_at)} · 政策 ${progress.policy||'未评分'}。热度不代表新闻真实性；新报道未达标将继续观察。`));card.append(evidence);
         if(progress.task_id){const task=text('a','查看主队列任务');task.href='/?view=production&tab=queue&search='+encodeURIComponent(meta.youtube_id);card.append(task);}
         const source=text('details',''); source.append(text('summary','来源与原始描述'),text('p',`视频 ID：${meta.youtube_id} · 频道 ID：${meta.channel_id || '未知'}`,'hint'),text('p',meta.description || '原始描述未知')); card.append(source);
-        card.append(text('p',candidate.reason),text('p',`资料更新 ${when(candidate.fetched_at)}${candidate.needs_review?' · 资料已变化，需重新核实':''}`,'hint'));
+        card.append(text('p',(candidate.eligibility==='RESTRICTED'?'拦截原因：':'核实结果：')+candidate.reason,'candidate-reason'),text('p',`资料更新 ${when(candidate.fetched_at)}${candidate.needs_review?' · 资料已变化，需重新核实':''}`,'hint'));
         if(candidate.pipeline_present) card.append(text('p',`已在主流水线：${candidate.pipeline_states.map(s=>s.status).join('、')}。候选排除不会撤回主任务，请到主队列处理。`));
         const actions=text('div','', 'candidate-actions'), link=`https://www.youtube.com/watch?v=${meta.youtube_id}`;
         const open=text('a','打开原视频'); open.href=link; open.target='_blank'; open.rel='noopener noreferrer'; actions.append(open);

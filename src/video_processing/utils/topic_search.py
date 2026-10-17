@@ -89,9 +89,20 @@ class ExistingTopicRules:
         return current_rules_fingerprint()
 
     def check(self, meta):
-        from ..censor_engine import check_text, check_channel_policy
+        from ..censor_engine import check_text, check_channel_policy, matched_excerpt
         text = meta["title"] + "\n" + meta["description"]
-        for result in (check_text(zh_text=text, en_text=text), check_channel_policy(zh_text=text, en_text=text)):
+        for checker in (check_text, check_channel_policy):
+            result = checker(zh_text=text, en_text=text)
             if result.hit:
-                return " / ".join(filter(None, (result.level, result.tag))) or "现有内容规则受限"
+                sources = []
+                for name, label in (("title", "标题"), ("description", "原始描述")):
+                    value = meta[name]
+                    local = checker(zh_text=value, en_text=value)
+                    if local.hit and (local.level, local.matched) == (result.level, result.matched):
+                        sources.append(f"{label}「{matched_excerpt(value, result.matched or '')}」")
+                if not sources:
+                    sources.append(f"标题＋原始描述（跨字段共现）「{matched_excerpt(text, result.matched or '')}」")
+                label = "频道内容策略" if result.level == "CP" else (result.tag or "内容审查")
+                return (f"{result.level} / {label} · 命中词：{result.matched or '共现规则'} · "
+                        f"来源：{'；'.join(sources)} · 规则版本：{self.version()}")
         return None
