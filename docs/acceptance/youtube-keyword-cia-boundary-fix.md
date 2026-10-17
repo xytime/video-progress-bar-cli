@@ -27,10 +27,25 @@
 
 ## 维护采用及实际回读
 
-待执行。第一份CIA计划在准备时发现UI已被另一原生维护冻结，返回 `UI_ORIGINAL_STATE_UNSUPPORTED`，未创建可执行计划、未修改源码；没有恢复或覆盖另一维护。11:57刷新Cloud非秘密配额搜索3/100、通用338/10000。执行前刷新非秘密Cloud配额和带时区宿主窗口，核实完整来源、锁、调度及保护字段。正常控制面关闭搜索及准入后，以全新原生 `--preserve-keyword-profile` 计划暂停新接纳、自然排空、正常停止、一致性备份、采用、维护启动、恢复调度、最终回读。原生拒绝先status再核实recover，不绕门禁、强杀、删锁或编辑旧journal。所有并行改动必须逐项核对保留。
+**2026-10-17 12:14:39北京时间完成原生九步上线；两条候选均解除CIA误拦，并于12:15:43由自然调度自动准入。** 当前修复及长期新准入链路验收通过，不代表两条内容已获发布批准。
 
-采用完成后恢复已授权长期能力，正常读取两条候选，并检查原始分数／时长、精确规则原因、KEYWORD主任务与准入账本。自然调度完成后再报告真实状态；不手工tick、制造候选或降低内容门槛。
+采用目标`284732b5b610ae4f9ed77ed939ce53f327499040`，包含片尾长例句并行修复553faa0及其后续文档eed288e。计划`5c1f0b5a0e044510bb4581b65b3c3d8e`，私有目录`~/Library/Application Support/VideoProcessing/deployments/keyword-cia-fix-20261017-c`；baseline/freeze/stop/backup/adopt/start/resume/restore/verify全部完成，verify.ok=true。11:57 Cloud非秘密搜索3/100、通用338/10000，采用时仍在一小时有效期内，宿主实际窗口通过。真实在途导致freeze拒绝后，先status核实，维持暂停新接纳并等待自然结束，再recover；未强杀、删锁、改指纹或编辑旧journal。
 
-### 12:06 生产采用前基线
+12:18独立回读：运行hash`df911b5285c439f953ebe692ef0b7535f7aaf85a097ba157f95fb631e1f6dd2a`，六类当时存活角色真实birth/hash/cwd匹配，完整LONG_TERM通过；26项原dirty哈希和1245条untracked路径全部保留，原生源码清单匹配。正常CSRF/CAS已恢复DISCOVERY_ONLY/version62、admission1/version18、RUNNING70；API20/40、每日2／滚动6／在途2、规则期限不变。
 
-[只读基线](evidence/youtube-keyword-cia-fix/before-adoption-20261017.json)确认两条候选仍分别82分／1040秒与85分／1156秒，旧规则指纹2a618ce6dfa4986c，均RESTRICTED且无主任务。当前由另一维护暂停新接纳（MAINTENANCE65、OFF57、admission0/version15）；轻量active为空，但完整检查仍发现一条发布中总账6133，而抖音账本770已UNDER_REVIEW。该项正在由负责会话按受控对账处理，本会话未修改它、未重传、未复用其部署计划。其维护完成后才执行本次全新计划。
+### 自然作业及两条候选
+
+- 12:15:25–27自然SCHEDULED `e44c3e7fed534d8797262673a96086d5` COMPLETE/OK，新增4／重复21／受限17，搜索1、详情1。随后自然REFRESH `7a0e707fea984e048b47f146d6792272`及`b2d75e6402164526bbbb552d4e9bfa5b`均成功，各详情1。三作业67条原始快照中65条数值评分复算一致，另外2条上游统计缺失按原规则保留空分；没有补造0分、手工tick或创建候选。
+- `vS2uoE_Rr8Q`：82分／1040秒保持；新规则`1190d2cf041c1a84`正常重评后CHECKABLE，12:15:43自然准入KEYWORD根任务**6135**，与持久账本精确关联。12:18为TRANSCRIBING，尚未制作或发布完成。
+- `jD_5JhBOJWg`：85分／1156秒保持；正常重评后CHECKABLE，12:15:43自然准入KEYWORD根任务**6134**，与持久账本精确关联。随后源字幕预检命中原有`blocklist.P0.en.china_sensitive_negative_news`，审计**203**、`REJECT_FAILED_BLACKLIST`，12:15:54任务FAILED且已入黑名单，视频下载前阻断。这是独立内容门禁；不是CIA再次误匹配或频道白名单限制。未重试、未退款，失败释放在途容量。
+- 12:18额度为北京日2/2、滚动168小时3/6、在途1/2；保留旧5947及新6134/6135三条真实消费。今日额度满只拦新增准入，搜索／刷新仍按预算和宿主窗口运行。未降低评分、热度、时长或内容门槛。
+
+[生产作业、规则重评、主任务／准入账本、P0审计和来源保存证据](evidence/youtube-keyword-cia-fix/production-acceptance-20261017.json)。生产页面1280×900及390×844的两条候选共4张截图已回看，原因提示可见，无横向溢出或页面异常；浏览器仅GET、未触发搜索／保存／准入操作。手机视口模拟不等同真实手机浏览器验收：[82分手机](evidence/youtube-keyword-cia-fix/production-vS2uoE_Rr8Q-390.png)、[85分手机](evidence/youtube-keyword-cia-fix/production-jD_5JhBOJWg-390.png)。截图摄于12:15，不用截图中的较早PENDING代替12:18数据库状态。
+
+12:20已通过应用原生工具将本期`youtube-v0-5`验收跟进设为PAUSED，生产定时采集与准入配置未变。12:21只读回查6135仍在转录，video及queue-dispatch在途，故本轮新增验收记录先提交并推送隔离分支，不在运行任务脚下合入文档或变更生产checkout；修复源码已实际采用。
+
+### 前置拒绝与并行工作保留
+
+首份准备遇到另一维护已冻结UI，`UI_ORIGINAL_STATE_UNSUPPORTED`，未创建可执行计划。[12:06基线](evidence/youtube-keyword-cia-fix/before-adoption-20261017.json)记录两条旧CIA误拦，及另一会话负责的6133／抖音770对账；该会话已完成自己的原生采用，本会话未修改或重传该视频。
+
+第二份计划`096066683c3347649921d06b285fcf5e`在freeze后发现生产HEAD新增eed288e文档／测试提交，源码、dirty及untracked均未变。未改计划或回退Git；等6056自然结束，完整检查通过后，以原生resume及Schedules.restore撤销尚未停止／采用的冻结，留下`cancel-before-adoption.json`，旧journal原样保留。整合eed288e后再生成上述第三份全新计划并完成采用。不是重放旧计划或跳过漂移检查。

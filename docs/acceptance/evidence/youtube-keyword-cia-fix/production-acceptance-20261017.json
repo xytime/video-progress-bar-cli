@@ -1,0 +1,1474 @@
+{
+  "at": "2026-10-17T04:18:13.092754+00:00",
+  "candidates": [
+    {
+      "key": "7ed6f71982c1b73b1165564ab9fcafc80d8516f66428e670453bbcf9db009e2b",
+      "youtube_id": "vS2uoE_Rr8Q",
+      "candidate": {
+        "score": 82,
+        "eligibility": "CHECKABLE",
+        "reason": "可人工核实；元数据检查不代表内容或发布批准",
+        "rule_version": "1190d2cf041c1a84",
+        "revision": 3,
+        "fetched_at": "2026-10-17T04:15:27.300711+00:00"
+      },
+      "duration": 1040,
+      "collection": {
+        "state": "ADMITTED",
+        "score": 82,
+        "policy": "heat-v1-channel-policy-v1",
+        "next_refresh": null,
+        "admission_code": null,
+        "inputs": {
+          "view_count": 3589,
+          "like_count": 114,
+          "channel_id": "UCqVHGwQCmmGa2hjS7ydN4sQ",
+          "source": "KEYWORD"
+        },
+        "task_id": 6135
+      },
+      "main": {
+        "id": 6135,
+        "status": "TRANSCRIBING",
+        "source": "KEYWORD",
+        "score": 82,
+        "duration_sec": 1040,
+        "error_msg": null,
+        "censor_tag": null,
+        "source_subtitle_preflight_status": null,
+        "created_at": "2026-10-17 04:15:43",
+        "updated_at": "2026-10-17 04:17:44"
+      },
+      "blacklisted": false,
+      "incidents": []
+    },
+    {
+      "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+      "youtube_id": "jD_5JhBOJWg",
+      "candidate": {
+        "score": 85,
+        "eligibility": "RESTRICTED",
+        "reason": "已在黑名单或频道排除名单",
+        "rule_version": "1190d2cf041c1a84",
+        "revision": 7,
+        "fetched_at": "2026-10-17T00:15:44.247545+00:00"
+      },
+      "duration": 1156,
+      "collection": {
+        "state": "ADMITTED",
+        "score": 85,
+        "policy": "heat-v1-channel-policy-v1",
+        "next_refresh": null,
+        "admission_code": null,
+        "inputs": {
+          "view_count": 1552,
+          "like_count": 188,
+          "channel_id": "UCqHBhR4PZlqXLBQeroBHyYw",
+          "source": "KEYWORD"
+        },
+        "task_id": 6134
+      },
+      "main": {
+        "id": 6134,
+        "status": "FAILED",
+        "source": "KEYWORD",
+        "score": 85,
+        "duration_sec": 1156,
+        "error_msg": "Censorship P0 Reject: 🔴 政治安全违禁 (matched: 'china_sensitive_negative_news')",
+        "censor_tag": "🔴 政治安全违禁",
+        "source_subtitle_preflight_status": null,
+        "created_at": "2026-10-17 04:15:43",
+        "updated_at": "2026-10-17 04:15:54"
+      },
+      "blacklisted": true,
+      "incidents": [
+        {
+          "id": 203,
+          "video_id": 6134,
+          "youtube_id": "jD_5JhBOJWg",
+          "slice_index": 0,
+          "stage": "blocklist",
+          "level": "P0",
+          "action": "REJECT_SIGTERM",
+          "tag": "🔴 政治安全违禁",
+          "score": 95,
+          "matched": "china_sensitive_negative_news",
+          "channel": "en",
+          "decision": "REJECT_FAILED_BLACKLIST",
+          "title": "Técnica de 28 Anos Morre no Instituto da Peste na Sibéria, e a Rússia Diz Que Não Foi Peste",
+          "zh_title": null,
+          "description_preview": null,
+          "text_excerpt": "Técnica de 28 Anos Morre no Instituto da Peste na Sibéria, e a Rússia Diz Que Não Foi Peste\nThe plague, the disease that has killed\nThe plague, the disease that has killed up to 200 million people throughout\nup to 200 million people throughout\nup to 200 million people throughout history, may have returned to kill\nhistory, may have returned to kill\nhistory, m",
+          "created_at": "2026-10-17 04:15:53",
+          "rule_pack_version": "1190d2cf041c1a84",
+          "rule_id": "blocklist.P0.en.china_sensitive_negative_news",
+          "source_field": "title,zh_title,description,subtitle",
+          "platform": "预加工",
+          "input_hash": "9bc476d4bf798fac",
+          "review_stage": "source_subtitle_preflight"
+        }
+      ]
+    }
+  ],
+  "budget": {
+    "day": "2026-10-16",
+    "search": 4,
+    "general": 9
+  },
+  "usage": {
+    "verified": true,
+    "limits": {
+      "profile": "v0.5",
+      "daily": 2,
+      "rolling": 6,
+      "inflight": 2,
+      "total": null,
+      "timezone": "Asia/Shanghai",
+      "rolling_hours": 168,
+      "min_duration": 180
+    },
+    "daily_used": 2,
+    "rolling_used": 3,
+    "total_used": 3,
+    "inflight": 1,
+    "day": "2026-10-17",
+    "code": "ADMISSION_DAILY",
+    "next_at": "2026-10-17T16:00:00+00:00"
+  },
+  "maintenance": {
+    "schema": 1,
+    "version": 70,
+    "state": "RUNNING",
+    "reason": "部署 5c1f0b5a0e044510bb4581b65b3c3d8e",
+    "at": 1792210477.208344,
+    "maintenance_age_seconds": 0,
+    "maintenance_overdue": false,
+    "active": [
+      {
+        "id": "56e6a0864d3842d18da0c84c934b437f",
+        "role": "video",
+        "object": "vS2uoE_Rr8Q:0",
+        "pid": 59276,
+        "phase": "ACTIVE",
+        "at": 1792210554.786519
+      },
+      {
+        "id": "b14f1fa26765413e81dd8741e84eb12a",
+        "role": "queue-dispatch",
+        "object": "queue-dispatch",
+        "pid": 58432,
+        "phase": "ACTIVE",
+        "at": 1792210543.6118982
+      }
+    ],
+    "unknown": [],
+    "phase": "DRAINING"
+  },
+  "roles": {
+    "ui": {
+      "pid": 58432,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    },
+    "auto-pipeline": {
+      "pid": 58432,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    },
+    "queue-runner": {
+      "pid": 58432,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    },
+    "ready-supervisor": {
+      "pid": 58432,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    },
+    "keepalive-watchdog": {
+      "pid": 58432,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    },
+    "ready-worker": {
+      "pid": 58740,
+      "alive": true,
+      "birth_match": true,
+      "hash_match": true,
+      "cwd_match": true
+    }
+  },
+  "deployment": {
+    "id": "5c1f0b5a0e044510bb4581b65b3c3d8e",
+    "journal": {
+      "schema": 1,
+      "plan": "96a74e03c4b4bcbd1996a554db848693545b9981685d76658676f8421175af93",
+      "done": [
+        "baseline",
+        "freeze",
+        "stop",
+        "backup",
+        "adopt",
+        "start",
+        "resume",
+        "restore",
+        "verify"
+      ],
+      "pending": null,
+      "state": "COMPLETE",
+      "at": 1792210479.4464488,
+      "error": null,
+      "failed_step": "freeze"
+    },
+    "runtime_hash": "df911b5285c439f953ebe692ef0b7535f7aaf85a097ba157f95fb631e1f6dd2a",
+    "runtime_manifest_matches": true,
+    "dirty_original_count": 26,
+    "dirty_preserved": true,
+    "untracked_original_count": 1245,
+    "untracked_preserved": true,
+    "head": "284732b5b610ae4f9ed77ed939ce53f327499040",
+    "private_directory": "/Users/ryusei/Library/Application Support/VideoProcessing/deployments/keyword-cia-fix-20261017-c",
+    "native_verify_ok": true,
+    "verify_receipt_keys": [
+      "ok",
+      "runtime"
+    ]
+  },
+  "score_summary": {
+    "snapshots": 67,
+    "scored": 65,
+    "all_numeric_scores_match": true,
+    "missing_stats_kept_null": 2
+  },
+  "job_proofs": {
+    "b2d75e6402164526bbbb552d4e9bfa5b": {
+      "id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "kind": "REFRESH",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-17T04:15:58.667329+00:00",
+      "ended_at": "2026-10-17T04:15:59.526332+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-17T04:15:59.508485+00:00",
+        "rows": [
+          {
+            "key": "0024375d7cee48d56b2f798fe9c5eca03e952279575c7c7f07ac36255873b012",
+            "youtube_id": "V8Hco_6deFA",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 10, \"like_count\": 1, \"channel_id\": \"UC0KS3eUCso1SxN4JZHjDNkA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "0255ab1ef8c678dd0d0de2c85b91b81765b1672dfa509562ca167d18c65472f1",
+            "youtube_id": "oHOj-Rb0BfE",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 69, \"like_count\": 2, \"channel_id\": \"UCK2qSWHdjtBUKuIU62bhJKA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "090f6e5525f7885bb3b71c3501ca68a1957195d0b27d1832533031b5139e6388",
+            "youtube_id": "9TL8rVDOdec",
+            "score": 11,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 963, \"like_count\": 7, \"channel_id\": \"UCBop-nGNfOlhvTYwEkZIOhA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "0d996f334e029a147712cca57cb26ad29e62ba28e8771efb72d655455855fb58",
+            "youtube_id": "vLlWX0_kVj8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 11, \"like_count\": 0, \"channel_id\": \"UCCin3EEf4hhJsDDBxp93U1w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 4
+          },
+          {
+            "key": "1881bf79fe67c33997f5c463d40e7ddc377f161c9e8206170c496a496961c2ab",
+            "youtube_id": "T_9Vl_ZX9Wk",
+            "score": 12,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 381, \"like_count\": 8, \"channel_id\": \"UC8kgJmbp29LHRZ_z5xf5bog\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "1a4a0e734243aa1548e50e8950584a219b5f7e8a48bfbd39680d7a2fb5fd04ae",
+            "youtube_id": "Mr4gI-P32vo",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 22, \"like_count\": 0, \"channel_id\": \"UCF_emlwEUFxJvFm2Eqy2ZOQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "26f92c415325d1cacdfc50dd738be2180c07e47b51167bda1da21326a1184f12",
+            "youtube_id": "P3uaHLVTGOc",
+            "score": null,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": null, \"like_count\": null, \"channel_id\": \"\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 3
+          },
+          {
+            "key": "313b26a32d7e1fe18454676a5ac2c24669edb82b0a7b22b9040d1db15de8269b",
+            "youtube_id": "O7l8BolvnRI",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 47, \"like_count\": 0, \"channel_id\": \"UCKLldaFGdUextKuKMiloQ4g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 3
+          },
+          {
+            "key": "3258d281c4497bc6d38731a678f0e5287769375e5e70f403ec64bf13aa45acc8",
+            "youtube_id": "dVTJgxY7WUI",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 23, \"like_count\": 0, \"channel_id\": \"UCDzgOazgxot_8pWK9P8tdyw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 5
+          },
+          {
+            "key": "3949ed46535c6668ae9d48e2426f395fe9edd2630024a7054a4bab9c3365a5ee",
+            "youtube_id": "_tCqepIeNfk",
+            "score": 11,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 229, \"like_count\": 12, \"channel_id\": \"UCzKxXybN5gXZ-iA5Vr_E8zg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 9
+          },
+          {
+            "key": "3e155d833ddc99b549df0d879a771002729d73178852a41afc84adf70a9296d0",
+            "youtube_id": "M2j4qjpFHWo",
+            "score": 4,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 89, \"like_count\": 3, \"channel_id\": \"UCrRN_hpt2L5tUMJcTrG6bgA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 9
+          },
+          {
+            "key": "42489e3a3f3ade5b6203be153f5c890a7c987064e1ea3a05fe433aaf99e49c11",
+            "youtube_id": "c01wtJbp7zc",
+            "score": 5,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 3463, \"like_count\": 7, \"channel_id\": \"UCNBmxc6FvKyxtCpUygcdINA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "447d22cbea29ae42960e2b805bf9e8d8869138bead26ed8463f0676bdf48f701",
+            "youtube_id": "PRI270SHzeE",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 56, \"like_count\": 2, \"channel_id\": \"UCknjIkcQ7jkbYHi6w0_VaWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 5
+          },
+          {
+            "key": "461489927577d9b2e6f25cd03fa4fe459afe2046f9a0d916c0f64e4c8e19837e",
+            "youtube_id": "jUDL9xswJyE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 23, \"like_count\": 0, \"channel_id\": \"UCoqHwXvG38b0pwLbPVfey4A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "47f27a66b92c67865c815ff632b8a1a5d53368e80733d8799c26999b5ac770d4",
+            "youtube_id": "EeX_bjNBuXA",
+            "score": null,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": null, \"like_count\": null, \"channel_id\": \"\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 5
+          },
+          {
+            "key": "5b99bcf6626fe50d3525225407da92be4b15ddc7a0fefd2e7f0ef10c9f5fe9f7",
+            "youtube_id": "b74IJXG_dps",
+            "score": 8,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 58384, \"like_count\": 191, \"channel_id\": \"UCiYbaVEODktcsh09454Grow\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 3
+          },
+          {
+            "key": "5cef19cc83c144f8d3d392fde39867c891d930bbf70f61ff88381d490a987d21",
+            "youtube_id": "ecqD3_pDYhk",
+            "score": 61,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1611, \"like_count\": 42, \"channel_id\": \"UCjbwkE_9W3moW2VKRymcKIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "7215c02d862a7b817b55cf10010694bd932444b90aa58dd81d83d33082b01f01",
+            "youtube_id": "pBmZ6xeYsq8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 9, \"like_count\": 0, \"channel_id\": \"UCAGc3yXcSYZEdPVm21KJQ_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 3
+          },
+          {
+            "key": "7755bc6b63d5c123aaceb6ce6289d65ee24033c057ba2fcc0749478727668bc0",
+            "youtube_id": "ugfE8koA8_U",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 69, \"like_count\": 4, \"channel_id\": \"UCL3lgQgdpw5N2o0ap2iUxig\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "78f7c02ef9ea829a2ad3b1846197736047982545d948efe1954066978531c23a",
+            "youtube_id": "hH6vxZ5RevE",
+            "score": 55,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1181, \"like_count\": 37, \"channel_id\": \"UCBqccx6BFMyG-2uakdCBfIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "84c62cb7deebc360641f8777d675331929e6dd8b6c00571f6a9e9f575fa67773",
+            "youtube_id": "i-zWpOJox1A",
+            "score": 15,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 4726, \"like_count\": 31, \"channel_id\": \"UCaLjq8bBXAA7lLlHaGHvI8w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 6
+          },
+          {
+            "key": "8621cadc19807f312fc6492e586881d887ca0a22271f0f22478a3ee4f95d67d2",
+            "youtube_id": "Fvn23UesRk8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 37, \"like_count\": 0, \"channel_id\": \"UCz76yprlUpoaHVHt0ld78tA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 5
+          },
+          {
+            "key": "8c333dbd7379008c1f926cb4d45f6c86ef53eeb9de715b77f504be03b41e32e0",
+            "youtube_id": "SaXi6CLheT8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2, \"like_count\": 0, \"channel_id\": \"UCE4IQdeSxbFq2_eUcsrYD_A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 8
+          },
+          {
+            "key": "8d100f978697425dad50f9f589d4907695c45d9f5548c274edf1a9d1c31f3045",
+            "youtube_id": "LpADgdc9SHk",
+            "score": 8,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 356, \"like_count\": 5, \"channel_id\": \"UCUMX1rd8A3sCG7mW0QtuN6g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "a1fe817178f7ea3ffdedf3ca5e17f671352b9265131023a5b55176b8e226eb8a",
+            "youtube_id": "F0d7m6OQYwU",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 66, \"like_count\": 4, \"channel_id\": \"UCtcR3cRksA7VXpsXD_iTAQQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "a25ae2b8c4ceb5a95aeba782212e0d5691c3ef364370867ad3c9b708e283ceae",
+            "youtube_id": "hF9Rri87hUY",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 68, \"like_count\": 1, \"channel_id\": \"UCTTL2cgco_X9y3qWv0JwDcQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "a31b86454b28ae262cbaefb4167c43e8f572bf3783046a2d4343c0d9d18ee808",
+            "youtube_id": "oNCiB4kwocs",
+            "score": 28,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 837, \"like_count\": 18, \"channel_id\": \"UC3wA6LjGyATzIav4r2FBtFA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "c6f8983157045dc2a8341017fd1b9eff711542092b92f3ba3ef26e4050c863e1",
+            "youtube_id": "elORkcfdD-s",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 68, \"like_count\": 0, \"channel_id\": \"UCGlBT7KUE__eFJ1xAcuHh_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 6
+          },
+          {
+            "key": "ca1e64607a2323aa16f55afb72d371a78c1b3f02c2aaeb9b887c462686523f19",
+            "youtube_id": "mll96LRa9FE",
+            "score": 6,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 210, \"like_count\": 4, \"channel_id\": \"UCP4imkUyehirv5gAue80L_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 5
+          },
+          {
+            "key": "cf3dfd11c55f6a1c3d906feedeceab03000287b6d91e56da1536e517fb2d2937",
+            "youtube_id": "SIL9vjaSgkY",
+            "score": 6,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 364, \"like_count\": 4, \"channel_id\": \"UCzOKP6OwCCZX5eo9pIwtYhg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "d431096ff58d6b456f5f0f99f4d0703515f8d48b5839baf525705d98b88ff2fa",
+            "youtube_id": "d_HZbOTiwSU",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 39, \"like_count\": 1, \"channel_id\": \"UCxOwFzvSeAgX-Axfvp_q-Yg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+            "youtube_id": "I-wLIXC21wI",
+            "score": 90,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 144573, \"like_count\": 5249, \"channel_id\": \"UC_9iG1I_ic5jUOyzR9vTMBg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 9
+          },
+          {
+            "key": "d6d8ae3b65951f78dec6a45a25d96a2cc8e631a5ddc5e408ea6a72f6018c84eb",
+            "youtube_id": "fscWxLLzAlk",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 19, \"like_count\": 0, \"channel_id\": \"UCiPeMgxBzzE4pcI_Q1CxGrA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "f49de6e0c6d388f836e16f471a82e64c558852b891ae52623dbec0926c5e341a",
+            "youtube_id": "DsX_SpgmGe4",
+            "score": 35,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 4787, \"like_count\": 72, \"channel_id\": \"UCqVHGwQCmmGa2hjS7ydN4sQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "f4c34069db27dce618adc0420bdc61e017bb5ac36764b2135f79fe968a5325eb",
+            "youtube_id": "EcWWY9n0V8k",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 84, \"like_count\": 0, \"channel_id\": \"UC1tVcWFcKQaU3gZzyZoDJAw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          },
+          {
+            "key": "f52277ce438064821a313e571786da3dd4e2b13f21a31fa286af9c216017aae9",
+            "youtube_id": "b8S04YlQlMQ",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 15, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 8
+          },
+          {
+            "key": "f7fda4c843af175bce54f682525544aad86f7ccd6b6120a5651208aa8c106cc4",
+            "youtube_id": "rNWZQazNBj0",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 389, \"like_count\": 2, \"channel_id\": \"UCSoAZhsSeqGUCe9BLHeM2Mw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 6
+          },
+          {
+            "key": "fd6c28e6958c70bc0dfbb439b7ff8fdb6c646e07dc32739372a4a97877407c3e",
+            "youtube_id": "v5YrLAYft9w",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 5, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:59.508485+00:00",
+            "revision": 7
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        }
+      ]
+    },
+    "7a0e707fea984e048b47f146d6792272": {
+      "id": "7a0e707fea984e048b47f146d6792272",
+      "kind": "REFRESH",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-17T04:15:42.696562+00:00",
+      "ended_at": "2026-10-17T04:15:43.410595+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-17T04:15:43.387377+00:00",
+        "rows": [
+          {
+            "key": "707f11328748359ecfab2821c22bce903bc8463590804b165c0148c4a8fe26f5",
+            "youtube_id": "UT6UJ-jLW_Y",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 430, \"like_count\": 1, \"channel_id\": \"UCeX20-rTnN46DUD6C7IplWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:43.387377+00:00",
+            "revision": 5
+          },
+          {
+            "key": "9f2559020527204fe4cb9e9378e972500919eff4f1138484a92550a606558906",
+            "youtube_id": "qsPIVIiTWGg",
+            "score": 16,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 347, \"like_count\": 12, \"channel_id\": \"UCkzZ2VzawxDKRJQ2jQ_eV2A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:43.387377+00:00",
+            "revision": 3
+          },
+          {
+            "key": "aa84b1bbd3d3fad72eb0c589c615fc9e51aac324e665d5120dbbc3b7944601f6",
+            "youtube_id": "BOSXQuSVGZY",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 12, \"like_count\": 0, \"channel_id\": \"UC_5wARtFHXqDzm5RJj1eTNw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:43.387377+00:00",
+            "revision": 3
+          },
+          {
+            "key": "b757ed39781a79d52f907a91cade78c5583d27fa4e788ee0b84a7fef432c0a59",
+            "youtube_id": "jp9Jsosuu54",
+            "score": 19,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 397, \"like_count\": 36, \"channel_id\": \"UCWhCsYpCh-BeJQTiqAUbfZg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:43.387377+00:00",
+            "revision": 3
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        }
+      ]
+    },
+    "e44c3e7fed534d8797262673a96086d5": {
+      "id": "e44c3e7fed534d8797262673a96086d5",
+      "kind": "SCHEDULED",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-17T04:15:25.627051+00:00",
+      "ended_at": "2026-10-17T04:15:27.361361+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-17T04:15:27.337220+00:00",
+        "rows": [
+          {
+            "key": "24f7d5fbd45655229fe49645f3bfe506702b212a68c258190ae5367730b72665",
+            "youtube_id": "XMSH7paSjMo",
+            "score": 58,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1244, \"like_count\": 51, \"channel_id\": \"UCHmYehzknP5_ETBHOXk1udw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "28b4e5465de32985aaac37857c5a37edd335d31d02001a4997974c3d5255d888",
+            "youtube_id": "l3vHvfe8nqE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 10, \"like_count\": 0, \"channel_id\": \"UCD30o48852lPHGaPs5vXUIg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 2
+          },
+          {
+            "key": "597ab2139c69d312fe7eb55dea05ab54e4346a971e66a57968e976abb5c9afc1",
+            "youtube_id": "Vix-c-YJqPg",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 49, \"like_count\": 10, \"channel_id\": \"UCG1IvGeThawW9R0LYtbC80A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 2
+          },
+          {
+            "key": "660bc1516e3b6170c7146b8db49be0cda7a5a87bc575b614ea568e2c1f946c1c",
+            "youtube_id": "ha4HOFXTMiU",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2, \"like_count\": 0, \"channel_id\": \"UCNh7M1Oj3FP9rxsjMrXKFWw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "6caae88ab02beddde8a8e3db1ac236718c6eb007f1cd20c3898171cc67e81088",
+            "youtube_id": "rPVMI-lNHX0",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 724, \"like_count\": 1, \"channel_id\": \"UChQiQ_TBQtluXTW98tgXb4A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "712c6c1d18e194ccd14e197c98c7ffa7e543d98f23191828380de8561a57a749",
+            "youtube_id": "_JzfO4BuIFU",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 75, \"like_count\": 1, \"channel_id\": \"UCDB_XYZPP836DgJs-aNwY5w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "795f2b24f8d5810744371f3a04faddfba4e66d16d1e93f7ccf7039a8218dd91d",
+            "youtube_id": "iMEPC7uF83w",
+            "score": 44,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 947, \"like_count\": 30, \"channel_id\": \"UC-du7OO9FAeWkIoV-8GefSg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "7ed6f71982c1b73b1165564ab9fcafc80d8516f66428e670453bbcf9db009e2b",
+            "youtube_id": "vS2uoE_Rr8Q",
+            "score": 82,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 3589, \"like_count\": 114, \"channel_id\": \"UCqVHGwQCmmGa2hjS7ydN4sQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "852b7ec883795a62ff5492a5dbc9b2d913702b7883cc3003933e79441e4b4aad",
+            "youtube_id": "cshDlR_56kc",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 34, \"like_count\": 3, \"channel_id\": \"UCd-1hskwr8MAy85tcpAwSgA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "861d2bb7171040fd163dc49c05214662a77dae19d75e6255a669f46dbd728364",
+            "youtube_id": "pkAZmNmW3Js",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1, \"like_count\": 0, \"channel_id\": \"UCn1uHH2weYD0cFmeTfQlHzg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 1
+          },
+          {
+            "key": "8b65bd93b151fcc801a131f2bab042391a375d5d565e0068bf9d41c0ff9ba633",
+            "youtube_id": "6lxzFTdwFII",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 20, \"like_count\": 0, \"channel_id\": \"UCWiUC8o85RpGBQJz2FN5zrQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "913021d4ce74b91ea99b4c76b500d4e2760c9751a65e341e26bfbdd730c740b6",
+            "youtube_id": "yiPTR3_6y7o",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2, \"like_count\": 0, \"channel_id\": \"UCtdtLnT8kQnL6nC7Gs-csGQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 2
+          },
+          {
+            "key": "95674a5ff24b12bb350fc9f5e1d54e0c3c59e239f5cd9071c5b9b736af8ee2ca",
+            "youtube_id": "qZnSvN1urpw",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 33, \"like_count\": 0, \"channel_id\": \"UCPcEPmkH6bBFE0McHvYcCOg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "9721128b4d3231e3b64ab35a2eeedb5b3bda3bb78c946c422af1dc81f7a021de",
+            "youtube_id": "BfTuykIe8WM",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 22, \"like_count\": 2, \"channel_id\": \"UCAo-gLm_UDqenCOoDxsmHAQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "9c3cb35ac57b4118101999178406abd8a7b0067bb4dae0ba7c52036fab35b694",
+            "youtube_id": "fZzdk9Klf94",
+            "score": 5,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 525, \"like_count\": 3, \"channel_id\": \"UCqWo28TH1jzxg2YKYtjwMAg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "9ffbdc4314709edcc499ce9414eadb810eea6928abddcde557334da535754d19",
+            "youtube_id": "BNJO3KoZCs4",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 228, \"like_count\": 2, \"channel_id\": \"UCD1hlMg95Xbv3EhlK02P49A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 1
+          },
+          {
+            "key": "a2407b66c180abd56a80b265887825cf7f2256e9d4862557c4b440620abb4af0",
+            "youtube_id": "jUgIC-4vK6k",
+            "score": 31,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1023, \"like_count\": 20, \"channel_id\": \"UC7tNF-HWHVk4bmvFsnmau-A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "b1650ef0a6af1b25e213c52870d380cdf16985380da819ec1abdc7c7443136b4",
+            "youtube_id": "nURVwzdvsmg",
+            "score": 87,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 9868, \"like_count\": 722, \"channel_id\": \"UCKHDLJdo7VlN39eEB5EjaZw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 1
+          },
+          {
+            "key": "b22e8ae0861a6d327ab21f37c1b8c4681f14f3d4bd2c119ff302d7be06d97cf6",
+            "youtube_id": "yIcDcaxzGLM",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 24, \"like_count\": 2, \"channel_id\": \"UCUqzeSRHCn66pw5qKZXOzaw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "b5cfa3a6bd24a908b41760ddfcbf3ef7a378efb537ce202f37d7e1145d30ce82",
+            "youtube_id": "cDjDmD4lSa8",
+            "score": 30,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 646, \"like_count\": 61, \"channel_id\": \"UCp0ictr-gVDu5tDBNvUgylA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "c1b4e131d612536913ef9a72faca7478256a1ea7776a301c6734cbcd1a732c5a",
+            "youtube_id": "b5B9MAk8628",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 48, \"like_count\": 3, \"channel_id\": \"UCFo19wJLMfpZiunjamH2N-Q\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "cd3c7ea096fed986265fbadb8af7c8c0cf28dd767e925d071b364841d54e96ca",
+            "youtube_id": "vs462bpHulw",
+            "score": 8,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1142, \"like_count\": 5, \"channel_id\": \"UC72nbKQLSDyiSARhg0Ywj4w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "ecad0ab2a488a25e31d9f5526951023ab6328c720f7027634ae5822195032174",
+            "youtube_id": "YbiYduonnww",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 7, \"like_count\": 0, \"channel_id\": \"UCekeCUQNaEbEey6Xr8goIAQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 1
+          },
+          {
+            "key": "f15426043cf3b89596431a4710993e5312d9cb76a76f5004ca5ebdcd44e57d5b",
+            "youtube_id": "TZBGxbOld60",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 438, \"like_count\": 2, \"channel_id\": \"UCqWo28TH1jzxg2YKYtjwMAg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          },
+          {
+            "key": "fc12ce8dc8812039a0c464b05415d90317540b6e2341bbe3b06040356fb42fcd",
+            "youtube_id": "qAkO8oU6HlY",
+            "score": 69,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1646, \"like_count\": 49, \"channel_id\": \"UCqVHGwQCmmGa2hjS7ydN4sQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-17T04:15:27.300711+00:00",
+            "revision": 3
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        },
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "search",
+          "units": 1
+        }
+      ]
+    }
+  },
+  "score_checks": [
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "V8Hco_6deFA",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "oHOj-Rb0BfE",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "9TL8rVDOdec",
+      "stored": 11,
+      "computed": 11,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "vLlWX0_kVj8",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "T_9Vl_ZX9Wk",
+      "stored": 12,
+      "computed": 12,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "Mr4gI-P32vo",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "P3uaHLVTGOc",
+      "stored": null,
+      "computed": null,
+      "match": null,
+      "reason": "上游统计缺失；保留空分，不准入"
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "O7l8BolvnRI",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "dVTJgxY7WUI",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "_tCqepIeNfk",
+      "stored": 11,
+      "computed": 11,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "M2j4qjpFHWo",
+      "stored": 4,
+      "computed": 4,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "c01wtJbp7zc",
+      "stored": 5,
+      "computed": 5,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "PRI270SHzeE",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "jUDL9xswJyE",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "EeX_bjNBuXA",
+      "stored": null,
+      "computed": null,
+      "match": null,
+      "reason": "上游统计缺失；保留空分，不准入"
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "b74IJXG_dps",
+      "stored": 8,
+      "computed": 8,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "ecqD3_pDYhk",
+      "stored": 61,
+      "computed": 61,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "pBmZ6xeYsq8",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "ugfE8koA8_U",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "hH6vxZ5RevE",
+      "stored": 55,
+      "computed": 55,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "i-zWpOJox1A",
+      "stored": 15,
+      "computed": 15,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "Fvn23UesRk8",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "SaXi6CLheT8",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "LpADgdc9SHk",
+      "stored": 8,
+      "computed": 8,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "F0d7m6OQYwU",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "hF9Rri87hUY",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "oNCiB4kwocs",
+      "stored": 28,
+      "computed": 28,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "elORkcfdD-s",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "mll96LRa9FE",
+      "stored": 6,
+      "computed": 6,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "SIL9vjaSgkY",
+      "stored": 6,
+      "computed": 6,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "d_HZbOTiwSU",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "I-wLIXC21wI",
+      "stored": 90,
+      "computed": 90,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "fscWxLLzAlk",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "DsX_SpgmGe4",
+      "stored": 35,
+      "computed": 35,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "EcWWY9n0V8k",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "b8S04YlQlMQ",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "rNWZQazNBj0",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "b2d75e6402164526bbbb552d4e9bfa5b",
+      "youtube_id": "v5YrLAYft9w",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "7a0e707fea984e048b47f146d6792272",
+      "youtube_id": "UT6UJ-jLW_Y",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "7a0e707fea984e048b47f146d6792272",
+      "youtube_id": "qsPIVIiTWGg",
+      "stored": 16,
+      "computed": 16,
+      "match": true
+    },
+    {
+      "job_id": "7a0e707fea984e048b47f146d6792272",
+      "youtube_id": "BOSXQuSVGZY",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "7a0e707fea984e048b47f146d6792272",
+      "youtube_id": "jp9Jsosuu54",
+      "stored": 19,
+      "computed": 19,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "XMSH7paSjMo",
+      "stored": 58,
+      "computed": 58,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "l3vHvfe8nqE",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "Vix-c-YJqPg",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "ha4HOFXTMiU",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "rPVMI-lNHX0",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "_JzfO4BuIFU",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "iMEPC7uF83w",
+      "stored": 44,
+      "computed": 44,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "vS2uoE_Rr8Q",
+      "stored": 82,
+      "computed": 82,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "cshDlR_56kc",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "pkAZmNmW3Js",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "6lxzFTdwFII",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "yiPTR3_6y7o",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "qZnSvN1urpw",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "BfTuykIe8WM",
+      "stored": 1,
+      "computed": 1,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "fZzdk9Klf94",
+      "stored": 5,
+      "computed": 5,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "BNJO3KoZCs4",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "jUgIC-4vK6k",
+      "stored": 31,
+      "computed": 31,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "nURVwzdvsmg",
+      "stored": 87,
+      "computed": 87,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "yIcDcaxzGLM",
+      "stored": 1,
+      "computed": 1,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "cDjDmD4lSa8",
+      "stored": 30,
+      "computed": 30,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "b5B9MAk8628",
+      "stored": 2,
+      "computed": 2,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "vs462bpHulw",
+      "stored": 8,
+      "computed": 8,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "YbiYduonnww",
+      "stored": 0,
+      "computed": 0,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "TZBGxbOld60",
+      "stored": 3,
+      "computed": 3,
+      "match": true
+    },
+    {
+      "job_id": "e44c3e7fed534d8797262673a96086d5",
+      "youtube_id": "qAkO8oU6HlY",
+      "stored": 69,
+      "computed": 69,
+      "match": true
+    }
+  ],
+  "scope": "CIA boundary correction, live UI, natural search/refresh and actual KEYWORD admission; not public publication",
+  "ledger": [
+    {
+      "key": "e7af5a820ea52bea299125f8daac84e484011f99baf26ca7af27ba49e31196bf",
+      "video_id": 5947,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 2,
+      "score": 86,
+      "policy": "heat-v1-channel-policy-v1",
+      "at": "2026-10-15T01:37:08.989604+00:00",
+      "result": "ADMITTED",
+      "youtube_id": "X79tE-S-Aow"
+    },
+    {
+      "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+      "video_id": 6134,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 7,
+      "score": 85,
+      "policy": "heat-v1-channel-policy-v1",
+      "at": "2026-10-17T04:15:43.497785+00:00",
+      "result": "ADMITTED",
+      "youtube_id": "jD_5JhBOJWg"
+    },
+    {
+      "key": "7ed6f71982c1b73b1165564ab9fcafc80d8516f66428e670453bbcf9db009e2b",
+      "video_id": 6135,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 7,
+      "score": 82,
+      "policy": "heat-v1-channel-policy-v1",
+      "at": "2026-10-17T04:15:43.535790+00:00",
+      "result": "ADMITTED",
+      "youtube_id": "vS2uoE_Rr8Q"
+    }
+  ],
+  "browser_readback": [
+    {
+      "youtube_id": "vS2uoE_Rr8Q",
+      "width": 1280,
+      "height": 900,
+      "reason_visible": true,
+      "overflow": false,
+      "errors": [],
+      "writes": [],
+      "screenshot": "vS2uoE_Rr8Q-1280.png"
+    },
+    {
+      "youtube_id": "vS2uoE_Rr8Q",
+      "width": 390,
+      "height": 844,
+      "reason_visible": true,
+      "overflow": false,
+      "errors": [],
+      "writes": [],
+      "screenshot": "vS2uoE_Rr8Q-390.png"
+    },
+    {
+      "youtube_id": "jD_5JhBOJWg",
+      "width": 1280,
+      "height": 900,
+      "reason_visible": true,
+      "overflow": false,
+      "errors": [],
+      "writes": [],
+      "screenshot": "jD_5JhBOJWg-1280.png"
+    },
+    {
+      "youtube_id": "jD_5JhBOJWg",
+      "width": 390,
+      "height": 844,
+      "reason_visible": true,
+      "overflow": false,
+      "errors": [],
+      "writes": [],
+      "screenshot": "jD_5JhBOJWg-390.png"
+    }
+  ]
+}
