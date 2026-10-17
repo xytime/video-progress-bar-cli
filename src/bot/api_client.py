@@ -472,6 +472,29 @@ class PipelineAPIClient:
             logger.warning("[api_client] revoke_manual_publish_lease failed: %s", e)
             return None
 
+    async def delivery_recoveries(self) -> Optional[dict]:
+        try:
+            async with self._client() as c:
+                response = await c.get('/api/delivery-recoveries', headers=self._lease_headers())
+                response.raise_for_status()
+                return response.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+            logger.warning("Recovery list unavailable: %s", exc)
+            return None
+
+    async def delivery_recovery_action(self, recovery_id: str, *, action: str, actor: str) -> dict:
+        try:
+            async with self._client() as c:
+                response = await c.post(f'/api/delivery-recoveries/{recovery_id}',
+                                        json={'action': action, 'actor': actor}, headers=self._lease_headers())
+                if response.status_code == 409:
+                    return {'error': response.json().get('detail', '任务状态已变化')}
+                response.raise_for_status()
+                return response.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+            logger.warning("Recovery action unavailable: %s", exc)
+            return {'error': '恢复服务暂不可用；未确认执行，请刷新 /recoveries 查看账本'}
+
     async def run_pipeline(self) -> Optional[dict]:
         """POST /api/pipeline/run — 触发一次完整管线。"""
         try:

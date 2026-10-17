@@ -278,6 +278,32 @@ def _require_pipeline_internal_token(
         raise HTTPException(status_code=403, detail="invalid lease control token")
 
 
+class DeliveryRecoveryAction(BaseModel):
+    action: str
+    actor: str
+
+
+@app.get("/api/delivery-recoveries", dependencies=[Depends(_require_pipeline_internal_token)])
+def list_delivery_recoveries():
+    from video_processing.delivery_recovery import DeliveryRecoveryService
+    service = DeliveryRecoveryService(db, settings.project_root)
+    return {"items": [service.view(row['id']) for row in db.list_delivery_recoveries()]}
+
+
+@app.post("/api/delivery-recoveries/{recovery_id}", dependencies=[Depends(_require_pipeline_internal_token)])
+def delivery_recovery_action(recovery_id: str, request: DeliveryRecoveryAction):
+    from video_processing.delivery_recovery import DeliveryRecoveryService
+    try:
+        view = DeliveryRecoveryService(db, settings.project_root).act(
+            recovery_id, action=request.action, actor=request.actor)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if request.action == 'retry':
+        from video_processing.utils.delivery_recovery_worker import ensure_delivery_recovery_worker
+        ensure_delivery_recovery_worker(db, settings.project_root)
+    return view
+
+
 def _start_highlight_analysis(job_id: str) -> None:
     """独立启动轻量候选分析；不调用 PipelineManager，也不启动下载/渲染/发布。"""
     def _run() -> None:

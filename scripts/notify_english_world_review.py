@@ -406,6 +406,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, help="与成片对应的 manifest JSON")
     parser.add_argument("--audio-qa-report", type=Path, help="绑定三份文件内容指纹的最终音频 QA")
     parser.add_argument("--failure", help="无合格素材或制作失败时的原因")
+    parser.add_argument("--failure-request", type=Path)
+    parser.add_argument("--allow-production-retry", action="store_true")
+    parser.add_argument("--recovery-parent-id")
     parser.add_argument("--delivery-receipt", type=Path, help="可选：供日更协调器读取的机器可读 Telegram 回执")
     parser.add_argument(
         "--manual-review-only", action="store_true",
@@ -418,13 +421,32 @@ def main() -> int:
     args = _parser().parse_args()
     safe_title = html.escape(args.title.strip())
     if args.failure:
+        from video_processing.delivery_recovery import DeliveryRecoveryService, keyboard
+        from video_processing.utils.retry_policy import backoff_seconds
+        recovery_db = PipelineDB()
+        recovery_service = DeliveryRecoveryService(recovery_db, _PROJECT_ROOT)
+        recovery = None
+        if args.recovery_parent_id:
+            recovery = recovery_db.get_delivery_recovery(args.recovery_parent_id)
+        elif args.failure_request:
+            recovery = recovery_service.register_production(
+                args.failure_request, args.failure, allow_retry=args.allow_production_retry)
+            if (args.allow_production_retry and recovery['failure_kind'] == 'TRANSIENT'
+                    and recovery['state'] == 'WAITING'):
+                recovery = recovery_db.queue_delivery_recovery(
+                    recovery['id'], actor='AUTO_TRANSIENT', action='retry', delay_seconds=backoff_seconds(1))
         result = send_text(
             event_type="english_world.not_delivered", priority="P1", cooldown_seconds=6 * 60 * 60,
+            reply_markup=keyboard(recovery) if recovery else None,
             text=(
                 "⚠️ <b>英语世界短视频｜今日未交付</b>\n"
                 f"任务：{safe_title}\n"
                 f"原因：{html.escape(args.failure.strip())}\n"
-                "制作、通知与平台状态以对应阶段账本为准；本通知不推断成片缺失或未投稿。"
+                "制作、通知与平台状态以对应阶段账本为准。\n"
+                + (f"恢复编号：<code>{recovery['id'][:8]}</code>；分类：{recovery['failure_kind']}；"
+                   f"状态：{recovery['state']}；下次 UTC {recovery['next_attempt_at'] or '等待操作'}\n"
+                   "可点下方按钮，或发送 /recoveries 找回任务。" if recovery else
+                   "发送 /recoveries 查看恢复任务。")
             ),
         )
         _write_delivery_receipt(

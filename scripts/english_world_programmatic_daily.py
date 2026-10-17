@@ -98,6 +98,9 @@ def _require_new_draft_budget(workspace: Path, evidence: Mapping[str, Any]) -> N
 
 
 def _transient_error(exc: Exception) -> bool:
+    from video_processing.utils.retry_policy import failure_kind
+    if failure_kind(str(exc)) in {"PROVIDER_BLOCKED", "BUDGET_EXHAUSTED"}:
+        return False
     if isinstance(exc, (TransientStageError, subprocess.TimeoutExpired)):
         return True
     return isinstance(exc, AgyProviderError) and any(
@@ -106,6 +109,9 @@ def _transient_error(exc: Exception) -> bool:
 
 def _candidate_failure_route(exc: Exception, *, locked_source: bool, production_candidates: int) -> tuple[bool, bool]:
     """返回是否排除来源、是否继续候选；基础设施失败永不作为来源缺陷。"""
+    from video_processing.utils.retry_policy import failure_kind
+    if failure_kind(str(exc)) == "PROVIDER_BLOCKED":
+        return False, False
     if isinstance(exc, CandidateReviewUnavailable):
         return False, not locked_source
     if isinstance(exc, CandidateSafetyRejected):
@@ -141,7 +147,11 @@ def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | No
                 raise CandidateSafetyRejected(f"{stage} 明确拒绝当前候选") from exc
             if not transient or attempt == 2:
                 raise
-            time.sleep(2)
+            from video_processing.utils.retry_policy import backoff_seconds
+            delay = backoff_seconds(attempt, base=2, cap=30)
+            entry.update(next_attempt_at=time.time() + delay, backoff_seconds=delay)
+            atomic_json(journal_path, journal)
+            time.sleep(delay)
         else:
             entry.update(state="COMPLETED", finished_ns=time.time_ns())
             atomic_json(journal_path, journal)

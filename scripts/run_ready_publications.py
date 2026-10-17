@@ -158,6 +158,8 @@ def main(argv=None) -> int:
                             continue
                         report({"stage": "POLLING", "current_video": None})
                         ensure_wallstreet_worker()
+                        from video_processing.utils.delivery_recovery_worker import ensure_delivery_recovery_worker
+                        ensure_delivery_recovery_worker(manager.db, ROOT)
                         attempted = dispatch_once(manager)
                         attempted += dispatch_english_world_once(manager)
                         report({"stage": "IDLE", "current_video": None})

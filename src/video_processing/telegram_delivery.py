@@ -114,7 +114,8 @@ def _post_with_connect_retry(url: str, **kwargs):
         except requests.ConnectTimeout:
             if attempt == 2:
                 raise
-            time.sleep(attempt + 1)
+            from .utils.retry_policy import backoff_seconds
+            time.sleep(backoff_seconds(attempt + 1, base=1, cap=30))
 
 
 def _transport_error(exc: Exception) -> tuple[str, str]:

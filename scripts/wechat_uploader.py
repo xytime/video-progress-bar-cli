@@ -3988,6 +3988,9 @@ def run_uploader(
             return 0
 
         # 5. 执行提交或存草稿
+        from video_processing.utils.submission_progress import write_progress
+        # 必须在第一个外部提交动作前持久化；写入失败时绝不点击。
+        write_progress(evidence_root, video_path, submit_intent=True)
         if draft:
             logger.info("Saving as draft...")
             draft_btn = page.locator("button:has-text('保存草稿')").first
@@ -4122,6 +4125,11 @@ def main():
         logger.info("Desktop WeChat authorization preflight: %s", result.code)
         sys.exit(0 if result.ready else 2)
 
+    from video_processing.utils.submission_progress import (
+        write_progress, proven_pre_submit, PRE_SUBMIT_BROWSER_CLOSED,
+    )
+    if args.evidence_dir and args.video and not (args.login_only or args.verify_only):
+        write_progress(Path(args.evidence_dir), args.video)
     try:
         code = run_uploader(
             video_path    = args.video,
@@ -4158,11 +4166,12 @@ def main():
         if not _is_playwright_target_closed(exc):
             raise
         logger.error(
-            "Playwright target closed before publish confirmation; "
-            "returning UNCONFIRMED(3) so pipeline will keep artifacts for manual verification: %s",
+            "Playwright target closed; classifying from durable submit intent: %s",
             exc,
         )
-        code = 3
+        code = (PRE_SUBMIT_BROWSER_CLOSED if args.evidence_dir and args.video
+                and proven_pre_submit(Path(args.evidence_dir), args.video) else 3)
+        logger.error("Browser interruption classified with durable progress: exit=%s", code)
     sys.exit(code)
 
 

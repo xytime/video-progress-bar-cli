@@ -121,7 +121,7 @@ _COMMAND_KEYBOARD = ReplyKeyboardMarkup(
         ["/last_login", "/last"],
         ["/lease_jobs", "/published"],
         ["/highlight", "/english_world"],
-        ["/help"],
+        ["/recoveries", "/help"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -140,6 +140,7 @@ _BOT_COMMANDS = [
     BotCommand("highlight", "Highlight Slice：选择视频生成金句候选"),
     BotCommand("english_world", "英语世界：搜索、选题与制作确认"),
     BotCommand("retry", "重试单条或最近N小时失败"),
+    BotCommand("recoveries", "查看失败原因、恢复制作与核验重传"),
     BotCommand("help", "显示快捷菜单"),
 ]
 
@@ -1162,6 +1163,49 @@ async def cmd_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply_last_published_chunks(update.message, videos, start)  # type: ignore
 
 
+def _recovery_markup(view):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(**button) for button in row]
+                                 for row in view['reply_markup']['inline_keyboard']])
+
+
+async def cmd_recoveries(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _check_admin(update):
+        return
+    result = await _api.delivery_recoveries()
+    if result is None:
+        await update.message.reply_text('恢复服务暂不可用；未触发任何操作。')
+        return
+    if not result['items']:
+        await update.message.reply_text('暂无具名恢复任务。')
+    for view in result['items']:
+        await update.message.reply_text(view['text'], reply_markup=_recovery_markup(view))
+
+
+async def handle_delivery_recovery_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _check_admin(update) or not update.callback_query:
+        return
+    query = update.callback_query
+    await query.answer()
+    match = re.fullmatch(r'recover:(view|ask|confirm|retry|hold):([a-f0-9]{32})', str(query.data or ''))
+    if not match:
+        return
+    action, rid = match.groups()
+    result = await _api.delivery_recovery_action(rid, action='view' if action == 'ask' else action,
+                                                actor=f'telegram:{update.effective_user.id}')
+    if result.get('error'):
+        await query.message.reply_text(result['error'])
+        return
+    if action == 'ask':
+        result['text'] += ('\n\n⚠️ 最后确认：我已在视频号后台核验本条不在已发表、审核中或草稿中。'
+                           '\n确认将保留原未知证据，并将同一成片排队重新审查和上传。'
+                           '\n可先用 /getvideo 查看上方 ID 对应成片。')
+        result['reply_markup'] = {'inline_keyboard': [[
+            {'text': '确认已核验未发布，重传本条', 'callback_data': f'recover:confirm:{rid}'}], [
+            {'text': '返回，不重传', 'callback_data': f'recover:view:{rid}'}]]}
+    # 发送新状态卡保留原通知及证据；重复点击由服务端原子消费阻断。
+    await query.message.reply_text(result['text'], reply_markup=_recovery_markup(result))
+
+
 async def cmd_getvideo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/getvideo <youtube_id> [slice_index] — 把制作好的成片发回当前对话。
 
@@ -1921,6 +1965,7 @@ def main() -> None:
     app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("retry", cmd_retry))
+    app.add_handler(CommandHandler("recoveries", cmd_recoveries))
     app.add_handler(CommandHandler("process", cmd_process))  # [Claude_Opus_4.8] 确定性单条发布：/process <youtube_id>
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("stats", cmd_stats))
@@ -1933,6 +1978,7 @@ def main() -> None:
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
     app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))
     app.add_handler(CallbackQueryHandler(handle_english_world_callback, pattern=r"^ew:"))
+    app.add_handler(CallbackQueryHandler(handle_delivery_recovery_callback, pattern=r"^recover:"))
     app.add_handler(CallbackQueryHandler(handle_manual_publish_lease_callback, pattern=r"^lease:"))
     app.add_handler(CallbackQueryHandler(handle_secondary_reply_callback, pattern=r"^rep:"))
 

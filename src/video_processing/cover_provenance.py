@@ -81,6 +81,8 @@ def freeze_submission(cover: Path, evidence: Path) -> Path:
 def notification_text(value: dict) -> str:
     value = presentation(value)
     parts = ["封面来源：" + value["label"], "退化：" + ("是" if value["degraded"] else ("否" if value["verified"] else "未核验"))]
+    if value.get("submission_binding") == "UNKNOWN":
+        parts.append("封面投稿绑定：未取得平台提交证明；以上仅为生成来源")
     for key, label in (("handoff_reason", "接力原因"), ("fallback_reason", "兜底原因"), ("agy_error", "AGY 失败"), ("codex_error", "Codex 失败"), ("cover_sha256", "封面 SHA256"), ("version_id", "封面版本")):
         if value.get(key):
             parts.append(label + "：" + str(value[key]))

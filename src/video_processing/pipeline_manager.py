@@ -636,7 +636,7 @@ class PipelineManager:
             additions.append(source_link)
         return f"{text.rstrip()}\n" + "\n".join(additions) if additions else text
 
-    def send_telegram_msg(self, text: str) -> bool:
+    def send_telegram_msg(self, text: str, *, reply_markup=None) -> bool:
         """发送 P1 管线提醒；P2 只记录为已抑制，避免状态消息淹没审批。"""
         event_type, priority, cooldown_seconds, dedupe_key = self._telegram_notification_policy(text)
         fingerprint = hashlib.sha256(f"{event_type}\0{dedupe_key}".encode("utf-8")).hexdigest()
@@ -653,6 +653,7 @@ class PipelineManager:
             event_type=event_type, priority=priority, text=text, cover_context=cover_context,
             cooldown_seconds=cooldown_seconds, timeout_seconds=10, dedupe_key=dedupe_key, db=self.db,
             token=self.telegram_token, chat_id=self.telegram_chat_id,
+            reply_markup=reply_markup,
         )
         if result.state == "SUPPRESSED":
             logger.info("Telegram notification deduplicated: %s", event_type)
@@ -1126,10 +1127,15 @@ class PipelineManager:
             )
             if any(canceled.values()):
                 logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
+            from .delivery_recovery import DeliveryRecoveryService, keyboard
+            recovery = DeliveryRecoveryService(self.db, self._PRJ_ROOT).register_unknown(yid, slice_index)
             self.send_telegram_msg(
                 "⚠️ <b>WeChat submission uncertain</b>\n"
                 f"ID: <code>{html.escape(prefix)}</code>\n"
-                "未取得平台受理证明；已停止自动重传，等待人工核验。"
+                "未取得平台受理证明；自动重传已暂停。\n"
+                "请点下方后台核验按钮；确认未发布后可申请重传同一成片。\n"
+                f"恢复编号：<code>{recovery['id'][:8]}</code>；也可发送 /recoveries 找回。",
+                reply_markup=keyboard(recovery),
             )
             return
 
@@ -3932,6 +3938,13 @@ class PipelineManager:
         slice_index = int(video.get("slice_index") or 0)
         prefix = f"{yid}_s{slice_index}" if slice_index else yid
         title = video.get("title", yid)
+        from .delivery_recovery import DeliveryRecoveryService
+        try:
+            DeliveryRecoveryService(self.db, self._PRJ_ROOT).validate_confirmed_artifacts(yid, slice_index)
+        except (ValueError, OSError) as exc:
+            self.db.update_video_status(yid, "FAILED", error_msg=str(exc), slice_index=slice_index)
+            self._notify_failed(yid, title, str(exc), slice_index=slice_index)
+            return
         if self._block_ted_like_rate_if_needed(yid, slice_index=slice_index):
             return
         # ── 4. PUBLISHING ─────────────────────────────────────────────────
@@ -4080,6 +4093,26 @@ class PipelineManager:
             )
             return
         except subprocess.CalledProcessError as upload_err:
+            from .utils.submission_progress import PRE_SUBMIT_BROWSER_CLOSED
+            if upload_err.returncode == PRE_SUBMIT_BROWSER_CLOSED:
+                retry = self.db.requeue_proven_pre_submit_failure(
+                    yid, slice_index=slice_index, evidence_dir=evidence_dir, video_path=str(published_video))
+                if retry:
+                    self.send_telegram_msg(
+                        f"⏳ 提交前浏览器中断｜<code>{html.escape(prefix)}</code>\n"
+                        f"凭据确认尚未提交；第 {retry['attempt']}/2 次递增退避重试，"
+                        f"下次 UTC {retry['next_attempt_at']}。将复用成片并重新检查发布条件。")
+                else:
+                    from .utils.submission_progress import proven_pre_submit
+                    if not proven_pre_submit(evidence_dir, str(published_video)):
+                        self._mark_wechat_submission_under_review(
+                            yid, prefix, evidence_path=None, reason='提交前中断凭据无法复核，需后台核验', slice_index=slice_index)
+                        return
+                    self.db.update_video_status(yid, 'FAILED', error_msg='提交前浏览器中断，安全重试次数已用尽或凭据不再有效', slice_index=slice_index)
+                    self.send_telegram_msg(
+                        f"⚠️ 提交前故障需处理｜<code>{html.escape(prefix)}</code>\n"
+                        f"有界重试已停止。查看 /status；修复浏览器后可用 /retry {html.escape(yid)}。")
+                return
             if upload_err.returncode == 14:
                 self.db.defer_ready_publication(yid, '商品等待：未点击发表，保留原商品和成片，按有界退避重新核验', slice_index=slice_index)
                 return

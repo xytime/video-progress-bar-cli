@@ -221,7 +221,10 @@ from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_chan
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
-class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
+from .delivery_recovery import DeliveryRecoveryDAL
+
+
+class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -290,6 +293,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             # 确保目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
+            self.initialize_delivery_recovery()
         self._initializing_schema = False
         from ..core.maintenance import running
         if not self._read_only and running():
@@ -9683,6 +9687,11 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                     (publication["video_id"], publication["platform_post_id"], publication["platform_post_id"], publication["platform_post_id"], publication["evidence_path"])).fetchone()
                 value = json.loads(row["payload_json"]) if row else {}
                 value.update(binding="submission", evidence_path=row["evidence_path"] if row else publication[0], platform_post_id=publication["platform_post_id"], attempt_id=row["attempt_id"] if row else None)
+                if not row:
+                    generated = conn.execute("SELECT payload_json FROM cover_versions WHERE youtube_id=? AND slice_index=? ORDER BY rowid DESC LIMIT 1", (youtube_id, slice_index)).fetchone()
+                    if generated:
+                        value = json.loads(generated[0])
+                        value.update(binding="generation", submission_binding="UNKNOWN")
             else:
                 row = conn.execute("SELECT payload_json FROM cover_versions WHERE youtube_id = ? AND slice_index = ? ORDER BY rowid DESC LIMIT 1", (youtube_id, slice_index)).fetchone()
                 value = json.loads(row[0]) if row else {}

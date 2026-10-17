@@ -217,6 +217,7 @@ class RuntimePaths:
     coordinator_provider: str = "codex"
     agy_bin: Path = DEFAULT_AGY_BIN
     agy_model: str = "gemini-3.8-flash-high"
+    recovery_parent_id: str | None = None
 
 
 class CoordinatorInterrupted(RuntimeError):
@@ -820,6 +821,11 @@ def _deliver_request_from_host(
     command = [str(paths.python_bin), str(paths.notifier_script), "--title", str(request["title"])]
     if failure_request:
         command.extend(["--failure", str(request["failure"])])
+        command.extend(["--failure-request", str(request_path)])
+        if not manual_review_only:
+            command.append("--allow-production-retry")
+        if paths.recovery_parent_id:
+            command.extend(["--recovery-parent-id", paths.recovery_parent_id])
     else:
         command.extend(["--mp4", str(request["mp4"]), "--manifest", str(request["manifest"]),
                         "--audio-qa-report", str(request["audio_qa_report"])])
@@ -862,6 +868,7 @@ def _notify_failure(
     *,
     max_attempts: int = 3,
     retry_delay_seconds: float = 10,
+    allow_production_retry: bool = False,
 ) -> None:
     if not paths.python_bin.is_file() or not paths.notifier_script.is_file():
         _log(stream, "ERROR: cannot notify Telegram; notifier unavailable")
@@ -872,9 +879,30 @@ def _notify_failure(
     from video_processing.utils.subprocess_env import build_subprocess_env
     env = build_subprocess_env()
 
+    command = [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason]
+    request_path = Path(stream.name).with_suffix(".delivery-request.json") if getattr(stream, "name", None) else None
+    if request_path and not request_path.exists():
+        # 无阶段回执的中断只提供查看，不能因一条新失败记录授权重做。
+        request_path.write_text(json.dumps({'kind': 'failure', 'title': '今日英语世界短视频',
+                                           'failure': reason, 'failure_kind': 'internal_error'}, ensure_ascii=False))
+        allow_production_retry = False
+    if request_path and request_path.is_file():
+        try:
+            request = json.loads(request_path.read_text())
+            if request.get("kind") == "failure":
+                reason = str(request.get("failure") or reason)
+                command[-1] = reason
+                command.extend(["--failure-request", str(request_path)])
+                if allow_production_retry:
+                    command.append("--allow-production-retry")
+        except (OSError, ValueError):
+            pass
+    if paths.recovery_parent_id:
+        command.extend(["--recovery-parent-id", paths.recovery_parent_id])
+    from video_processing.utils.retry_policy import backoff_seconds
     for attempt in range(1, max_attempts + 1):
         result = run_admitted(
-            [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
+            command,
             stdout=stream,
             stderr=subprocess.STDOUT,
             check=False,
@@ -886,7 +914,7 @@ def _notify_failure(
             return
         _log(stream, f"ERROR: Telegram failure notifier exited {result.returncode} (attempt {attempt}/{max_attempts})")
         if attempt < max_attempts:
-            time.sleep(retry_delay_seconds)
+            time.sleep(backoff_seconds(attempt, base=retry_delay_seconds, cap=max(60, retry_delay_seconds)) if retry_delay_seconds else 0)
     _log(stream, "ERROR: Telegram failure notifier exhausted retries; local run log is the authoritative failure record")
 
 
@@ -1405,8 +1433,10 @@ def run(
                 retry_label = {"codex": "Codex", "agy": "AGY", "programmatic": "programmatic"}.get(
                     paths.coordinator_provider.lower(), "coordinator"
                 )
-                _log(stream, f"{retry_label} transient transport failure (exit={exit_code}); retrying after {retry_delay_seconds:g}s")
-                time.sleep(retry_delay_seconds)
+                from video_processing.utils.retry_policy import backoff_seconds
+                delay = backoff_seconds(attempt, base=retry_delay_seconds, cap=max(3600, retry_delay_seconds)) if retry_delay_seconds else 0
+                _log(stream, f"{retry_label} transient transport failure (exit={exit_code}); exponential backoff {delay:g}s")
+                time.sleep(delay)
             if shadow_only:
                 if exit_code != 0:
                     _write_status(status_path, "SHADOW_COORDINATOR_FAILED", exit_code, attempt, run_log, response_path)
@@ -1472,7 +1502,8 @@ def run(
             fail_requested_job(f"生产协调器失败：phase={phase}, exit={exit_code}")
             _write_status(status_path, phase, exit_code, attempt, run_log, response_path)
             if not delivery_failure_reported and not delivery_attempted:
-                _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。制作与平台状态需要分别核验。", stream)
+                _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。制作与平台状态需要分别核验。", stream,
+                                allow_production_retry=not (job_id or resume_delivery_request or forced_youtube_id))
             return exit_code
     except CoordinatorInterrupted as exc:
         exit_code = 128 + exc.signum
@@ -1537,6 +1568,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="受控补发唯一允许的 YouTube ID；宿主将拒绝其他来源的成功交付。",
     )
     parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--recovery-parent-id", help="具名恢复队列内部关联 ID，防止递归创建恢复任务")
     parser.add_argument("--retry-delay-seconds", type=float, default=15)
     parser.add_argument(
         "--skip-source-access-preflight",
@@ -1596,6 +1628,7 @@ def main(argv: list[str] | None = None) -> int:
         coordinator_provider=args.coordinator_provider,
         agy_bin=args.agy_bin,
         agy_model=args.agy_model,
+        recovery_parent_id=args.recovery_parent_id,
     )
     return run(
         paths,
