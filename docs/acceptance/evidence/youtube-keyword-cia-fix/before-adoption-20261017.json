@@ -1,0 +1,110 @@
+{
+  "at": "2026-10-17T04:06:34.099252+00:00",
+  "runtime_source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+  "matcher_version": "2a618ce6dfa4986c",
+  "maintenance": {
+    "schema": 1,
+    "version": 65,
+    "state": "MAINTENANCE",
+    "reason": "部署 5f5ada3a0f2a4b829716c3f93a11122a",
+    "at": 1792209581.8076658,
+    "maintenance_age_seconds": 412,
+    "maintenance_overdue": false,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE"
+  },
+  "control": {
+    "mode": "OFF",
+    "version": 57
+  },
+  "admission": {
+    "id": 1,
+    "admission": 0,
+    "version": 15,
+    "runtime_code": "SEARCH_CLOSED",
+    "runtime_at": "2026-10-17T03:59:37.552397+00:00"
+  },
+  "active_ledger": [
+    {
+      "table": "processed_videos",
+      "count": 1
+    }
+  ],
+  "parallel_publication": {
+    "id": 6133,
+    "status": "PUBLISHING",
+    "platform_ledger_id": 770,
+    "platform_state": "UNDER_REVIEW"
+  },
+  "candidates": [
+    {
+      "key": "7ed6f71982c1b73b1165564ab9fcafc80d8516f66428e670453bbcf9db009e2b",
+      "youtube_id": "vS2uoE_Rr8Q",
+      "eligibility": "RESTRICTED",
+      "reason": "CP / 🚫 频道策略限制",
+      "rule_version": "2a618ce6dfa4986c",
+      "content_version": "e84d53b20e1c12f766fd472a23bdff0a7a7c0be311d469792b2600681a1c8766",
+      "revision": 1,
+      "score": 82,
+      "fetched_at": "2026-10-17T00:15:18.367208+00:00",
+      "admitted_id": null,
+      "metadata": {
+        "title": "PESTE NEUMÓNICA: ¿LA NUEVA COVID-19? | ¿RIESGO DE PANDEMIA? EN VIVO",
+        "duration": 1040,
+        "views": 3416,
+        "likes": 110,
+        "channel_id": "UCqVHGwQCmmGa2hjS7ydN4sQ",
+        "channel_title": null
+      },
+      "collection": {
+        "state": "RESTRICTED",
+        "score": 82,
+        "policy": "heat-v1-channel-policy-v1",
+        "next_refresh": null,
+        "admission_code": null,
+        "inputs": {
+          "view_count": 3416,
+          "like_count": 110,
+          "channel_id": "UCqVHGwQCmmGa2hjS7ydN4sQ",
+          "source": "KEYWORD"
+        },
+        "task_id": null
+      }
+    },
+    {
+      "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+      "youtube_id": "jD_5JhBOJWg",
+      "eligibility": "RESTRICTED",
+      "reason": "CP / 🚫 频道策略限制",
+      "rule_version": "2a618ce6dfa4986c",
+      "content_version": "aa731e6c0358bf394c84970128be20f39104d746d75633e8743c13e7e5ca70b7",
+      "revision": 5,
+      "score": 85,
+      "fetched_at": "2026-10-17T00:15:44.247545+00:00",
+      "admitted_id": null,
+      "metadata": {
+        "title": "Técnica de 28 Anos Morre no Instituto da Peste na Sibéria, e a Rússia Diz Que Não Foi Peste",
+        "duration": 1156,
+        "views": 1552,
+        "likes": 188,
+        "channel_id": "UCqHBhR4PZlqXLBQeroBHyYw",
+        "channel_title": null
+      },
+      "collection": {
+        "state": "RESTRICTED",
+        "score": 85,
+        "policy": "heat-v1-channel-policy-v1",
+        "next_refresh": null,
+        "admission_code": null,
+        "inputs": {
+          "view_count": 1552,
+          "like_count": 188,
+          "channel_id": "UCqHBhR4PZlqXLBQeroBHyYw",
+          "source": "KEYWORD"
+        },
+        "task_id": null
+      }
+    }
+  ]
+}
