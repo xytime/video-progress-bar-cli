@@ -113,5 +113,48 @@
       "duration": 1156,
       "false_match": "oficial"
     }
-  ]
+  ],
+  "parallel_integration": {
+    "preserved_commit": "553faa09a4d346ef5892d53f3118d2ed22bd6904",
+    "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm",
+    "passed": 141,
+    "manifest_sha256": "614cdab453658026301bf78711639d1213962c198a92b619ba53068d7d3b2451",
+    "receipt": {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/keyword-cia-integration-20261017",
+      "started_at": "2026-10-17T04:00:41.120181+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.122
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/unit/test_vocabulary_outro.py",
+        "tests/unit/test_topic_cia_policy.py",
+        "tests/unit/test_keyword_collection.py",
+        "tests/unit/test_keyword_long_term.py",
+        "tests/unit/test_deployment_sources.py",
+        "tests/unit/test_deployment_host.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "614cdab453658026301bf78711639d1213962c198a92b619ba53068d7d3b2451",
+      "profile_sha256": "aa5b3f8db052cd5526d63c7e4ba067edaf35fa7f29d75a005a61cbd5156c168d",
+      "browser_runtime": null,
+      "browser_runtime_sha256": null,
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 21.929
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm/sandbox"
+      },
+      "finished_at": "2026-10-17T04:01:03.967067+00:00"
+    }
+  }
 }

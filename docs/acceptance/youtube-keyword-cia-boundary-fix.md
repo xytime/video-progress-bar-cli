@@ -23,8 +23,10 @@
 
 [隔离收据](evidence/youtube-keyword-cia-fix/isolated-tests.json)；[浅色手机](evidence/youtube-keyword-cia-fix/policy-reason-light-390.png)、[深色桌面](evidence/youtube-keyword-cia-fix/policy-reason-dark-1280.png)、[高对比手机](evidence/youtube-keyword-cia-fix/policy-reason-contrast-390.png)。
 
+- 生产同时开始原生片尾长例句修复维护（553faa0）。本分支已整合该提交；最终联合快照另补141项，全部通过、沙箱回收，清单 `614cdab453658026301bf78711639d1213962c198a92b619ba53068d7d3b2451`。此前一次快照复制命令因工作目录引用失败，没有纳入这两份新源码；其旧清单测试不作为联合验收证据。最终联合141项以该清单为准。
+
 ## 维护采用及实际回读
 
-待执行。执行前刷新非秘密Cloud配额和带时区宿主窗口，核实完整来源、锁、调度及保护字段。正常控制面关闭搜索及准入后，以全新原生 `--preserve-keyword-profile` 计划暂停新接纳、自然排空、正常停止、一致性备份、采用、维护启动、恢复调度、最终回读。原生拒绝先status再核实recover，不绕门禁、强杀、删锁或编辑旧journal。所有并行改动必须逐项核对保留。
+待执行。第一份CIA计划在准备时发现UI已被另一原生维护冻结，返回 `UI_ORIGINAL_STATE_UNSUPPORTED`，未创建可执行计划、未修改源码；没有恢复或覆盖另一维护。11:57刷新Cloud非秘密配额搜索3/100、通用338/10000。执行前刷新非秘密Cloud配额和带时区宿主窗口，核实完整来源、锁、调度及保护字段。正常控制面关闭搜索及准入后，以全新原生 `--preserve-keyword-profile` 计划暂停新接纳、自然排空、正常停止、一致性备份、采用、维护启动、恢复调度、最终回读。原生拒绝先status再核实recover，不绕门禁、强杀、删锁或编辑旧journal。所有并行改动必须逐项核对保留。
 
 采用完成后恢复已授权长期能力，正常读取两条候选，并检查原始分数／时长、精确规则原因、KEYWORD主任务与准入账本。自然调度完成后再报告真实状态；不手工tick、制造候选或降低内容门槛。
