@@ -1,0 +1,79 @@
+{
+  "at": "2026-10-17T14:29:03.612881+08:00",
+  "browser": "installed Chromium 148.0.7778.96 via Playwright",
+  "scope": "production GET-only desktop and mobile viewport simulation; not actual Safari/WeChat",
+  "results": [
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "url": "http://127.0.0.1:9100/?view=videos&tab=error&created_window=all&search=jD_5JhBOJWg",
+      "status": 200,
+      "evidence_verified": true,
+      "p0_both_unchecked": true,
+      "release_disabled": true,
+      "cancel_closed": true,
+      "layout_verified": true,
+      "dimensions": {
+        "width": 1280,
+        "document": 1280,
+        "modalClient": 558,
+        "modalScroll": 558,
+        "evidenceClient": 488,
+        "evidenceScroll": 488
+      },
+      "writes": [],
+      "page_errors": [],
+      "console_errors": [
+        "Failed to load resource: net::ERR_FAILED"
+      ],
+      "blocked_external": [
+        {
+          "host": "fonts.googleapis.com",
+          "path": "/css2"
+        }
+      ],
+      "evidence_requests": [
+        "/api/videos/jD_5JhBOJWg/censor-keywords"
+      ],
+      "screenshot": "production-1280.png"
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "url": "http://127.0.0.1:9100/?view=videos&tab=error&created_window=all&search=jD_5JhBOJWg",
+      "status": 200,
+      "evidence_verified": true,
+      "p0_both_unchecked": true,
+      "release_disabled": true,
+      "cancel_closed": true,
+      "layout_verified": true,
+      "dimensions": {
+        "width": 390,
+        "document": 390,
+        "modalClient": 356,
+        "modalScroll": 356,
+        "evidenceClient": 286,
+        "evidenceScroll": 286
+      },
+      "writes": [],
+      "page_errors": [],
+      "console_errors": [
+        "Failed to load resource: net::ERR_FAILED"
+      ],
+      "blocked_external": [
+        {
+          "host": "fonts.googleapis.com",
+          "path": "/css2"
+        }
+      ],
+      "evidence_requests": [
+        "/api/videos/jD_5JhBOJWg/censor-keywords"
+      ],
+      "screenshot": "production-390.png"
+    }
+  ]
+}

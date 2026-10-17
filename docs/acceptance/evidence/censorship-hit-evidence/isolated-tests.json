@@ -103,11 +103,48 @@
         "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-tntqmy7_/sandbox"
       },
       "finished_at": "2026-10-17T06:19:36.685423+00:00"
+    },
+    {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/censor-evidence-integration-20261017",
+      "started_at": "2026-10-17T06:25:45.796710+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.076
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/browser/test_censorship_evidence.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "f3dff37e13141a8b2ca70da8fd2b65e1129872f18074d1450e3b2f9c4c599638",
+      "profile_sha256": "4135e797d465890da3c935e719988c2db7040a5057a4d609031d3b6a0bddb11c",
+      "browser_runtime": {
+        "revision": "1223",
+        "version": "148.0.7778.96",
+        "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+      },
+      "browser_runtime_sha256": "4d5211bbb08e7675281b0b2fa54167a6bb0d3a6abce010e45673be8fc4cde5e1",
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 14.198
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox"
+      },
+      "finished_at": "2026-10-17T06:26:00.885597+00:00"
     }
   ],
   "notes": [
     "803 passed / 12 warnings on the broader integrated snapshot; final empty-end VTT guard then covered by the affected 62 passed / 6 warnings run.",
     "No unresolved failures. A prior missing ignored VTT fixture failure was fixed by explicitly including the fixture, without weakening assertions.",
-    "Actual isolated Chromium; 1280x900 and 390x844 in light, dark and contrast. Mobile viewport simulation is not real Safari."
+    "Actual isolated Chromium; 1280x900 and 390x844 in light, dark and contrast. Mobile viewport simulation is not real Safari.",
+    "Production long-rule-name tag cloud overflow fixed with a single wrapping declaration; real long label included in the affected 4 passed / 6 warnings browser run. Final production desktop and mobile assertions also passed. This does not relabel the earlier 803 and 62 runs as a single full run."
   ]
 }
