@@ -412,6 +412,8 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_T
             max_submit_per_tick=args.max_submit,
             scan_posts_per_tick=args.scan_posts,
             max_drafts_per_tick=args.max_drafts,
+            platform_post_id=args.post_id,
+            video_title_hint=args.video_title or "",
         ))
     if args.command == "import-draft":
         need("post-id", "comment-id", "comment-text", "zh", "en")

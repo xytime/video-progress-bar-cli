@@ -77,6 +77,8 @@ def run_secondary_reply_tick(
     scan_posts_per_tick: Optional[int] = None,
     max_drafts_per_tick: Optional[int] = None,
     max_reconcile_attempts: Optional[int] = None,
+    platform_post_id: Optional[str] = None,
+    video_title_hint: str = "",
 ) -> Dict[str, Any]:
     """执行一次有界二级回复 Tick 周期。"""
     if not settings.enable_wechat_secondary_reply:
@@ -226,11 +228,21 @@ def run_secondary_reply_tick(
     # Phase 2: 按水位表增量扫描已发布作品评论区 (SR-04)
     # =========================================================================
     discover_fn = getattr(platform, "discover_comments", None)
-    due_posts = (
-        db.get_due_comment_scan_posts(account_key=acct, limit=max(1, scan_limit), now_utc=now_dt)
-        if scan_limit > 0
-        else []
-    )
+    if platform_post_id:
+        explicit_row = db.get_commentable_wechat_post_by_platform_id(platform_post_id) or {
+            "platform_post_id": platform_post_id,
+            "title": video_title_hint,
+            "zh_title": video_title_hint,
+        }
+        if video_title_hint and not explicit_row.get("video_title"):
+            explicit_row["video_title"] = video_title_hint
+        due_posts = [explicit_row] if scan_limit > 0 else []
+    else:
+        due_posts = (
+            db.get_due_comment_scan_posts(account_key=acct, limit=max(1, scan_limit), now_utc=now_dt)
+            if scan_limit > 0
+            else []
+        )
     posts_by_id: Dict[str, Dict[str, Any]] = {
         str(p["platform_post_id"]): p for p in due_posts if p.get("platform_post_id")
     }
@@ -238,7 +250,13 @@ def run_secondary_reply_tick(
     if callable(discover_fn) and scan_limit > 0:
         for post_row in due_posts:
             post_id = str(post_row["platform_post_id"])
-            vtitle = str(post_row.get("video_title") or post_row.get("zh_title") or post_row.get("title") or "")
+            vtitle = str(
+                video_title_hint
+                or post_row.get("video_title")
+                or post_row.get("zh_title")
+                or post_row.get("title")
+                or ""
+            )
             vdesc = str(post_row.get("published_description") or post_row.get("description") or "")
             pub_at = str(post_row.get("publication_created_at") or post_row.get("published_at") or "")
             scan_now_dt = _utc_now(clock)
@@ -329,7 +347,7 @@ def run_secondary_reply_tick(
     # =========================================================================
     if draft_limit > 0:
         unprocessed = db.get_unprocessed_audience_comments(
-            platform_post_id=None,
+            platform_post_id=platform_post_id,
             account_key=acct,
             exclude_existing_tasks=True,
             include_failed_tasks=False,
@@ -352,6 +370,8 @@ def run_secondary_reply_tick(
             )
 
             post_meta = posts_by_id.get(post_id) or db.get_commentable_wechat_post_by_platform_id(post_id)
+            if video_title_hint and (not post_meta or not post_meta.get("title")):
+                post_meta = dict(post_meta or {}, title=video_title_hint, zh_title=video_title_hint)
             video_ctx = build_verified_video_context(post_meta)
 
             try:

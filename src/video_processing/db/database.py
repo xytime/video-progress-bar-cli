@@ -14201,7 +14201,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_comment_scan_state s
                     ON s.account_key = ? AND s.platform_post_id = w.platform_post_id
-                WHERE w.state = 'PUBLISHED'
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
                   AND datetime(w.created_at) >= datetime(?, '-' || ? || ' days')
                   AND (s.next_scan_after IS NULL OR datetime(s.next_scan_after) <= datetime(?))
