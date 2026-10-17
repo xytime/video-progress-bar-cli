@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Antigravity | 新增 resolve_published_copy_text 解析落盘文案文件用于评论页场景 ID 绑定与草稿背景摘要 |
 | 1.0.0 | 2026-10-17 | Antigravity | 初始创建：实现 M3.5 四阶段有界 Tick 调度器与防重入/非破坏性配额预检 (SR-01~SR-04) |
 """
 
@@ -58,6 +59,33 @@ logger = logging.getLogger(__name__)
 def _utc_now(clock: Optional[Callable[[], datetime.datetime]] = None) -> datetime.datetime:
     now = clock() if clock else datetime.datetime.now(datetime.timezone.utc)
     return now if now.tzinfo else now.replace(tzinfo=datetime.timezone.utc)
+
+
+def resolve_published_copy_text(post_row: Optional[Dict[str, Any]]) -> str:
+    """从作品记录或落盘文案文件读取完整已发布文案，用于评论页场景 ID 绑定与背景摘要。"""
+    if not isinstance(post_row, dict):
+        return ""
+    direct = str(post_row.get("published_description") or post_row.get("description") or "").strip()
+    if direct:
+        return " ".join(direct.split())
+    copy_path = str(post_row.get("copy_path") or "").strip()
+    target_path: Optional[Path] = None
+    if copy_path and Path(copy_path).is_file():
+        target_path = Path(copy_path)
+    else:
+        yid = str(post_row.get("youtube_id") or "").strip()
+        if yid:
+            slice_idx = int(post_row.get("slice_index") or 0)
+            prefix = f"{yid}_s{slice_idx}" if slice_idx else yid
+            cand = Path(__file__).resolve().parents[3] / "output" / f"{prefix}_copy.txt"
+            if cand.is_file():
+                target_path = cand
+    if target_path is not None:
+        try:
+            return " ".join(target_path.read_text(encoding="utf-8").split())
+        except Exception:
+            return ""
+    return ""
 
 
 def run_secondary_reply_tick(
@@ -257,7 +285,11 @@ def run_secondary_reply_tick(
                 or post_row.get("title")
                 or ""
             )
-            vdesc = str(post_row.get("published_description") or post_row.get("description") or "")
+            vdesc = resolve_published_copy_text(post_row)
+            if vdesc and not post_row.get("published_description"):
+                post_row["published_description"] = vdesc
+                if not post_row.get("description"):
+                    post_row["description"] = vdesc
             pub_at = str(post_row.get("publication_created_at") or post_row.get("published_at") or "")
             scan_now_dt = _utc_now(clock)
             disc = discover_fn(post_id=post_id, video_title=vtitle, published_description=vdesc)
@@ -370,6 +402,11 @@ def run_secondary_reply_tick(
             )
 
             post_meta = posts_by_id.get(post_id) or db.get_commentable_wechat_post_by_platform_id(post_id)
+            if post_meta:
+                post_meta = dict(post_meta)
+                copy_desc = resolve_published_copy_text(post_meta)
+                if copy_desc and not post_meta.get("description"):
+                    post_meta["description"] = copy_desc
             if video_title_hint and (not post_meta or not post_meta.get("title")):
                 post_meta = dict(post_meta or {}, title=video_title_hint, zh_title=video_title_hint)
             video_ctx = build_verified_video_context(post_meta)

@@ -287,18 +287,22 @@ def _build_real_platform(args, db: Optional[PipelineDB] = None):
     evidence_dir = getattr(args, "evidence_dir", None) or ops.DEFAULT_EVIDENCE_DIR
 
     def _resolve_hints(post_id: str):
-        if cli_title:
-            return cli_title, ""
+        from video_processing.interaction.secondary_reply_runner import resolve_published_copy_text
+
+        post_row = None
         if db is not None and post_id:
             try:
                 post_row = db.get_commentable_wechat_post_by_platform_id(post_id)
-                if isinstance(post_row, dict):
-                    return (
-                        str(post_row.get("video_title") or post_row.get("zh_title") or post_row.get("title") or ""),
-                        str(post_row.get("published_description") or post_row.get("description") or ""),
-                    )
             except Exception:
-                pass
+                post_row = None
+        copy_desc = resolve_published_copy_text(post_row) if isinstance(post_row, dict) else ""
+        if cli_title:
+            return cli_title, copy_desc
+        if isinstance(post_row, dict):
+            return (
+                str(post_row.get("video_title") or post_row.get("zh_title") or post_row.get("title") or ""),
+                copy_desc,
+            )
         return "", ""
 
     return BrowserSecondaryReplyPlatform(

@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.1 | 2026-10-17 | Antigravity | 修复 post/post_list HTTP 201 响应捕获，支持通过 >=30 字符唯一已发布文案跨场景绑定 exportId 并在滚动分页时动态重算探针 |
 | 1.6.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments_on_page 接口与 comment_list 原始载荷捕获，供 M3.5 Tick 扫描复用 |
 | 1.5.0 | 2026-10-17 | Antigravity | 统一校准与发送的卡片绑定、父评论与回复控件唯一定位逻辑；从契约层导入 SecondaryReplySubmissionGuard；公开 create_evidence_dir 与 execute_page_reply_flow；收紧 calibrate_page_controls 身份与文本证据要求 |
 | 1.4.0 | 2026-10-17 | Codex | 修复 _interact_with_page 中回复按钮选择器联合碰撞缺陷，采用单候选迭代；将 calibrate_comment_controls 编辑器检测限定于当前父评论范围 (M2) |
@@ -133,6 +134,8 @@ class SecondaryReplyBrowserAdapter:
         self._active_export_id: Optional[str] = None
         self._post_descriptions: Dict[str, str] = {}
         self._last_comment_list_payload: Optional[Dict[str, Any]] = None
+        self._bound_scene_post_id: Optional[str] = None
+        self._active_guard: Optional[SecondaryReplySubmissionGuard] = None
 
     def _setup_page_listeners(self, page, guard: Optional[SecondaryReplySubmissionGuard] = None) -> None:
         """注册页面网络监听：捕获 comment_list 响应数据、折叠/分页标志与活跃作品 ID。"""
@@ -140,6 +143,8 @@ class SecondaryReplyBrowserAdapter:
         self._post_descriptions.clear()
         self._active_export_id = None
         self._last_comment_list_payload = None
+        self._bound_scene_post_id = None
+        self._active_guard = guard
         def on_request(req):
             if req.method == "POST" and "comment/comment_list" in req.url:
                 try:
@@ -156,7 +161,7 @@ class SecondaryReplyBrowserAdapter:
                 guard.capture_response(res)
             if not is_official_wechat_origin(res.url):
                 return
-            if urlparse(res.url).path == COMMENT_POST_LIST_PATH and res.status == 200:
+            if urlparse(res.url).path == COMMENT_POST_LIST_PATH and res.status in (200, 201):
                 try:
                     for item in res.json()["data"]["list"]:
                         desc = item.get("desc") or ""
@@ -216,6 +221,25 @@ class SecondaryReplyBrowserAdapter:
 
     _new_evidence_dir = create_evidence_dir
 
+    def _resolve_scene_post_id(
+        self,
+        platform_post_id: str,
+        published_description: Optional[str] = None,
+    ) -> Optional[str]:
+        """解析评论管理页当前场景的原生 exportId；若跨场景则仅允许 >=30 字符的唯一完整已发布文案绑定。"""
+        if platform_post_id in self._post_descriptions:
+            return platform_post_id
+        expected = _normalized_text(published_description)
+        if expected and len(expected) >= 30:
+            matches = [
+                pid
+                for pid, desc in self._post_descriptions.items()
+                if _normalized_text(desc) == expected
+            ]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
     def _select_and_bind_post_card(
         self,
         page: Any,
@@ -229,24 +253,34 @@ class SecondaryReplyBrowserAdapter:
         card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
         if card is None:
             return False, f"未找到作品卡片 (exportId: {platform_post_id})"
+        scene_post_id = self._resolve_scene_post_id(platform_post_id, published_description) or platform_post_id
+        self._bound_scene_post_id = scene_post_id
         self._captured_comments.clear()
         self._active_export_id = None
         self._last_comment_list_payload = None
         card.click()
         page.wait_for_timeout(wait_ms)
 
+        valid_post_ids = {platform_post_id, scene_post_id} - {""}
         bound = page.locator("[data-current-object-id]")
         bound_ok = False
         if bound.count() >= 1 and all(
-            (bound.nth(i).get_attribute("data-current-object-id") or "") == platform_post_id
+            (bound.nth(i).get_attribute("data-current-object-id") or "") in valid_post_ids
             for i in range(bound.count())
         ):
             bound_ok = True
-        elif self._active_export_id and self._active_export_id == platform_post_id:
+        elif self._active_export_id and self._active_export_id in valid_post_ids:
             bound_ok = True
 
         if not bound_ok:
             return False, f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})，拒绝继续"
+        if (
+            self._active_guard is not None
+            and self._active_export_id == scene_post_id
+            and self._active_guard.expected_post_id == platform_post_id
+            and scene_post_id != platform_post_id
+        ):
+            self._active_guard.expected_post_id = scene_post_id
         return True, None
 
     def _locate_unique_visible_control(
@@ -793,9 +827,10 @@ class SecondaryReplyBrowserAdapter:
         _replied, _comp, parent = self._check_author_already_replied(page, root_comment_id, author_id)
         if parent is None or _comp != "COMPLETE":
             return "UNKNOWN", ""
+        valid_post_ids = {platform_post_id, self._bound_scene_post_id or ""} - {""}
         api_info = self._captured_comments.get(root_comment_id)
         if api_info is not None:
-            if api_info.get("export_id") != platform_post_id or self._active_export_id != platform_post_id:
+            if api_info.get("export_id") not in valid_post_ids or self._active_export_id not in valid_post_ids:
                 return "UNKNOWN", ""
             if type(api_info.get("downContinueFlag")) is not int or api_info["downContinueFlag"] != 0:
                 return "UNKNOWN", ""
@@ -808,7 +843,7 @@ class SecondaryReplyBrowserAdapter:
                 return "FOUND", matches[0]
             return ("AMBIGUOUS" if matches else "NOT_FOUND"), ""
         post_attr = parent.locator("xpath=ancestor::article[@data-current-object-id]")
-        if post_attr.count() != 1 or post_attr.first.get_attribute("data-current-object-id") != platform_post_id:
+        if post_attr.count() != 1 or (post_attr.first.get_attribute("data-current-object-id") or "") not in valid_post_ids:
             return "UNKNOWN", ""
         want = _normalized_text(unicodedata.normalize("NFC", reply_content))
         nodes = parent.locator(".level-two, [data-level-two]").locator(f"[data-author-id='{author_id}']")
@@ -842,7 +877,13 @@ class SecondaryReplyBrowserAdapter:
             logger.warning("[SecondaryReplyBrowser] data-object-id '%s' 匹配到多个卡片 (%d)，触发歧义阻断", platform_post_id, card.count())
             return None
 
-        title_hint = self._post_descriptions.get(platform_post_id) or video_title or published_description or ""
+        scene_pid = self._resolve_scene_post_id(platform_post_id, published_description) or platform_post_id
+        title_hint = (
+            self._post_descriptions.get(scene_pid)
+            or published_description
+            or video_title
+            or ""
+        )
         clean_hint = _normalized_text(title_hint)[:20]
         if clean_hint:
             cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
@@ -852,7 +893,7 @@ class SecondaryReplyBrowserAdapter:
                 logger.warning("[SecondaryReplyBrowser] 文案 '%s' 匹配到多个卡片 (%d)，触发歧义阻断", clean_hint, cards.count())
                 return None
 
-        scroll_container = page.locator(".scroll-list__wrp, .feeds-container, .scroll-list").filter(visible=True)
+        scroll_container = page.locator(".feeds-container, .scroll-list__wrp, .scroll-list").filter(visible=True)
         if scroll_container.count() > 0:
             for _ in range(15):
                 try:
@@ -869,6 +910,14 @@ class SecondaryReplyBrowserAdapter:
                     logger.warning("[SecondaryReplyBrowser] 滚动后 data-object-id '%s' 匹配到多个卡片 (%d)，触发歧义阻断", platform_post_id, card.count())
                     return None
 
+                scene_pid = self._resolve_scene_post_id(platform_post_id, published_description) or platform_post_id
+                title_hint = (
+                    self._post_descriptions.get(scene_pid)
+                    or published_description
+                    or video_title
+                    or ""
+                )
+                clean_hint = _normalized_text(title_hint)[:20]
                 if clean_hint:
                     cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
                     if cards.count() == 1:
