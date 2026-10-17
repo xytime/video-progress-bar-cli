@@ -54,7 +54,8 @@ def execute(db):
             category = failure_kind(detail)
             message = f"恢复执行退出 {result.returncode}；分类 {category}；日志 {log_path}"
             if category == "TRANSIENT":
-                delay = backoff_seconds(row["attempts"])
+                # 自动入队已等待第一个区间；执行失败后的下一间隔继续翻倍。
+                delay = backoff_seconds(row["attempts"] + 1)
     except Exception as exc:
         message = f"执行中断，需核验已有阶段记录：{type(exc).__name__}: {exc}"
     db.finish_delivery_recovery(rid, result=message, retry_delay=delay)

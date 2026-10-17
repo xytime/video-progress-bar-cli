@@ -193,6 +193,11 @@ def test_worker_only_reschedules_transient_failure(monkeypatch, db, tmp_path, de
     row = service.register_production(request, detail, allow_retry=True)
     service.act(row['id'], action='retry', actor='telegram:1')
     monkeypatch.setattr(worker, 'ROOT', tmp_path)
+    delays = []
+    def backoff(attempt):
+        delays.append(attempt)
+        return 300 * 2 ** (attempt - 1)
+    monkeypatch.setattr(worker, 'backoff_seconds', backoff)
     sent = []
     monkeypatch.setattr(worker, 'send_text', lambda **kw: sent.append(kw))
 
@@ -206,3 +211,4 @@ def test_worker_only_reschedules_transient_failure(monkeypatch, db, tmp_path, de
     worker.execute(db)
     assert db.get_delivery_recovery(row['id'])['state'] == expected
     assert len(sent) == 2
+    assert delays == ([2] if expected == 'QUEUED' else [])
