@@ -454,21 +454,32 @@ async def handle_secondary_reply_callback(
     from config.settings import settings
     from video_processing.db.database import PipelineDB
     from video_processing.interaction import secondary_reply_ops as reply_ops
+    from video_processing.interaction.secondary_reply_approval import handle_approval_callback
 
     callback_data = str(query.data or "").strip()
     user_id = str(getattr(update.effective_user, "id", "") or "").strip()
     chat_id = str(getattr(update.effective_chat, "id", "") or "").strip()
     account_key = str(getattr(settings, "wechat_reply_account_key", "") or "").strip()
+    configured_approver = str(getattr(settings, "wechat_reply_approver_telegram_id", "") or "").strip()
 
     def _consume_sync() -> dict:
         db = PipelineDB(db_path=db_path) if db_path else PipelineDB()
-        return reply_ops.approve_callback(
-            db,
+        if account_key and configured_approver:
+            return reply_ops.approve_callback(
+                db,
+                callback_data=callback_data,
+                user_id=user_id,
+                chat_id=chat_id,
+                account_key=account_key,
+            )
+        ok, msg = handle_approval_callback(
+            db=db,
             callback_data=callback_data,
             user_id=user_id,
             chat_id=chat_id,
-            account_key=account_key,
+            expected_account_key=account_key or None,
         )
+        return {"ok": bool(ok), "result": msg, "reason": msg}
 
     res = await asyncio.to_thread(_consume_sync)
     parts = callback_data.split(":")
