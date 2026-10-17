@@ -10,6 +10,7 @@
 # Modification History
 | Version | Date       | Author          | Description                                                    |
 |---------|------------|-----------------|---------------------------------------------------------------|
+| evidence-v1 | 2026-10-17 | Codex | 原输入拼接复用，新增审计摘录定位真实命中，保留处置语义。 |
 | 1.8.0   | 2026-09-09 | Codex | 审查回执统一带来源视频 ID 与安全可点击链接，并转义动态字段。 |
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager._check_censorship 抽出 CensorshipService（行为逐字保留） |
 | 1.1.0   | 2026-06-25 | Claude_Opus_4.8 | P2 命中手动锁定(is_manually_scored=1)视频时改为挂起人工复核(FAILED+TG)而非 force 清零回弹——根治"调分后反复弹回待筛选且分数归0"的困惑；非锁定视频仍按原 deprioritize |
@@ -28,6 +29,7 @@ from typing import Callable
 
 from config.settings import settings
 from . import censor_engine
+from .censorship_evidence import blocklist_inputs
 from .utils.platform_events import format_youtube_source_link_html
 # 动作常量在 import 时绑定即可（不会被运行时替换）；判定函数 check_text/check_channel_policy
 # 通过 censor_engine.<fn> 在调用时查找，保证测试 monkeypatch censor_engine.check_text 生效。
@@ -105,10 +107,16 @@ class CensorshipService:
         source_field: str = "",
         review_stage: str = "",
         platform: str = "",
+        match_text: str = "",
     ) -> None:
         """违规台账不能影响主审查流程；失败只记日志。"""
         try:
             matched = getattr(result, "matched", None)
+            detail = None
+            try:
+                detail = censor_engine.explain_blocklist_hit(match_text, result) if match_text else None
+            except Exception as exc:
+                logger.warning("[CensorLedger] hit explanation unavailable for %s: %s", yid, exc)
             self.db.record_censorship_incident(
                 yid,
                 slice_index=slice_index,
@@ -129,7 +137,7 @@ class CensorshipService:
                 title=title,
                 zh_title=zh_title,
                 description_preview=description,
-                text_excerpt=self._excerpt_for_match(title, zh_title, description, checked_text, matched=str(matched or "")),
+                text_excerpt=detail["context"] if detail else self._excerpt_for_match(title, zh_title, description, checked_text, matched=str(matched or "")),
             )
         except Exception as exc:
             logger.warning("[CensorLedger] failed to record incident for %s: %s", yid, exc)
@@ -172,15 +180,7 @@ class CensorshipService:
             # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────
             if settings.enable_censorship_engine:
                 # zh_text 用中文标题；为空但 title 含中文则 fallback 到 title
-                zh_for_censor = zh_title or ""
-                if not zh_for_censor and re.search(r"[一-龥]", title):
-                    zh_for_censor = title
-
-                en_for_censor = f"{title} {description}".strip()
-                # 症结 8：字幕正文并入双通道（.ass 中英混排），仅作用于此处违法层。
-                if subtitle_text:
-                    zh_for_censor = f"{zh_for_censor} {subtitle_text}".strip()
-                    en_for_censor = f"{en_for_censor} {subtitle_text}".strip()
+                zh_for_censor, en_for_censor = blocklist_inputs(title, zh_title, description, subtitle_text)
                 result = censor_engine.check_text(zh_text=zh_for_censor, en_text=en_for_censor)
                 if result.hit:
                     if manual_bypass and (result.level != "P0" or manual_p0_approved):
@@ -200,6 +200,7 @@ class CensorshipService:
                             decision="REJECT_FAILED_BLACKLIST" if settings.enable_blacklist_tombstone else "REJECT_FAILED",
                             title=title, zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            match_text=zh_for_censor if result.channel == "zh" else en_for_censor,
                             source_field="title,zh_title,description,subtitle",
                             review_stage=stage,
                             platform=platform,
@@ -223,6 +224,7 @@ class CensorshipService:
                             decision="SUSPEND_MANUAL_REVIEW", title=title,
                             zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            match_text=zh_for_censor if result.channel == "zh" else en_for_censor,
                             source_field="title,zh_title,description,subtitle",
                             review_stage=stage,
                             platform=platform,
@@ -249,6 +251,7 @@ class CensorshipService:
                                 decision="P2_MANUAL_LOCK_SUSPEND", title=title,
                                 zh_title=zh_title, description=description,
                                 checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                                match_text=zh_for_censor if result.channel == "zh" else en_for_censor,
                                 source_field="title,zh_title,description,subtitle",
                                 review_stage=stage,
                                 platform=platform,
@@ -272,6 +275,7 @@ class CensorshipService:
                             decision="P2_DEPRIORITIZE", title=title,
                             zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            match_text=zh_for_censor if result.channel == "zh" else en_for_censor,
                             source_field="title,zh_title,description,subtitle",
                             review_stage=stage,
                             platform=platform,

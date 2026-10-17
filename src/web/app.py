@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
 | cover-source-v1 | 2026-10-15 | Codex | 列表返回统一封面来源，缩略图读取投稿冻结文件。 |
 | maintenance-v1 | 2026-10-12 | Codex | 共用持久化准入、调度角色互斥、单项线程归属和资源等待；维护启动保留本地候选管理。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 挂载本机候选独立路由，生产搜索默认关闭；不接入主流水线。 |
@@ -2870,6 +2871,12 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
     matched = scan_all_matches(zh_text=text_zh, en_text=text_en)
     layer, layer_label, severity = _censor_layer_from_error(video.get("error_msg"))
     keywords = _build_keyword_cloud(text_zh, text_en, matched)
+    from video_processing.censorship_evidence import review_evidence
+    source_files = sorted(path for path in _OUT_DIR.glob(f"{youtube_id}_source_subtitle*.vtt")
+                          if path.name == f"{youtube_id}_source_subtitle.vtt"
+                          or path.name.startswith(f"{youtube_id}_source_subtitle."))
+    evidence = review_evidence(video, db.get_censorship_incidents(
+        youtube_id, slice_index=slice_index, limit=1), subtitle, source_files)
 
     return {
         "success": True,
@@ -2886,6 +2893,7 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
         "has_subtitle": bool(subtitle),
         "subtitle_chars": len(subtitle),
         "subtitle_source": subtitle_source,
+        "evidence": evidence,
     }
 
 

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description                                                                  |
 |---------|------------|----------------------------------------|------------------------------------------------------------------------------|
+| evidence-v1 | 2026-10-17 | Codex | 共用原共现遍历，只读解释真实词及原文位置，判定和规则不变。 |
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发           |
 | 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
 | 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
@@ -737,8 +738,8 @@ def _term_spans_en(normalized_text: str, term: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in re.finditer(rf"\b{re.escape(norm_term)}\b", normalized_text)]
 
 
-def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[str]:
-    """返回首个近距离共现命中，matched 形如 "china+dictatorship"。"""
+def _cooccurrence_detail(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[dict]:
+    """保留原遍历顺序，返回判定实际选择的首组词及位置。"""
     if not text or not rules:
         return None
     span_fn = _term_spans_zh if channel == "zh" else _term_spans_en
@@ -758,8 +759,54 @@ def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text:
                     for c_start, c_end in context_spans:
                         gap = max(c_start - p_end, p_start - c_end, 0)
                         if gap <= max_gap:
-                            return rule.get("matched") or f"{primary}+{context}"
+                            return {"matched": rule.get("matched") or f"{primary}+{context}",
+                                    "terms": [primary, context], "spans": [(p_start, p_end), (c_start, c_end)],
+                                    "gap": gap, "max_gap": max_gap}
     return None
+
+
+def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[str]:
+    """返回首个近距离共现命中；解释与判定共用同一遍历。"""
+    detail = _cooccurrence_detail(text, rules, channel=channel, dense_text=dense_text)
+    return detail["matched"] if detail else None
+
+
+def explain_blocklist_hit(text: str, result: CensorResult) -> Optional[dict]:
+    """只读解释已判定命中；不能定位或归一化不等价时不猜测原文位置。"""
+    if result.level not in ("P0", "P1", "P2") or result.channel not in ("zh", "en"):
+        return None
+    channel = result.channel
+    normalized = _normalize(text)
+    haystack = _strip_spaces(normalized) if channel == "zh" else normalized
+    rule = _get_blocklist()[result.level]
+    if result.matched in rule[channel]:
+        spans = (_term_spans_zh if channel == "zh" else _term_spans_en)(haystack, result.matched)
+        detail = {"matched": result.matched, "terms": [result.matched], "spans": spans[:1],
+                  "gap": None, "max_gap": None}
+    else:
+        detail = _cooccurrence_detail(normalized, rule.get("cooccurrence_" + channel, []),
+                                      channel=channel, dense_text=_strip_spaces(normalized))
+    if not detail or detail["matched"] != result.matched or not detail["spans"]:
+        return None
+    # 映射回原文，同时核实逐字符处理与引擎整串 NFKC 完全一致；组合字符不一致就拒绝定位。
+    chars, positions = [], []
+    for index, char in enumerate(text):
+        for normalized_char in unicodedata.normalize("NFKC", char).lower():
+            if normalized_char.isspace():
+                if channel == "en" and chars and chars[-1] != " ":
+                    chars.append(" "); positions.append(index)
+            else:
+                chars.append(normalized_char); positions.append(index)
+    if chars and chars[-1] == " ":
+        chars.pop(); positions.pop()
+    if "".join(chars) != haystack:
+        return None
+    raw_spans = [(positions[start], positions[end - 1] + 1) for start, end in detail["spans"]]
+    start, end = min(s[0] for s in raw_spans), max(s[1] for s in raw_spans)
+    return {**detail, "raw_spans": raw_spans,
+            "context": text[max(0, start - 180):min(len(text), end + 180)],
+            "channel": channel, "level": result.level,
+            "normalization": "NFKC、小写、压缩空白" + ("、中文去空白" if channel == "zh" else "、英文单词边界")}
 
 
 # ── 主检测函数 (Main Censor Function) ─────────────────────────────────────────

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-17 | Codex | 只读命中证据与当前重扫分开，保留 P0 双确认门禁。 |
   | 2026-10-15 | Codex | 缩略图下统一来源标识与键盘可展开证据，兼容手机。 |
   | 2026-10-12 | Codex | v0.3 共享五区导航、只读总览、列表 URL 恢复及可见区域刷新。 |
   | 2026-09-26 | Antigravity | 修复移动端静态 CSS 强缓存，添加版本号；移动端卡片 4 大核心指标升级为 2x2 紧凑自适应排版，解决超长换行重叠；修复状态徽章坚排拆字 Bug。 |
@@ -607,8 +608,13 @@
       <!-- 层级警示横幅 -->
       <div id="bypass-banner" style="border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:0.8125rem; line-height:1.5;"></div>
 
+      <section aria-label="原审计命中证据" style="padding:12px; margin-bottom:14px; background:var(--bg3); border:1px solid var(--border); border-radius:8px; font-size:0.8125rem; line-height:1.6; overflow-wrap:anywhere;">
+        <strong>原审计命中证据</strong>
+        <div id="bypass-evidence" aria-live="polite" style="color:var(--text2); white-space:pre-wrap;">加载中…</div>
+      </section>
+
       <!-- 命中词 -->
-      <div style="font-size:0.75rem; color:var(--text3); margin-bottom:6px;">⛔ 触发审查的命中词</div>
+      <div style="font-size:0.75rem; color:var(--text3); margin-bottom:6px;">当前内容重扫命中词（不代替原审计）</div>
       <div id="bypass-matched" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;"></div>
 
       <!-- 关键词标签云 -->
@@ -2630,15 +2636,18 @@
   let _bypassYid = null;
   let _bypassSlice = 0;
   let _bypassSeverity = 'low';
+  let _bypassRequest = 0;
   async function openBypassModal(youtubeId, sliceIndex = 0) {
     if (typeof navigator.vibrate === 'function') navigator.vibrate(15);
     _bypassYid = youtubeId;
     _bypassSlice = sliceIndex || 0;
+    const requestId = ++_bypassRequest;
     const modal = document.getElementById('bypass-modal');
     const banner = document.getElementById('bypass-banner');
     const matchedEl = document.getElementById('bypass-matched');
     const cloudEl = document.getElementById('bypass-cloud');
     const srcEl = document.getElementById('bypass-cloud-src');
+    const evidenceEl = document.getElementById('bypass-evidence');
     const p0Wrap = document.getElementById('bypass-p0-confirm');
     const p0ReviewChk = document.getElementById('bypass-p0-review-checkbox');
     const p0ResumeChk = document.getElementById('bypass-p0-resume-checkbox');
@@ -2646,6 +2655,7 @@
 
     // 重置弹窗状态
     banner.textContent = '正在分析内容…';
+    evidenceEl.textContent = '加载中…';
     banner.style.background = 'rgba(255,255,255,0.05)';
     banner.style.color = 'var(--text2)';
     matchedEl.innerHTML = '';
@@ -2654,16 +2664,33 @@
     p0Wrap.style.display = 'none';
     p0ReviewChk.checked = false;
     p0ResumeChk.checked = false;
-    confirmBtn.disabled = false;
+    confirmBtn.disabled = true;
     confirmBtn.textContent = '确认放行并继续处理';
     modal.style.display = 'flex';
 
     try {
       const r = await fetch(`/api/videos/${youtubeId}/censor-keywords?slice_index=${_bypassSlice}`);
       const d = await r.json();
-      if (!d.success) { banner.textContent = '❌ ' + (d.error || '加载失败'); return; }
+      if (requestId !== _bypassRequest) return;
+      if (!r.ok || !d.success) { banner.textContent = '❌ ' + (d.error || '加载失败'); evidenceEl.textContent = '读取失败，暂无可核实证据。'; return; }
+
+      const ev = d.evidence || {message:'暂无可核实的原审计证据。'};
+      const lines = [ev.message];
+      if (ev.incident_id) lines.push(`审计 #${ev.incident_id} · ${ev.review_stage || '阶段未知'}`);
+      if (ev.rule_id) lines.push(`规则：${ev.rule_id}`);
+      if (ev.rule_version) lines.push(`规则版本：${ev.rule_version}`);
+      if (ev.status === 'VERIFIED_REPLAY') {
+        for (const term of ev.terms || []) {
+          const locations = (term.locations || []).map(loc => `${loc.start}–${loc.end}（${loc.file}）`).join('；');
+          lines.push(`真实命中：${term.actual} · ${term.source} · ${locations || '无可核实字幕时间'}`);
+        }
+        lines.push(`依据：${ev.basis}${ev.max_gap == null ? '' : `；归一化间距 ${ev.gap} ≤ ${ev.max_gap} 字符`}`);
+        lines.push(ev.normalization, ev.timing_note, '原文上下文：', ev.context);
+      }
+      evidenceEl.textContent = lines.filter(Boolean).join('\n');
 
       _bypassSeverity = d.severity || 'low';
+      confirmBtn.disabled = false;
       const sevColor = { critical:'var(--red)', high:'var(--yellow)', medium:'var(--yellow)', low:'var(--yellow)' }[_bypassSeverity] || 'var(--text2)';
       const sevBg = { critical:'rgba(248,113,113,0.12)', high:'rgba(245,158,11,0.12)', medium:'rgba(245,158,11,0.10)', low:'rgba(234,179,8,0.10)' }[_bypassSeverity] || 'rgba(255,255,255,0.05)';
       banner.style.background = sevBg;
@@ -2714,7 +2741,10 @@
         p0ResumeChk.onchange = syncP0Confirm;
       }
     } catch (e) {
+      if (requestId !== _bypassRequest) return;
       banner.textContent = '❌ 网络错误: ' + e.message;
+      evidenceEl.textContent = '读取失败，暂无可核实证据。';
+      confirmBtn.disabled = true;
     }
   }
 
