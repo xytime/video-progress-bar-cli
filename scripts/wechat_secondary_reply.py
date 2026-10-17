@@ -278,7 +278,7 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     parser.add_argument("--comment-text", help="导入时：该一级评论的原文（作为审批绑定的源评论快照）")
     parser.add_argument("--zh")
     parser.add_argument("--en")
-    parser.add_argument("--style", default="CASUAL", choices=[s.value for s in SecondaryReplyStyle])
+    parser.add_argument("--style", default="CASUAL_LIGHT", choices=[s.value for s in SecondaryReplyStyle])
     parser.add_argument("--confirm-reply-sha12", help="approve：回填预检输出 reply_sha256 前 12 位")
     parser.add_argument("--ttl-minutes", type=int, default=60)
     parser.add_argument("--video-title", default="", help="仅用于页面卡片导航提示；不作为作品绑定依据")

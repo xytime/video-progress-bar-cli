@@ -102,10 +102,11 @@ class SecondaryReplyCensor:
                 return False, f"英文通道命中频道策略: {res_cp_en.tag} (词汇: '{res_cp_en.matched}')"
 
         # 3. 检查合并后的整段文本（双语通道协同检测）
-        res_comb = check_text(zh_text=chinese_reply, en_text=english_reply)
+        res_comb = check_text(zh_text=combined, en_text=combined)
         if res_comb.hit:
             return False, f"合并文本命中违规 ({res_comb.level}): {res_comb.tag} (词汇: '{res_comb.matched}')"
-        res_comb_cp = check_channel_policy(zh_text=chinese_reply, en_text=english_reply)
+        # 中文策略对拉丁词使用子串匹配；英文整段走英文词边界规则，避免 financial 被 CIA 误伤。
+        res_comb_cp = check_channel_policy(zh_text=chinese_reply, en_text=combined)
         if res_comb_cp.hit:
             return False, f"合并文本命中频道策略: {res_comb_cp.tag} (词汇: '{res_comb_cp.matched}')"
 
@@ -372,7 +373,9 @@ class SecondaryReplyService:
         """提交前终审门禁：无论草稿何时生成，发送前必须以当前最新政策终审。"""
         # 1. 格式校验
         zh_nfc, en_nfc, formatted = validate_reply_length_and_format(chinese_reply, english_reply)
-        check_target = formatted_reply or formatted
+        if formatted_reply is not None and unicodedata.normalize("NFC", formatted_reply) != formatted:
+            raise SecondaryReplyContractError("FINAL_TEXT_DIFFERS_FROM_APPROVED")
+        check_target = formatted
 
         # 2. 内容审查与频道策略终审
         is_safe, error_detail = self.censor.check_reply_safety(

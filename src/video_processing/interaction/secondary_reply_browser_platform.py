@@ -96,12 +96,15 @@ class BrowserSecondaryReplyPlatform:
         title, desc = self._hints(post_id)
         try:
             with self._session(guard) as page:
-                self.adapter._interact_with_page(
+                status, _evidence, reason = self.adapter._interact_with_page(
                     page, task_id=0, platform_post_id=post_id, root_comment_id=root_id,
                     reply_content=text, video_title=title, published_description=desc,
                     attempt_dir=self.adapter._new_evidence_dir(self._evidence_dir),
                     guard=guard, before_submit=wrapped_before_submit, send_only=True,
                 )
+                if status not in ("SENT", "VERIFIED"):
+                    return PlatformSendResult(intent_persisted=persisted[0], guard=guard,
+                                              exception=f"{status}: {reason}")
         except Exception as exc:
             return PlatformSendResult(intent_persisted=persisted[0], guard=guard, exception=str(exc))
         return PlatformSendResult(intent_persisted=persisted[0], guard=guard)

@@ -12700,7 +12700,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
                 (account_key, platform_post_id, comment_id),
             ).fetchone()
-            if existing and existing["status"] in ("CLAIMED", "SUBMIT_INTENT", "UNCERTAIN", "VERIFIED"):
+            if existing and existing["status"] in ("CLAIMED", "SUBMIT_INTENT", "UNCERTAIN", "VERIFIED", "SKIPPED"):
                 return int(existing["id"])
 
             if not existing:

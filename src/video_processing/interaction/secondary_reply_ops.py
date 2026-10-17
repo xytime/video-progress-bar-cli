@@ -61,7 +61,7 @@ def local_approver_identity() -> Optional[Dict[str, str]]:
 
 def import_manual_draft(
     db: PipelineDB, *, account_key: str, post_id: str, comment_id: str, comment_text: str,
-    zh: str, en: str, style: str = "CASUAL",
+    zh: str, en: str, style: str = "CASUAL_LIGHT",
 ) -> Dict[str, Any]:
     """导入一条人工撰写的双语回复为待审草稿；经确定性格式与政策终审检查，不合格直接拒绝。"""
     if not account_key:

@@ -307,7 +307,8 @@ class SecondaryReplyOrchestrator:
                 "readback_layer": "fresh_session_admin_view", "public_visibility": "NOT_CHECKED",
                 "screenshot_after_refresh": look.evidence_path or None,
             }
-            path = self.evidence_dir / f"receipt_task{task_id}_{reply_id}.json"
+            safe_reply_id = hashlib.sha256(reply_id.encode("utf-8")).hexdigest()[:24]
+            path = self.evidence_dir / f"receipt_task{task_id}_{safe_reply_id}.json"
             path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
             return str(path)
         except Exception as exc:

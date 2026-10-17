@@ -372,7 +372,7 @@ def parse_wechat_comment_list_payload(
             sub_username = str(sub.get("username") or "")
             sub_role = str(sub.get("data-author-role") or sub.get("author_role") or "")
             sub_nick = str(sub.get("commentNickname") or "")
-            if (author_username and sub_username == author_username) or sub_role == "author" or "作者" in sub_nick:
+            if (author_username and sub_username == author_username) or (not author_username and sub_role == "author"):
                 has_author_reply = True
 
         # 判定二级状态
