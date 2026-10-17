@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 验证真实字幕抽取和受控渲染串联，不调用上传器 |
 | 1.0.1 | 2026-10-15 | Codex | 流水线连接使用显式测试策略，保留生产独立类型开关 |
+| 1.0.2 | 2026-10-17 | Codex | 复现真实长例句，验证完整目标词、原文连续片段和短句兼容 |
 """
 import json
 from pathlib import Path
@@ -69,6 +70,61 @@ def test_text_never_silently_truncated():
         layout.fit('unbreakable'*100, 'en', 700, 60, 30)
 
 
+LONG_EXAMPLE = (
+    'The moment we hear the word leader, we feel that somebody who is very confident, '
+    'somebody who is getting the direction, somebody who is leading the path, '
+    'somebody who is different is coming into our mind'
+)
+
+
+@pytest.mark.parametrize('word,text', [
+    ('leader', LONG_EXAMPLE),
+    ('confident', LONG_EXAMPLE),
+    ('mind', LONG_EXAMPLE),
+    ('The moment', LONG_EXAMPLE),
+    ('coming into our mind', LONG_EXAMPLE),
+    ('LEADER', LONG_EXAMPLE),
+    ('leading the path', LONG_EXAMPLE),
+    ('leader', 'unbreakable' * 100 + ' a leader in this example'),
+])
+def test_long_example_keeps_complete_target_and_measured_bounds(word, text):
+    face, lines, excerpt = layout.fit_example(text, word)
+    assert excerpt != text and '…' in excerpt
+    assert 20 <= face.size <= 23 and len(lines) <= 2
+    assert all(face.getlength(line) <= 774 for line in lines)
+    core = excerpt.removeprefix('… ').removesuffix(' …')
+    assert core in text and word.casefold() in core.casefold()
+    start = text.index(core)
+    assert start == 0 or text[start - 1].isspace()
+    end = start + len(core)
+    assert end == len(text) or text[end].isspace()
+
+
+@pytest.mark.parametrize('text', ['This is a leader.', 'This is a leader. ' * 4])
+def test_fitting_examples_stay_unchanged(text):
+    _, _, excerpt = layout.fit_example(text, 'leader')
+    assert excerpt == text
+
+
+def test_long_example_cannot_substitute_substring_or_clip_target():
+    with pytest.raises(ValueError, match='完整目标词'):
+        layout.fit_example('leadership ' * 100, 'leader')
+    word = 'unbreakable' * 100
+    with pytest.raises(ValueError, match='容量'):
+        layout.fit_example('This is ' + word + ' in context', word)
+
+
+def test_display_preparation_preserves_full_source_and_every_term():
+    original = dict(word='leader', excerpt=LONG_EXAMPLE, context_sentence=LONG_EXAMPLE,
+                    phonetic='/ˈliːdə/', pos='n.', meaning_zh='领导者', timestamp='01:00')
+    items = [dict(original) for _ in range(4)]
+    prepared = layout.prepare_examples(items)
+    assert len(prepared) == 4 and len(layout.render_cards(prepared, '长例句回归')) == 2
+    assert all(item['context_sentence'] == LONG_EXAMPLE for item in prepared)
+    assert all(item['excerpt'] != LONG_EXAMPLE for item in prepared)
+    assert all(item == original for item in items)
+
+
 def test_cache_bound_to_source_subtitle_layout_and_output(tmp_path, monkeypatch):
     source=tmp_path/'a.mp4';source.write_bytes(b'original')
     ass=subtitle(tmp_path/'a.ass');output=tmp_path/'a_vocab.mp4';output.write_bytes(b'complete')
@@ -84,7 +140,9 @@ def test_cache_bound_to_source_subtitle_layout_and_output(tmp_path, monkeypatch)
 def test_render_cache_reused_before_media_processing(tmp_path, monkeypatch):
     source=tmp_path/'a.mp4';source.write_bytes(b'original');ass=subtitle(tmp_path/'a.ass')
     output=tmp_path/'a_vocab.mp4';output.write_bytes(b'complete')
-    vo.receipt_path(output).write_text(json.dumps({'inputs':vo.fingerprint(source,ass,'title'), 'status':'rendered','output_sha256':vo.sha256(output)}))
+    inputs = vo.fingerprint(source,ass,'title')
+    inputs['version'] = 'approved-v4-1'  # 修复不能让已经完成的旧版成片被迫重做。
+    vo.receipt_path(output).write_text(json.dumps({'inputs':inputs, 'status':'rendered','output_sha256':vo.sha256(output)}))
     monkeypatch.setattr(vo,'probe',Mock(side_effect=AssertionError('should reuse')))
     assert vo.build(source,ass,output,'title') == output
     with pytest.raises(ValueError):vo.build(source,ass,source,'title')
