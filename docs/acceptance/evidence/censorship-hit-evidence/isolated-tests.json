@@ -1,0 +1,150 @@
+{
+  "runs": [
+    {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/censor-evidence-integration-20261017",
+      "started_at": "2026-10-17T06:10:44.538210+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-demwxguh",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-demwxguh/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.077
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/unit/test_censorship_evidence.py",
+        "tests/unit/test_censorship_p0_manual_review.py",
+        "tests/unit/test_subtitle_censorship.py",
+        "tests/unit/test_censorship_slice_index.py",
+        "tests/unit/test_censor_rules_hotreload.py",
+        "tests/unit/test_gambling_betting_censor.py",
+        "tests/unit/test_keyword_collection.py",
+        "tests/unit/test_keyword_job_proof.py",
+        "tests/unit/test_keyword_long_term.py",
+        "tests/unit/test_keyword_long_term_rollout.py",
+        "tests/unit/test_keyword_rollout_contract.py",
+        "tests/unit/test_keyword_rollout_runtime.py",
+        "tests/unit/test_topic_candidates.py",
+        "tests/unit/test_topic_candidates_edges.py",
+        "tests/unit/test_topic_candidates_api.py",
+        "tests/unit/test_topic_cia_policy.py",
+        "tests/unit/test_topic_runtime_failures.py",
+        "tests/unit/test_topic_search_adapter.py",
+        "tests/unit/test_topic_trial_budget.py",
+        "tests/unit/test_maintenance.py",
+        "tests/unit/test_maintenance_cron.py",
+        "tests/unit/test_maintenance_entries.py",
+        "tests/unit/test_deployment.py",
+        "tests/unit/test_deployment_host.py",
+        "tests/unit/test_deployment_schedules.py",
+        "tests/unit/test_deployment_sources.py",
+        "tests/browser"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "4b115f852e1fea32e1214be8de06bc381ea5d1b340560571248b848f7526c0c8",
+      "profile_sha256": "8ba5432f99a24fbc30d381ef56aac58b5642ce0dd9434e9949fe9638ac3b61fb",
+      "browser_runtime": {
+        "revision": "1223",
+        "version": "148.0.7778.96",
+        "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-demwxguh/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+      },
+      "browser_runtime_sha256": "6da8d0e0c2d27e1810f271f591eab91993ffd43859cb43ac843755b3579a9861",
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 495.233
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-demwxguh/sandbox"
+      },
+      "finished_at": "2026-10-17T06:19:36.575666+00:00"
+    },
+    {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/censor-evidence-integration-20261017",
+      "started_at": "2026-10-17T06:14:20.975428+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-tntqmy7_",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-tntqmy7_/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.077
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/unit/test_censorship_evidence.py",
+        "tests/unit/test_censorship_p0_manual_review.py",
+        "tests/unit/test_subtitle_censorship.py",
+        "tests/unit/test_censorship_slice_index.py",
+        "tests/unit/test_censor_rules_hotreload.py",
+        "tests/unit/test_gambling_betting_censor.py",
+        "tests/browser/test_censorship_evidence.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "a0e303807a7d310ed1d5184a4edc88687507ff183280f12ace00642537b96e7f",
+      "profile_sha256": "83eacdf2b3a9e939ee5f0a1648d147d9428eda9073b2f7368ceae6429d8ebcea",
+      "browser_runtime": {
+        "revision": "1223",
+        "version": "148.0.7778.96",
+        "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-tntqmy7_/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+      },
+      "browser_runtime_sha256": "97c3fed8a4542b68fad30347f6269aea535c6250fc2a84235fbaa009366e8564",
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 19.565
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-tntqmy7_/sandbox"
+      },
+      "finished_at": "2026-10-17T06:19:36.685423+00:00"
+    },
+    {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/censor-evidence-integration-20261017",
+      "started_at": "2026-10-17T06:25:45.796710+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.076
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/browser/test_censorship_evidence.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "f3dff37e13141a8b2ca70da8fd2b65e1129872f18074d1450e3b2f9c4c599638",
+      "profile_sha256": "4135e797d465890da3c935e719988c2db7040a5057a4d609031d3b6a0bddb11c",
+      "browser_runtime": {
+        "revision": "1223",
+        "version": "148.0.7778.96",
+        "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+      },
+      "browser_runtime_sha256": "4d5211bbb08e7675281b0b2fa54167a6bb0d3a6abce010e45673be8fc4cde5e1",
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 14.198
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ilxm0ifd/sandbox"
+      },
+      "finished_at": "2026-10-17T06:26:00.885597+00:00"
+    }
+  ],
+  "notes": [
+    "803 passed / 12 warnings on the broader integrated snapshot; final empty-end VTT guard then covered by the affected 62 passed / 6 warnings run.",
+    "No unresolved failures. A prior missing ignored VTT fixture failure was fixed by explicitly including the fixture, without weakening assertions.",
+    "Actual isolated Chromium; 1280x900 and 390x844 in light, dark and contrast. Mobile viewport simulation is not real Safari.",
+    "Production long-rule-name tag cloud overflow fixed with a single wrapping declaration; real long label included in the affected 4 passed / 6 warnings browser run. Final production desktop and mobile assertions also passed. This does not relabel the earlier 803 and 62 runs as a single full run."
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "at": 1791789626.312907,
+  "production_head": "e1399711e6c0a50f01a7e793174ebfd49e5bacc7",
+  "health": {
+    "status": 200,
+    "body": {
+      "initialized_at": 1791785237.849867,
+      "cleaned_at": 1791789626.24453,
+      "failed_at": null,
+      "code": null,
+      "ready": true,
+      "stopped_off_confirmed": null
+    }
+  },
+  "capabilities": {
+    "topic_available": true,
+    "search_enabled": false
+  },
+  "control": {
+    "mode": "OFF",
+    "version": 3
+  },
+  "maintenance": {
+    "state": "RUNNING",
+    "phase": "IDLE"
+  },
+  "search_open": false,
+  "job_count": 0,
+  "budget": {
+    "day": "2026-10-12",
+    "search": 0,
+    "general": 0
+  },
+  "protected_dirty_unchanged": {
+    ".gitignore": true,
+    "config/wechat_products.json": true,
+    "scripts/submit_generic_douyin.py": true,
+    "src/video_processing/db/database.py": true,
+    "src/video_processing/processors/caption_processor.py": true,
+    "src/video_processing/utils/subtitle_translation_provider.py": true,
+    "src/video_processing/utils/vocab_helper.py": true
+  },
+  "deployment": "NOT_ADOPTED",
+  "schedules_changed": false,
+  "restart_performed": false,
+  "real_search_calls_this_turn": 0
+}

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 既有业务测试显式初始化独立维护状态，不改变生产缺失闭锁 |
 | 1.1.0 | 2026-09-08 | Codex | 业务配置导入前检查一次性源码根和实际沙盒拒绝，禁止裸 pytest 触碰正式库 |
 | 1.0.0 | 2026-07-28 | Codex | 默认关闭公开视频提交窗口守卫，避免发布类单测依赖当前时钟 |
 """
@@ -42,6 +43,18 @@ def _require_test_sandbox():
 _require_test_sandbox()
 
 from config.settings import settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_running_maintenance(tmp_path, monkeypatch):
+    from video_processing.core.maintenance import MaintenanceGate
+    path = tmp_path / "maintenance" / "state.json"
+    monkeypatch.setattr(settings, "maintenance_state_path", path)
+    monkeypatch.setenv("MAINTENANCE_STATE_PATH", str(path))
+    control = MaintenanceGate(path)
+    version = control.enter("隔离测试显式初始化")["version"]
+    control.resume(version, validated=True)
+    return control
 
 
 @pytest.fixture(autouse=True)

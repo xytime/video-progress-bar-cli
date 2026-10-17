@@ -15,6 +15,7 @@
 # | 1.5.0 | 2026-07-29 | Codex | 新增 dubbing 人工配音再制网关；不接入 job 自动流水线 |
 # | 1.6.0 | 2026-09-23 | Antigravity | 新增 craft / antishit 极客架构守卫与防屎山度量命令组 |
 # | 1.7.0 | 2026-10-08 | Antigravity | 新增 pager / handwritten 手写手账伴读视频制作命令组 |
+# | 1.8.0 | 2026-10-12 | Codex | 本机持久维护与正常停 UI；禁止自动强杀替换 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -136,6 +137,9 @@ show_usage() {
     echo "  ./vpanel craft [PATH...]      扫描 Python 文件或目录的架构坏味道与复杂度"
     echo "  ./vpanel craft --check [PATH] 检查依赖规则；违规=1，扫描不完整=2；路径相对调用目录"
     echo ""
+    echo "受控部署:"
+    echo "  ./vpanel deploy plan --directory <私有目录> --target <提交> --tested-manifest <测试清单> [--overlay <整合副本>]"
+    echo "  ./vpanel deploy apply|status|recover --directory <私有目录>"
     echo "通用:"
     echo "  ./vpanel help                 显示此帮助信息"
     echo ""
@@ -145,15 +149,25 @@ show_usage() {
 # 仪表盘控制 (UI)
 # -----------------------------------------------------------------------
 ui_start() {
+    if [ "${3:-}" = "--maintenance" ]; then
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" enter --reason "候选工作台维护启动" || return 1
+    fi
     # [Claude_Opus_4.8] 权威判断：端口已被占用 = 已在运行（不再只信易漂移的 PID 文件）
     local pp; pp="$(_port_pid)"
     if [ -n "$pp" ]; then
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" check-ui --pid "$pp" || return 1
         echo "ℹ️ 控制中心已在运行 (PID: $pp, http://localhost:${DASH_PORT})"
         echo "$pp" > "$PID_FILE"
         return 0
     fi
 
     if [ -f "$LAUNCH_PLIST" ]; then
+        local launch_root
+        launch_root="$(plutil -extract WorkingDirectory raw "$LAUNCH_PLIST" 2>/dev/null)" || return 1
+        if [ "$launch_root" != "$PRJ_ROOT" ]; then
+            echo "拒绝启动：LaunchAgent 的目录与当前隔离工作区不一致。" >&2
+            return 1
+        fi
         echo "🚀 正在通过 launchd 启动控制中心仪表盘..."
         if ! _launch_loaded; then
             launchctl bootstrap "$LAUNCH_DOMAIN" "$LAUNCH_PLIST" || return 1
@@ -165,6 +179,7 @@ ui_start() {
             sleep 0.5
             bound="$(_port_pid)"
             if [ -n "$bound" ]; then
+                PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" check-ui --pid "$bound" || return 1
                 echo "$bound" > "$PID_FILE"
                 echo "✅ 启动成功！端口 :${DASH_PORT} 由 PID $bound 接管"
                 echo "🌐 仪表盘地址: http://localhost:${DASH_PORT}"
@@ -179,10 +194,8 @@ ui_start() {
     # 清理「持有 app.py 但没绑端口」的游离/僵进程（如端口冲突起飞失败的残留）
     local strays; strays="$(_dash_pids)"
     if [ -n "$strays" ]; then
-        echo "🧹 清理未绑定端口的游离进程: $(echo "$strays" | tr '\n' ' ')"
-        for p in $strays; do kill "$p" 2>/dev/null || true; done
-        sleep 1
-        for p in $(_dash_pids); do kill -9 "$p" 2>/dev/null || true; done
+        echo "拒绝启动：发现未确认归属的旧 UI，须核实首次采用和外部重拉起来源。" >&2
+        return 1
     fi
 
     echo "🚀 正在启动控制中心仪表盘..."
@@ -196,6 +209,7 @@ ui_start() {
         sleep 0.5
         bound="$(_port_pid)"
         if [ "$bound" = "$NEW_PID" ]; then
+            PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" check-ui --pid "$bound" || return 1
             echo "✅ 启动成功！端口 :${DASH_PORT} 由 PID $NEW_PID 接管"
             echo "🌐 仪表盘地址: http://localhost:${DASH_PORT}"
             echo "📄 日志文件: output/dashboard.log"
@@ -209,44 +223,17 @@ ui_start() {
 }
 
 ui_stop() {
-    # [Claude_Opus_4.8] 杀光所有 dashboard 进程 + 占端口者（不再只杀 PID 文件那一个，
-    # 避免 PID 文件漂移后漏掉真正在服务的进程；并在最后验证端口确已释放）
-    if _launch_loaded; then
-        echo "🛑 正在停止 launchd 控制中心..."
-        launchctl bootout "$LAUNCH_DOMAIN/$LAUNCH_LABEL" 2>/dev/null || true
-    fi
-    local pids; pids="$(_all_dash_pids)"
-    if [ -z "$pids" ]; then
-        echo "ℹ️ 控制中心未在运行"
-        rm -f "$PID_FILE"
-        return 0
-    fi
-    echo "🛑 正在停止控制中心 (PID: $(echo "$pids" | tr '\n' ' '))..."
-    for p in $pids; do kill "$p" 2>/dev/null || true; done   # 优雅 SIGTERM
-    local i
-    for i in $(seq 1 12); do                                  # 等待最多 ~6s 退出+释放端口
-        sleep 0.5
-        [ -z "$(_all_dash_pids)" ] && break
-    done
-    local left; left="$(_all_dash_pids)"
-    if [ -n "$left" ]; then
-        echo "⚡ 进程未响应，强制终止: $(echo "$left" | tr '\n' ' ')"
-        for p in $left; do kill -9 "$p" 2>/dev/null || true; done
-        sleep 0.5
-    fi
-    rm -f "$PID_FILE"
+    local action_args=("${@:3}")
+    PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" stop-ui "${action_args[@]}" || return 1
     if [ -n "$(_port_pid)" ]; then
-        echo "❌ 端口 :${DASH_PORT} 仍被 PID $(_port_pid) 占用，请人工检查"
+        echo "拒绝确认停止：端口仍占用，保留归属记录。" >&2
         return 1
     fi
-    echo "✅ 已停止，端口 :${DASH_PORT} 已释放"
+    echo "控制中心已正常退出。"
 }
 
 ui_restart() {
-    # [Claude_Opus_4.8] 真正的重启：彻底清停（含游离进程）→ 验证端口释放 → 验证绑定启动
-    echo "🔄 重启控制中心..."
-    ui_stop || true
-    sleep 1
+    ui_stop "$@" || return 1
     ui_start
 }
 
@@ -263,7 +250,7 @@ ui_status() {
     local strays; strays="$(_dash_pids | grep -vx "$pp" 2>/dev/null)"
     if [ -n "$strays" ]; then
         echo "⚠️ 检测到游离 app.py 进程(未绑端口): $(echo "$strays" | tr '\n' ' ')"
-        echo "   建议 './vpanel ui restart' 一键清理并重启"
+        echo "   建议 './vpanel ui restart' 先核实归属，进入维护并自然排空"
     fi
 }
 
@@ -337,57 +324,7 @@ print(f'\n共 {len(channels)} 个已批准频道')
 }
 
 job_add_channel() {
-    local URL="${1:-}"
-    if [ -z "$URL" ]; then
-        echo "❌ 用法: ./vpanel job add-channel <YouTube频道URL>"
-        echo "   示例: ./vpanel job add-channel https://www.youtube.com/@TheVerge"
-        exit 1
-    fi
-
-    local COOKIE_ARGS=()
-    if [ -f "output/youtube_cookies.txt" ]; then
-        COOKIE_ARGS=(--cookies output/youtube_cookies.txt)
-    else
-        COOKIE_ARGS=(--cookies-from-browser safari)
-    fi
-
-    INFO=$(.venv/bin/yt-dlp --flat-playlist --playlist-items 1 --no-warnings \
-        --print "playlist:%(channel_id,id)s|%(channel,title)s" \
-        --print "%(playlist_channel_id,channel_id,uploader_id)s|%(playlist_channel,channel,uploader,playlist_title)s" \
-        "${COOKIE_ARGS[@]}" \
-        "$URL" 2>&1)
-
-    if echo "$INFO" | grep -q "ERROR"; then
-        echo "❌ yt-dlp 无法访问该 URL："
-        echo "   $INFO"
-        exit 1
-    fi
-
-    CHANNEL_LINE=$(echo "$INFO" | grep -E '^UC[a-zA-Z0-9_-]{22}\|' | head -1)
-    if [ -z "$CHANNEL_LINE" ]; then
-        CHANNEL_LINE=$(echo "$INFO" | grep '|' | head -1)
-    fi
-    CHANNEL_ID=$(echo "$CHANNEL_LINE" | cut -d'|' -f1)
-    CHANNEL_NAME=$(echo "$CHANNEL_LINE" | cut -d'|' -f2)
-
-    if [[ ! "$CHANNEL_ID" =~ ^UC[a-zA-Z0-9_-]{22}$ ]]; then
-        echo "❌ 解析到的频道 ID 格式异常（${CHANNEL_ID:-空}），请确认这是一个有效的 YouTube 频道链接"
-        exit 1
-    fi
-
-    echo "  频道名: $CHANNEL_NAME"
-    echo "  频道ID: $CHANNEL_ID"
-
-    "$PYTHON" -c "
-import sys; sys.path.insert(0, '$PRJ_ROOT/src')
-from video_processing.db.database import PipelineDB
-db = PipelineDB()
-ok = db.add_channel('$CHANNEL_ID', '$CHANNEL_NAME', status='APPROVED', reason='Added via vpanel job add-channel')
-if ok:
-    print('✅ 已添加并批准')
-else:
-    print('ℹ️ 已存在，记录已更新')
-"
+    PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/add_approved_channel.py" "${1:-}"
 }
 
 # -----------------------------------------------------------------------
@@ -404,9 +341,9 @@ fi
 case "$GROUP" in
     ui)
         case "$ACTION" in
-            start)   ui_start ;;
-            stop)    ui_stop ;;
-            restart) ui_restart ;;
+            start)   ui_start "$@" ;;
+            stop)    ui_stop "$@" ;;
+            restart) ui_restart "$@" ;;
             status)  ui_status ;;
             logs)    ui_logs ;;
             open)    ui_open ;;
@@ -418,6 +355,9 @@ case "$GROUP" in
         esac
         ;;
     job)
+        if [ "$ACTION" = "run" ] || [ "$ACTION" = "add-channel" ]; then
+            PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" require-running || exit 2
+        fi
         case "$ACTION" in
             run)         job_run ;;
             logs)        job_logs ;;
@@ -429,6 +369,14 @@ case "$GROUP" in
                 exit 1
                 ;;
         esac
+        ;;
+    deploy)
+        shift
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/deployment_control.py" "$@"
+        ;;
+    maintenance)
+        shift
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/maintenance_control.py" "$@"
         ;;
     dubbing)
         shift

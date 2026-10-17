@@ -273,16 +273,18 @@
     const proc = data.processed || 0;
     const pub = data.published || 0;
 
-    const qualPct = ingested > 0 ? Math.min(100, Math.round((qual / ingested) * 100)) : 0;
-    const procPct = ingested > 0 ? Math.min(100, Math.round((proc / ingested) * 100)) : 0;
-    const pubPct = ingested > 0 ? Math.min(100, Math.round((pub / ingested) * 100)) : 0;
+    const ratio = (n,d) => d ? `${Math.round(n/d*1000)/10}%（${n}/${d}）` : '—（无符合口径记录）';
+    const cohort=data.cohort;
+    const qualPct = ingested > 0 ? Math.round((qual / ingested) * 100) : 0;
+    const procPct = ingested > 0 ? Math.round((proc / ingested) * 100) : 0;
+    const pubPct = ingested > 0 ? Math.round((pub / ingested) * 100) : 0;
 
     container.innerHTML = `
       <div class="funnel-steps">
         <div class="funnel-step">
           <div class="funnel-step-header">
-            <span class="funnel-step-name">1. 发现采集 (Ingested)</span>
-            <span class="funnel-step-value">${ingested}<span class="funnel-step-rate">基准 100%</span></span>
+            <span class="funnel-step-name">1. 入库记录</span>
+            <span class="funnel-step-value">${ingested}<span class="funnel-step-rate">${ingested ? "基准 100%" : "—（无符合口径记录）"}</span></span>
           </div>
           <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-1" style="width:100%"></div></div>
         </div>
@@ -290,28 +292,29 @@
         <div class="funnel-step">
           <div class="funnel-step-header">
             <span class="funnel-step-name">2. 评分入围 (≥ 75 分)</span>
-            <span class="funnel-step-value">${qual}<span class="funnel-step-rate">入围率 ${data.qualification_rate}%</span></span>
+            <span class="funnel-step-value">${qual}<span class="funnel-step-rate">入围率 ${ratio(qual,ingested)}</span></span>
           </div>
           <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-2" style="width:${qualPct}%"></div></div>
         </div>
 
         <div class="funnel-step">
           <div class="funnel-step-header">
-            <span class="funnel-step-name">3. 制作加工 (Processed)</span>
-            <span class="funnel-step-value">${proc}<span class="funnel-step-rate">制作率 ${data.processing_rate}%</span></span>
+            <span class="funnel-step-name">3. 已进入制作环节</span>
+            <span class="funnel-step-value">${proc}<span class="funnel-step-rate">入围记录占比 ${ratio(cohort.qualified_processed,qual)}</span></span>
           </div>
           <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-3" style="width:${procPct}%"></div></div>
         </div>
 
         <div class="funnel-step">
           <div class="funnel-step-header">
-            <span class="funnel-step-name">4. 正式发布 (Published)</span>
-            <span class="funnel-step-value">${pub}<span class="funnel-step-rate">全链转化 ${data.overall_conversion_rate}%</span></span>
+            <span class="funnel-step-name">4. 本地提交/完成记录</span>
+            <span class="funnel-step-value">${pub}<span class="funnel-step-rate">入库记录占比 ${ratio(pub,ingested)}</span></span>
           </div>
           <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-4" style="width:${pubPct}%"></div></div>
         </div>
       </div>
 
+      <p class="hint">按父任务入库批次统计当前状态，含提交受理，不代表平台公开。入围记录本地提交/完成率 ${ratio(cohort.qualified_local_completed,qual)}</p>
       <div class="funnel-diagnosis">
         <div class="funnel-diagnosis-row">
           <span>🛡 拦截/失败:</span>
@@ -325,7 +328,7 @@
         </div>
         ${data.latest_published_at ? `
         <div class="funnel-diagnosis-row">
-          <span>🚀 最近发布:</span>
+          <span>本地提交/完成记录最近更新:</span>
           <span>${_relativeTime(data.latest_published_at)}</span>
         </div>` : ''}
       </div>

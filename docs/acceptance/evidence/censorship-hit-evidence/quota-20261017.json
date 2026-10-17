@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-17T14:19:00+08:00",
+  "project": "gen-lang-client-0993011647",
+  "service": "youtube.googleapis.com",
+  "search": {
+    "used": 4,
+    "limit": 100
+  },
+  "general": {
+    "used": 417,
+    "limit": 10000
+  },
+  "method": "Read-only Cloud console quota page; no credential page or key read.",
+  "valid_seconds": 3600
+}

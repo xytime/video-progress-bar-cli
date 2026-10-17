@@ -16,6 +16,8 @@
 | 1.3.0   | 2026-06-25 | Claude_Opus_4.8 | [审查整改] 候选查询下沉 PipelineDB.get_rescore_candidates（消除裸 SQL/手抄黑名单过滤/时区漂移）；fetch_current 健壮解析 yt-dlp 输出，避免异常被静默吞成"取不到" |
 | 1.4.0   | 2026-07-12 | Codex           | [访问减压] 单轮最多查询50条，并跳过已达到频道专属发布线的演讲类候选 |
 | 1.5.0   | 2026-09-25 | Codex           | 按到期时间公平轮转，优先批量读取官方统计并保存刷新结果；失败有冷却 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 import subprocess
 import sys
@@ -31,6 +33,9 @@ from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_vi
 CAP = 50  # 单轮最多复查 50 条；官方 API 可在一次请求中取完
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
+@guarded("rescore-source", lambda yid: yid)
 def fetch_current(yid: str):
     cmd = [settings.ytdlp_path, "--ignore-no-formats-error", "--no-warnings",
            *settings.get_yt_cookie_args(),
@@ -47,6 +52,7 @@ def fetch_current(yid: str):
         return (None, None)
 
 
+@entry
 def main():
     db = PipelineDB()
     # 候选与黑名单过滤全部下沉至 DAL（单一真相源，杜绝手抄过滤漂移重发黑名单频道）
@@ -59,7 +65,9 @@ def main():
     statistics = {}
     if settings.youtube_data_api_key and rows:
         try:
-            statistics = fetch_video_statistics(
+            with gate().admit("rescore-statistics", "rescore-statistics") as ticket:
+                ticket.start()
+                statistics = fetch_video_statistics(
                 list(dict.fromkeys(row["youtube_id"] for row in rows)),
                 api_key=settings.youtube_data_api_key,
                 timeout_sec=settings.youtube_data_api_timeout_sec,
@@ -67,26 +75,28 @@ def main():
         except YouTubeCatalogError as exc:
             print(f"[rescore] 批量统计读取失败，本轮记录冷却后再试：{exc}", flush=True)
     for i, row in enumerate(rows, 1):
-        yid, si = row["youtube_id"], row["slice_index"]
-        cv, cl = statistics.get(yid, (None, None)) if settings.youtube_data_api_key else fetch_current(yid)
-        result = db.record_rescore_attempt(yid, si or 0, cv, cl)
-        if cv is None:
-            failed += 1
-        elif result is not None:
-            previous, new = result
-            updated += 1
-            publish_line = (
-                settings.speech_publish_score_line
-                if row.get("channel_id") in settings.speech_channel_id_set
-                else 75
-            )
-            if previous < publish_line <= new:
-                rescued.append((new, cv, cl or 0, yid))
-                print(f"  ★捞回 分{new} 发布线{publish_line} 播放{cv} 赞{cl} {yid}（老分{previous}）", flush=True)
-        if i % 20 == 0:
-            print(f"  …进度 {i}/{len(rows)}  已捞回 {len(rescued)}  取不到 {failed}", flush=True)
-        if not settings.youtube_data_api_key and i < len(rows):
-            time.sleep(random.uniform(1.5, 3.0))
+        with gate().admit("main", str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as ticket:
+            ticket.start()
+            yid, si = row["youtube_id"], row["slice_index"]
+            cv, cl = statistics.get(yid, (None, None)) if settings.youtube_data_api_key else fetch_current(yid)
+            result = db.record_rescore_attempt(yid, si or 0, cv, cl)
+            if cv is None:
+                failed += 1
+            elif result is not None:
+                previous, new = result
+                updated += 1
+                publish_line = (
+                    settings.speech_publish_score_line
+                    if row.get("channel_id") in settings.speech_channel_id_set
+                    else 75
+                )
+                if previous < publish_line <= new:
+                    rescued.append((new, cv, cl or 0, yid))
+                    print(f"  ★捞回 分{new} 发布线{publish_line} 播放{cv} 赞{cl} {yid}（老分{previous}）", flush=True)
+            if i % 20 == 0:
+                print(f"  …进度 {i}/{len(rows)}  已捞回 {len(rescued)}  取不到 {failed}", flush=True)
+            if not settings.youtube_data_api_key and i < len(rows):
+                time.sleep(random.uniform(1.5, 3.0))
 
     print(f"\n[rescore] 完成：扫描{len(rows)} 成功刷新{updated} 跨发布线{len(rescued)} 取不到{failed}", flush=True)
     rescued.sort(reverse=True)

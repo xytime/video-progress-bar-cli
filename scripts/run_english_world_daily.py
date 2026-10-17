@@ -58,6 +58,8 @@
 # | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，避免“渲染”等宽泛词触发误淘汰。 |
 # | 2.30.0 | 2026-09-03 | Codex | 旧式冲突文本优先识别来源通路错误，宁可保留也不误淘汰来源。 |
 # | 2.30.1 | 2026-09-06 | Codex | 正文序列化预检、分类淘汰、具名交付续接及宿主失败独立归因。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -198,6 +200,9 @@ AGY 单轮执行约束：只允许当前根代理在本次调用中直接完成�
 完成，写入准确失败交付请求并结束。不得因等待后台任务而保持空闲或延长本轮。
 """
 
+
+from video_processing.core.maintenance_child import run_admitted, single_script
+from video_processing.core.maintenance import start_current, entry, guarded, gate, running, MaintenanceDenied
 
 @dataclass(frozen=True)
 class RuntimePaths:
@@ -828,7 +833,7 @@ def _deliver_request_from_host(
             sys.path.insert(0, source_root)
         from video_processing.utils.subprocess_env import build_subprocess_env
 
-        result = subprocess.run(
+        result = run_admitted(
             command,
             cwd=paths.project_root,
             stdout=stream,
@@ -868,7 +873,7 @@ def _notify_failure(
     env = build_subprocess_env()
 
     for attempt in range(1, max_attempts + 1):
-        result = subprocess.run(
+        result = run_admitted(
             [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
             stdout=stream,
             stderr=subprocess.STDOUT,
@@ -1074,6 +1079,7 @@ def _pending_auto_delivery_request(paths: RuntimePaths) -> Path | None:
     return None
 
 
+@guarded("english-production", lambda *a, **kw: "english-job:" + str(kw.get("job_id") or "daily"), waiting=True)
 def run(
     paths: RuntimePaths,
     *,
@@ -1104,6 +1110,12 @@ def run(
             _log(stream, "skipped: daily English World run is already active")
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
         return 0
+
+    try:
+        start_current()
+    except MaintenanceDenied:
+        _release_lock(paths.lock_dir)
+        raise
 
     if not shadow_only and not job_id and not forced_youtube_id and not force and resume_delivery_request is None:
         src_path = str(paths.project_root / "src")
@@ -1545,6 +1557,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@single_script
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get(_COORDINATOR_CHILD_ENV) == "1":
         print("英语世界协调器子进程不得递归调用日更入口；父协调器已持有运行锁。")

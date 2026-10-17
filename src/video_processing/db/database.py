@@ -5,9 +5,13 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
+| maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
+| deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
 | 3.96.0 | 2026-10-12 | Codex | 新增视频号二级回复观众评论、任务状态机、防重账本与尝试历史 DAL，支持原子预占与配额检查。 |
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
 | 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
@@ -198,10 +202,12 @@ import hmac
 import secrets
 import unicodedata
 import uuid
+from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence, Tuple
 from .wallstreet_experiment import WallstreetExperimentDAL
+from .topic_candidates import TopicCandidateDAL
 
 from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
@@ -211,7 +217,7 @@ from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_chan
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
-class PipelineDB(WallstreetExperimentDAL):
+class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -257,6 +263,7 @@ class PipelineDB(WallstreetExperimentDAL):
         return normalized_state
 
     def __init__(self, db_path: str = "pipeline.db", *, read_only: bool = False):
+        self._initializing_schema = True
         # 默认在项目根目录的 output 文件夹内创建数据库
         # 如果是绝对路径则直接使用
         if not os.path.isabs(db_path):
@@ -279,6 +286,9 @@ class PipelineDB(WallstreetExperimentDAL):
             # 确保目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
+        self._initializing_schema = False
+        from ..core.maintenance import running
+        if not self._read_only and running():
             self.reconcile_pending_ghost_tasks()
         
     @contextmanager
@@ -301,11 +311,108 @@ class PipelineDB(WallstreetExperimentDAL):
         # 后续 DAL 连接静默失去 ON DELETE/ON UPDATE 约束。
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.row_factory = sqlite3.Row
+        conn.create_function("keyword_allowed", 2, lambda source, yid: int(self._keyword_allowed(conn, source, yid)))
+        admission = {}
+        if not self._initializing_schema and not self._read_only:
+            from ..core.maintenance import gate, current, MaintenanceDenied
+            mutating = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                        sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_DROP_TABLE,
+                        sqlite3.SQLITE_ALTER_TABLE, sqlite3.SQLITE_CREATE_INDEX, sqlite3.SQLITE_DROP_INDEX}
+
+            def authorize(action, _arg1, _arg2, _database, _trigger):
+                if action not in mutating:
+                    return sqlite3.SQLITE_OK
+                if "failure" in admission:
+                    return sqlite3.SQLITE_DENY
+                parent = current()
+                if "context" in admission or (parent is not None and parent.row["phase"] == "ACTIVE"):
+                    return sqlite3.SQLITE_OK
+                try:
+                    context = gate().admit("legacy-db-write", "transaction:" + secrets.token_hex(8))
+                    ticket = context.__enter__()
+                    admission["context"] = context
+                    ticket.start()
+                    return sqlite3.SQLITE_OK
+                except MaintenanceDenied as exc:
+                    admission["failure"] = exc
+                    return sqlite3.SQLITE_DENY
+
+            conn.set_authorizer(authorize)
         try:
             with conn:
                 yield conn
+        except sqlite3.DatabaseError:
+            if "failure" in admission:
+                raise admission["failure"]
+            raise
         finally:
-            conn.close()
+            try:
+                conn.close()
+            finally:
+                if "context" in admission:
+                    admission["context"].__exit__(None, None, None)
+
+    @staticmethod
+    def maintenance_active_work(path) -> list[dict]:
+        """维护退出/恢复只读账本核对；不初始化、不恢复、不改写在途任务。"""
+        with closing(sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=2)) as conn:
+            conn.row_factory = sqlite3.Row
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            checks = {
+                "processed_videos": ("status", ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "PUBLISHING")),
+                "english_world_jobs": ("state", ("RESEARCHING",)),
+                "english_world_review_items": ("state", ("SUBMITTING",)),
+                "douyin_publications": ("state", ("SUBMITTING",)),
+                "kuaishou_publications": ("state", ("SUBMITTING",)),
+                "wallstreet_publications": ("state", ("SUBMITTING",)),
+                "wechat_review_notifications": ("delivery_state", ("PROCESSING",)),
+                "highlight_jobs": ("state", ("ANALYZING",)),
+            }
+            rows = []
+            for table, (column, values) in checks.items():
+                if table not in tables:
+                    continue
+                count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} IN ({','.join('?' for _ in values)})", values).fetchone()[0]
+                if count:
+                    rows.append({"table": table, "count": count})
+            return rows
+
+    @staticmethod
+    def maintenance_backup(source: Path, destination: Path) -> dict:
+        """独占新备份目标，包含 WAL；不初始化/迁移源数据库，失败不覆盖旧备份。"""
+        import hashlib
+        source, destination = Path(source).resolve(), Path(destination).resolve()
+        if source == destination or destination.exists():
+            raise ValueError("备份目标必须是新文件")
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        deadline = time.monotonic() + 30
+
+        def progress(status, remaining, total):
+            if time.monotonic() > deadline:
+                raise TimeoutError("一致性备份超时")
+
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=2)) as original:
+            with closing(sqlite3.connect(destination, timeout=2)) as saved:
+                original.backup(saved, pages=256, progress=progress, sleep=.01)
+                result = [row[0] for row in saved.execute("PRAGMA integrity_check")]
+                if result != ["ok"]:
+                    raise ValueError("备份完整性检查失败")
+        with destination.open("rb") as stream:
+            os.fsync(stream.fileno())
+        return {"path": str(destination), "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                "integrity": "ok", "bytes": destination.stat().st_size}
+
+    @staticmethod
+    def maintenance_verify_backup(destination: Path, expected: dict) -> bool:
+        """恢复前复验备份内容与完整性，不用备份覆盖生产。"""
+        import hashlib
+        destination = Path(destination).resolve()
+        if str(destination) != expected.get("path") or hashlib.sha256(destination.read_bytes()).hexdigest() != expected.get("sha256"):
+            return False
+        with closing(sqlite3.connect(destination.as_uri() + "?mode=ro", uri=True, timeout=2)) as saved:
+            return [row[0] for row in saved.execute("PRAGMA integrity_check")] == ["ok"]
 
     def _migrate_publication_subjects_if_needed(self) -> None:
         if self._read_only or not self.db_path or self.db_path == ":memory:":
@@ -1650,6 +1757,14 @@ class PipelineDB(WallstreetExperimentDAL):
                 "ON english_world_douyin_attempts(review_id, started_at DESC)"
             )
 
+            cursor.execute("""CREATE TABLE IF NOT EXISTS cover_versions (
+                version_id TEXT PRIMARY KEY, youtube_id TEXT, slice_index INTEGER NOT NULL DEFAULT 0,
+                cover_sha256 TEXT NOT NULL, payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cover_versions_video ON cover_versions(youtube_id, slice_index)")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS cover_submission_bindings (
+                evidence_path TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES cover_versions(version_id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
             cursor.execute('''
@@ -1665,6 +1780,8 @@ class PipelineDB(WallstreetExperimentDAL):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            if "cover_context_json" not in {row[1] for row in cursor.execute("PRAGMA table_info(telegram_notification_receipts)")}:
+                cursor.execute("ALTER TABLE telegram_notification_receipts ADD COLUMN cover_context_json TEXT")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_telegram_notification_receipts_dedupe "
                 "ON telegram_notification_receipts(event_type, content_sha256, created_at DESC)"
@@ -3166,6 +3283,8 @@ class PipelineDB(WallstreetExperimentDAL):
                 SUM(CASE WHEN score >= 75 THEN 1 ELSE 0 END) as qualified,
                 SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') THEN 1 ELSE 0 END) as processed,
                 SUM(CASE WHEN status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN score >= 75 AND status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN 1 ELSE 0 END) as qualified_local_completed,
+                SUM(CASE WHEN score >= 75 AND status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') THEN 1 ELSE 0 END) as qualified_processed,
                 SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
                 SUM(CASE WHEN censor_tag IS NOT NULL THEN 1 ELSE 0 END) as censor_blocked,
                 MAX(created_at) as latest_ingested_at,
@@ -3213,6 +3332,14 @@ class PipelineDB(WallstreetExperimentDAL):
                 "processing_rate": round(proc_rate, 2),
                 "publishing_rate": round(pub_rate, 2),
                 "overall_conversion_rate": round(overall_rate, 2),
+                "cohort": {
+                    "ingested": ingested, "qualified": qualified, "processed": processed,
+                    "local_completed": published,
+                    "qualified_local_completed": row["qualified_local_completed"] or 0,
+                    "qualified_processed": row["qualified_processed"] or 0,
+                    "local_records_updated_at": row["latest_published_at"],
+                    "basis": "parent_created_at", "timezone": "Asia/Shanghai",
+                },
                 "latest_ingested_at": row["latest_ingested_at"],
                 "latest_published_at": row["latest_published_at"],
             }
@@ -3660,7 +3787,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 UPDATE processed_videos SET status='PROCESSING', process_pid=?,
                     retry_count=retry_count+1, error_msg='CODEX_MEDIA_RECOVERY', updated_at=CURRENT_TIMESTAMP
                 WHERE youtube_id=? AND slice_index=0 AND status='FAILED' AND score>=75
-                  AND source<>'DISCOVERY' AND error_msg=? AND retry_count=? AND process_pid IS NULL
+                  AND source<>'DISCOVERY' AND keyword_allowed(source,youtube_id) AND error_msg=? AND retry_count=? AND process_pid IS NULL
                   AND updated_at >= datetime('now', '-48 hours')
                   AND NOT EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id=processed_videos.youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=processed_videos.id)
@@ -3801,7 +3928,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 WHERE youtube_id = ? AND slice_index = ?
                   AND status IN ('PENDING', 'PROCESSING', 'WECHAT_DEFERRED')
                   AND IFNULL(publication_review_required, 0) = 0
-                  AND COALESCE(source, 'AUTO') != 'DISCOVERY'
+                  AND COALESCE(source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive a WHERE a.video_id = processed_videos.id)
@@ -3912,7 +4039,7 @@ class PipelineDB(WallstreetExperimentDAL):
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' AND keyword_allowed(source,youtube_id) "
                 "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
                 "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
@@ -3985,7 +4112,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 SELECT pv.*
                 FROM processed_videos pv
                 {join_channel}
-                WHERE pv.status = 'WECHAT_DEFERRED'
+                WHERE pv.status = 'WECHAT_DEFERRED' AND keyword_allowed(pv.source,pv.youtube_id)
                   AND NOT EXISTS (
                     SELECT 1
                     FROM wechat_publications_historical_archive archive
@@ -4173,6 +4300,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     bool(reconciled), error_message,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
@@ -4229,6 +4357,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     clean_evidence_path,
                 ),
             )
+            self._bind_cover_evidence(conn, clean_evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
@@ -4342,6 +4471,7 @@ class PipelineDB(WallstreetExperimentDAL):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("Failed to persist WeChat submission task state")
+            self._bind_cover_evidence(conn, clean_evidence_path)
             conn.commit()
             publication = conn.execute(
                 "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
@@ -4433,6 +4563,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     normalized_state, clean_platform_post_id, clean_platform_url, bool(reconciled), error_message,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_publications WHERE subject_id = ?", (clean_subject_id,)
@@ -4488,6 +4619,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     clean_evidence_path,
                 ),
             )
+            self._bind_cover_evidence(conn, evidence_path)
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
@@ -4645,7 +4777,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 '''SELECT pv.*
                    FROM processed_videos pv
                    WHERE pv.status = 'PENDING'
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -4724,7 +4856,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 '''SELECT pv.* FROM processed_videos pv
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
                      AND pv.status = 'PENDING'
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -4799,6 +4931,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 '''SELECT lease.* FROM manual_publish_leases lease
                    JOIN processed_videos pv ON pv.id = lease.video_id
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND keyword_allowed(pv.source,pv.youtube_id)
                      AND lease.platform = ? AND lease.claimed_at IS NULL
                      AND lease.revoked_at IS NULL AND lease.expires_at > CURRENT_TIMESTAMP
                    ORDER BY lease.issued_at DESC LIMIT 1''',
@@ -5006,7 +5139,7 @@ class PipelineDB(WallstreetExperimentDAL):
             FROM processed_videos pv
             WHERE pv.status = 'PENDING'
               AND pv.score < 75
-              AND IFNULL(pv.source, '') != 'DISCOVERY'
+              AND IFNULL(pv.source, '') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
               AND IFNULL(pv.is_manually_scored, 0) = 0
               AND (
                     pv.score_input_signature IS NULL
@@ -5092,7 +5225,7 @@ class PipelineDB(WallstreetExperimentDAL):
                    WHERE youtube_id = ?
                      AND slice_index = 0
                      AND status IN ('PENDING', 'EXPIRED', 'IGNORED')
-                     AND IFNULL(source, '') != 'DISCOVERY'
+                     AND IFNULL(source, '') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = processed_videos.id)""",
                 (score, youtube_id)
@@ -5368,7 +5501,7 @@ class PipelineDB(WallstreetExperimentDAL):
               AND {rate_sql}
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
-              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
                               WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0
@@ -5424,7 +5557,7 @@ class PipelineDB(WallstreetExperimentDAL):
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING'
-              AND pv.source = 'AUTO'
+              AND pv.source IN ('AUTO','KEYWORD') AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
@@ -6120,6 +6253,40 @@ class PipelineDB(WallstreetExperimentDAL):
             raise ValueError(f"Unknown error type: {error_type}")
         return categories[error_type]
 
+    @staticmethod
+    def _attention_case() -> str:
+        """主事项互斥分类；只考察当前异常家庭，正常切片旧错误不参与。"""
+        fault = "f.status IN ('FAILED', 'LOGIN_REQUIRED')"
+        related = "(f.id = pv.id OR (pv.status = 'SEGMENTED' AND f.parent_id = pv.id))"
+        message = "(COALESCE(f.error_msg, '') || ' ' || COALESCE(f.censor_tag, ''))"
+        login = f"(f.status = 'LOGIN_REQUIRED' OR {message} LIKE '%LOGIN_REQUIRED%' OR {message} LIKE '%cookie%' OR {message} LIKE '%登录%')"
+        policy = f"({message} LIKE '%Channel Policy%' OR {message} LIKE '%频道策略%' OR {message} LIKE '%Censorship P0%' OR {message} LIKE '%政治安全违禁%')"
+        # 同一错误含技术故障也不降级为纯策略观察项。
+        technical = ' OR '.join(f"{message} LIKE '%{word}%'" for word in
+                                ('timeout', 'network', 'traceback', 'exception', '连接', '超时', 'COPYWRITING', 'quality gate'))
+        exists = lambda extra: f"EXISTS (SELECT 1 FROM processed_videos f WHERE {related} AND {fault} AND ({extra}))"
+        error = "(pv.status IN ('FAILED','LOGIN_REQUIRED') OR (pv.status='SEGMENTED' AND " + exists('1=1') + "))"
+        return f"""CASE
+            WHEN pv.status IN ('UNCERTAIN','SUBMITTED_UNBOUND','SUBMITTED_BOUND') THEN 'delivery'
+            WHEN pv.status='WECHAT_DEFERRED' OR ({error} AND {exists(login)}) THEN 'blocked'
+            WHEN {error} AND {exists('1=1')} AND NOT {exists(f'NOT {policy} OR {technical}')} THEN 'policy'
+            WHEN {error} THEN 'execution'
+            WHEN pv.status='UNDER_REVIEW' THEN 'review'
+            ELSE NULL END"""
+
+    def get_attention_summary(self) -> Dict[str, Any]:
+        """一次只读查询保证数量、最近更新时间来自同一快照。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(f"""WITH classified AS MATERIALIZED (
+                SELECT {self._attention_case()} AS kind, updated_at
+                FROM processed_videos pv WHERE pv.parent_id IS NULL)
+                SELECT kind, COUNT(*) AS count,
+                       MAX(CASE WHEN datetime(updated_at) IS NOT NULL THEN updated_at END) AS updated_at
+                FROM classified WHERE kind IS NOT NULL GROUP BY kind""").fetchall()
+        result = {kind: dict(count=0, updated_at=None) for kind in ('delivery','blocked','execution','review','policy')}
+        result.update({row['kind']: dict(count=row['count'], updated_at=row['updated_at']) for row in rows})
+        return result
+
     def get_video_filter_channels(self, tab: str, engagement_window_days: int = 3) -> List[str]:
         """返回当前场景可选频道，供控制面下拉框使用，不改变任何视频状态。"""
         condition, params = self._build_video_tab_condition(tab, engagement_window_days)
@@ -6151,9 +6318,17 @@ class PipelineDB(WallstreetExperimentDAL):
         include_expired: bool = False,
         created_window: str = 'all',
         funnel_stage: Optional[str] = None,
+        attention_kind: Optional[str] = None,
+        like_rate_min: Optional[float] = None,
+        like_rate_max: Optional[float] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
-        if funnel_stage:
+        if attention_kind:
+            if attention_kind not in {'delivery','blocked','execution','review','policy'} or funnel_stage:
+                raise ValueError('Unknown or conflicting attention kind')
+            clauses = ["pv.parent_id IS NULL", f"({self._attention_case()}) = ?"]
+            query_params = [attention_kind]
+        elif funnel_stage:
             stage_conditions = {
                 'ingested': "pv.parent_id IS NULL",
                 'qualified': "pv.score >= 75 AND pv.parent_id IS NULL",
@@ -6173,6 +6348,20 @@ class PipelineDB(WallstreetExperimentDAL):
             clauses = [condition]
             query_params: List[Any] = list(params)
 
+        # 百分数区间；缺失点赞数或无有效观看数不能作为 0% 参与匹配。
+        for bound in (like_rate_min, like_rate_max):
+            if bound is not None and not 0 <= bound <= 100:
+                raise ValueError("点赞率必须在 0–100% 之间")
+        if like_rate_min is not None and like_rate_max is not None and like_rate_min > like_rate_max:
+            raise ValueError("点赞率下限不能超过上限")
+        if like_rate_min is not None or like_rate_max is not None:
+            clauses.append("pv.view_count > 0 AND pv.like_count >= 0 AND pv.like_count <= pv.view_count")
+            if like_rate_min is not None:
+                clauses.append("100.0 * pv.like_count / pv.view_count >= ?")
+                query_params.append(like_rate_min)
+            if like_rate_max is not None:
+                clauses.append("100.0 * pv.like_count / pv.view_count <= ?")
+                query_params.append(like_rate_max)
         if search:
             escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             clauses.append("(pv.youtube_id LIKE ? ESCAPE '\\' OR pv.title LIKE ? ESCAPE '\\' OR COALESCE(pv.zh_title, '') LIKE ? ESCAPE '\\')")
@@ -6220,6 +6409,7 @@ class PipelineDB(WallstreetExperimentDAL):
             "ELSE NULL END"
         )
         order_by = {
+            'updated_at_desc': 'datetime(pv.updated_at) DESC, pv.id ASC',
             'score_desc': 'pv.score DESC, pv.id ASC',
             'views_desc': '(pv.view_count IS NULL) ASC, pv.view_count DESC, pv.id ASC',
             'like_rate_desc': '(pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC',
@@ -9351,6 +9541,63 @@ class PipelineDB(WallstreetExperimentDAL):
             ).fetchone()
             return int(row["cnt"]) if row else 0
 
+    @staticmethod
+    def _store_cover_version(conn, value):
+        from video_processing.cover_provenance import canonical, version
+        if version(value)["version_id"] != value.get("version_id"):
+            raise ValueError("Invalid cover version identity")
+        conn.execute("INSERT OR IGNORE INTO cover_versions (version_id, youtube_id, slice_index, cover_sha256, payload_json) VALUES (?, ?, ?, ?, ?)",
+                     (value["version_id"], value.get("youtube_id"), value.get("slice_index", 0), value["cover_sha256"], canonical(value)))
+
+    def record_cover_version(self, value):
+        with self.get_connection() as conn:
+            self._store_cover_version(conn, value)
+            conn.commit()
+
+    @staticmethod
+    def _bind_cover_evidence(conn, evidence_path):
+        from video_processing.cover_provenance import read_json
+        if not evidence_path:
+            return
+        value = read_json(Path(evidence_path) / "cover_binding.json")
+        if not value:
+            return
+        import hashlib
+        frozen = Path(evidence_path) / "submitted_cover.jpg"
+        if not frozen.is_file() or hashlib.sha256(frozen.read_bytes()).hexdigest() != value.get("cover_sha256"):
+            logging.warning("Submission cover snapshot invalid; retaining platform acceptance with unknown cover")
+            return
+        try:
+            PipelineDB._store_cover_version(conn, value)
+        except (ValueError, KeyError):
+            logging.warning("Submission cover metadata invalid; retaining platform acceptance")
+            return
+        existing = conn.execute("SELECT version_id FROM cover_submission_bindings WHERE evidence_path = ?", (evidence_path,)).fetchone()
+        if existing and existing[0] != value["version_id"]:
+            logging.warning("Submission cover binding conflict; retaining original immutable binding")
+            return
+        conn.execute("INSERT OR IGNORE INTO cover_submission_bindings (evidence_path, version_id) VALUES (?, ?)", (evidence_path, value["version_id"]))
+        conn.execute("UPDATE wechat_submission_attempts SET cover_sha256 = ? WHERE evidence_path = ? AND cover_sha256 IS NULL", (value["cover_sha256"], evidence_path))
+
+    def get_cover_context(self, youtube_id, slice_index=0):
+        from video_processing.cover_provenance import presentation
+        with self.get_connection() as conn:
+            publication = conn.execute("SELECT w.evidence_path, w.platform_post_id, w.video_id FROM wechat_publications w JOIN processed_videos v ON w.video_id = v.id WHERE v.youtube_id = ? AND v.slice_index = ?", (youtube_id, slice_index)).fetchone()
+            if publication:
+                row = conn.execute("""SELECT c.payload_json, b.evidence_path, a.attempt_id FROM cover_submission_bindings b
+                    JOIN cover_versions c USING(version_id)
+                    JOIN wechat_submission_attempts a ON a.evidence_path = b.evidence_path
+                    WHERE a.video_id = ? AND ((? IS NOT NULL AND a.platform_post_id = ?) OR
+                    (? IS NULL AND a.evidence_path = ?)) ORDER BY a.created_at DESC LIMIT 1""",
+                    (publication["video_id"], publication["platform_post_id"], publication["platform_post_id"], publication["platform_post_id"], publication["evidence_path"])).fetchone()
+                value = json.loads(row["payload_json"]) if row else {}
+                value.update(binding="submission", evidence_path=row["evidence_path"] if row else publication[0], platform_post_id=publication["platform_post_id"], attempt_id=row["attempt_id"] if row else None)
+            else:
+                row = conn.execute("SELECT payload_json FROM cover_versions WHERE youtube_id = ? AND slice_index = ? ORDER BY rowid DESC LIMIT 1", (youtube_id, slice_index)).fetchone()
+                value = json.loads(row[0]) if row else {}
+                value["binding"] = "generation"
+            return presentation(value)
+
     def record_telegram_notification_receipt(
         self,
         *,
@@ -9360,6 +9607,7 @@ class PipelineDB(WallstreetExperimentDAL):
         delivery_state: str,
         telegram_message_id: Optional[str] = None,
         error_kind: Optional[str] = None,
+        cover_context: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """记录 Telegram API 投递结果；不把 API 接受等同于用户设备已读。"""
         allowed_priorities = {"P0", "P1", "P2"}
@@ -9371,8 +9619,8 @@ class PipelineDB(WallstreetExperimentDAL):
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """INSERT INTO telegram_notification_receipts
-                   (event_type, priority, content_sha256, delivery_state, telegram_message_id, error_kind)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (event_type, priority, content_sha256, delivery_state, telegram_message_id, error_kind, cover_context_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     (event_type or "unknown")[:120],
                     priority,
@@ -9380,6 +9628,7 @@ class PipelineDB(WallstreetExperimentDAL):
                     delivery_state,
                     (telegram_message_id or "")[:80] or None,
                     (error_kind or "")[:120] or None,
+                    json.dumps(cover_context, ensure_ascii=False) if cover_context else None,
                 ),
             )
             conn.commit()

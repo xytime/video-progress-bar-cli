@@ -1,0 +1,20 @@
+{
+  "at": 1791794804.3354821,
+  "head": "79e2c4527dda44181de3c40959adbabb5f899df3",
+  "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+  "runtime_files_match_tested_overlay": true,
+  "db_backup_integrity": "ok",
+  "backup_phase": "after source checkout before any new service start",
+  "safe_inspection": {
+    "schema": 1,
+    "version": 3,
+    "state": "MAINTENANCE",
+    "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+    "at": 1791794356.097245,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE",
+    "workers": {},
+    "safe": true
+  }
+}

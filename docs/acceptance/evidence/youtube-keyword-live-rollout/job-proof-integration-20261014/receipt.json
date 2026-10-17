@@ -1,0 +1,58 @@
+{
+  "source": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/keyword-proof-integration-es06i2g2/repo",
+  "started_at": "2026-10-13T19:04:13.729835+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-c766agvr",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-c766agvr/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.082
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_job_proof.py",
+    "tests/unit/test_keyword_rollout_contract.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_database_channel_funnel.py",
+    "tests/unit/test_database_codex_text_recovery.py",
+    "tests/unit/test_dubbing_database.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/unit/test_vocabulary_outro.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "e2024ac90e301862b8d92836dc915470c2d7eb60a502ddccdb940d6685ace1cd",
+  "profile_sha256": "9467a929e61092d796a6e817b397f9fc4ced2808325169c4a6d87a09c53a21a6",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-c766agvr/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "897d29f106736fa50dfbd6f5e19e3c655401c4a99242436b7e596842d281d7a6",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 86.973
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-c766agvr/sandbox"
+  },
+  "finished_at": "2026-10-13T19:05:41.714856+00:00"
+}

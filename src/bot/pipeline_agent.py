@@ -30,6 +30,9 @@ based on incoming Telegram messages and commands.
 | 1.15.0  | 2026-09-23 | Antigravity                         | [下载引擎翻转] download_video 优先原生 yt-dlp，经 download_strategy 抽象 Strategy/Fallback 模式，覆盖进程异常与产物验真 (<50KB/缺失) 双重兜底并自动清理损坏分片 |
 | 1.16.0  | 2026-09-23 | Antigravity                         | [契约对齐与超时加固] 1. _find_downloaded_video 统一启用 verify_media=True 校验完整音视频轨并自动隔离损坏产物；2. download_video 注入总超时预算 settings.youtube_download_timeout_seconds，保留完整 curl 低速保护参数，识别中断/取消 |
 | 1.17.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] download_video 捕获 TimeoutError 统一上报下载超时，与 download_strategy 契约对齐 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
+| 1.18.0 | 2026-10-15 | Codex | 登录子进程检查退出码并回报失败，刷新代理并向请求会话发送二维码。 |
 """
 import html
 import os
@@ -41,6 +44,7 @@ import subprocess
 import fcntl
 import time
 import inspect
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any, get_args, get_origin
 
@@ -54,6 +58,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from config.settings import settings
+from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.db import PipelineDB
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.utils.file_utils import clean_partial_downloads
@@ -62,6 +67,9 @@ from video_processing.utils.download_strategy import (
     execute_download_with_fallback,
 )
 
+
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import start_current,  entry, guarded, gate, running, MaintenanceDenied
 
 def _cover_provenance_path(cover_file: Path) -> Path:
     return cover_file.with_name(f"{cover_file.stem}_provenance.json")
@@ -242,6 +250,7 @@ class PipelineAgent:
 
     # ── Tools Implementation ──────────────────────────────────────────────────
 
+    @guarded("bot-action")
     def send_telegram_message(self, message: str) -> str:
         """Sends a notification or progress message to the user via Telegram.
 
@@ -262,6 +271,7 @@ class PipelineAgent:
             logger.error(f"Failed to send telegram message: {e}")
             return f"Error sending message: {e}"
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)))
     def send_finished_video(self, youtube_id: str, slice_index: int = 0) -> str:
         """Sends the FINISHED produced video file (the ready-to-publish vertical MP4)
         back to the user's Telegram chat. If the file exceeds Telegram's 50MB upload
@@ -389,6 +399,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)})
 
+    @guarded("bot-action")
     def add_video_to_queue(self, url: str) -> str:
         """Parses a YouTube URL and queues it in the database as PENDING.
 
@@ -406,6 +417,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Exception calling add_video API: {e}"})
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)))
     def process_video_now(self, youtube_id: str) -> str:
         """立即对指定视频跑完整发布流程（下载→字幕→文案→封面→发布），忽略分数阈值，后台执行、断点续跑。
         当用户指名要发布/处理某一条具体视频时调用（例如「发布第3个」「处理 NSn6uQoPO5U」「把 FreeBuff 那条发了」）。
@@ -425,6 +437,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Exception calling process API: {e}"})
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def download_video(self, youtube_id: str) -> str:
         """Downloads a YouTube video using yt-dlp.
 
@@ -438,6 +451,7 @@ class PipelineAgent:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info(f"[Lock] Acquired pipeline lock to download {youtube_id}.")
         try:
+            start_current()
             existing = self._find_downloaded_video(youtube_id)
             if existing:
                 return json.dumps({"ok": True, "message": f"Video already downloaded", "path": existing})
@@ -465,7 +479,7 @@ class PipelineAgent:
             timeout_sec = float(settings.youtube_download_timeout_seconds)
 
             def _agent_runner(cmd: list[str], timeout: Optional[float] = None):
-                return subprocess.run(
+                return run_admitted(
                     cmd,
                     check=True,
                     capture_output=True,
@@ -500,6 +514,7 @@ class PipelineAgent:
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock after download {youtube_id}.")
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def transcribe_and_caption_video(self, youtube_id: str) -> str:
         """Runs the transcription and bilingual caption rendering on the downloaded video.
 
@@ -513,6 +528,7 @@ class PipelineAgent:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info(f"[Lock] Acquired pipeline lock to transcribe {youtube_id}.")
         try:
+            start_current()
             video_file = self._find_downloaded_video(youtube_id)
             if not video_file:
                 return json.dumps({"ok": False, "error": "Downloaded video file not found. Download it first."})
@@ -533,7 +549,7 @@ class PipelineAgent:
             render_env["PYTHONPATH"] = str(self.src_dir)
 
             try:
-                subprocess.run(render_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=render_env)
+                run_admitted(render_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=render_env)
                 if vertical.exists() and vertical.stat().st_size > 1_000_000:
                     return json.dumps({"ok": True, "message": "Transcription and caption rendering successful", "path": str(vertical)})
                 return json.dumps({"ok": False, "error": "Rendered vertical video not found or too small after transcription"})
@@ -546,6 +562,7 @@ class PipelineAgent:
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock after transcribe {youtube_id}.")
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def generate_wechat_copy(self, youtube_id: str) -> str:
         """Generates WeChat Channels copy (title, body description, category) using Gemini/DeepTranslator.
 
@@ -559,6 +576,7 @@ class PipelineAgent:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info(f"[Lock] Acquired pipeline lock to generate copy for {youtube_id}.")
         try:
+            start_current()
             copy_file = self.output_dir / f"{youtube_id}_copy.txt"
             title_file = self.output_dir / f"{youtube_id}_title.txt"
             category_file = self.output_dir / f"{youtube_id}_category.txt"
@@ -588,7 +606,7 @@ class PipelineAgent:
                 "--desc-file", str(desc_file),
             ]
             try:
-                subprocess.run(copy_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
+                run_admitted(copy_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
                 if copy_file.exists() and title_file.exists():
                     return json.dumps({
                         "ok": True,
@@ -606,6 +624,7 @@ class PipelineAgent:
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock after copy generation for {youtube_id}.")
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def generate_video_cover(self, youtube_id: str) -> str:
         """Generates a designed cover image for WeChat Channels.
 
@@ -619,6 +638,7 @@ class PipelineAgent:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info(f"[Lock] Acquired pipeline lock to generate cover for {youtube_id}.")
         try:
+            start_current()
             vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
             if not vertical.exists():
                 return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
@@ -649,7 +669,7 @@ class PipelineAgent:
                 "--provenance-output", str(provenance_file),
             ]
             try:
-                res = subprocess.run(cover_cmd, check=False, capture_output=True, text=True, cwd=str(self.project_root))
+                res = run_admitted(cover_cmd, check=False, capture_output=True, text=True, cwd=str(self.project_root))
                 if res.returncode != 0:
                     return json.dumps({"ok": False, "error": f"Cover generator failed: {res.stderr}"})
                 if _is_dedicated_cover(cover_file):
@@ -662,6 +682,7 @@ class PipelineAgent:
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock after cover generation for {youtube_id}.")
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def upload_to_wechat(self, youtube_id: str) -> str:
         """Uploads the video, cover, copy, and category to WeChat Channels using Playwright.
 
@@ -675,6 +696,7 @@ class PipelineAgent:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info(f"[Lock] Acquired pipeline lock to upload {youtube_id}.")
         try:
+            start_current()
             vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
             if not vertical.exists():
                 return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
@@ -707,7 +729,7 @@ class PipelineAgent:
                 upload_cmd += ["--category-file", str(category_file)]
 
             try:
-                res = subprocess.run(upload_cmd, capture_output=True, text=True, cwd=str(self.project_root))
+                res = run_admitted(upload_cmd, capture_output=True, text=True, cwd=str(self.project_root))
                 if res.returncode == 2:
                     return json.dumps({
                         "ok": False,
@@ -728,6 +750,7 @@ class PipelineAgent:
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock after upload {youtube_id}.")
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)))
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None) -> str:
         """Updates the processing status of a video in the database.
 
@@ -744,6 +767,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Failed to update status: {e}"})
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)))
     def delete_video_from_db(self, youtube_id: str, delete_files: bool = True) -> str:
         """Deletes a video record and its associated local files.
 
@@ -766,6 +790,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Exception during deletion: {e}"})
 
+    @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)))
     def retry_video_in_db(self, youtube_id: str) -> str:
         """Resets a video's status back to PENDING and clears errors, so it can be re-run.
 
@@ -788,6 +813,7 @@ class PipelineAgent:
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)})
 
+    @guarded("bot-action")
     def trigger_wechat_login(self) -> str:
         """Starts a HEADLESS WeChat login and pushes the QR code to Telegram for remote scan.
 
@@ -806,18 +832,37 @@ class PipelineAgent:
             "--state",
             state,
         ]
-        # 注入 Telegram 凭据（wechat_uploader 经 os.environ 读取），使二维码能 sendPhoto 到 Telegram。
-        env = {**os.environ, "PYTHONPATH": str(self.project_root / "src")}
-        if settings.telegram_bot_token:
-            env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
-        if settings.active_telegram_chat_id:
-            env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+        # 每次请求重新探测代理；二维码回到发起命令的管理员会话。
+        extra_env = {"PYTHONPATH": str(self.project_root / "src")}
+        if getattr(self, "chat_id", None):
+            extra_env["TELEGRAM_CHAT_ID"] = str(self.chat_id)
+        env = build_subprocess_env(extra_env, include_gemini=False)
         try:
             # 后台 Bot 的终端可能已撤销，登录子进程不能继承失效的 stdin。
-            subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
-            return json.dumps({"ok": True, "message": "微信登录已启动（无头）。登录二维码将稍后发到这里，请用手机微信扫码；扫码成功后会自动保存登录态并继续。"})
+            proc = subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
+            try:
+                code = proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                threading.Thread(target=self._watch_wechat_login, args=(proc,), daemon=True).start()
+                return json.dumps({"ok": True, "message": "微信登录请求已受理，正在获取二维码；若快捷登录成功则无需扫码。失败会另行通知。"})
+            if code:
+                return json.dumps({"ok": False, "error": self._wechat_login_failure(code)})
+            return json.dumps({"ok": True, "message": "登录流程已完成，请用 /last_login 核对登录状态。"})
         except Exception as e:
-            return json.dumps({"ok": False, "error": f"Failed to launch WeChat login process: {e}"})
+            return json.dumps({"ok": False, "error": f"启动微信登录失败：{type(e).__name__}"})
+
+    @staticmethod
+    def _wechat_login_failure(code: int) -> str:
+        if code == 11:
+            return "未生成新二维码：视频号浏览器会话正被占用。请等待当前登录或上传结束后再发送 /wechat_login。"
+        return f"微信登录未完成（退出码 {code}），旧二维码不可继续使用。请重新发送 /wechat_login；如仍无图片，请检查登录日志与 Telegram 网络。"
+
+    def _watch_wechat_login(self, proc) -> None:
+        """接收子进程最终结果，避免启动成功掩盖稍后的占锁或扫码失败。"""
+        code = proc.wait()
+        logger.info("WeChat login process finished: pid=%s exit=%s", proc.pid, code)
+        if code:
+            self.send_telegram_message(self._wechat_login_failure(code))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -905,6 +950,7 @@ class PipelineAgent:
         ]
         try:
             for _ in range(10):
+                gate().require_running()
                 response = client.chat.completions.create(
                     model=settings.deepseek_model,
                     messages=messages,  # type: ignore[arg-type]
@@ -959,6 +1005,7 @@ class PipelineAgent:
 
     # ── Main Run Entrypoint ───────────────────────────────────────────────────
 
+    @entry
     def run(self, prompt: str) -> str:
         """Starts a GenerativeModel chat session and processes the prompt using Function Calling.
 
@@ -975,6 +1022,7 @@ class PipelineAgent:
         )
         
         for attempt in range(_GEMINI_MAX_ATTEMPTS):
+            gate().require_running()
             try:
                 response = chat.send_message(prompt)
                 return response.text

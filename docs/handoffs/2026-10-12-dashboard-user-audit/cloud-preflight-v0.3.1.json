@@ -1,0 +1,54 @@
+{
+  "recorded_at": "2026-10-12T06:36:17.155Z",
+  "source": "Google Cloud Console visible quota and metrics UI",
+  "project_id": "gen-lang-client-0993011647",
+  "project_name": "anti-gravity",
+  "api": "youtube.googleapis.com",
+  "api_enabled": true,
+  "quota_snapshot": {
+    "observed_local_time": "2026-10-12 14:33 Asia/Shanghai",
+    "day_timezone": "America/Los_Angeles",
+    "general": {
+      "limit": 10000,
+      "used": 510,
+      "remaining": 9490
+    },
+    "search": {
+      "limit": 100,
+      "used": 0,
+      "remaining": 100
+    },
+    "screenshot": "11-cloud-quota-refresh.jpg"
+  },
+  "metrics": {
+    "window": "2026-09-12 14:33:48 to 2026-10-12 14:33:48 UTC+8",
+    "credential_filter_labels": [
+      "anti-gravity-BDC-proj",
+      "video-precessing-youtube-catalog",
+      "Unspecified",
+      "Anonymous",
+      "Google Cloud Console API 密钥"
+    ],
+    "requests": {
+      "channels_list": 3829,
+      "playlist_items_list": 3843,
+      "videos_list": 3296
+    },
+    "note": "Filter labels are available credential categories, not proof that each credential has requests. Aggregate methods cannot identify hosts."
+  },
+  "production_credential_project_binding": "UNVERIFIED",
+  "shared_external_callers": "UNVERIFIED",
+  "youtube_business_api_calls_made_by_this_audit": 0,
+  "production_changes": [],
+  "decision": "Keep search OFF; selected-project quota alone does not satisfy production opening gates.",
+  "production_readback": {
+    "checked_at": "2026-10-12T06:37:30.907Z",
+    "source": "Live keyword workbench DOM",
+    "status": "生产搜索尚未开放；可管理专题和整理已有候选",
+    "enable_manual_search_disabled": true,
+    "search_candidates_disabled": true,
+    "search_usage": 0,
+    "detail_usage": 0,
+    "readback_limitation": "Unauthenticated direct state request returned expected 403; closure verified through normal browser session."
+  }
+}

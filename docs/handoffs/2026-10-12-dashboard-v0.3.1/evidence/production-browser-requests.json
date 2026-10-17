@@ -1,0 +1,591 @@
+{
+  "truncated": true,
+  "hasMore": false,
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/static/css/manual_products.css?v=20261011_1"
+    },
+    {
+      "method": "GET",
+      "path": "/static/css/console_workspace.css?v=20261012-031"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/console_navigation.js?v=20261012-1"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/dashboard_workspace.js?v=20261012-031"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/channel_manager.js?v=1791794736"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/product_picker.js?v=20261011_1"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/manual_products.js?v=20261011_1"
+    },
+    {
+      "method": "GET",
+      "path": "/api/products/manual-options"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=completed&page=1&size=20&search=&channel=&sort=updated_at_desc&score_band=all&error_type=all&status=all&engagement_window_days=3&include_processed=false&include_expired=false&created_window=today_bj&funnel_stage=published"
+    },
+    {
+      "method": "GET",
+      "path": "/api/covers/Ju-JyxDgV7g"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=waitlist&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=active&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=ready&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/videos?tab=error&size=20&created_window=all"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/attention"
+    },
+    {
+      "method": "GET",
+      "path": "/api/funnel?window=today_bj"
+    },
+    {
+      "method": "GET",
+      "path": "/api/console/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/topic-candidates"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/topic_display_preferences.js?v=1"
+    },
+    {
+      "method": "GET",
+      "path": "/static/css/dashboard.css"
+    },
+    {
+      "method": "GET",
+      "path": "/static/css/product_settings.css?v=20261011-redesign"
+    },
+    {
+      "method": "GET",
+      "path": "/static/css/topic_candidates.css?v=1"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/topic_candidates.js?v=20261012-031"
+    },
+    {
+      "method": "GET",
+      "path": "/static/css/console_workspace.css?v=20261012-031"
+    },
+    {
+      "method": "GET",
+      "path": "/static/js/console_navigation.js?v=20261012-1"
+    },
+    {
+      "method": "GET",
+      "path": "/api/topic-candidates/state"
+    },
+    {
+      "method": "GET",
+      "path": "/api/topic-candidates/videos?topic_id=&state=&eligibility=&q=&page=1"
+    }
+  ],
+  "writes": []
+}

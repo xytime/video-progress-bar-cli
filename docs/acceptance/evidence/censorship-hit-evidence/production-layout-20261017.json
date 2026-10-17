@@ -1,0 +1,171 @@
+{
+  "at": "2026-10-17T14:29:46.066163+08:00",
+  "deployment": {
+    "id": "ac690d3c2c5d48f6b82106006fdc1e30",
+    "target": "0c734856c3b41ea24ed09af7a944af669e912c27",
+    "state": "COMPLETE",
+    "done": [
+      "baseline",
+      "freeze",
+      "stop",
+      "backup",
+      "adopt",
+      "start",
+      "resume",
+      "restore",
+      "verify"
+    ],
+    "completed_at": "2026-10-17T14:28:41.505544+08:00"
+  },
+  "source_hash": "accd085cefebde8a5a550549a3b8d3e490db14935dc2247769396c1111e454d2",
+  "roles": [
+    {
+      "role": "auto-pipeline",
+      "pid": 27931,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "ready-supervisor",
+      "pid": 27931,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "ui",
+      "pid": 27931,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "keepalive-watchdog",
+      "pid": 27931,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "queue-runner",
+      "pid": 27931,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    },
+    {
+      "role": "ready-worker",
+      "pid": 28347,
+      "birth_matches": true,
+      "hash_matches": true,
+      "cwd_matches": true
+    }
+  ],
+  "preservation": {
+    "dirty_files": 26,
+    "untracked_paths": 1245,
+    "dirty_exactly_preserved": true,
+    "untracked_exactly_preserved": true,
+    "runtime_source_unchanged_by_template_fix": true,
+    "native_sources_final": true
+  },
+  "profile": {
+    "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/keyword-rollout.json",
+    "error": false,
+    "identity": "0d370b08315fee81c05549f60fcc804a75b1cc992c420742d95bcc227b35a6bb"
+  },
+  "profile_verified": true,
+  "control": {
+    "mode": "DISCOVERY_ONLY",
+    "version": 68
+  },
+  "collection": {
+    "scheduler_enabled": true,
+    "admission_available": true,
+    "automatic_used": 4,
+    "id": 1,
+    "admission": 1,
+    "version": 22,
+    "runtime_code": "REFRESH_OR_ADMISSION",
+    "runtime_at": "2026-10-17T06:29:41.580730+00:00"
+  },
+  "budget": {
+    "day": "2026-10-16",
+    "search": 4,
+    "general": 9
+  },
+  "maintenance": {
+    "schema": 1,
+    "version": 74,
+    "state": "RUNNING",
+    "reason": "部署 ac690d3c2c5d48f6b82106006fdc1e30",
+    "at": 1792218518.670597,
+    "maintenance_age_seconds": 0,
+    "maintenance_overdue": false,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE"
+  },
+  "evidence": {
+    "status": "VERIFIED_REPLAY",
+    "incident_id": 203,
+    "rule_id": "blocklist.P0.en.china_sensitive_negative_news",
+    "rule_version": "1190d2cf041c1a84",
+    "input_hash": "9bc476d4bf798fac",
+    "review_stage": "source_subtitle_preflight",
+    "message": "原审计输入及规则指纹一致；以下为只读复核，不代表放行。",
+    "terms": [
+      {
+        "term": "china",
+        "actual": "China",
+        "locations": [
+          {
+            "file": "jD_5JhBOJWg_source_subtitle.en-orig.vtt",
+            "start": "00:06:21.280",
+            "end": "00:06:23.630"
+          }
+        ],
+        "source": "字幕",
+        "timing_available": true
+      },
+      {
+        "term": "killed",
+        "actual": "killed",
+        "locations": [
+          {
+            "file": "jD_5JhBOJWg_source_subtitle.en-orig.vtt",
+            "start": "00:06:23.699",
+            "end": "00:06:27.200"
+          }
+        ],
+        "source": "字幕",
+        "timing_available": true
+      }
+    ],
+    "context": "idemic of\ncloses. In 1910, an epidemic of\ncloses. In 1910, an epidemic of pneumonic plague swept through\npneumonic plague swept through\npneumonic plague swept through northeastern China, Manchuria, and\nnortheastern China, Manchuria, and\nnortheastern China, Manchuria, and killed tens of thousands of people. The\nkilled tens of thousands of people. The\nkilled tens of thousands of people. The doctor who led the response was named\ndoctor who led the response ",
+    "gap": 87,
+    "max_gap": 240,
+    "normalization": "NFKC、小写、压缩空白、英文单词边界",
+    "basis": "近距离共现规则",
+    "timing_note": "时间为原 VTT cue 区间，重叠自动字幕保持原样。"
+  },
+  "read_only": {
+    "compared_with_pre_deployment": {
+      "task": true,
+      "incidents": true,
+      "blacklisted": true,
+      "manual_p0_approved": true,
+      "ledger": true
+    },
+    "no_retry_or_release": true,
+    "production_browser_GET_only": true
+  },
+  "task_6134": {
+    "id": 6134,
+    "youtube_id": "jD_5JhBOJWg",
+    "status": "FAILED",
+    "blacklisted": true,
+    "manual_p0_approved": false
+  }
+}

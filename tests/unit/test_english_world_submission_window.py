@@ -78,9 +78,11 @@ def test_submission_defers_without_claiming_when_pipeline_lock_is_busy(monkeypat
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter.settings, "wechat_publishing_paused", False)
     monkeypatch.setattr(type(submitter.settings), "is_english_world_publish_window", lambda _self: True)
-    monkeypatch.setattr(submitter.fcntl, "flock", lambda *_args: (_ for _ in ()).throw(BlockingIOError()))
-
-    assert submitter.submit("b" * 32) == submitter.EXIT_DEFERRED
+    lock_path = tmp_path / "output" / "wechat_publish_priority.lock"
+    lock_path.parent.mkdir(parents=True)
+    with lock_path.open("a+") as held:
+        submitter.fcntl.flock(held, submitter.fcntl.LOCK_EX | submitter.fcntl.LOCK_NB)
+        assert submitter.submit("b" * 32) == submitter.EXIT_DEFERRED
     assert calls == [("get", "b" * 32)]
 
 

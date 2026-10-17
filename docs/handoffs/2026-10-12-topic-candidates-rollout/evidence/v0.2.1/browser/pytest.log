@@ -1,0 +1,13 @@
+.................................                                        [100%]
+=============================== warnings summary ===============================
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/starlette/testclient.py:445: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+33 passed, 6 warnings in 49.95s

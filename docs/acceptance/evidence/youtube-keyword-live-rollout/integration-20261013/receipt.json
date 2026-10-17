@@ -1,0 +1,54 @@
+{
+  "source": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/keyword-integration-1kcxodgm/repo",
+  "started_at": "2026-10-13T14:39:18.658299+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ygw0g6go",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ygw0g6go/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.078
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_topic_runtime_failures.py",
+    "tests/unit/test_topic_search_adapter.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_database_codex_text_recovery.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_database_channel_funnel.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "8ef6d96acae885e8de41bb1456a098ca2e18e68e9f0069440ebab80d618ab531",
+  "profile_sha256": "f7df516626d0a1f1b9954163946cb945d2d785b89fde1b98e712f85d38a12e97",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ygw0g6go/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "8b5b0c0370caf2191bb1f9d71a55cde6e3f000199487ff45e3f716e6e4825a95",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 100.251
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ygw0g6go/sandbox"
+  },
+  "finished_at": "2026-10-13T14:41:00.657405+00:00"
+}

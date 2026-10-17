@@ -1,0 +1,48 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "started_at": "2026-10-13T17:03:54.827873+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-3j58y0eh",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-3j58y0eh/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.089
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "86a7fbf1fa8b70a91f0326e78c9f547fa75ab81bae5b6d7b5bb83eb0bc4f7fe2",
+  "profile_sha256": "7bb598aa43a9239b44d8fd333d476f0506d483f1e0ab9d4e40254a963a902173",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-3j58y0eh/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "699c3092a7edc32f583f03bd28f84b551dc4e298257868d8b082f8867e9ccfa1",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 75.483
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-3j58y0eh/sandbox"
+  },
+  "finished_at": "2026-10-13T17:05:11.834254+00:00"
+}

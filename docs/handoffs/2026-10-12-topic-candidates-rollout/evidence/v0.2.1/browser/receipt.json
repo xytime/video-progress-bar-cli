@@ -1,0 +1,29 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-1331gvtq/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.132
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_dashboard_interactions.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "8848dc2978749241e42c65b9bbafaca36a43485b8d2319cd1d06b5b5ccf8770c",
+  "profile_sha256": "b5698eef83cfeff9d5f6800dc68f511aeeb0711b1a6e6baa98d7fb13661ee294",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-1331gvtq/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "222b8552cc72b361470934792cc586edaf40f33413967049575551e978d64377",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 50.883
+  },
+  "finished_at": "2026-10-12T04:45:06.216502+00:00"
+}

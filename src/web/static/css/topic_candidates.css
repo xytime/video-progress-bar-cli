@@ -1,0 +1,33 @@
+/* Modification History: 1.0.0 | 2026-10-11 | Codex | 候选工作台布局，复用后台主题与商品页控件。 */
+.topic-workbench section { margin-top: 18px; }
+.topic-workbench .page-header { position: static; }
+/* 主操作悬停保留主题底色，避免继承通用按钮的透明底色后文字失去对比。 */
+.topic-workbench button.primary:hover { background: var(--product-action); color: var(--bg); }
+.topic-workbench .topic-row, .topic-workbench .candidate-card { border-top: 1px solid var(--border); padding: 14px 0; overflow-wrap: anywhere; }
+.topic-workbench .topic-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.topic-workbench .topic-row h3, .topic-workbench .candidate-card h3 { font-size: 1rem; margin-bottom: 6px; }
+.topic-workbench .topic-actions, .topic-workbench .candidate-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.topic-workbench .candidate-filters { display: grid; grid-template-columns: 1fr 1fr 1fr 2fr; gap: 12px; margin-bottom: 14px; }
+.topic-workbench .candidate-filters label { display: block; margin-bottom: 5px; }
+.topic-workbench .candidate-search { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.topic-workbench .candidate-search label { grid-column: 1 / -1; }
+.topic-workbench .candidate-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.topic-workbench .candidate-pagination div { display: flex; gap: 8px; }
+.topic-workbench .candidate-card p { margin: 8px 0; }
+.topic-workbench .candidate-actions a { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
+.topic-workbench .field-error { min-height: 1.25em; color: var(--red); font-size: .875rem; }
+.topic-workbench [aria-invalid="true"] { border-color: var(--red); }
+.topic-workbench #feedback { min-height: 1.5em; }
+.topic-workbench #topic-form label { display: block; margin: 12px 0 6px; }
+.topic-workbench #topic-form input, .topic-workbench #topic-form select { width: 100%; }
+.topic-workbench button, .topic-workbench input, .topic-workbench select, .topic-workbench a { min-height: 40px; }
+.topic-workbench button:focus-visible, .topic-workbench a:focus-visible, .topic-workbench input:focus-visible, .topic-workbench select:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.topic-workbench dialog { max-width: min(560px, calc(100vw - 28px)); }
+.topic-workbench .copy-link { width: 100%; margin-top: 8px; }
+@media (max-width: 700px) {
+  .topic-workbench .topic-row { grid-template-columns: 1fr; }
+  .topic-workbench .candidate-filters { grid-template-columns: 1fr 1fr; }
+  .topic-workbench .candidate-search { grid-column: 1 / -1; }
+  .topic-workbench .page-header, .topic-workbench .status-banner, .topic-workbench .section-head { align-items: flex-start; flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .topic-workbench *, .topic-workbench *::before { animation: none !important; transition: none !important; } }

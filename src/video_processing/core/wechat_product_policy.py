@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
+from .video_groups import VIDEO_GROUPS, GROUP_LABELS, classify_video
 
 
 WALLSTREET_CHANNEL_ID = "UCTK_cv-y88CScoudcXnS1Ew"
@@ -143,8 +144,6 @@ class ProductRule:
     role: ProductRole = ProductRole.DEFAULT
 
 
-VIDEO_GROUPS = ("english_world", "wallstreet", "ted", "ai_news", "other")
-GROUP_LABELS = dict(zip(VIDEO_GROUPS, ("英语世界短视频", "华尔街事实炸弹", "TED 类", "AI 相关资讯", "其他")))
 
 
 @dataclass(frozen=True)
@@ -189,16 +188,7 @@ class ProductPolicy:
             raise ValueError("视频上下文字段必须为字符串")
         group, group_reason = "other", "未命中特定类型"
         if self.profiles:
-            if content_type == "ENGLISH_WORLD_SHORT":
-                group, group_reason = "english_world", "内容类型 ENGLISH_WORLD_SHORT"
-            else:
-                for name in ("wallstreet", "ted", "ai_news"):
-                    if source_channel_id and source_channel_id.strip() in self.profiles[name].channel_ids:
-                        group, group_reason = name, "来源频道精确匹配"
-                        break
-                else:
-                    if product_topic == "AI":
-                        group, group_reason = "ai_news", "显式主题 AI"
+            group, group_reason = classify_video(dict(context), {k: p.channel_ids for k, p in self.profiles.items()})
         role, rule_id, aliases = ProductRole.DEFAULT, "DEFAULT", ()
         if product_alias is not None:
             rule_id, aliases = "MANUAL", (product_alias,)

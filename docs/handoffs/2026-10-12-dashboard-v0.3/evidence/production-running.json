@@ -1,0 +1,74 @@
+{
+  "at": 1791785323.428163,
+  "hosts": {
+    "localhost": {
+      "home": 200,
+      "topic_page": 200,
+      "maintenance": {
+        "state": "RUNNING",
+        "phase": "DRAINING"
+      },
+      "topic": {
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "state": "PAUSED"
+      },
+      "mode_rejected": {
+        "detail": {
+          "code": "SEARCH_CLOSED",
+          "message": "生产搜索尚未开放"
+        }
+      },
+      "search_rejected": {
+        "detail": {
+          "code": "SEARCH_CLOSED",
+          "message": "生产搜索尚未开放"
+        }
+      },
+      "mode": "OFF",
+      "jobs": 0,
+      "budget": {
+        "day": "2026-10-11",
+        "search": 0,
+        "general": 0
+      }
+    },
+    "127.0.0.1": {
+      "home": 200,
+      "topic_page": 200,
+      "maintenance": {
+        "state": "RUNNING",
+        "phase": "DRAINING"
+      },
+      "topic": {
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "state": "PAUSED"
+      },
+      "mode_rejected": {
+        "detail": {
+          "code": "SEARCH_CLOSED",
+          "message": "生产搜索尚未开放"
+        }
+      },
+      "search_rejected": {
+        "detail": {
+          "code": "SEARCH_CLOSED",
+          "message": "生产搜索尚未开放"
+        }
+      },
+      "mode": "OFF",
+      "jobs": 0,
+      "budget": {
+        "day": "2026-10-11",
+        "search": 0,
+        "general": 0
+      }
+    }
+  },
+  "lan": {
+    "/topic-candidates": 403,
+    "/api/topic-candidates/health": 403,
+    "/api/topic-candidates/state": 403
+  }
+}

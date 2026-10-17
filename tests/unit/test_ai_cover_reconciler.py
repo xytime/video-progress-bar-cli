@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-10-01 | Codex | 验证 Luna 新任务路由与独立来源回执 |
 """
 import fcntl
@@ -34,7 +35,7 @@ def setup_task(tmp_path, monkeypatch, age=0, luna=False, channel='channel'):
     monkeypatch.setattr(reconciler,'settings',SimpleNamespace(enable_codex_cover_queue=True,
         enable_douyin_browser_publishing=False,
         ai_cover_primary_provider='agy',ai_cover_queue_dir='queue',ai_cover_finish_dir='finish',
-        enable_antigravity_cover_fallback=False))
+        enable_antigravity_cover_fallback=False, ai_cover_provider_cooldown_seconds=900))
     monkeypatch.setattr(reconciler,'PipelineDB',lambda:db)
     return queue,task,db
 
@@ -80,9 +81,10 @@ def test_enrollment_failure_rolls_back_cover_readiness(tmp_path,monkeypatch):
     assert db.get_wallstreet_pairs()==[]
 
 
-def test_luna_eligible_task_records_distinct_source(tmp_path, monkeypatch):
-    queue, task, db = setup_task(tmp_path, monkeypatch, luna=True)
-    (task.finish_dir / 'antigravity_attempt.json').write_text(json.dumps({'status':'failed','attempt_number':3}))
+@pytest.mark.parametrize("age,attempts", [(0, 3), (33, 1), (33, 0)])
+def test_luna_eligible_task_records_distinct_source(tmp_path, monkeypatch, age, attempts):
+    queue, task, db = setup_task(tmp_path, monkeypatch, luna=True, age=age)
+    (task.finish_dir / 'antigravity_attempt.json').write_text(json.dumps({'status':'failed','attempt_number':attempts}))
     reconciler.settings.enable_codex_luna_cover_fallback = True
     reconciler.settings.codex_luna_cover_timeout_seconds = 180
     reconciler.settings.codex_luna_cover_review_timeout_seconds = 60

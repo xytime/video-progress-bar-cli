@@ -1,0 +1,93 @@
+{
+  "at": 1791794422.592749,
+  "original_path": "scripts/generate_hillary_editorial_cover.py",
+  "hold_path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/.maintenance-source-hold/dashboard-v031/generate_hillary_editorial_cover.py",
+  "sha256": "577779cd3d059c227b85cb5137c0a7dfb045e42bf9067575e590c126220a9ae0",
+  "inode": 26293749,
+  "mtime_ns": 1791789842840517275,
+  "hash_before": "a82fb8a900dcbc00c3375b4b695ea12a29273774259f8daf16d8402675d3fcb0",
+  "hash_restored": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+  "owner": {
+    "role": "ui",
+    "protocol": 1,
+    "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+    "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+    "birth": "1791785235.299121",
+    "pid": 32397,
+    "started_at": "2026-10-12T06:07:17.826985+00:00"
+  },
+  "inspection": {
+    "schema": 1,
+    "version": 3,
+    "state": "MAINTENANCE",
+    "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+    "at": 1791794356.097245,
+    "active": [],
+    "unknown": [
+      {
+        "code": "SOURCES_NOT_VERIFIED"
+      }
+    ],
+    "phase": "UNKNOWN",
+    "workers": {
+      "ui": {
+        "role": "ui",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785235.299121",
+        "pid": 32397,
+        "started_at": "2026-10-12T06:07:17.826985+00:00"
+      },
+      "auto-pipeline": {
+        "role": "auto-pipeline",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785235.299121",
+        "pid": 32397,
+        "started_at": "2026-10-12T06:07:17.952300+00:00"
+      },
+      "queue-runner": {
+        "role": "queue-runner",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785235.299121",
+        "pid": 32397,
+        "started_at": "2026-10-12T06:07:17.954222+00:00"
+      },
+      "ready-supervisor": {
+        "role": "ready-supervisor",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785235.299121",
+        "pid": 32397,
+        "started_at": "2026-10-12T06:07:17.950801+00:00"
+      },
+      "keepalive-watchdog": {
+        "role": "keepalive-watchdog",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785235.299121",
+        "pid": 32397,
+        "started_at": "2026-10-12T06:07:17.955073+00:00"
+      },
+      "ready-worker": {
+        "role": "ready-worker",
+        "protocol": 1,
+        "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791785298.251257",
+        "pid": 33005,
+        "started_at": "2026-10-12T06:08:18.623166+00:00"
+      }
+    },
+    "safe": false
+  },
+  "source_manifest_count": 363,
+  "source_manifest_sha256": "7839d177ae4591934e9f756ed336261f5e6730dac5491c40cf76a8fe91274526",
+  "full_manifest_location": "local private deployment backup/source-reconciliation.json"
+}

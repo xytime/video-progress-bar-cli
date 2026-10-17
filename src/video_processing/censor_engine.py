@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description                                                                  |
 |---------|------------|----------------------------------------|------------------------------------------------------------------------------|
+| evidence-v1 | 2026-10-17 | Codex | 共用原共现遍历，只读解释真实词及原文位置，判定和规则不变。 |
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发           |
 | 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
 | 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
@@ -603,7 +604,8 @@ def current_rules_fingerprint() -> str:
     """返回当前生效规则包的短 hash，用于事故复盘时确认命中依据。"""
     blocklist, channel_policy = _load_external_rules()
     payload = json.dumps(
-        {"blocklist": blocklist, "channel_policy": channel_policy},
+        {"blocklist": blocklist, "channel_policy": channel_policy,
+         "matcher": "cp-latin-boundary-v1"},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -660,6 +662,53 @@ def _strip_spaces(text: str) -> str:
     return re.sub(r"\s", "", text)
 
 
+def _channel_zh_hit(normalized_text: str, dense_text: str, word: str) -> bool:
+    """中文词仍防拆字；词库中的拉丁缩写按边界匹配，保留 C I A 防绕过。"""
+    acronym = unicodedata.normalize("NFKC", word)
+    if not re.fullmatch(r"[A-Z]{2,}", acronym):
+        return _strip_spaces(_normalize(word)) in dense_text
+    return next(_acronym_matches(normalized_text, acronym), None) is not None
+
+
+def _acronym_matches(normalized_text: str, acronym: str):
+    def continues_word(char: str) -> bool:
+        return (char.isdigit() or char == "_" or
+                "LATIN" in unicodedata.name(char, "") or
+                unicodedata.category(char).startswith("M"))
+
+    pattern = r"\s*".join(re.escape(char) for char in acronym.lower())
+    for match in re.finditer(pattern, normalized_text):
+        before = normalized_text[match.start() - 1] if match.start() else ""
+        after = normalized_text[match.end():match.end() + 1]
+        if not (before and continues_word(before)) and not (after and continues_word(after)):
+            yield match
+
+
+def matched_excerpt(text: str, matched: str, radius: int = 45) -> str:
+    """按原文位置截取命中附近，保留大小写/全角/拆空格；共现分别展示。"""
+    normalized, positions = [], []
+    for index, char in enumerate(text):
+        for normalized_char in unicodedata.normalize("NFKC", char).lower():
+            normalized.append(normalized_char)
+            positions.append(index)
+    normalized = "".join(normalized)
+    excerpts = []
+    for term in matched.split("+"):
+        acronym = unicodedata.normalize("NFKC", term)
+        term = _strip_spaces(_normalize(term))
+        if not term:
+            continue
+        match = (next(_acronym_matches(normalized, acronym), None) if re.fullmatch(r"[A-Z]{2,}", acronym)
+                 else re.search(r"\s*".join(re.escape(char) for char in term), normalized))
+        if match:
+            start = max(0, positions[match.start()] - radius)
+            end = min(len(text), positions[match.end() - 1] + 1 + radius)
+            excerpt = ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+            if excerpt not in excerpts:
+                excerpts.append(excerpt)
+    return " / ".join(excerpts) or "共现规则命中，请核实完整原文"
+
+
 # ── 豁免检查 (Exemption Check) ───────────────────────────────────────────────
 
 def _is_exempted(normalized_text: str, exemptions: list[str]) -> bool:
@@ -689,8 +738,8 @@ def _term_spans_en(normalized_text: str, term: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in re.finditer(rf"\b{re.escape(norm_term)}\b", normalized_text)]
 
 
-def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[str]:
-    """返回首个近距离共现命中，matched 形如 "china+dictatorship"。"""
+def _cooccurrence_detail(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[dict]:
+    """保留原遍历顺序，返回判定实际选择的首组词及位置。"""
     if not text or not rules:
         return None
     span_fn = _term_spans_zh if channel == "zh" else _term_spans_en
@@ -710,8 +759,54 @@ def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text:
                     for c_start, c_end in context_spans:
                         gap = max(c_start - p_end, p_start - c_end, 0)
                         if gap <= max_gap:
-                            return rule.get("matched") or f"{primary}+{context}"
+                            return {"matched": rule.get("matched") or f"{primary}+{context}",
+                                    "terms": [primary, context], "spans": [(p_start, p_end), (c_start, c_end)],
+                                    "gap": gap, "max_gap": max_gap}
     return None
+
+
+def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[str]:
+    """返回首个近距离共现命中；解释与判定共用同一遍历。"""
+    detail = _cooccurrence_detail(text, rules, channel=channel, dense_text=dense_text)
+    return detail["matched"] if detail else None
+
+
+def explain_blocklist_hit(text: str, result: CensorResult) -> Optional[dict]:
+    """只读解释已判定命中；不能定位或归一化不等价时不猜测原文位置。"""
+    if result.level not in ("P0", "P1", "P2") or result.channel not in ("zh", "en"):
+        return None
+    channel = result.channel
+    normalized = _normalize(text)
+    haystack = _strip_spaces(normalized) if channel == "zh" else normalized
+    rule = _get_blocklist()[result.level]
+    if result.matched in rule[channel]:
+        spans = (_term_spans_zh if channel == "zh" else _term_spans_en)(haystack, result.matched)
+        detail = {"matched": result.matched, "terms": [result.matched], "spans": spans[:1],
+                  "gap": None, "max_gap": None}
+    else:
+        detail = _cooccurrence_detail(normalized, rule.get("cooccurrence_" + channel, []),
+                                      channel=channel, dense_text=_strip_spaces(normalized))
+    if not detail or detail["matched"] != result.matched or not detail["spans"]:
+        return None
+    # 映射回原文，同时核实逐字符处理与引擎整串 NFKC 完全一致；组合字符不一致就拒绝定位。
+    chars, positions = [], []
+    for index, char in enumerate(text):
+        for normalized_char in unicodedata.normalize("NFKC", char).lower():
+            if normalized_char.isspace():
+                if channel == "en" and chars and chars[-1] != " ":
+                    chars.append(" "); positions.append(index)
+            else:
+                chars.append(normalized_char); positions.append(index)
+    if chars and chars[-1] == " ":
+        chars.pop(); positions.pop()
+    if "".join(chars) != haystack:
+        return None
+    raw_spans = [(positions[start], positions[end - 1] + 1) for start, end in detail["spans"]]
+    start, end = min(s[0] for s in raw_spans), max(s[1] for s in raw_spans)
+    return {**detail, "raw_spans": raw_spans,
+            "context": text[max(0, start - 180):min(len(text), end + 180)],
+            "channel": channel, "level": result.level,
+            "normalization": "NFKC、小写、压缩空白" + ("、中文去空白" if channel == "zh" else "、英文单词边界")}
 
 
 # ── 主检测函数 (Main Censor Function) ─────────────────────────────────────────
@@ -852,7 +947,7 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
     # 中文：去空格后做连续子串匹配（防拆字绕过），返回首个命中的原始词。
     def _find_zh(words: list[str]) -> Optional[str]:
         for word in words:
-            if _strip_spaces(_normalize(word)) in zh_dense:
+            if _channel_zh_hit(zh_norm, zh_dense, word):
                 return word
         return None
 
@@ -974,18 +1069,21 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
     # ── Channel Policy（硬命中词 + 国名/冲突共现）────────────────────────────────
     cp = _get_channel_policy()
     cp_tag = cp["tag"]
+    def _cp_zh_hit(word: str) -> bool:
+        return _channel_zh_hit(zh_norm, zh_dense, word)
+
     if zh_norm:
         for word in cp["zh"]:
-            if _zh_hit(word):
+            if _cp_zh_hit(word):
                 _add(word, "CP", cp_tag, "zh")
-        zh_country = [w for w in cp["country_zh"] if _zh_hit(w)]
-        zh_conflict = [w for w in cp["conflict_zh"] if _zh_hit(w)]
+        zh_country = [w for w in cp["country_zh"] if _cp_zh_hit(w)]
+        zh_conflict = [w for w in cp["conflict_zh"] if _cp_zh_hit(w)]
         if zh_country and zh_conflict:  # 仅当国名与冲突词共现时才视为命中
             for c in zh_country + zh_conflict:
                 _add(c, "CP", cp_tag, "zh")
         # [Claude_Opus_4.8] v1.9.0 🅱️：政治人名/党名 + 政治语境/冲突词 共现
-        zh_person = [w for w in cp.get("person_zh", []) if _zh_hit(w)]
-        zh_pctx = [w for w in cp.get("policy_context_zh", []) if _zh_hit(w)]
+        zh_person = [w for w in cp.get("person_zh", []) if _cp_zh_hit(w)]
+        zh_pctx = [w for w in cp.get("policy_context_zh", []) if _cp_zh_hit(w)]
         if zh_person and (zh_pctx or zh_conflict):
             for c in zh_person + zh_pctx:
                 _add(c, "CP", cp_tag, "zh")

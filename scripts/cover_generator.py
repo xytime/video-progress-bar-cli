@@ -16,6 +16,8 @@
 | 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
 | 2.7.0   | 2026-08-03 | Codex                        | 来源清单写入无大面积遮罩版式硬门槛，旧缓存不得继续复用且 Pillow 兜底去卡片 |
 | 2.8.0   | 2026-09-18 | Antigravity                  | 增加 --payload-file 参数，消除 CLI 长 JSON 字符串转义脆弱性 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 import os
@@ -33,6 +35,9 @@ from video_processing.core.cover_policy import compliant_cover_layout_policy
 W, H = 1080, 1920
 # 视频号等平台使用的 6:7 封面安全尺寸。
 COVER_W, COVER_H = 1080, 1260
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def get_font_path():
     paths = [
@@ -314,6 +319,7 @@ def _applied_creative_brief(payload: dict, layout: dict) -> dict:
     }
 
 
+@single_script
 def main():
     # [Gemini_3.5_Flash_planning] 支持 --payload 参数接入 CoverEngine v2.0，同时支持 Pillow 降级兜底
     parser = argparse.ArgumentParser(description="Generate a dedicated non-frame video cover.")

@@ -6,6 +6,7 @@
 | 1.7.0   | 2026-10-05 | Codex | 提供冷却与逐段翻译检查点的原子 JSON 写入。 |
 | 1.6.1   | 2026-09-23 | Antigravity | 修复 find_downloaded_video 中小于 min_size 的无效文件在 quarantine_invalid=True 时未被隔离的缺陷 |
 | 1.6.0   | 2026-09-23 | Antigravity | 下沉统一媒体验真 verify_downloaded_media；find_downloaded_video 统一支持音视频双轨验真与损坏隔离 |
+| evidence-v1 | 2026-10-17 | Codex | VTT 保留 cue 时间，与既有纯文本共用解析截断。 |
 | 1.5.0   | 2026-09-23 | Codex           | 校验音视频轨道；降级下载保留完整格式流及可续传片段。 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | find_downloaded_video 单一真相源（bot 与管线共用）                  |
 | 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | 新增 read_subtitle_text（.ass 纯文本，管线字幕审查与复核 UI 共用）   |
@@ -324,7 +325,12 @@ def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
     内容审查。自动字幕可能包含重叠/渐进式 cue，函数保留原文而不尝试去重，宁可
     审查更完整的源文本，也不能因猜测性合并漏掉敏感片段。
     """
-    parts: List[str] = []
+    return "\n".join(cue["text"] for cue in read_webvtt_cues(subtitle_files, max_chars))
+
+
+def read_webvtt_cues(subtitle_files: Iterable[Path], max_chars: int = 40000) -> list[dict]:
+    """与审查原文共用解析和截断，额外保留 cue 时间及来源，不合并重叠字幕。"""
+    parts: list[dict] = []
     total = 0
     for subtitle_file in sorted(Path(path) for path in subtitle_files):
         try:
@@ -334,6 +340,7 @@ def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
 
         in_cue = False
         cue_lines: List[str] = []
+        timing = ""
 
         def flush_cue() -> bool:
             nonlocal total
@@ -343,7 +350,10 @@ def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
             cue_lines.clear()
             if not text:
                 return False
-            parts.append(text)
+            times = timing.split("-->", 1)
+            end_parts = times[1].strip().split() if len(times) > 1 else []
+            parts.append({"text": text, "file": subtitle_file.name,
+                          "start": times[0].strip(), "end": end_parts[0] if end_parts else ""})
             total += len(text)
             return total >= max_chars
 
@@ -351,21 +361,22 @@ def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
             line = raw_line.strip()
             if "-->" in line:
                 if flush_cue():
-                    return "\n".join(parts)
+                    return parts
+                timing = line
                 in_cue = True
                 continue
             if not in_cue:
                 continue
             if not line:
                 if flush_cue():
-                    return "\n".join(parts)
+                    return parts
                 in_cue = False
                 continue
             cue_lines.append(line)
 
         if flush_cue():
-            return "\n".join(parts)
-    return "\n".join(parts)
+            return parts
+    return parts
 
 
 def safe_remove(path: Path) -> bool:

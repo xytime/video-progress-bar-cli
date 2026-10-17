@@ -8,6 +8,8 @@ PipelineManager，不调用下载、渲染或发布链路，因此不会改变�
 | --- | --- | --- | --- |
 | 1.0.1 | 2026-08-20 | Codex | 对显式指定源片提供候选分析前的时间轴字幕可用性检查 |
 | 1.0.0 | 2026-08-20 | Codex | 新增独立 Highlight Job 的候选分析和计划落盘服务 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from .miner import mine_candidates, parse_webvtt_cues
 
 logger = logging.getLogger(__name__)
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
 
 class HighlightJobService:
     """只读源片、独立落盘的 Highlight Job 服务。"""
@@ -50,6 +54,7 @@ class HighlightJobService:
         """判断源片是否已有可供候选分析的带时间轴字幕。"""
         return self._find_source_subtitle(youtube_id) is not None
 
+    @guarded("highlight", lambda self, job_id: "highlight:" + str(job_id))
     def analyze(self, job_id: str) -> dict[str, Any] | None:
         """领取并分析一个 Highlight Job；同一 Job 只会被一个调用者执行。"""
         job = self.db.claim_highlight_job_for_analysis(job_id)

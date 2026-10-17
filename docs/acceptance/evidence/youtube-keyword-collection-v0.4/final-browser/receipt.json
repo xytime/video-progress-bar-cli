@@ -1,0 +1,32 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-e3pq_gx4/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.09
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/browser/test_dashboard_workspace.py",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/browser/test_manual_product_selection_browser.py",
+    "tests/unit/test_dashboard_interactions.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "cfbc06e4667429c75fc2e2a1c3e8c6f06d4f951c0963b6086ba650834ad84064",
+  "profile_sha256": "64dd580b64a9d204fc2f51f4c5b3d04d4aa5d48a786a443b25543d46d6fe0323",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-e3pq_gx4/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "ce9de51efe22750f5b5329ec35e45fb961cbce4b74e63b83907b6abdba8c2cae",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 57.179
+  },
+  "finished_at": "2026-10-13T09:18:35.203356+00:00"
+}

@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-10-17T11:57:00+08:00",
+  "source": "Google Cloud existing logged-in quota page; refreshed; accessibility text readback",
+  "project": "gen-lang-client-0993011647",
+  "api": "youtube.googleapis.com",
+  "search": {
+    "used": 3,
+    "limit": 100
+  },
+  "general": {
+    "used": 338,
+    "limit": 10000
+  },
+  "credential_material_read": false
+}

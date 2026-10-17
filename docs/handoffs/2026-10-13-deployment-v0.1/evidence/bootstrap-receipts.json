@@ -1,0 +1,167 @@
+[
+  {
+    "step": "baseline",
+    "receipt_sha256": "e48283b96bcfb80167bacb1a803a726ac2338497ce7448477c8f3924cd96a591",
+    "ok": true,
+    "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4"
+  },
+  {
+    "step": "freeze",
+    "receipt_sha256": "4b488cc54852bee8a795e36db7e20429088ab145023d4bfaeb4f240db1622f40",
+    "ok": true,
+    "safe": true,
+    "state": "MAINTENANCE",
+    "version": 5,
+    "active": [],
+    "unknown": [],
+    "workers": {
+      "ui": {
+        "role": "ui",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794804.363831",
+        "pid": 24148,
+        "started_at": "2026-10-12T08:46:46.077778+00:00"
+      },
+      "auto-pipeline": {
+        "role": "auto-pipeline",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794804.363831",
+        "pid": 24148,
+        "started_at": "2026-10-12T08:46:46.173290+00:00"
+      },
+      "queue-runner": {
+        "role": "queue-runner",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794804.363831",
+        "pid": 24148,
+        "started_at": "2026-10-12T08:46:46.173918+00:00"
+      },
+      "ready-supervisor": {
+        "role": "ready-supervisor",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794804.363831",
+        "pid": 24148,
+        "started_at": "2026-10-12T08:46:46.173338+00:00"
+      },
+      "keepalive-watchdog": {
+        "role": "keepalive-watchdog",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794804.363831",
+        "pid": 24148,
+        "started_at": "2026-10-12T08:46:46.173892+00:00"
+      },
+      "ready-worker": {
+        "role": "ready-worker",
+        "protocol": 1,
+        "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791794942.364211",
+        "pid": 24650,
+        "started_at": "2026-10-12T08:49:02.767402+00:00"
+      }
+    }
+  },
+  {
+    "step": "stop",
+    "receipt_sha256": "9e94ed52df76d518471bbf0220699fece63c0d9e94b62e93f47fbd8a4d86594c",
+    "ok": true
+  },
+  {
+    "step": "backup",
+    "receipt_sha256": "22ea127ca8df0231cd294ffbb235aa7db3f38b8339bc0aa6bcfe4e922136dfb3",
+    "ok": true,
+    "backup": {
+      "sha256": "82902f7660b215d257a1cc24c64480c22cdce2a057526d476c5759c05df6424e",
+      "integrity": "ok",
+      "bytes": 22786048
+    }
+  },
+  {
+    "step": "adopt",
+    "receipt_sha256": "714eab1b49587f712be3ff49af43505465595f72e421fb24d70e8830cf998df0",
+    "ok": true,
+    "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4"
+  },
+  {
+    "step": "start",
+    "receipt_sha256": "43f8dca63951abab637b48c7da61fa7543d9d5a590d6d767c5c1fc965e360776",
+    "ok": true,
+    "safe": true,
+    "state": "MAINTENANCE",
+    "version": 5,
+    "active": [],
+    "unknown": [],
+    "workers": {
+      "ui": {
+        "role": "ui",
+        "protocol": 1,
+        "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791872162.673653",
+        "pid": 33980,
+        "started_at": "2026-10-13T06:16:04.038729+00:00"
+      },
+      "auto-pipeline": {
+        "role": "auto-pipeline",
+        "protocol": 1,
+        "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791872162.673653",
+        "pid": 33980,
+        "started_at": "2026-10-13T06:16:04.135033+00:00"
+      },
+      "queue-runner": {
+        "role": "queue-runner",
+        "protocol": 1,
+        "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791872162.673653",
+        "pid": 33980,
+        "started_at": "2026-10-13T06:16:04.134437+00:00"
+      },
+      "ready-supervisor": {
+        "role": "ready-supervisor",
+        "protocol": 1,
+        "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791872162.673653",
+        "pid": 33980,
+        "started_at": "2026-10-13T06:16:04.135018+00:00"
+      },
+      "keepalive-watchdog": {
+        "role": "keepalive-watchdog",
+        "protocol": 1,
+        "source_hash": "1ba394b75641dc4a09b0746ad7536d965266af719bd2f7370312264b13b6a7a4",
+        "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "birth": "1791872162.673653",
+        "pid": 33980,
+        "started_at": "2026-10-13T06:16:04.134545+00:00"
+      }
+    }
+  },
+  {
+    "step": "resume",
+    "receipt_sha256": "2db2352ec4e64954105067613d24e4b0b24868a08c99b8b7fd383d8e1d7556a1",
+    "ok": true
+  },
+  {
+    "step": "restore",
+    "receipt_sha256": "c3a4ad9c0f3106622e2e2075778e36d6a33b8bd1ef979fcd29aeacb6e6d28518",
+    "ok": true
+  },
+  {
+    "step": "verify",
+    "receipt_sha256": "37e39fb009572b0eacc6ed8adb710c5eccadccb1d3ac1536a1a0a2a7f8371a55",
+    "ok": true
+  }
+]

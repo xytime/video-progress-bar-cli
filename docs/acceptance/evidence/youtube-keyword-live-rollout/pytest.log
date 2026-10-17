@@ -1,0 +1,42 @@
+........................................................................ [ 53%]
+...............................................................          [100%]
+=============================== warnings summary ===============================
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/starlette/testclient.py:445: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+tests/browser/test_topic_candidates_browser.py::test_k14_keyword_collection_growth_and_controlled_admission
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j/sandbox/repo/src/web/app.py:1013: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/browser/test_topic_candidates_browser.py::test_k14_keyword_collection_growth_and_controlled_admission
+tests/browser/test_topic_candidates_browser.py::test_k14_keyword_collection_growth_and_controlled_admission
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/browser/test_topic_candidates_browser.py::test_k14_keyword_collection_growth_and_controlled_admission
+  /Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r5n_o20j/sandbox/repo/src/web/app.py:1053: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+135 passed, 10 warnings in 59.57s

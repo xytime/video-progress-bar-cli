@@ -1,0 +1,190 @@
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+.................................................... [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+.............................................................. [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 93%]
+.FF..................................................................... [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+..............                                                           [100%]
+=================================== FAILURES ===================================
+___________ test_dashboard_render_and_selection_evidence[viewport0] ____________
+
+dashboard = (<Page url='http://dashboard-test.invalid/?view=topics&tab=waitlist'>, {'errors': [], 'payload': {'filter_options': {'...l'], 'engagement_window_days': ['3'], 'error_type': ['all'], 'include_expired': ['false'], ...}], 'warnings': [], ...})
+viewport = {'height': 1000, 'width': 1440}
+
+    @pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
+    def test_dashboard_render_and_selection_evidence(dashboard, viewport):
+        page, state = dashboard
+        page.set_viewport_size(viewport)
+>       assert page.url == "http://dashboard-test.invalid/"
+E       AssertionError: assert 'http://dashb...&tab=waitlist' == 'http://dashb...test.invalid/'
+E         
+E         - http://dashboard-test.invalid/
+E         + http://dashboard-test.invalid/?view=topics&tab=waitlist
+
+tests/browser/test_browser_isolation.py:37: AssertionError
+___________ test_dashboard_render_and_selection_evidence[viewport1] ____________
+
+dashboard = (<Page url='http://dashboard-test.invalid/?view=topics&tab=waitlist'>, {'errors': [], 'payload': {'filter_options': {'...l'], 'engagement_window_days': ['3'], 'error_type': ['all'], 'include_expired': ['false'], ...}], 'warnings': [], ...})
+viewport = {'height': 844, 'width': 390}
+
+    @pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
+    def test_dashboard_render_and_selection_evidence(dashboard, viewport):
+        page, state = dashboard
+        page.set_viewport_size(viewport)
+>       assert page.url == "http://dashboard-test.invalid/"
+E       AssertionError: assert 'http://dashb...&tab=waitlist' == 'http://dashb...test.invalid/'
+E         
+E         - http://dashboard-test.invalid/
+E         + http://dashboard-test.invalid/?view=topics&tab=waitlist
+
+tests/browser/test_browser_isolation.py:37: AssertionError
+=============================== warnings summary ===============================
+src/web/app.py:1007
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/web/app.py:1007: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+../../../../../Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+src/web/app.py:1047
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/web/app.py:1047: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+src/video_processing/utils/volcengine_tts_protocol.py:351
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:351: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    async def receive_message(websocket: websockets.WebSocketClientProtocol) -> Message:
+
+../../../../../Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+src/video_processing/utils/volcengine_tts_protocol.py:362
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:362: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    websocket: websockets.WebSocketClientProtocol,
+
+src/video_processing/utils/volcengine_tts_protocol.py:374
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:374: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    async def start_connection(websocket: websockets.WebSocketClientProtocol) -> None:
+
+src/video_processing/utils/volcengine_tts_protocol.py:381
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:381: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    async def finish_connection(websocket: websockets.WebSocketClientProtocol) -> None:
+
+src/video_processing/utils/volcengine_tts_protocol.py:389
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:389: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    websocket: websockets.WebSocketClientProtocol, payload: bytes, session_id: str
+
+src/video_processing/utils/volcengine_tts_protocol.py:399
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:399: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    websocket: websockets.WebSocketClientProtocol, session_id: str
+
+src/video_processing/utils/volcengine_tts_protocol.py:409
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/src/video_processing/utils/volcengine_tts_protocol.py:409: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    websocket: websockets.WebSocketClientProtocol, payload: bytes, session_id: str
+
+tests/unit/test_database_channel_funnel.py::test_get_channel_funnel_metrics_time_windows
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/tests/unit/test_database_channel_funnel.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_funnel_metrics_24h_and_today_bj_windows
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/tests/unit/test_database_channel_funnel.py:150: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_database_channel_funnel.py::test_get_paginated_videos_created_window_filter
+  /private/tmp/video-pytest-lu8k3tm2/sandbox/repo/tests/unit/test_database_channel_funnel.py:181: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/unit/test_dubbing_service_flow.py::test_render_video_forwards_source_date_to_vertical_processor
+tests/unit/test_source_caption.py::test_standard_processor_preserves_translation_boundary[None--Source text]
+tests/unit/test_source_caption.py::test_standard_processor_preserves_translation_boundary[en--Source text]
+tests/unit/test_source_caption.py::test_standard_processor_preserves_translation_boundary[zh-CN-\u4e2d\u6587\u8bd1\u6587-\u4e2d\u6587\u8bd1\u6587]
+tests/unit/test_source_caption.py::test_standard_processor_preserves_translation_boundary[zh-CN--]
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/pysubs2/formats/substation.py:356: DeprecationWarning: The 'alignment' attribute of SSAStyle should be an Alignment instance, using plain int is deprecated
+    warnings.warn("The 'alignment' attribute of SSAStyle should be an Alignment instance, using plain int is deprecated", DeprecationWarning)
+
+tests/unit/test_listening_transcriber.py::test_source_metadata_title_is_preferred_for_a_pdf_question_document
+tests/unit/test_listening_transcriber.py::test_source_metadata_title_is_preferred_for_a_pdf_question_document
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/unit/test_listening_transcriber.py::test_source_metadata_title_is_preferred_for_a_pdf_question_document
+tests/unit/test_listening_transcriber.py::test_source_metadata_title_is_preferred_for_a_pdf_question_document
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/unit/test_listening_transcriber.py::test_source_metadata_title_is_preferred_for_a_pdf_question_document
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+tests/browser/test_topic_candidates_browser.py::test_m13_maintenance_crud_two_restarts_and_boundary
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/starlette/testclient.py:445: DeprecationWarning: Setting per-request cookies=<...> is being deprecated, because the expected behaviour on cookie persistence is ambiguous. Set cookies directly on the client instance instead.
+    return super().request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/browser/test_browser_isolation.py::test_dashboard_render_and_selection_evidence[viewport0]
+FAILED tests/browser/test_browser_isolation.py::test_dashboard_render_and_selection_evidence[viewport1]
+2 failed, 3582 passed, 31 warnings, 30 subtests passed in 675.60s (0:11:15)

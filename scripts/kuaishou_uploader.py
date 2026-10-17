@@ -5,6 +5,7 @@
 校准后才会启用，防止页面改版时误提交作品。
 
 # Modification History
+| maintenance-v1 | 2026-10-12 | Codex | 直跑入口接入维护准入与同项子进程凭据。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-15 | Codex | 新增快手创作者中心会话登录、状态判定与安全返回码骨架 |
@@ -1162,6 +1163,10 @@ def run_uploader(
             browser.close()
 
 
+from video_processing.core.maintenance_child import single_script
+
+
+@single_script
 def main() -> int:
     parser = argparse.ArgumentParser(description="快手创作者中心浏览器上传器")
     parser.add_argument("--video", help="待上传视频路径")

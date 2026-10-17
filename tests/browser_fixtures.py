@@ -101,10 +101,10 @@ def dashboard(chromium):
             route.fulfill(body="")
 
     page.route("**/*", route_handler)
-    page.goto("http://dashboard-test.invalid/", wait_until="networkidle")
+    page.goto("http://dashboard-test.invalid/?view=topics&tab=waitlist", wait_until="networkidle")
     page.evaluate("() => { clearTimeout(refreshTimeoutId); scheduleNextRefresh = () => {}; }")
     page.locator("#row-first").wait_for()
-    assert page.title() == "📺 Video Pipeline Control Center"
+    assert page.title() == "选题中心 · 视频运营工作台"
     try:
         yield page, state
     finally:

@@ -1,0 +1,160 @@
+{
+  "scope": "production-integrated isolated tests; no live search or admission proof",
+  "runs": [
+    {
+      "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-5v_aka_p",
+      "passed": 405,
+      "receipt": {
+        "source": "/Volumes/EXT2T/AppDataOffload/ryusei/keyword-cia-integration-20261017",
+        "started_at": "2026-10-17T03:53:27.642951+00:00",
+        "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-5v_aka_p",
+        "storage_policy": "external-auto-cleanup",
+        "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-5v_aka_p/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.177
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/unit/test_topic_cia_policy.py",
+          "tests/unit/test_channel_policy.py",
+          "tests/unit/test_censor_rules_hotreload.py",
+          "tests/unit/test_gambling_betting_censor.py",
+          "tests/unit/test_subtitle_censorship.py",
+          "tests/unit/test_topic_candidates.py",
+          "tests/unit/test_topic_candidates_edges.py",
+          "tests/unit/test_topic_candidates_api.py",
+          "tests/unit/test_topic_search_adapter.py",
+          "tests/unit/test_keyword_collection.py",
+          "tests/unit/test_keyword_long_term.py",
+          "tests/unit/test_keyword_long_term_rollout.py",
+          "tests/unit/test_deployment.py",
+          "tests/unit/test_deployment_host.py",
+          "tests/unit/test_deployment_sources.py",
+          "tests/unit/test_maintenance.py",
+          "tests/browser/test_topic_candidates_browser.py"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "b9a168f6efa17e827a23589f0f8dc60c7409ce17b9ad83eece0711dbdae65f23",
+        "profile_sha256": "bf4fd1cd32cb16e9502745df7abb4aa8efbf3bbc74db2b0cda5e1a07855f0e2d",
+        "browser_runtime": {
+          "revision": "1223",
+          "version": "148.0.7778.96",
+          "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-5v_aka_p/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+        },
+        "browser_runtime_sha256": "16b0b6d3fce5530986b0dea808eb42fcc74db6e06b09af1ed3ad26e249390f7d",
+        "media_runtime": null,
+        "media_runtime_sha256": null,
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 140.453
+        },
+        "exit_code": 0,
+        "cleanup": {
+          "status": "removed",
+          "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-5v_aka_p/sandbox"
+        },
+        "finished_at": "2026-10-17T03:55:49.542713+00:00"
+      },
+      "manifest_sha256": "b9a168f6efa17e827a23589f0f8dc60c7409ce17b9ad83eece0711dbdae65f23"
+    },
+    {
+      "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0h8utr2t",
+      "passed": 3,
+      "receipt": {
+        "source": "/Volumes/EXT2T/AppDataOffload/ryusei/keyword-cia-integration-20261017",
+        "started_at": "2026-10-17T03:56:11.750263+00:00",
+        "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0h8utr2t",
+        "storage_policy": "external-auto-cleanup",
+        "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0h8utr2t/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.075
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/browser/test_topic_candidates_browser.py::test_policy_reason_field_excerpt_and_safe_mobile_wrapping"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "b9a168f6efa17e827a23589f0f8dc60c7409ce17b9ad83eece0711dbdae65f23",
+        "profile_sha256": "1fb9e70af88f38bb296ef66e170ca77dffedad4157254eadc2184b56ce46f96d",
+        "browser_runtime": {
+          "revision": "1223",
+          "version": "148.0.7778.96",
+          "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0h8utr2t/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+        },
+        "browser_runtime_sha256": "d83c114ec250346974552d9583750333979753db789db853585d72ebe31cb46f",
+        "media_runtime": null,
+        "media_runtime_sha256": null,
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 6.427
+        },
+        "exit_code": 0,
+        "cleanup": {
+          "status": "removed",
+          "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-0h8utr2t/sandbox"
+        },
+        "finished_at": "2026-10-17T03:59:04.304094+00:00"
+      },
+      "manifest_sha256": "b9a168f6efa17e827a23589f0f8dc60c7409ce17b9ad83eece0711dbdae65f23"
+    }
+  ],
+  "metadata_cases": [
+    {
+      "youtube_id": "vS2uoE_Rr8Q",
+      "score": 82,
+      "duration": 1040,
+      "false_match": "diferencias"
+    },
+    {
+      "youtube_id": "jD_5JhBOJWg",
+      "score": 85,
+      "duration": 1156,
+      "false_match": "oficial"
+    }
+  ],
+  "parallel_integration": {
+    "preserved_commit": "553faa09a4d346ef5892d53f3118d2ed22bd6904",
+    "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm",
+    "passed": 141,
+    "manifest_sha256": "614cdab453658026301bf78711639d1213962c198a92b619ba53068d7d3b2451",
+    "receipt": {
+      "source": "/Volumes/EXT2T/AppDataOffload/ryusei/keyword-cia-integration-20261017",
+      "started_at": "2026-10-17T04:00:41.120181+00:00",
+      "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm",
+      "storage_policy": "external-auto-cleanup",
+      "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.122
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/unit/test_vocabulary_outro.py",
+        "tests/unit/test_topic_cia_policy.py",
+        "tests/unit/test_keyword_collection.py",
+        "tests/unit/test_keyword_long_term.py",
+        "tests/unit/test_deployment_sources.py",
+        "tests/unit/test_deployment_host.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "614cdab453658026301bf78711639d1213962c198a92b619ba53068d7d3b2451",
+      "profile_sha256": "aa5b3f8db052cd5526d63c7e4ba067edaf35fa7f29d75a005a61cbd5156c168d",
+      "browser_runtime": null,
+      "browser_runtime_sha256": null,
+      "media_runtime": null,
+      "media_runtime_sha256": null,
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 21.929
+      },
+      "exit_code": 0,
+      "cleanup": {
+        "status": "removed",
+        "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-50vum4gm/sandbox"
+      },
+      "finished_at": "2026-10-17T04:01:03.967067+00:00"
+    }
+  }
+}

@@ -13,6 +13,128 @@ import pytest
 from tests.browser_fixtures import chromium, dashboard, _payload, _video
 
 
+@pytest.mark.parametrize('slice_index', [0, 2])
+@pytest.mark.parametrize('severity', ['high', 'critical'])
+@pytest.mark.parametrize('viewport', [(1440, 1000), (390, 844)])
+def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity, viewport):
+    """无震动 API 的浏览器也能复核；打开/取消弹窗不发起放行。"""
+    from playwright.sync_api import expect
+    page, state = dashboard
+    page.evaluate("Object.defineProperty(navigator, 'vibrate', {value: undefined})")
+    video = dict(_video('first', status='FAILED'),
+                 error_msg='Censorship P0 Reject' if severity == 'critical' else 'Channel Policy Reject')
+    parent = dict(_video('first', status='SEGMENTED'), slices_count=1)
+    state['payload'] = _payload([parent if slice_index else video], total=1)
+    page.route('**/api/videos/first/slices', lambda route: route.fulfill(
+        json={'slices': [dict(video, slice_index=slice_index)]}))
+    page.route(f'**/api/videos/first/censor-keywords?slice_index={slice_index}',
+               lambda route: route.fulfill(json={
+                   'success': True, 'severity': severity, 'layer_label': '测试审查',
+                   'error_msg': '测试拦截原因', 'matched': [{'term': '测试词', 'layer': 'P0'}],
+                   'keywords': [], 'has_subtitle': False,
+               }))
+    page.locator('.console-primary[data-section=production]').click()
+    page.locator('#tab-error').click()
+    if slice_index:
+        page.locator('#btn-toggle-first').click()
+    page.set_viewport_size({'width': viewport[0], 'height': viewport[1]})
+    row = page.locator('.child-row-first' if slice_index else '#row-first')
+    row.get_by_role('button', name='🔓 复核放行', exact=True).click()
+    modal = page.locator('#bypass-modal')
+    expect(modal).to_be_visible(timeout=2000)
+    expect(modal.locator('#bypass-banner')).to_contain_text('测试拦截原因')
+    expect(modal.locator('#bypass-matched')).to_contain_text('测试词')
+    confirm = modal.locator('#btn-confirm-bypass')
+    if severity == 'critical':
+        expect(confirm).to_be_disabled()
+        modal.locator('#bypass-p0-review-checkbox').check()
+        expect(confirm).to_be_disabled()
+        modal.locator('#bypass-p0-resume-checkbox').check()
+        expect(confirm).to_be_enabled()
+    else:
+        expect(confirm).to_be_enabled()
+    modal.get_by_role('button', name='取消', exact=True).click()
+    expect(modal).to_be_hidden()
+    assert state['writes'] == []
+
+
+@pytest.mark.parametrize('slice_index', [None, 2])
+@pytest.mark.parametrize('status,payload,expected', [
+    (503, {'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},
+     '维护状态不允许领取新工作 [MAINTENANCE]'),
+    (503, {'detail': {'code': 'UNKNOWN', 'message': '维护状态无法确认'}},
+     '维护状态无法确认 [UNKNOWN]'),
+    (503, {'detail': '服务暂不可用'}, '服务暂不可用'),
+    (503, None, '请求失败（HTTP 503）'),
+    (200, {'success': False, 'error': '视频当前状态不是 PENDING'}, '视频当前状态不是 PENDING'),
+])
+def test_process_failure_shows_reason_and_restores_button(dashboard, slice_index, status, payload, expected):
+    from playwright.sync_api import expect
+    page, state = dashboard
+    requests = []
+    suffix = f'/slices/{slice_index}' if slice_index is not None else ''
+
+    def deny(route):
+        requests.append(route.request.method)
+        if payload is None:
+            route.fulfill(status=status, content_type='text/html', body='<h1>Unavailable</h1>')
+        else:
+            route.fulfill(status=status, json=payload)
+
+    page.route(f'**/api/videos/first{suffix}/process', deny)
+    if slice_index is None:
+        button = page.locator('#row-first button[onclick="processVideoNow(\'first\')"]')
+    else:
+        state['payload'] = _payload([dict(_video('first', status='SEGMENTED'), slices_count=1)], total=1)
+        page.route('**/api/videos/first/slices', lambda route: route.fulfill(
+            json={'slices': [dict(_video('first'), slice_index=slice_index)]}))
+        page.evaluate('async () => { await loadVideos(); }')
+        page.locator('#btn-toggle-first').click()
+        button = page.locator('.child-row-first button[onclick^="processSliceNow"]')
+    old_text = button.inner_text()
+    button.click()
+    expect(page.locator('.toast-item').last).to_have_text('❌ 启动失败: ' + expected)
+    expect(button).to_be_enabled()
+    expect(button).to_have_text(old_text)
+    assert requests == ['POST']
+    # 浏览器会为被刻意拒绝的 HTTP 请求记录资源错误，其他告警仍须通过夹具检查。
+    expected_warning = f'Failed to load resource: the server responded with a status of {status} (Service Unavailable)'
+    state['warnings'][:] = [message for message in state['warnings'] if message != expected_warning]
+
+
+@pytest.mark.parametrize('payload,expected', [
+    ({'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},
+     '维护状态不允许领取新工作 [MAINTENANCE]'),
+    (None, '请求失败（HTTP 503）'),
+])
+def test_delete_rejection_keeps_task_and_explains_failure(dashboard, payload, expected):
+    from playwright.sync_api import expect
+    page, state = dashboard
+    requests = []
+
+    def deny(route):
+        requests.append((route.request.method, route.request.url))
+        if payload is None:
+            route.fulfill(status=503, content_type='text/html', body='<h1>Unavailable</h1>')
+        else:
+            route.fulfill(status=503, json=payload)
+
+    page.route('**/api/videos/first?delete_files=false', deny)
+    row = page.locator('#row-first')
+    row.get_by_role('button', name='❌ 删除', exact=True).click()
+    page.locator('#delete-confirm-code-input').fill(page.locator('#delete-safety-code').inner_text())
+    confirm = page.locator('#btn-confirm-delete')
+    confirm.click()
+    expect(page.locator('.toast-item').last).to_have_text('❌ 删除失败: ' + expected)
+    expect(confirm).to_be_enabled()
+    expect(confirm).to_have_text('确认删除 (Delete)')
+    expect(page.locator('#delete-modal')).to_be_visible()
+    expect(row).to_be_visible()
+    assert requests == [('DELETE', 'http://dashboard-test.invalid/api/videos/first?delete_files=false')]
+    state['warnings'][:] = [message for message in state['warnings'] if message !=
+        'Failed to load resource: the server responded with a status of 503 (Service Unavailable)']
+
+
 def test_processing_row_has_stop_and_delete_controls(dashboard):
     page, state = dashboard
     state['payload'] = _payload([_video('preparing', status='PROCESSING')], total=1)
@@ -76,6 +198,7 @@ def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, t
                  publication_target="视频号")
     counts = dict.fromkeys(("waitlist", "queue", "active", "wechat_deferred", "local_accepted", "review", "completed", "error"), 0)
     state["payload"] = dict(_payload([video], total=1), total_pages=1, tab_counts=dict(counts, ready=1))
+    page.locator(".console-primary[data-section=production]").click()
     page.locator("#tab-ready").click()
     row = page.locator("#row-ready-video")
     row.wait_for()
@@ -208,7 +331,7 @@ def test_chinese_statuses_match_table_platform_and_details(dashboard):
         "NEW_UNMAPPED": "待核验", "__proto__": "待核验",
     }
     state["payload"] = _payload([_video(f"status-{i}", code) for i, code in enumerate(labels)])
-    page.locator("#tab-review").click()
+    page.locator(".console-primary[data-section=publications]").click()
     page.locator("#row-status-0").wait_for()
     for i, (code, label) in enumerate(labels.items()):
         row = page.locator(f"#row-status-{i}")
@@ -247,8 +370,8 @@ def test_platform_display_state_takes_precedence_and_unknown_is_not_unqueued(das
 def test_old_tab_response_cannot_overwrite_new_tab(dashboard, older_ok):
     page, state = dashboard
     _hold_video_requests(page)
-    page.locator("#tab-review").click()
-    page.locator("#tab-waitlist").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=waitlist\"]").click()
     assert page.evaluate("pendingVideoRequests[0].signal.aborted")
     page.evaluate("payload => pendingVideoRequests[1].finish(payload)", state["payload"])
     page.locator("#row-first").wait_for()
@@ -264,8 +387,8 @@ def test_old_tab_response_cannot_overwrite_new_tab(dashboard, older_ok):
 def test_hotwords_invalidates_pending_video_requests(dashboard):
     page, state = dashboard
     _hold_video_requests(page)
-    page.locator("#tab-review").click()
-    page.locator("#tab-hotwords").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=hotwords\"]").click()
     assert page.evaluate("pendingVideoRequests[0].signal.aborted")
     page.evaluate("payload => pendingVideoRequests[0].finish(payload)", state["payload"])
     assert page.locator("#hotwords-panel").is_visible()
@@ -282,8 +405,8 @@ def test_same_query_latest_refresh_wins_and_query_failure_can_retry(dashboard):
     page.locator("#row-newest").wait_for()
     page.evaluate("payload => pendingVideoRequests[0].finish(payload)", state["payload"])
     assert page.evaluate("Object.keys(_currentVideosMap)") == ["newest"]
-    page.locator("#tab-review").click()
-    page.locator("#tab-waitlist").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=waitlist\"]").click()
     page.evaluate("() => pendingVideoRequests[3].finish({detail: '测试失败'}, false)")
     page.get_by_text("列表加载失败，请重试刷新。", exact=True).wait_for()
     assert page.evaluate("Object.keys(_currentVideosMap)") == []

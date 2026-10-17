@@ -16,6 +16,8 @@
 | 1.0.6 | 2026-08-29 | Codex | 搜索与显式 URL 候选均按频道 ID 严格限制为三家授权来源，并将稳定 ID 写入候选账本。 |
 | 1.0.8 | 2026-09-17 | Codex | 导出来源硬排除词表，供运行时安全门复用，避免研究预筛与交付前检查漂移。 |
 | 1.0.7 | 2026-09-17 | Codex | 新增 BNN Bloomberg 严格频道 ID、首位检索与透明候选优先权重。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -66,6 +68,8 @@ _TOPIC_TERMS = {
 }
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
 class EnglishWorldResearchService:
     """将外部元数据搜索收敛为可选择、可追溯、但不产生媒体副作用的候选任务。"""
 
@@ -80,6 +84,7 @@ class EnglishWorldResearchService:
         self._searcher = searcher or _youtube_search
         self._inspector = inspector or _youtube_inspect
 
+    @guarded("english-research", lambda self, job_id: "english-job:" + str(job_id))
     def research(self, job_id: str) -> dict[str, Any] | None:
         """领取研究任务并保存候选；失败仅写本任务，不影响通用队列。"""
         job = self.db.claim_english_world_job_for_research(job_id)

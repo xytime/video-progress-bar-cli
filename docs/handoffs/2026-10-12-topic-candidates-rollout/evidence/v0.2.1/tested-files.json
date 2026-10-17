@@ -1,0 +1,542 @@
+{
+  "branch": "codex/topic-candidate-workbench",
+  "pre_implementation_head": "49195acfb5258fbb05fa5fa1f1ac8ea60a6366b9",
+  "production_head": "0419de50cfd806353256db607878bdd34a096878",
+  "runtime_code_hash": "243b85d54dc47881508b521e774b3a820ec980373751ed0bf09b0f0bfb0888dd",
+  "note": "Snapshot matches bind file content; execution scope is the receipt arguments. Counts are not additive. Docs are audited separately.",
+  "files": {
+    ".env.example": {
+      "sha256": "d0ff4e8e0b5599c242f9dfd75cfa9533e7e4bf7773336a84aa1d3ad94179eb9e",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/add_approved_channel.py": {
+      "sha256": "95d849a873a16bc78bd900f5735077a81681a807c334f4b25505928c3bfe69f0",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/copywriter.py": {
+      "sha256": "35ddc93fbddaa909a6847571a05538df49bcac86371a5f55e9149fd6e5773ab6",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/cover_generator.py": {
+      "sha256": "7aa2beeb2293ed937818ff1be1c4f96faf32f47ba15f2e56765c4efe71dded1c",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/douyin_uploader.py": {
+      "sha256": "30632dbe1f4153f716a9ac3d3eec0eb896744f38c250dde46858e89042b1e41d",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/kuaishou_uploader.py": {
+      "sha256": "4b15258585c77f5a34ca2baa286443f8f98cd2e96218848ee32ae77c460e8934",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/maintenance_control.py": {
+      "sha256": "39f8bb876f010d00a0f6f75dffe143e325ff438d4c1458fd81faf79a56693807",
+      "matching_passing_snapshots": [
+        "final-focused",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/monitor_channels.py": {
+      "sha256": "1d5da5c5899bbb1193ce8adae9464fc17869724d4b866966a113003ab39173ae",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/monitor_english_world_daily.py": {
+      "sha256": "ef48de39698e1a02266835b9507f692168f33512e07570f10f39c7937f065752",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/rescore_refresh.py": {
+      "sha256": "bb948493fd5e22cb864a5ee9673dbbbc77d10ae5185107528cefea0e071d6620",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_background_preparation.py": {
+      "sha256": "824f6edcc9174570b43f08772828ea769bfffc3c04be74f8032b225b628b7547",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_english_world_daily.py": {
+      "sha256": "36c379125ae15c15505b4419c2675639ceda6f4ef6f1ce464dc1ea82a9d7d87a",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_publication_window.py": {
+      "sha256": "2c4967446241e049191a9fb5ad3110d9f11f138728c4d718a716be4bc23d36a7",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_ready_publications.py": {
+      "sha256": "ede9ce1db5473151ce0b3eb3ed474b1f3f17c7426e92e3b9d087befa515b95b5",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_video_task.py": {
+      "sha256": "4e1a4d3c3373ae912ffd44d0114d9d1acf2db14949ce44127456ffd3723a09f8",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/run_wallstreet_ab.py": {
+      "sha256": "611c14760d3ef5703b6633556e4ad54e95ac6a0b4923f73685042e598db6bc07",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/submit_english_world_douyin.py": {
+      "sha256": "0e5461ca6748656c6030fd0c76b2e94cea5dacd8b592aa3a726f9df6ca036310",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/submit_english_world_review.py": {
+      "sha256": "05c83d6755e8779e17a452ad910db4f6099860563c98d3f77361f76342351bf1",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/submit_generic_douyin.py": {
+      "sha256": "d1e506c5d74abd49acf0af84da47e695b6bc124d8b655c3be275a5ef488e46a0",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "final-faults"
+      ]
+    },
+    "scripts/wechat_commenter.py": {
+      "sha256": "30f6f80a8ccb6f4c76b6bc2a7528ff99db3361c0b0a50ef170bf874697d5035c",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/wechat_keepalive.py": {
+      "sha256": "e188cb8f475e2e38a90dd18a5db192fa33f6b30f0f9e0099ed010acd3bd6d191",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "scripts/wechat_uploader.py": {
+      "sha256": "343f856af44f44bf4b22dc310a81bf3543be35a3fcefead8d2919f0a0f93956c",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/bot/pipeline_agent.py": {
+      "sha256": "d161a71f20dccbdfc4b96815d68d096ae1883f573ec50c3bb1d90fa58afd80cf",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/config/settings.py": {
+      "sha256": "430fffca9d7c0691ca52ec98580bc398679338af84c2052c1a5aee6b64dc850e",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/core/maintenance.py": {
+      "sha256": "86bfe01c39a6cdd1c2aff4f02224a1b64b9337e80cc22423386404dbf5996f1c",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/core/maintenance_child.py": {
+      "sha256": "69280d7506c86d4ded4fe8f5c350007944089e7d4092a2039acb80ca6849c9fc",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/core/maintenance_runtime.py": {
+      "sha256": "c5040d3d95b88eceb2b785028c4fe725368ea2303ddf7dcda695505a3eec964c",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/core/wechat_session_lock.py": {
+      "sha256": "eb804a1b2179d9dc53b706aff2f8338b0202d248ca1fd33c17c05ce8efde322b",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/db/database.py": {
+      "sha256": "e169251d5af599172ffefc0c4660c8bc181df1068c1e72a493dee24588c56323",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/db/topic_candidates.py": {
+      "sha256": "7f2f8cdb7d3974a1303f6255ddd426dd5a60e602185d9e0659142574abfbe6c0",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/english_world/research.py": {
+      "sha256": "e2bb8533b07a539077aed5b878e17a0bf272d11d75f642bb71e361f8eccc3669",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/highlight/service.py": {
+      "sha256": "8d03b4e39eb4de89e9db59dcbb77c20ea4f09c22951cb8b09cd9e2ccd2a63741",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/interaction/runner.py": {
+      "sha256": "9aeb9b1e764a9d01bdf4e65304c4c85bdfcb0e2056bfed418b76b5ebf9d6e89f",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/pipeline_manager.py": {
+      "sha256": "c169012c8f476ed07ed0ee600194b733a190c8365ed516ade8ab0664fcfcca73",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/processors/caption_processor.py": {
+      "sha256": "e8aca9f24585050aff069847650364529bc12b9657419f5c2a35f0641aae63b7",
+      "matching_passing_snapshots": [
+        "final-focused",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/topic_tracker/runtime.py": {
+      "sha256": "3f341a4a236a6011a9ec885d0cab134f48a567afb31698b136034e9c4552cd0a",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/topic_tracker/service.py": {
+      "sha256": "21a278d24f46fd4765d91c9873a72add64f88046a32b5ddc8ced5a00d32bc8a0",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/utils/maintenance_clues.py": {
+      "sha256": "1272760e347b2b4c1e263fd4e8c9402b496982c5cc6ed42c09671458dffeff69",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/video_processing/utils/wallstreet_worker.py": {
+      "sha256": "c5ac6bbad1a04cfc1e652a4c5bcda4579d15a94278a3065a629571b0cf5bb2d6",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/web/app.py": {
+      "sha256": "94ac1c89e64a6c724cd99ba5e9ef686e662b8a6914945581912d7e483078f901",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/web/static/js/topic_candidates.js": {
+      "sha256": "55d90d3951937c511ae236ba88a322c981373eb61f96690efe5a7bacb2a057f1",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "src/web/topic_candidates.py": {
+      "sha256": "8df91d2abb3dfa44f41ec5e23239fb14236106643fa439d5d89e380260a6c8d8",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/browser/test_topic_candidates_browser.py": {
+      "sha256": "73bee4711668647fb9e5f227e13fbf99584f1a1a7694dd341f3e067636da0701",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/conftest.py": {
+      "sha256": "96108e8e66a055d826e34028ad2fcc75abf9fdd4222e8e8446da73107da0a557",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/helpers/maintenance_worker.py": {
+      "sha256": "c14eec9dff09194ae29f18b00caf34acc7abfdf0fc8518e399f6e117f09795c6",
+      "matching_passing_snapshots": [
+        "final-focused",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_english_world_submission_window.py": {
+      "sha256": "a0990abf7f88d35a53940bcd321fe0a37c5660d1986d5d9ce71a24f114bb9037",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_four_pillars_optimization.py": {
+      "sha256": "1c4d5a0ec15ce374d3fe48aa47bdef4982580421e60676648e6b6ae7ed6e5de5",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_maintenance.py": {
+      "sha256": "83b777d92b35fd147dcdc2f0112035eec1d7b0a4246649017d3dab5bab93e823",
+      "matching_passing_snapshots": [
+        "final-focused",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_maintenance_entries.py": {
+      "sha256": "83692bf531d59b03ba8f273524cded94382059f8d62b07c25c1f873b54074633",
+      "matching_passing_snapshots": [
+        "final-focused",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_source_subtitle_preparation.py": {
+      "sha256": "3882b58708144fa38abd447acc7be3da092d03ec7d29f130746ecba9b722c3a9",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_subprocess_env.py": {
+      "sha256": "491d0ac13e1c40d32d4c8de93a8c0a9385d2f51a3178d0a345ce0d9ac58bb390",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_topic_candidates_api.py": {
+      "sha256": "85bf9799a2bae71de6bc101526fc41b56a3cc544dfe844ff764fcbce5d54c959",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_topic_candidates_edges.py": {
+      "sha256": "2797017c6c1e50f3b7d522e81c39363dc0ffcb38198bb021f4e1e4b507db2f70",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    },
+    "tests/unit/test_topic_runtime_failures.py": {
+      "sha256": "f64800b1979628cd7b705f95cf3d251f21ce3e47aedcf20f1b77e3d87970c7d7",
+      "matching_passing_snapshots": [
+        "final-faults"
+      ]
+    },
+    "vpanel": {
+      "sha256": "6fa858b54f12ae94e986ea5146828e69818bc41fd91e4df3013fb37b9186d17a",
+      "matching_passing_snapshots": [
+        "full-unit",
+        "final-focused",
+        "browser",
+        "production-overlay",
+        "final-faults"
+      ]
+    }
+  }
+}

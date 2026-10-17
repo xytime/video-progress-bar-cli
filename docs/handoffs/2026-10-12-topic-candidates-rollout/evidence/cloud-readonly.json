@@ -1,0 +1,68 @@
+{
+  "observation_window_beijing": "2026-10-12 00:13–00:22 +08:00",
+  "method": "Authenticated Google Cloud console UI readback using the existing browser session; no credentials page/key values, no YouTube API calls, no quota/API/project edits",
+  "project_display_name": "anti-gravity",
+  "project_id": "gen-lang-client-0993011647",
+  "service": "youtube.googleapis.com",
+  "service_enabled": true,
+  "quota_url": "https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas?project=gen-lang-client-0993011647",
+  "daily_quota_snapshot": [
+    {
+      "name": "Search Queries per day",
+      "metric": "youtube.googleapis.com/search_list",
+      "limit_name": "defaultSearchListPerDayPerProject",
+      "limit": 100,
+      "used": 0,
+      "remaining_at_observation": 100
+    },
+    {
+      "name": "Queries per day",
+      "metric": "youtube.googleapis.com/default",
+      "limit_name": "defaultPerDayPerProject",
+      "limit": 10000,
+      "used": 201,
+      "remaining_at_observation": 9799
+    }
+  ],
+  "general_usage_7day_graph": {
+    "start_beijing": "2026-10-05 00:16:53 +08:00",
+    "end_beijing": "2026-10-12 00:16:53 +08:00",
+    "peak_units": 489,
+    "peak_percent": 4.89,
+    "current_units": 201,
+    "screenshot": "cloud-quota-7day.jpg"
+  },
+  "metrics_30day_method_counts": {
+    "start_beijing": "2026-09-12 00:14 +08:00",
+    "end_beijing": "2026-10-12 00:14 +08:00",
+    "scope": "All credentials and all methods in the selected project",
+    "channels.list": 3784,
+    "playlistItems.list": 3781,
+    "videos.list": 3239,
+    "label_note": "Method labels normalized to public REST endpoint names",
+    "reported_error_percent_each_method": 0,
+    "search_method_observation": "No search.list method shown in this selected 30-day metrics view; not proof of future absence or a complete caller registry"
+  },
+  "metrics_visible_credential_names": [
+    "anti-gravity-BDC-proj",
+    "video-precessing-youtube-catalog",
+    "Unspecified",
+    "Anonymous",
+    "Google Cloud Console API key"
+  ],
+  "production_credential_project_binding": {
+    "status": "UNVERIFIED",
+    "human_reply": "暂不确定，保留为搜索开放前置条件",
+    "constraint": "Do not set TOPIC_QUOTA_VERIFIED=true or open production search based on this console snapshot alone"
+  },
+  "quota_day_at_observation": "2026-10-11 America/Los_Angeles",
+  "next_daily_reset_beijing": "2026-10-12 15:00 +08:00",
+  "limitations": [
+    "Console measurements can lag and are point-in-time values, not reserved future balances",
+    "Credential display names do not prove the production configured key belongs to this project",
+    "Metrics do not identify all host/process owners; other project callers remain unverified",
+    "Daily reset follows midnight Pacific Time with DST; 15:00 Beijing is specific to this date"
+  ],
+  "official_quota_reference": "https://developers.google.com/youtube/v3/determine_quota_cost",
+  "official_reference_updated_utc": "2026-10-08"
+}

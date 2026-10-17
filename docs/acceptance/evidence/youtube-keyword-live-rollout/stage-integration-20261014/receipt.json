@@ -1,0 +1,57 @@
+{
+  "source": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/keyword-stage-integration-6kjktfm9/repo",
+  "started_at": "2026-10-13T18:13:22.483958+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-px_n71kw",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-px_n71kw/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.094
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_rollout_contract.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_database_channel_funnel.py",
+    "tests/unit/test_database_codex_text_recovery.py",
+    "tests/unit/test_dubbing_database.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/unit/test_vocabulary_outro.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "5279559455ec70ad65410778c05f7dc3a17b65958979dfd476a9818c357152f4",
+  "profile_sha256": "f321a7fafadef7a41accbedb8c91209b9928d8406cedcf5eb656e024da9a4743",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-px_n71kw/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "bc659d8fca093595d61b395750d101c0969dc1ba9f572d12d9c780e0aed004b3",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 81.209
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-px_n71kw/sandbox"
+  },
+  "finished_at": "2026-10-13T18:14:44.857464+00:00"
+}

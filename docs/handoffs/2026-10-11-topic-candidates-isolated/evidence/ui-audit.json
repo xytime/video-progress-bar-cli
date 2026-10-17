@@ -1,0 +1,32 @@
+{
+  "findings": [
+    {
+      "category": "violation",
+      "file": "src/web/templates/index.html",
+      "line": 538,
+      "message": "Enabled literal button has no detectable action or submit behavior.",
+      "remediation": "Connect the button to a real action, make it a submit button, or disable/remove it.",
+      "ruleId": "affordance.actionless-button",
+      "severity": "error"
+    },
+    {
+      "category": "violation",
+      "file": "src/web/templates/index.html",
+      "line": 577,
+      "message": "Enabled literal button has no detectable action or submit behavior.",
+      "remediation": "Connect the button to a real action, make it a submit button, or disable/remove it.",
+      "ruleId": "affordance.actionless-button",
+      "severity": "error"
+    }
+  ],
+  "mode": "strict",
+  "projectRoot": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "schemaVersion": 1,
+  "summary": {
+    "errors": 2,
+    "total": 2,
+    "unresolved": 0,
+    "violations": 2,
+    "warnings": 0
+  }
+}

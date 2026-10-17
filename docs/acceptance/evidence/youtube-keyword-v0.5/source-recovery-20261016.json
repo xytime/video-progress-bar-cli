@@ -1,0 +1,1307 @@
+{
+  "observed_at": "2026-10-16T07:26:22.602169+00:00",
+  "production_head": "65a38535373990afbe5f760951d7b38221ea3efd",
+  "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+  "cause": {
+    "parallel_commit": "65a38535373990afbe5f760951d7b38221ea3efd",
+    "runtime_file": "src/video_processing/pipeline_manager.py",
+    "old_runtime_source_hash": "27bedd3e9f6cafe93f2c31cd8078ed947d191de5878416ae839539053ec87b8c",
+    "parallel_task_completed": true
+  },
+  "deployment": {
+    "id": "855157080503440a839f6daf0f0c0a90",
+    "directory": "/Users/ryusei/Library/Application Support/VideoProcessing/deployments/keyword-v05-source-recovery-20261016-b",
+    "journal": {
+      "schema": 1,
+      "plan": "8de928159a3ece641970bbd8c04520a604458e1e9d3c801fe4f06de7636805bb",
+      "done": [
+        "baseline",
+        "freeze",
+        "stop",
+        "backup",
+        "adopt",
+        "start",
+        "resume",
+        "restore",
+        "verify"
+      ],
+      "pending": null,
+      "state": "COMPLETE",
+      "at": 1792135483.5206258,
+      "error": null,
+      "failed_step": "adopt"
+    },
+    "receipt_hashes": {
+      "plan.json": "22c2b6281640cba0e1ead2a81cbce3b0da3311409010a1df4f81231ca4963ccc",
+      "journal.json": "a2dca0f8adf99ed5e1da4f946316efd4515dd90b4f7dcbd3d7c3043fd760f7ec",
+      "stop.json": "48a8c07b35e824345f087b69f7f8a33dde541d0ff01ce9134db299b0c4c61eb9",
+      "backup-verified.json": "f566907ae5d6b0d019d4d4591b3ce7d49a0a9bd94df495b5fa528193b596a6b5",
+      "adopt.json": "d0bf1d1662f44e0920698f71476c424ad5e81a4864e5855b8b4bb4caa530e090",
+      "start.json": "235b6887ce929269536eb3989e6ab04f35c577e677c35c1f17a92941bccb5017",
+      "verify.json": "bd2ea71eb4990d8be6a6c04bc0bccdf96f3e56dca859f3c7d1b4728c74d59c93"
+    },
+    "retirement_proof_from": "/Users/ryusei/Library/Application Support/VideoProcessing/deployments/keyword-v05-long-term-20261016-a",
+    "native_final_readback": {
+      "observed_at": "2026-10-16T07:25:01.560747+00:00",
+      "journal": {
+        "schema": 1,
+        "plan": "8de928159a3ece641970bbd8c04520a604458e1e9d3c801fe4f06de7636805bb",
+        "done": [
+          "baseline",
+          "freeze",
+          "stop",
+          "backup",
+          "adopt",
+          "start",
+          "resume",
+          "restore",
+          "verify"
+        ],
+        "pending": null,
+        "state": "COMPLETE",
+        "at": 1792135483.5206258,
+        "error": null,
+        "failed_step": "adopt"
+      },
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+      "main": "65a38535373990afbe5f760951d7b38221ea3efd",
+      "dirty_count": 26,
+      "untracked_count": 1246,
+      "runtime_files": 392,
+      "exact_source_inventory_preserved": true,
+      "full_native_final_status": {
+        "control": {
+          "mode": "OFF",
+          "version": 55
+        },
+        "maintenance": {
+          "state": "RUNNING",
+          "phase": "DRAINING"
+        },
+        "jobs": [
+          {
+            "id": "5248267a620843959fe25cdb03fe4056",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 7,
+            "control_version": 53,
+            "idempotency": "refresh_36de3a8eca584358851b05e5b9fdbf3f_7_124453_0024375d7cee",
+            "state": "COMPLETE",
+            "started_at": "2026-10-16T05:31:19.931441+00:00",
+            "ended_at": "2026-10-16T05:31:20.637977+00:00",
+            "code": "OK",
+            "counts": {},
+            "kind": "REFRESH",
+            "has_more": 0,
+            "search_requests": 0,
+            "general_units": 1
+          },
+          {
+            "id": "aa2c62e5a8014b878ffa4cac121899df",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 7,
+            "control_version": 53,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_7_124453",
+            "state": "COMPLETE",
+            "started_at": "2026-10-16T05:31:02.853192+00:00",
+            "ended_at": "2026-10-16T05:31:04.600176+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 6,
+              "duplicate": 19,
+              "restricted": 22
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "473768a6b25c4cb3895c2e2d4323e88f",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 7,
+            "control_version": 53,
+            "idempotency": "refresh_36de3a8eca584358851b05e5b9fdbf3f_7_124452_3949ed46535c",
+            "state": "COMPLETE",
+            "started_at": "2026-10-16T01:31:06.817968+00:00",
+            "ended_at": "2026-10-16T01:31:07.608886+00:00",
+            "code": "OK",
+            "counts": {},
+            "kind": "REFRESH",
+            "has_more": 0,
+            "search_requests": 0,
+            "general_units": 1
+          },
+          {
+            "id": "ba71922539084b8093f5e4200c39f83c",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 7,
+            "control_version": 53,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_7_124452",
+            "state": "COMPLETE",
+            "started_at": "2026-10-16T01:30:49.578740+00:00",
+            "ended_at": "2026-10-16T01:30:51.461583+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 4,
+              "duplicate": 19,
+              "restricted": 20
+            },
+            "kind": "SCHEDULED",
+            "has_more": 0,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "b1a502837dc04267b00fee6c0ae55f1b",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 7,
+            "control_version": 53,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_7_124451",
+            "state": "COMPLETE",
+            "started_at": "2026-10-15T21:30:38.549445+00:00",
+            "ended_at": "2026-10-15T21:30:40.321058+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 20,
+              "duplicate": 5,
+              "restricted": 22
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "f7c3f5cb8b144ec8a7c82cb6e7f08069",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 42,
+            "idempotency": "refresh_36de3a8eca584358851b05e5b9fdbf3f_2_124447_142a5f01bcb0",
+            "state": "COMPLETE",
+            "started_at": "2026-10-15T05:37:12.927657+00:00",
+            "ended_at": "2026-10-15T05:37:13.905784+00:00",
+            "code": "OK",
+            "counts": {},
+            "kind": "REFRESH",
+            "has_more": 0,
+            "search_requests": 0,
+            "general_units": 1
+          },
+          {
+            "id": "233be1e7440547b6b10e8b68f7c5544c",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 42,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_2_124447",
+            "state": "COMPLETE",
+            "started_at": "2026-10-15T05:36:55.804138+00:00",
+            "ended_at": "2026-10-15T05:36:57.569431+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 5,
+              "duplicate": 20,
+              "restricted": 23
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "957790514db54ff4a5a0eb1c3868012d",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 42,
+            "idempotency": "refresh_36de3a8eca584358851b05e5b9fdbf3f_2_124446_07e295ebacf9",
+            "state": "COMPLETE",
+            "started_at": "2026-10-15T01:37:08.022948+00:00",
+            "ended_at": "2026-10-15T01:37:08.922942+00:00",
+            "code": "OK",
+            "counts": {},
+            "kind": "REFRESH",
+            "has_more": 0,
+            "search_requests": 0,
+            "general_units": 1
+          },
+          {
+            "id": "bb1b790cabbb4d7eb867f3dac74c2534",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 42,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_2_124446",
+            "state": "COMPLETE",
+            "started_at": "2026-10-15T01:36:50.818588+00:00",
+            "ended_at": "2026-10-15T01:36:52.646465+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 25,
+              "duplicate": 0,
+              "restricted": 23
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "73182ac657e44a9eab9771fdb9a5b552",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 32,
+            "idempotency": "refresh_36de3a8eca584358851b05e5b9fdbf3f_2_124441_0b19ccddb6e7",
+            "state": "COMPLETE",
+            "started_at": "2026-10-14T05:22:07.659603+00:00",
+            "ended_at": "2026-10-14T05:22:08.385322+00:00",
+            "code": "OK",
+            "counts": {},
+            "kind": "REFRESH",
+            "has_more": 0,
+            "search_requests": 0,
+            "general_units": 1
+          },
+          {
+            "id": "57deff6653d14a3d86d8530b885859e9",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 32,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_2_124441",
+            "state": "COMPLETE",
+            "started_at": "2026-10-14T05:21:50.269136+00:00",
+            "ended_at": "2026-10-14T05:21:52.068829+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 5,
+              "duplicate": 20,
+              "restricted": 21
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "fd2e71abfe5b404283e5f1d3e0a9002c",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 2,
+            "control_version": 26,
+            "idempotency": "scheduled_36de3a8eca584358851b05e5b9fdbf3f_2_124440",
+            "state": "COMPLETE",
+            "started_at": "2026-10-14T01:21:38.721107+00:00",
+            "ended_at": "2026-10-14T01:21:40.537034+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 3,
+              "duplicate": 22,
+              "restricted": 20
+            },
+            "kind": "SCHEDULED",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          },
+          {
+            "id": "dc6a28d3354a44b5b4baefc00b9bc815",
+            "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+            "topic_version": 1,
+            "control_version": 19,
+            "idempotency": "live-trial-plague-20261014-01",
+            "state": "COMPLETE",
+            "started_at": "2026-10-14T00:09:08.894958+00:00",
+            "ended_at": "2026-10-14T00:09:10.872872+00:00",
+            "code": "OK",
+            "counts": {
+              "new": 25,
+              "duplicate": 0,
+              "restricted": 20
+            },
+            "kind": "MANUAL",
+            "has_more": 1,
+            "search_requests": 1,
+            "general_units": 1
+          }
+        ],
+        "budget": {
+          "day": "2026-10-16",
+          "search": 0,
+          "general": 0
+        },
+        "search_open": false,
+        "can_enable": true,
+        "configuration": {
+          "topic_trial_mode": false,
+          "topic_quota_project": "gen-lang-client-0993011647",
+          "topic_scheduler_enabled": true,
+          "topic_search_daily_limit": 20,
+          "topic_admission_enabled": true,
+          "topic_admission_total_limit": 6,
+          "topic_quota_verified": true,
+          "topic_search_enabled": true,
+          "topic_general_daily_limit": 40
+        },
+        "rollout": {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/keyword-rollout.json",
+          "error": false,
+          "identity": "0d370b08315fee81c05549f60fcc804a75b1cc992c420742d95bcc227b35a6bb"
+        },
+        "collection": {
+          "scheduler_enabled": true,
+          "admission_available": true,
+          "automatic_used": 0,
+          "id": 1,
+          "admission": 0,
+          "version": 13,
+          "runtime_code": "SEARCH_CLOSED",
+          "runtime_at": "2026-10-16T07:24:59.200991+00:00"
+        },
+        "trial": {
+          "enabled": false,
+          "budget": {
+            "search": {
+              "used": 8,
+              "limit": 3,
+              "remaining": 0
+            },
+            "general": {
+              "used": 13,
+              "limit": 6,
+              "remaining": 0
+            }
+          }
+        }
+      },
+      "workers": {
+        "ui": {
+          "pid": 79150,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "auto-pipeline": {
+          "pid": 79150,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "queue-runner": {
+          "pid": 79150,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "ready-supervisor": {
+          "pid": 79150,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "keepalive-watchdog": {
+          "pid": 79150,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "ready-worker": {
+          "pid": 79446,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        },
+        "wallstreet-worker": {
+          "pid": 79448,
+          "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed",
+          "birth_matches": true,
+          "source_matches": true,
+          "cwd_matches": true
+        }
+      },
+      "complete_long_term_profile_verified": true,
+      "schedules_restored": true
+    },
+    "reopened_at": "2026-10-16T07:25:15.588839+00:00"
+  },
+  "preservation": {
+    "exact_inventory_unchanged": true,
+    "dirty_count": 26,
+    "untracked_paths": 1246,
+    "runtime_files": 392
+  },
+  "loaded_profile_verified": true,
+  "workers": [
+    {
+      "role": "ui",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    },
+    {
+      "role": "auto-pipeline",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    },
+    {
+      "role": "queue-runner",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    },
+    {
+      "role": "ready-supervisor",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    },
+    {
+      "role": "keepalive-watchdog",
+      "pid": 79150,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    },
+    {
+      "role": "ready-worker",
+      "pid": 79446,
+      "birth_matches": true,
+      "source_matches": true,
+      "source_hash": "aee901f6babfcb9982a2c3ea652d00d17fa699cd09b9bed14e79affc3fbd51ed"
+    }
+  ],
+  "maintenance": {
+    "schema": 1,
+    "version": 64,
+    "state": "RUNNING",
+    "reason": "部署 855157080503440a839f6daf0f0c0a90",
+    "at": 1792135481.3831758,
+    "maintenance_age_seconds": 0,
+    "maintenance_overdue": false,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE"
+  },
+  "state": {
+    "control": {
+      "mode": "DISCOVERY_ONLY",
+      "version": 56
+    },
+    "collection": {
+      "scheduler_enabled": true,
+      "admission_available": true,
+      "automatic_used": 0,
+      "id": 1,
+      "admission": 1,
+      "version": 14,
+      "runtime_code": "REFRESH_OR_ADMISSION",
+      "runtime_at": "2026-10-16T07:26:15.593793+00:00"
+    },
+    "maintenance": {
+      "state": "RUNNING",
+      "phase": "IDLE"
+    },
+    "budget": {
+      "day": "2026-10-16",
+      "search": 0,
+      "general": 0
+    },
+    "configuration": {
+      "topic_trial_mode": false,
+      "topic_quota_project": "gen-lang-client-0993011647",
+      "topic_scheduler_enabled": true,
+      "topic_search_daily_limit": 20,
+      "topic_admission_enabled": true,
+      "topic_admission_total_limit": 6,
+      "topic_quota_verified": true,
+      "topic_search_enabled": true,
+      "topic_general_daily_limit": 40
+    },
+    "rollout": {
+      "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/keyword-rollout.json",
+      "error": false,
+      "identity": "0d370b08315fee81c05549f60fcc804a75b1cc992c420742d95bcc227b35a6bb"
+    },
+    "search_open": true,
+    "topics": [
+      {
+        "id": "36de3a8eca584358851b05e5b9fdbf3f",
+        "name": "肺鼠疫",
+        "query": "'Pneumonic plague'|plague",
+        "category": "健康科学",
+        "lookback_days": 1,
+        "valid_days": 7,
+        "identity": "7dd736e160b16a33057f563fc77b295256c284c83ec70629a6719aaddf43818e",
+        "expires_at": "2026-10-22T21:30:37.255626+00:00",
+        "status": "ACTIVE",
+        "version": 7,
+        "last_run_at": "2026-10-16T05:31:02.853192+00:00",
+        "language": "en",
+        "min_duration": 180,
+        "auto_enabled": 1,
+        "next_run_at": "2026-10-16T09:31:02.853192+00:00",
+        "candidate_count": 93
+      },
+      {
+        "id": "523824a166d24a59bba04d4f146c50fc",
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "category": "科技产业",
+        "lookback_days": 7,
+        "valid_days": 7,
+        "identity": "f81edce338bbe2a0038718aced6f4e4c80219a5db2416d10159c3e4a66511be4",
+        "expires_at": "2026-10-19T06:05:39.340958+00:00",
+        "status": "PAUSED",
+        "version": 3,
+        "last_run_at": null,
+        "language": "en",
+        "min_duration": 180,
+        "auto_enabled": 0,
+        "next_run_at": null,
+        "candidate_count": 0
+      }
+    ]
+  },
+  "usage": {
+    "verified": true,
+    "limits": {
+      "profile": "v0.5",
+      "daily": 2,
+      "rolling": 6,
+      "inflight": 2,
+      "total": null,
+      "timezone": "Asia/Shanghai",
+      "rolling_hours": 168,
+      "min_duration": 180
+    },
+    "daily_used": 0,
+    "rolling_used": 1,
+    "total_used": 1,
+    "inflight": 0,
+    "day": "2026-10-16",
+    "code": "OK",
+    "next_at": null
+  },
+  "ledger": [
+    {
+      "key": "e7af5a820ea52bea299125f8daac84e484011f99baf26ca7af27ba49e31196bf",
+      "video_id": 5947,
+      "topic_id": "36de3a8eca584358851b05e5b9fdbf3f",
+      "topic_version": 2,
+      "score": 86,
+      "policy": "heat-v1-channel-policy-v1",
+      "at": "2026-10-15T01:37:08.989604+00:00",
+      "result": "ADMITTED",
+      "youtube_id": "X79tE-S-Aow"
+    }
+  ],
+  "latest_natural_jobs": {
+    "aa2c62e5a8014b878ffa4cac121899df": {
+      "id": "aa2c62e5a8014b878ffa4cac121899df",
+      "kind": "SCHEDULED",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T05:31:02.853192+00:00",
+      "ended_at": "2026-10-16T05:31:04.600176+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-16T05:31:04.583320+00:00",
+        "rows": [
+          {
+            "key": "0255ab1ef8c678dd0d0de2c85b91b81765b1672dfa509562ca167d18c65472f1",
+            "youtube_id": "oHOj-Rb0BfE",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 56, \"like_count\": 2, \"channel_id\": \"UCK2qSWHdjtBUKuIU62bhJKA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "1881bf79fe67c33997f5c463d40e7ddc377f161c9e8206170c496a496961c2ab",
+            "youtube_id": "T_9Vl_ZX9Wk",
+            "score": 12,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 314, \"like_count\": 8, \"channel_id\": \"UC8kgJmbp29LHRZ_z5xf5bog\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "1a4a0e734243aa1548e50e8950584a219b5f7e8a48bfbd39680d7a2fb5fd04ae",
+            "youtube_id": "Mr4gI-P32vo",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 5, \"like_count\": 0, \"channel_id\": \"UCF_emlwEUFxJvFm2Eqy2ZOQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "3258d281c4497bc6d38731a678f0e5287769375e5e70f403ec64bf13aa45acc8",
+            "youtube_id": "dVTJgxY7WUI",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1, \"like_count\": 0, \"channel_id\": \"UCDzgOazgxot_8pWK9P8tdyw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "42489e3a3f3ade5b6203be153f5c890a7c987064e1ea3a05fe433aaf99e49c11",
+            "youtube_id": "c01wtJbp7zc",
+            "score": 4,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 2154, \"like_count\": 4, \"channel_id\": \"UCNBmxc6FvKyxtCpUygcdINA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "447d22cbea29ae42960e2b805bf9e8d8869138bead26ed8463f0676bdf48f701",
+            "youtube_id": "PRI270SHzeE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 12, \"like_count\": 0, \"channel_id\": \"UCknjIkcQ7jkbYHi6w0_VaWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "461489927577d9b2e6f25cd03fa4fe459afe2046f9a0d916c0f64e4c8e19837e",
+            "youtube_id": "jUDL9xswJyE",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 12, \"like_count\": 0, \"channel_id\": \"UCoqHwXvG38b0pwLbPVfey4A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "47f27a66b92c67865c815ff632b8a1a5d53368e80733d8799c26999b5ac770d4",
+            "youtube_id": "EeX_bjNBuXA",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 5, \"like_count\": 1, \"channel_id\": \"UC7tNF-HWHVk4bmvFsnmau-A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "5cef19cc83c144f8d3d392fde39867c891d930bbf70f61ff88381d490a987d21",
+            "youtube_id": "ecqD3_pDYhk",
+            "score": 63,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1565, \"like_count\": 42, \"channel_id\": \"UCjbwkE_9W3moW2VKRymcKIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "707f11328748359ecfab2821c22bce903bc8463590804b165c0148c4a8fe26f5",
+            "youtube_id": "UT6UJ-jLW_Y",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 145, \"like_count\": 0, \"channel_id\": \"UCeX20-rTnN46DUD6C7IplWg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "7755bc6b63d5c123aaceb6ce6289d65ee24033c057ba2fcc0749478727668bc0",
+            "youtube_id": "ugfE8koA8_U",
+            "score": 3,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 62, \"like_count\": 4, \"channel_id\": \"UCL3lgQgdpw5N2o0ap2iUxig\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "78f7c02ef9ea829a2ad3b1846197736047982545d948efe1954066978531c23a",
+            "youtube_id": "hH6vxZ5RevE",
+            "score": 45,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1038, \"like_count\": 29, \"channel_id\": \"UCBqccx6BFMyG-2uakdCBfIA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "84c62cb7deebc360641f8777d675331929e6dd8b6c00571f6a9e9f575fa67773",
+            "youtube_id": "i-zWpOJox1A",
+            "score": 16,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 898, \"like_count\": 10, \"channel_id\": \"UCaLjq8bBXAA7lLlHaGHvI8w\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 2
+          },
+          {
+            "key": "8621cadc19807f312fc6492e586881d887ca0a22271f0f22478a3ee4f95d67d2",
+            "youtube_id": "Fvn23UesRk8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 28, \"like_count\": 0, \"channel_id\": \"UCz76yprlUpoaHVHt0ld78tA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "8d100f978697425dad50f9f589d4907695c45d9f5548c274edf1a9d1c31f3045",
+            "youtube_id": "LpADgdc9SHk",
+            "score": 8,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 243, \"like_count\": 5, \"channel_id\": \"UCUMX1rd8A3sCG7mW0QtuN6g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "a1fe817178f7ea3ffdedf3ca5e17f671352b9265131023a5b55176b8e226eb8a",
+            "youtube_id": "F0d7m6OQYwU",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 25, \"like_count\": 2, \"channel_id\": \"UCtcR3cRksA7VXpsXD_iTAQQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "a31b86454b28ae262cbaefb4167c43e8f572bf3783046a2d4343c0d9d18ee808",
+            "youtube_id": "oNCiB4kwocs",
+            "score": 19,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 571, \"like_count\": 12, \"channel_id\": \"UC3wA6LjGyATzIav4r2FBtFA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "c6f8983157045dc2a8341017fd1b9eff711542092b92f3ba3ef26e4050c863e1",
+            "youtube_id": "elORkcfdD-s",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 8, \"like_count\": 0, \"channel_id\": \"UCGlBT7KUE__eFJ1xAcuHh_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 2
+          },
+          {
+            "key": "ca1e64607a2323aa16f55afb72d371a78c1b3f02c2aaeb9b887c462686523f19",
+            "youtube_id": "mll96LRa9FE",
+            "score": 6,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 198, \"like_count\": 4, \"channel_id\": \"UCP4imkUyehirv5gAue80L_g\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 1
+          },
+          {
+            "key": "cf3dfd11c55f6a1c3d906feedeceab03000287b6d91e56da1536e517fb2d2937",
+            "youtube_id": "SIL9vjaSgkY",
+            "score": 5,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 338, \"like_count\": 3, \"channel_id\": \"UCzOKP6OwCCZX5eo9pIwtYhg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "d431096ff58d6b456f5f0f99f4d0703515f8d48b5839baf525705d98b88ff2fa",
+            "youtube_id": "d_HZbOTiwSU",
+            "score": 1,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 25, \"like_count\": 1, \"channel_id\": \"UCxOwFzvSeAgX-Axfvp_q-Yg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "e906ce336f75a1567548abceff490b633daf39d701409c38b82ff3130f210bee",
+            "youtube_id": "jD_5JhBOJWg",
+            "score": 40,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 857, \"like_count\": 129, \"channel_id\": \"UCqHBhR4PZlqXLBQeroBHyYw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 2
+          },
+          {
+            "key": "f49de6e0c6d388f836e16f471a82e64c558852b891ae52623dbec0926c5e341a",
+            "youtube_id": "DsX_SpgmGe4",
+            "score": 66,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1811, \"like_count\": 51, \"channel_id\": \"UCqVHGwQCmmGa2hjS7ydN4sQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "f4c34069db27dce618adc0420bdc61e017bb5ac36764b2135f79fe968a5325eb",
+            "youtube_id": "EcWWY9n0V8k",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 39, \"like_count\": 0, \"channel_id\": \"UC1tVcWFcKQaU3gZzyZoDJAw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 3
+          },
+          {
+            "key": "f7fda4c843af175bce54f682525544aad86f7ccd6b6120a5651208aa8c106cc4",
+            "youtube_id": "rNWZQazNBj0",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 93, \"like_count\": 0, \"channel_id\": \"UCSoAZhsSeqGUCe9BLHeM2Mw\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:04.546665+00:00",
+            "revision": 2
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        },
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "search",
+          "units": 1
+        }
+      ]
+    },
+    "5248267a620843959fe25cdb03fe4056": {
+      "id": "5248267a620843959fe25cdb03fe4056",
+      "kind": "REFRESH",
+      "state": "COMPLETE",
+      "code": "OK",
+      "started_at": "2026-10-16T05:31:19.931441+00:00",
+      "ended_at": "2026-10-16T05:31:20.637977+00:00",
+      "snapshot": {
+        "recorded_at": "2026-10-16T05:31:20.618934+00:00",
+        "rows": [
+          {
+            "key": "0024375d7cee48d56b2f798fe9c5eca03e952279575c7c7f07ac36255873b012",
+            "youtube_id": "V8Hco_6deFA",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 6, \"like_count\": 1, \"channel_id\": \"UC0KS3eUCso1SxN4JZHjDNkA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 3
+          },
+          {
+            "key": "090f6e5525f7885bb3b71c3501ca68a1957195d0b27d1832533031b5139e6388",
+            "youtube_id": "9TL8rVDOdec",
+            "score": 9,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 760, \"like_count\": 6, \"channel_id\": \"UCBop-nGNfOlhvTYwEkZIOhA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 3
+          },
+          {
+            "key": "3949ed46535c6668ae9d48e2426f395fe9edd2630024a7054a4bab9c3365a5ee",
+            "youtube_id": "_tCqepIeNfk",
+            "score": 10,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 210, \"like_count\": 12, \"channel_id\": \"UCzKxXybN5gXZ-iA5Vr_E8zg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 5
+          },
+          {
+            "key": "3e155d833ddc99b549df0d879a771002729d73178852a41afc84adf70a9296d0",
+            "youtube_id": "M2j4qjpFHWo",
+            "score": 4,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 77, \"like_count\": 3, \"channel_id\": \"UCrRN_hpt2L5tUMJcTrG6bgA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 5
+          },
+          {
+            "key": "8c333dbd7379008c1f926cb4d45f6c86ef53eeb9de715b77f504be03b41e32e0",
+            "youtube_id": "SaXi6CLheT8",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 1, \"like_count\": 0, \"channel_id\": \"UCE4IQdeSxbFq2_eUcsrYD_A\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 4
+          },
+          {
+            "key": "a25ae2b8c4ceb5a95aeba782212e0d5691c3ef364370867ad3c9b708e283ceae",
+            "youtube_id": "hF9Rri87hUY",
+            "score": 2,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 50, \"like_count\": 1, \"channel_id\": \"UCTTL2cgco_X9y3qWv0JwDcQ\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 3
+          },
+          {
+            "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+            "youtube_id": "I-wLIXC21wI",
+            "score": 90,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 135691, \"like_count\": 5080, \"channel_id\": \"UC_9iG1I_ic5jUOyzR9vTMBg\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 5
+          },
+          {
+            "key": "d6d8ae3b65951f78dec6a45a25d96a2cc8e631a5ddc5e408ea6a72f6018c84eb",
+            "youtube_id": "fscWxLLzAlk",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 15, \"like_count\": 0, \"channel_id\": \"UCiPeMgxBzzE4pcI_Q1CxGrA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 3
+          },
+          {
+            "key": "f52277ce438064821a313e571786da3dd4e2b13f21a31fa286af9c216017aae9",
+            "youtube_id": "b8S04YlQlMQ",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 14, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 4
+          },
+          {
+            "key": "fd6c28e6958c70bc0dfbb439b7ff8fdb6c646e07dc32739372a4a97877407c3e",
+            "youtube_id": "v5YrLAYft9w",
+            "score": 0,
+            "score_policy": "heat-v1-channel-policy-v1",
+            "score_inputs": "{\"view_count\": 4, \"like_count\": 0, \"channel_id\": \"UC0S2jUR_p8AF_d778nU6lbA\", \"source\": \"KEYWORD\"}",
+            "fetched_at": "2026-10-16T05:31:20.618934+00:00",
+            "revision": 3
+          }
+        ]
+      },
+      "budget": [
+        {
+          "project": "gen-lang-client-0993011647",
+          "bucket": "general",
+          "units": 1
+        }
+      ]
+    }
+  },
+  "score_recalculations": [
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "oHOj-Rb0BfE",
+      "computed": 3,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "T_9Vl_ZX9Wk",
+      "computed": 12,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "Mr4gI-P32vo",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "dVTJgxY7WUI",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "c01wtJbp7zc",
+      "computed": 4,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "PRI270SHzeE",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "jUDL9xswJyE",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "EeX_bjNBuXA",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "ecqD3_pDYhk",
+      "computed": 63,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "UT6UJ-jLW_Y",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "ugfE8koA8_U",
+      "computed": 3,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "hH6vxZ5RevE",
+      "computed": 45,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "i-zWpOJox1A",
+      "computed": 16,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "Fvn23UesRk8",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "LpADgdc9SHk",
+      "computed": 8,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "F0d7m6OQYwU",
+      "computed": 1,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "oNCiB4kwocs",
+      "computed": 19,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "elORkcfdD-s",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "mll96LRa9FE",
+      "computed": 6,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "SIL9vjaSgkY",
+      "computed": 5,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "d_HZbOTiwSU",
+      "computed": 1,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "jD_5JhBOJWg",
+      "computed": 40,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "DsX_SpgmGe4",
+      "computed": 66,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "EcWWY9n0V8k",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "aa2c62e5a8014b878ffa4cac121899df",
+      "youtube_id": "rNWZQazNBj0",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "V8Hco_6deFA",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "9TL8rVDOdec",
+      "computed": 9,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "_tCqepIeNfk",
+      "computed": 10,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "M2j4qjpFHWo",
+      "computed": 4,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "SaXi6CLheT8",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "hF9Rri87hUY",
+      "computed": 2,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "I-wLIXC21wI",
+      "computed": 90,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "fscWxLLzAlk",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "b8S04YlQlMQ",
+      "computed": 0,
+      "matches": true
+    },
+    {
+      "job": "5248267a620843959fe25cdb03fe4056",
+      "youtube_id": "v5YrLAYft9w",
+      "computed": 0,
+      "matches": true
+    }
+  ],
+  "current_candidate_state_counts": {
+    "RESTRICTED": 32,
+    "OBSERVING": 3
+  },
+  "current_high_score_candidates": [
+    {
+      "youtube_id": "I-wLIXC21wI",
+      "key": "d64c29d1d8322f71b497bb5232512fcc5935678159f097995333ae7bdacb784a",
+      "duration": 2669,
+      "state": "RESTRICTED",
+      "score": 90,
+      "policy": "heat-v1-channel-policy-v1",
+      "next_refresh": null,
+      "admission_code": null,
+      "inputs": {
+        "view_count": 135691,
+        "like_count": 5080,
+        "channel_id": "UC_9iG1I_ic5jUOyzR9vTMBg",
+        "source": "KEYWORD"
+      },
+      "task_id": null
+    }
+  ],
+  "tests": [
+    {
+      "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ewool5y2",
+      "receipt": {
+        "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "started_at": "2026-10-16T06:31:20.574737+00:00",
+        "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ewool5y2",
+        "storage_policy": "external-auto-cleanup",
+        "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ewool5y2/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.077
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/unit/test_pipeline_pre_submit_retry.py",
+          "tests/unit/test_vocabulary_outro_settings.py",
+          "tests/unit/test_wechat_upload_recovery.py"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "28122e64f98c5f160c81ff27e25441db18bb23798a7da72c3540c27ac7b9731d",
+        "profile_sha256": "d78228711e751da2a6438db01e2079d0327df3ffdc27d0bfc7e183789cee261e",
+        "browser_runtime": null,
+        "browser_runtime_sha256": null,
+        "media_runtime": null,
+        "media_runtime_sha256": null,
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 5.828
+        },
+        "exit_code": 0,
+        "cleanup": {
+          "status": "removed",
+          "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ewool5y2/sandbox"
+        },
+        "finished_at": "2026-10-16T06:31:27.151767+00:00"
+      },
+      "counts": {
+        "tests": 74,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "directory": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ikn9t_yr",
+      "receipt": {
+        "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+        "started_at": "2026-10-16T07:20:52.406326+00:00",
+        "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ikn9t_yr",
+        "storage_policy": "external-auto-cleanup",
+        "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ikn9t_yr/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.133
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/unit/test_keyword_long_term.py",
+          "tests/unit/test_keyword_long_term_rollout.py",
+          "tests/unit/test_deployment_host.py",
+          "tests/unit/test_maintenance.py",
+          "tests/unit/test_keyword_collection.py"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "28122e64f98c5f160c81ff27e25441db18bb23798a7da72c3540c27ac7b9731d",
+        "profile_sha256": "a35a4071ce0a3821a7a1b4df8368beb9f09b06b449227769f5fe00e76c63b251",
+        "browser_runtime": null,
+        "browser_runtime_sha256": null,
+        "media_runtime": null,
+        "media_runtime_sha256": null,
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 16.2
+        },
+        "exit_code": 0,
+        "cleanup": {
+          "status": "removed",
+          "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-ikn9t_yr/sandbox"
+        },
+        "finished_at": "2026-10-16T07:21:09.448560+00:00"
+      },
+      "counts": {
+        "tests": 82,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "completion": {
+    "long_term_running": true,
+    "new_v05_admitted_count": 0,
+    "full_acceptance": false,
+    "public_publication_claimed": false
+  },
+  "nonsecret_quota": {
+    "observed_at": "2026-10-16T07:21:03.174501+00:00",
+    "project": "gen-lang-client-0993011647",
+    "search_used": 0,
+    "search_limit": 100,
+    "general_used": 1,
+    "general_limit": 10000,
+    "source": "Cloud Console quota page after reload",
+    "valid_seconds": 3600
+  }
+}

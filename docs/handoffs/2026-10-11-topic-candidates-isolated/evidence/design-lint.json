@@ -1,0 +1,39 @@
+{
+  "findings": [
+    {
+      "severity": "info",
+      "path": "omitted.colors",
+      "message": "colors intentionally omitted — no colors tokens will be validated",
+      "rule": "declared-omission"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.typography",
+      "message": "typography intentionally omitted — no typography tokens will be validated",
+      "rule": "declared-omission"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.rounded",
+      "message": "rounded intentionally omitted — no rounded tokens will be validated",
+      "rule": "declared-omission"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.spacing",
+      "message": "spacing intentionally omitted — no spacing tokens will be validated",
+      "rule": "declared-omission"
+    },
+    {
+      "severity": "info",
+      "path": "omitted.components",
+      "message": "components intentionally omitted — no components tokens will be validated",
+      "rule": "declared-omission"
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "infos": 5
+  }
+}

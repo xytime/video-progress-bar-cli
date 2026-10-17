@@ -2,6 +2,8 @@
 
 业务证据：`docs/specs/wechat-product-link-2026-10-10.md`；服务契约由 `src/web/product_settings.py`、配置/目录/资料校验器负责。页面保存不等于发布器采用，已登记来源不等于现场平台核验，库存仅为采集时观测。此次只重构管理交互，不改变发布门禁。
 
+生词片尾是独立配置变体，使用原生 checkbox/select/dialog，复用现有表单视觉。配置事实源为 `config/vocabulary_outro.json`，接口与草稿所有者分别为 `src/web/vocabulary_outro_settings.py`、`src/web/static/js/vocabulary_outro_settings.js`。CAS 冲突保留草稿并要求重新载入，独立只读重试不清除写入错误；过期预览不覆盖新表单。离开及重新载入需确认丢弃，Escape 保留草稿并恢复焦点。记录、最近任务和配置的读取分别反馈。保存只影响未开始片尾步骤的任务，冻结记录不代表上传/发布。独立英语世界学习卡不经过此步骤，实际任务预览明确标注不适用。验证所有者为 `tests/browser/test_vocabulary_outro_settings_browser.py`。
+
 ## Canonical UI Map
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
@@ -11,6 +13,18 @@
 | Scrollbar | src/web/static/css/dashboard.css | dashboard 主题变量 | 对话框与列表内部滚动 | tests/browser/test_product_settings_browser.py |
 | Toast | feedback / catalog-import-feedback | product_settings.js | 页面状态及局部错误 live region，不引入额外 toast | tests/browser/test_product_settings_browser.py |
 | CRUD | src/web/product_settings.py | 已确认业务规格 | 草稿、保存、恢复草稿；不新增删除商品 | tests/unit/test_wechat_product_p1.py |
+
+专题候选是独立业务变体；共享语义颜色、字号、原生 select/dialog，不复制商品选品逻辑。
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Select/Listbox | native select | topic_candidates.html | 类别、时间范围、规则/整理筛选、排除原因 | tests/browser/test_topic_candidates_browser.py |
+| Form | src/web/static/js/topic_candidates.js | v0.2 规格 / API 验证 / CAS | 专题草稿、字段错误、失败保留、丢弃确认 | tests/browser/test_topic_candidates_browser.py |
+| Scrollbar | src/web/static/css/dashboard.css | 现有语义主题 | 继承 product_settings.css 的原生 dialog 内部滚动 | tests/browser/test_topic_candidates_browser.py |
+| Toast | feedback / form-feedback / action-feedback | topic_candidates.js | 页面与局部状态 live region | tests/browser/test_topic_candidates_browser.py |
+| CRUD | src/web/topic_candidates.py | docs/specs/topic-keyword-tracking-architecture.md | 暂停、归档、收藏、排除；无主表写入和发布权限 | tests/unit/test_topic_candidates_api.py |
+
+专题筛选、标题/频道查询与页码保存在 URL；中文输入结束后过滤。异步列表请求取消过期响应。重复写入禁用；冲突和服务故障保留表单。Escape 取消对话框，未保存修改需明确丢弃；焦点回到打开入口。服务端会话与 CSRF 校验不替代实名审核；真实对端仅限回环地址。搜索不自动执行或续跑，运行中暂停仍显示停止过程。
 
 ## 操作及恢复
 
@@ -22,3 +36,41 @@
 - 恢复历史先载入草稿，返回类型配置查看；再保存生成新版本。导入在弹窗执行原可靠资料校验，防止覆盖未保存草稿；未接入实时同步展示状态，不伪造可执行刷新。
 - 对话框使用原生 dialog 的焦点隔离、Escape与焦点恢复，关键保存中不允许关闭。错误为文本，必填校验关联字段并定位；loading/empty/error明确，页面自然滚动。
 - 主题/字号继承控制台偏好，日期固定使用 zh-CN / Asia/Shanghai。目标：语义HTML、可见焦点、手机无横向溢出，暗/亮/高对比可读。没有承诺其他未实测平台/读屏软件。
+
+## 共享工作台 v0.3
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Navigation | src/web/static/js/console_navigation.js | docs/specs/dashboard-home-ia-v0.3.md | 桌面侧栏、移动 dialog 共享一份导航 | tests/browser/test_dashboard_workspace.py |
+| Layout | src/web/static/css/console_workspace.css | DESIGN.md / dashboard.css 语义变量 | 总览、列表、商品与专题共享外框 | tests/browser/test_dashboard_workspace.py |
+| Readonly overview | src/web/static/js/dashboard_workspace.js | 现有列表 total_count；只读 capabilities | 成功、旧数据、空态、失败 | tests/browser/test_dashboard_workspace.py |
+
+根路径 view/tab/search/size/page 及全部既有筛选由 URL 恢复；旧 tab 链接仍支持。导航不提交业务操作，离开商品页复用现有草稿确认；专题模态编辑保持原焦点隔离。根路径内部切换保留手动表单值。首页点击数字进入同口径的全时间列表，受理与公开分开。404/不可用候选禁用入口并保留说明；OFF 仍可进入管理页面。
+
+
+## v0.3.1 已确认增补
+
+依据 `docs/specs/dashboard-home-fixes-v0.3.1.md`。专题状态、候选读取和写操作使用独立反馈域；只读重试不得清除保存冲突或草稿。同域恢复清旧错；12 秒读取超时、请求世代与筛选上下文防止旧响应覆盖。状态未核实时禁止依赖旧状态写入或发起搜索，更换筛选失败不保留旧条件候选。
+
+首页流程概览按父任务入库批次与北京时间显示；交集分子/同集合分母，零分母为“—”。本地提交/完成不证明平台公开，updated_at 只称最近记录更新。建议先查看按投递待核实、登录/恢复受阻、执行异常排序，平台审核/纯策略单列观察；分类由 DAL 单一谓词提供，attention_kind 与更新时间排序随 URL 恢复，零项弱化。
+
+## v0.4 已确认增补：YouTube 关键词采集
+
+依据 `docs/specs/youtube-keyword-collection-v0.4.md`，2026-10-13 用户确认隔离开发。本段覆盖 v0.2 的“仅手动搜索、无主表准入”业务限制，保留既有控件、草稿、读取故障和 CAS 契约；生产开放仍需另行确认。
+
+- 入口与频道白名单并列，保留 `/topic-candidates`。主要路径为新建采集规则 → 逐条启用定时采集 → 查看候选热度 → 受控达标准入 → 查看主队列任务。
+- 规则新增语言偏好、近期范围、最低时长；使用现有 native select，系统 popup 的几何与键盘行为可接受。旧规则保持原值，新规则 1 天/30 秒起步且自动关闭。
+- 页面访问和保存规则不触发搜索。定时运行归既有 queue-runner，页面只刷新状态；对话框编辑期间不以自动读取覆盖草稿。
+- 搜索、定时能力、达标准入分别展示。启用准入必须展示将进入自动制作、审查与发布的后果；确认对话框初始焦点在取消，关闭也明确停止新准入及尚未开始的处理。
+- 预算展示总搜索 20、自动最多 18、详情 40；计划每 4 小时顺延，维护、来源未核实、凭据错误、预算等待分开解释。热度分有统计与政策依据，不称 AI 质量分。
+- 候选沿用 25 条分页。观察轮候、未知统计、已达标待准入、已入队、已存在和排除区分；入队不等于已经制作或发布。
+- 验收所有者仍为 `tests/browser/test_topic_candidates_browser.py`，新增 K13/K14；共享首页、商品表单和手动选品回归继续纳入 `premium-ui.json`。
+
+## 点赞率区间筛选
+
+2026-10-14 用户确认指标为点赞数 ÷ 观看数，并授权直接上线。主列表复用 index.html 的筛选状态、URL 恢复和请求世代机制；DAL 在分页前按百分数闭区间筛选，总数使用同一谓词。默认不限制；启用时仅匹配观看数大于零、点赞数有效的数据，缺失不当作零。常用区间、原生双滑块和数字输入共享一组上下限；拖动仅预览，松手提交并回到第一页。上下限交叉钳制到另一端，清除筛选恢复不限；跨 Tab、分页和刷新保留。样式使用 dashboard.css 既有主题变量。验收见 test_dashboard_video_filters.py 和 test_dashboard_workspace.py。
+
+## 封面来源 v1（2026-10-15 用户确认）
+来源由 cover_provenance 契约提供，后台和 Telegram 使用相同来源、退化状态、哈希与版本。
+封面缩略图下原生 details 展示来源并可键盘展开；不依赖颜色和 hover。桌面和移动端共用该组件。详情为原生 details 的非模态浮层，限制视口宽度和高度，Escape 关闭并恢复来源标签焦点。
+投稿展示绑定的冻结文件，后续生成不改写历史；缺证据显示来源未核验。无重发、补通知或发布策略变更。

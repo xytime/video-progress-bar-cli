@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-29 | Codex | 用不可读标准输入验证扫码登录子进程独立启动 |
+| 1.1.0 | 2026-10-15 | Codex | 覆盖会话占用即时失败、延迟失败通知与请求会话路由。 |
 """
 
 import json
@@ -46,8 +47,7 @@ assert control.returncode != 0, 'Invalid stdin did not reproduce startup failure
 assert b'init_sys_streams' in control.stderr, control.stderr
 result = json.loads(agent.trigger_wechat_login())
 assert result['ok'], result
-_, status = os.waitpid(-1, 0)
-sys.exit(os.waitstatus_to_exitcode(status))
+assert '已完成' in result['message'], result
 """
     result = subprocess.run(
         [sys.executable, "-c", parent, str(tmp_path)],
@@ -63,3 +63,39 @@ sys.exit(os.waitstatus_to_exitcode(status))
     assert started["args"] == [
         "--login-only", "--relogin", "--state", str(tmp_path / "output/wechat_state.json")
     ]
+
+
+def test_login_busy_is_not_reported_as_started(tmp_path):
+    from unittest.mock import Mock, patch
+    from bot.pipeline_agent import PipelineAgent
+
+    agent = PipelineAgent.__new__(PipelineAgent)
+    agent.project_root = tmp_path
+    agent.output_dir = tmp_path / 'output'
+    agent.venv_python = sys.executable
+    agent.chat_id = 123
+    proc = Mock()
+    proc.wait.return_value = 11
+    with patch('bot.pipeline_agent.subprocess.Popen', return_value=proc) as launch, \
+         patch('bot.pipeline_agent.build_subprocess_env', return_value={}) as env:
+        result = json.loads(agent.trigger_wechat_login())
+    assert not result['ok']
+    assert '会话正被占用' in result['error']
+    assert env.call_args.args[0]['TELEGRAM_CHAT_ID'] == '123'
+    assert launch.call_args.kwargs['stdin'] == subprocess.DEVNULL
+
+
+def test_late_login_failure_notifies_requester():
+    from unittest.mock import Mock
+    from bot.pipeline_agent import PipelineAgent
+
+    agent = PipelineAgent.__new__(PipelineAgent)
+    agent.send_telegram_message = Mock()
+    proc = Mock(pid=42)
+    proc.wait.return_value = 2
+    agent._watch_wechat_login(proc)
+    assert '退出码 2' in agent.send_telegram_message.call_args.args[0]
+    agent.send_telegram_message.reset_mock()
+    proc.wait.return_value = 0
+    agent._watch_wechat_login(proc)
+    agent.send_telegram_message.assert_not_called()

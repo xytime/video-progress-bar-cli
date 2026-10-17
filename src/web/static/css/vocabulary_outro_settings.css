@@ -1,0 +1,12 @@
+/* 生词片尾页面布局；语义颜色、表单与对话框沿用现有控制台。 */
+.vocabulary-settings .outro-layout { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:18px; align-items:start; }
+.vocabulary-settings .outro-toggle { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 0; margin:0; border-bottom:1px solid var(--border); font-size:.875rem; }
+.vocabulary-settings .outro-toggle:last-child { border-bottom:0; }
+.vocabulary-settings .outro-toggle small { display:block; margin-top:4px; font-weight:normal; }
+.vocabulary-settings input[type="checkbox"] { width:22px; height:22px; flex:0 0 22px; margin:0; accent-color:var(--blue); }
+.vocabulary-settings .outro-record { padding:14px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.vocabulary-settings .outro-record p { margin:4px 0; }
+.vocabulary-settings #feedback { white-space:pre-line; overflow-wrap:anywhere; }
+.vocabulary-settings #feedback:empty { display:none; }
+.vocabulary-settings .preview-panel button { margin-top:12px; }
+@media(max-width:1050px) { .vocabulary-settings .outro-layout { grid-template-columns:minmax(0,1fr); } }

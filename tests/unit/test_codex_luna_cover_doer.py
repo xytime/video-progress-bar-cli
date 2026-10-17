@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-10-01 | Codex | 验证双会话、回执门禁与失败释放 claim |
 """
 from __future__ import annotations
@@ -12,6 +13,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from scripts import run_codex_luna_cover_doer as worker
@@ -34,9 +36,27 @@ def _task(tmp_path: Path):
     return queue, task, args
 
 
-def test_luna_two_cli_sessions_write_accepted_receipt(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("route", ["legacy", "failed_once", "circuit", "expired", "invalid_result"])
+def test_luna_two_cli_sessions_write_accepted_receipt(tmp_path: Path, monkeypatch, route):
     queue, task, args = _task(tmp_path)
     monkeypatch.setattr(worker, "_generated_images_dir", lambda: tmp_path)
+    if route != "legacy":
+        attempt = task.finish_dir / "antigravity_attempt.json"
+        attempt.unlink()
+        if route in {"failed_once", "invalid_result"}:
+            attempt.write_text(json.dumps({"status": "failed", "attempt_number": 1}))
+        if route == "invalid_result":
+            (task.finish_dir / "result.json").write_text(json.dumps({"task_id": task.task_id}))
+        if route == "expired":
+            task.payload["generation_deadline_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        if route in {"failed_once", "invalid_result"}:
+            assert not queue.antigravity_due(task)
+        assert queue.prepare_luna_handoff(task, circuit_open=route == "circuit", budget_seconds=330)
+        assert not queue.should_fallback(task)
+        assert not queue.antigravity_due(task)
+        deadline = queue.luna_deadline(task)
+        assert queue.prepare_luna_handoff(task, circuit_open=True, budget_seconds=1000)
+        assert queue.luna_deadline(task) == deadline
     calls = []
 
     def fake_cli(command, work_dir, timeout):
@@ -75,3 +95,13 @@ def test_luna_rejection_falls_back_without_result(tmp_path: Path, monkeypatch):
     assert not (task.finish_dir / "result.json").exists()
     assert json.loads((task.finish_dir / "luna_attempt.json").read_text())["status"] == "failed"
     assert not (task.finish_dir / "claim.json").exists()
+
+
+def test_handoff_timeout_and_failed_attempt_are_only_fallback_routes(tmp_path):
+    queue, task, _ = _task(tmp_path)
+    assert not queue.should_fallback(task, datetime.now(timezone.utc) + timedelta(hours=1))
+    assert queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=330)
+    assert not queue.should_fallback(task)
+    assert queue.should_fallback(task, queue.luna_deadline(task))
+    (task.finish_dir / "luna_attempt.json").write_text(json.dumps({"status": "failed", "error": "generation_failed"}))
+    assert queue.should_fallback(task)

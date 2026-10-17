@@ -1,0 +1,50 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "started_at": "2026-10-13T18:09:12.210429+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjb7mzcv",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjb7mzcv/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.092
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_keyword_rollout_contract.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_maintenance_cron.py",
+    "tests/unit/test_deployment.py",
+    "tests/unit/test_deployment_host.py",
+    "tests/unit/test_deployment_sources.py",
+    "tests/unit/test_deployment_schedules.py",
+    "tests/browser/test_topic_candidates_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "c30bcdaec9cf091cca60f337e87b4b0f7403a8e1c063f86c291e1b8644af43ec",
+  "profile_sha256": "35dac4eb2e4fd9deec6e125d4cc8bd588ed8ffb51b8d121cae275f42632176e4",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjb7mzcv/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "fa3b4c1485fe6658fb65802620920767176953cf236d4c7d9281f566ec0cd3fd",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 75.595
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-yjb7mzcv/sandbox"
+  },
+  "finished_at": "2026-10-13T18:10:28.843515+00:00"
+}

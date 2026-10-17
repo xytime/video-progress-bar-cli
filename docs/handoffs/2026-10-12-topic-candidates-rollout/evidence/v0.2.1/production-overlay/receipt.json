@@ -1,0 +1,50 @@
+{
+  "source": "/private/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-wd71cx8u",
+  "snapshot": "/private/tmp/video-pytest-rjg73j8i/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.077
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_caption_processor_red_blue.py",
+    "tests/unit/test_caption_translation_guard.py",
+    "tests/unit/test_dashboard_add_channel.py",
+    "tests/unit/test_dashboard_control_plane_security.py",
+    "tests/unit/test_database_slices.py",
+    "tests/unit/test_english_world_product_production.py",
+    "tests/unit/test_four_pillars_optimization.py",
+    "tests/unit/test_maintenance.py",
+    "tests/unit/test_maintenance_entries.py",
+    "tests/unit/test_product_final_receipts.py",
+    "tests/unit/test_source_subtitle_preparation.py",
+    "tests/unit/test_subprocess_env.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_clues_hub.py",
+    "tests/unit/test_topic_runtime_failures.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/unit/test_vocabulary_export.py",
+    "tests/unit/test_wallstreet_product_contract.py",
+    "tests/unit/test_wechat_product_attachment_v2.py",
+    "tests/unit/test_wechat_product_catalog.py",
+    "tests/unit/test_wechat_product_groups.py",
+    "tests/unit/test_wechat_product_p1.py",
+    "tests/unit/test_wechat_product_picker.py",
+    "tests/unit/test_wechat_product_selection.py",
+    "tests/unit/test_ted_source_cleanup.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "3b0d201f3c573896d455402e7a52cd6c8f09a59ef84a64e464e8897dde4c83ed",
+  "profile_sha256": "85f76a475ff8e3a2b1a019c0bace10c3eb1a9002b7e303d22af9f316b5a46c68",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 40.057
+  },
+  "finished_at": "2026-10-12T04:56:39.706076+00:00"
+}

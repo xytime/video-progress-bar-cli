@@ -1,0 +1,48 @@
+{
+  "production_head": "e1399711e6c0a50f01a7e793174ebfd49e5bacc7",
+  "source": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing",
+  "snapshot": "/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-iwrrudpz",
+  "base_source_manifest_sha256": "aa48c3b3cb71b6cf599eae9bec7145e21c39f2bb47be139c1dc7f93371bb9251",
+  "overlays": {
+    "src/video_processing/db/database.py": {
+      "production_working_sha256": "3b7b5657fb41a44a277e778c5df3c44c7a143f8d2cb84945876b0bc52867914d",
+      "integrated_sha256": "d1f6f1b727756d9f227034fe880ea03dd7447a4516bd9e5506c303b002e9892e"
+    },
+    "src/video_processing/processors/caption_processor.py": {
+      "production_working_sha256": "f263a496dac31a6fafc11c61a560cdb104bc2618819a81f0745ce54ed5875d04",
+      "integrated_sha256": "f263a496dac31a6fafc11c61a560cdb104bc2618819a81f0745ce54ed5875d04"
+    },
+    "src/video_processing/utils/subtitle_translation_provider.py": {
+      "production_working_sha256": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8",
+      "integrated_sha256": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8"
+    },
+    "src/video_processing/utils/vocab_helper.py": {
+      "production_working_sha256": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2",
+      "integrated_sha256": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2"
+    },
+    "scripts/submit_generic_douyin.py": {
+      "production_working_sha256": "588bfdc8dbbd5a60f02725738744ecdb0a2262e646776923d6919ec7359c37ad",
+      "integrated_sha256": "588bfdc8dbbd5a60f02725738744ecdb0a2262e646776923d6919ec7359c37ad"
+    },
+    "config/wechat_products.json": {
+      "production_working_sha256": "9fabcb096826645c4efe70583028397ecf4d2142ee18a59a27bf005143ad89f0",
+      "integrated_sha256": "9fabcb096826645c4efe70583028397ecf4d2142ee18a59a27bf005143ad89f0"
+    },
+    "src/video_processing/topic_clues/__init__.py": {
+      "production_working_sha256": "034b2034c5655a3969a830f45008bb530f2fcfbd20a22c6c8c1cb5bf2cfe3983",
+      "integrated_sha256": "034b2034c5655a3969a830f45008bb530f2fcfbd20a22c6c8c1cb5bf2cfe3983"
+    },
+    "src/video_processing/topic_clues/hub.py": {
+      "production_working_sha256": "f5df32af6d0b8eb9df07687ace19eb7e7c092fd82fa66174030fb767976197b8",
+      "integrated_sha256": "f5df32af6d0b8eb9df07687ace19eb7e7c092fd82fa66174030fb767976197b8"
+    },
+    "tests/unit/test_topic_clues_hub.py": {
+      "production_working_sha256": "64a015cbdc5eb673691612648539372574a7d1271d11d307741cf7a4b0c37355",
+      "integrated_sha256": "64a015cbdc5eb673691612648539372574a7d1271d11d307741cf7a4b0c37355"
+    },
+    "tests/unit/test_vocabulary_export.py": {
+      "production_working_sha256": "aa439ebaba7d22bbcd122566563a788761ad577f55eeae63db06cc9e85d5a73d",
+      "integrated_sha256": "aa439ebaba7d22bbcd122566563a788761ad577f55eeae63db06cc9e85d5a73d"
+    }
+  }
+}

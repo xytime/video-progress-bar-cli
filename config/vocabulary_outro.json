@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "profiles": {
+    "english_world": {
+      "enabled": true,
+      "channel_ids": []
+    },
+    "wallstreet": {
+      "enabled": true,
+      "channel_ids": [
+        "UCTK_cv-y88CScoudcXnS1Ew"
+      ]
+    },
+    "ted": {
+      "enabled": true,
+      "channel_ids": [
+        "UCAuUUnT6oDeKwE6v1NGQxug",
+        "UCsT0YIqwnpJCM-mx7-gSA4Q"
+      ]
+    },
+    "ai_news": {
+      "enabled": true,
+      "channel_ids": []
+    },
+    "other": {
+      "enabled": true,
+      "channel_ids": []
+    }
+  }
+}

@@ -6,11 +6,15 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
+| maintenance-v1 | 2026-10-12 | Codex | 声明维护状态及仅继承 FD 可验证的单项子进程归属。 |
+| topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 增加原片首尾包装清理开关，生产核验后显式启用。 |
 | insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
 | insight-v1.2 | 2026-10-09 | Codex | 完整 B 策划独立超时，不增加普通 A 预算。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
+| 3.75.0 | 2026-10-12 | Codex | 新增 enable_wechat_article_link, wechat_article_timeout_seconds, wechat_article_policy_path，支持公众号文章挂接一期 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
 | 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
@@ -120,7 +124,7 @@ from pathlib import Path
 from typing import Optional, List, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
@@ -254,6 +258,11 @@ class Settings(BaseSettings):
     wechat_product_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_products.json"
     wechat_product_status_path: Path = _PROJECT_ROOT / "output" / "wechat_product_runtime.json"
 
+    # 视频号公众号文章扩展链接挂接（一期：已发表文章链接）。默认关闭。
+    enable_wechat_article_link: bool = False
+    wechat_article_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
+    wechat_article_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_articles.json"
+
 
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
@@ -323,6 +332,8 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-v4-flash"
     # DeepSeek 一体化翻译+vocabulary 候选：完成 A/B 对比前保持关闭。
     enable_deepseek_vocab_fallback: bool = True
+    # 后台生词片尾配置独立于商品和公众号文章；每个任务在片尾开始时冻结。
+    vocabulary_outro_policy_path: Path = _PROJECT_ROOT / "config" / "vocabulary_outro.json"
     # 单条字幕任务用于 DeepSeek 对比候选的总预算；超出后保留此前可用候选并继续成片。
     deepseek_subtitle_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     # Gemini 主字幕候选的整片总预算；单请求超时会按剩余预算自动收紧。
@@ -359,6 +370,63 @@ class Settings(BaseSettings):
     # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
     youtube_data_api_key: str = ""
     youtube_data_api_timeout_sec: int = 20
+
+    # 维护状态独立于业务库；首次缺失拒绝领取，须由本机命令显式初始化。
+    maintenance_state_path: Path = _PROJECT_ROOT / "output" / "maintenance-state.json"
+    maintenance_child_receipt: str = ""
+    maintenance_child_fd: int = -1
+
+    def maintenance_child_environment(self) -> dict[str, str]:
+        """仅用于继承标准环境；业务代码不自行读取环境变量。"""
+        return dict(os.environ)
+
+    # 专题候选：本轮仅开发和隔离验收，生产搜索保持关闭。
+    topic_scheduler_enabled: bool = Field(default=False, description="关键词定时采集宿主开关")
+    topic_admission_enabled: bool = Field(default=False, description="关键词达标准入及自动处理宿主开关")
+    topic_admission_total_limit: int = Field(default=1, ge=0, le=1000, description="首轮累计上限；经LONG_TERM精确合同采用6时，启用日2/滚动168小时6/在途2，历史不退款")
+    topic_search_enabled: bool = False
+    topic_trial_mode: bool = Field(default=False, description="试运行累计最多 3 次搜索/6 次详情；跨日、重启和项目切换不重置")
+    topic_quota_verified: bool = False
+    topic_quota_project: str = ""
+    topic_search_daily_limit: int = Field(default=20, ge=1, le=20)
+    topic_general_daily_limit: int = Field(default=40, ge=1, le=40)
+    topic_rollout_path: Path = _PROJECT_ROOT / "output" / "keyword-rollout.json"
+    _topic_rollout_record: dict | None = PrivateAttr(default=None)
+    _topic_rollout_error: bool = PrivateAttr(default=False)
+
+    def model_post_init(self, context):
+        self.reload_topic_rollout()
+
+    def reload_topic_rollout(self):
+        """仅覆盖固定的非秘密关键词字段；配置异常保持关闭，由门禁报告。"""
+        from .keyword_rollout import validate_transition, phase_values
+        import json
+        import time
+        previously_loaded = self._topic_rollout_record is not None or self._topic_rollout_error
+        self._topic_rollout_record = None
+        self._topic_rollout_error = False
+        try:
+            if not self.topic_rollout_path.exists():
+                if previously_loaded:
+                    raise ValueError("KEYWORD_PROFILE_REMOVED")
+                return
+            if self.topic_rollout_path.resolve() != self.topic_rollout_path.absolute():
+                raise ValueError("KEYWORD_PROFILE_SYMLINK")
+            record = json.loads(self.topic_rollout_path.read_text())
+            if not isinstance(record, dict) or set(record) != {"transition", "deployment_id", "directory"}:
+                raise ValueError("KEYWORD_PROFILE_INVALID")
+            values = validate_transition(record["transition"], time.time(), fresh=False)
+            self._topic_rollout_record = record
+        except (OSError, ValueError, TypeError, KeyError):
+            self._topic_rollout_error = True
+            values = phase_values("OFF")
+        for name, value in values.items():
+            setattr(self, name, value)
+
+    def topic_rollout_snapshot(self):
+        from .keyword_rollout import digest
+        return dict(path=str(self.topic_rollout_path), error=self._topic_rollout_error,
+                    identity=digest(self._topic_rollout_record) if self._topic_rollout_record else None)
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]
@@ -612,6 +680,13 @@ class Settings(BaseSettings):
     background_preparation_batch_limit: int = 1
     source_subtitle_languages: str = "en.*,en"
     source_subtitle_retry_hours: int = 6
+    source_audio_preflight_enabled: bool = True
+    source_audio_model_path: Path = Path.home() / ".cache/whisper/base.pt"
+    source_audio_preflight_timeout_seconds: int = 600
+    source_audio_max_duration_seconds: int = 1800
+    source_audio_max_attempts: int = 3
+    ai_cover_provider_cooldown_seconds: int = 900
+    monitor_translation_timeout_seconds: int = 30
 
     # 公开视频提交窗口。默认关闭，避免成片在等待窗口时落后于同类内容；
     # 如需恢复定时发布，可在 .env 将开关显式设为 true。

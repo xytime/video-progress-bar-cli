@@ -29,6 +29,8 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.10.0 | 2026-09-03 | Codex | 英语世界投稿强制申请原创；界面未确认声明时禁止进入发表。 |
 | 1.11.0 | 2026-09-03 | Codex | 仅在原创声明回执完整确认后记录视频号受理，缺失证据安全失败。 |
 | 1.11.1 | 2026-09-06 | Codex | 领取前复核最终音频 QA 的内容指纹，防止旧 PASS 掩盖文件覆盖。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -60,6 +62,10 @@ _UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_DEFERRED = 10
 EXIT_PRODUCT_WAIT = 14
 
+
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied, start_current
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def _english_world_uploader_command(
     item: dict, evidence_dir: Path, *, require_original_declaration: bool = True,
@@ -320,6 +326,7 @@ def _manual_authorization_active(item: dict) -> bool:
     return expires_at > datetime.now(timezone.utc)
 
 
+@guarded("english-submit", lambda review_id, **kw: "review:" + str(review_id), waiting=True)
 def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> int:
     """领取并执行一次投稿；即使浏览器异常也保留可审计的终态回执。"""
     if settings.wechat_publishing_paused:
@@ -356,6 +363,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             logger.info("English World submission deferred because WeChat publication is busy: %s", review_id)
             return EXIT_DEFERRED
 
+        start_current()
         if pending["state"] != "SUBMISSION_APPROVED":
             return 0
         if settings.enable_wechat_comment_interaction:
@@ -409,7 +417,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             )
             if not settings.wechat_headless:
                 command.append("--no-headless")
-            result = subprocess.run(
+            result = run_admitted(
                 command, cwd=str(_PROJECT_ROOT), text=True, capture_output=True,
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
@@ -484,6 +492,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
     return 0
 
 
+@single_script
 def main() -> int:
     parser = argparse.ArgumentParser(description="提交已批准的英语世界学习卡到视频号")
     parser.add_argument("--review-id", required=True, help="Telegram 审核项 ID")

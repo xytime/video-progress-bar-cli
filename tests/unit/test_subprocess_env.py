@@ -70,7 +70,7 @@ def test_pipeline_manager_delegates_to_subprocess_env(monkeypatch):
     assert res == {"TEST_ENV": "1"}
 
 
-def test_cover_generator_payload_file(tmp_path: Path):
+def test_cover_generator_payload_file(tmp_path: Path, isolated_running_maintenance):
     payload_file = tmp_path / "test_payload.json"
     payload_data = {
         "title": "测试封面标题",
@@ -90,6 +90,7 @@ def test_cover_generator_payload_file(tmp_path: Path):
         str(output_cover),
     ]
     env = build_subprocess_env()
+    env["MAINTENANCE_STATE_PATH"] = str(isolated_running_maintenance.path)
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0
     assert output_cover.is_file()

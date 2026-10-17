@@ -1,0 +1,28 @@
+{
+  "source": "/private/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-iwrrudpz",
+  "snapshot": "/private/tmp/video-pytest-es1_4jjo/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.128
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/browser/test_browser_isolation.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "b24f5fc70992ee2f385c9c2bc0f3cd898100629edf75667ad0cee2d2e3c3d719",
+  "profile_sha256": "f99a7952c9b176a18a3166a91382b383c6b8667ddc5dd7f33f9fabc27e373c29",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-es1_4jjo/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "8137b091cf2bc2c3b095a5d43021443fb9b1e25930cbea280ac6871706ab8909",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 6.432
+  },
+  "finished_at": "2026-10-12T07:18:28.947199+00:00"
+}

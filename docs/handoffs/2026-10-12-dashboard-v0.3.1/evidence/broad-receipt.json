@@ -1,0 +1,29 @@
+{
+  "source": "/private/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-dh3rrnqa",
+  "snapshot": "/private/tmp/video-pytest-lu8k3tm2/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.076
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit",
+    "tests/browser"
+  ],
+  "timeout_seconds": 900,
+  "source_manifest_sha256": "cec4d922ce2aeb1d90f914b3af2e55dc2ddeec771f4a17a2c4d94eafda54927a",
+  "profile_sha256": "ba003f710b59328986a3c0c833bc9c50f394f1f7cb4633bf82b6744ac7d10db1",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-lu8k3tm2/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "65a8487ffb8ea5f879cf4cbda7d85715b70667186b5749d2763625fb884a210e",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 1,
+    "seconds": 814.99
+  },
+  "finished_at": "2026-10-12T07:18:59.730652+00:00"
+}

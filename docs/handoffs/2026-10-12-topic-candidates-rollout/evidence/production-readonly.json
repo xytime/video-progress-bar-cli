@@ -1,0 +1,290 @@
+{
+  "observed_at": "2026-10-11T16:15:58.329989+00:00",
+  "method": "Read-only, no application imports, no secret values, no YouTube API calls",
+  "production_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "branch": "main",
+  "head": "f0ac39a7cfc093cfdccf2c4d3a1ca03b90ec886f",
+  "dirty": "M .gitignore\n M config/wechat_products.json\n M scripts/submit_generic_douyin.py\n M src/video_processing/db/database.py\n M src/video_processing/processors/caption_processor.py\n M src/video_processing/utils/subtitle_translation_provider.py\n M src/video_processing/utils/vocab_helper.py\n?? .agents/skills/baiju-guoxi/\n?? assets/baiju_guoxi/\n?? config/wechat_products.json.lock\n?? docs/content_strategy/Topic_Sense_Playbook.md\n?? docs/content_strategy/cases/\n?? docs/experience_log/2026-10-05_hit_case_study_and_editorial_sense.md\n?? docs/guides/topic_selection_editorial_playbook.md\n?? docs/handoffs/2026-10-06-deep-insight-engine-codex/\n?? docs/work_orders/2026-10-10_conservative_ad_removal_system.md\n?? experiments/\n?? scripts/generate_baiju_guoxi.py\n?? scripts/generate_baiju_guoxi_cover.py\n?? scripts/generate_handdrawn_option_c.py\n?? scripts/generate_handdrawn_option_c_v2.py\n?? scripts/generate_quality_preview_options.py\n?? scripts/make_douyin_poster.py\n?? scripts/make_tech_titans_assets.py\n?? scripts/preview_abba_safe_zones.py\n?? scripts/render_baiju_guoxi_video.py\n?? scripts/render_final_handwritten_pager.py\n?? scripts/test_4badges.py\n?? scripts/test_vibrant_banner.py\n?? src/video_processing/baiju_guoxi/\n?? src/video_processing/processors/outro_vocab_card.py\n?? src/video_processing/topic_clues/\n?? tests/unit/test_baiju_guoxi.py\n?? tests/unit/test_outro_vocab_card.py\n?? tests/unit/test_topic_clues_hub.py\n?? tests/unit/test_vocabulary_export.py",
+  "dashboard_stats": {
+    "total": 5673,
+    "pending": 2142,
+    "active": 6,
+    "breakdown": {
+      "PENDING": 2142,
+      "PROCESSING": 5,
+      "PUBLISH_PRECHECK": 0,
+      "DOWNLOADING": 0,
+      "TRANSCRIBING": 1,
+      "COPYWRITING": 0,
+      "PUBLISHING": 0,
+      "SUBMITTED_UNBOUND": 27,
+      "SUBMITTED_BOUND": 205,
+      "UNDER_REVIEW": 1,
+      "UNCERTAIN": 2,
+      "PUBLISHED": 848,
+      "FAILED": 469,
+      "LOGIN_REQUIRED": 0
+    },
+    "resource_control": {
+      "ffmpeg_config": "/Users/ryusei/Library/Application Support/VideoProcessing/ffmpeg-slot/resource-limits.json",
+      "ffmpeg_limit": 1,
+      "ffmpeg_config_error": null,
+      "ffmpeg_guard_enabled": true,
+      "pid": 99036
+    },
+    "server_time": "00:15:58"
+  },
+  "allowlisted_env_flags_only": {
+    "rg_exit_code": 0,
+    "lines": [
+      "119:DASHBOARD_BIND_HOST=0.0.0.0",
+      "122:ENABLE_MARKET_HOURS_GUARD=true"
+    ],
+    "limitation": "Disk values only; process environment overrides are not inspected."
+  },
+  "cron": {
+    "exit_code": 0,
+    "known_tasks": [
+      {
+        "schedule": "*/30 * * * *",
+        "task_labels": [
+          "monitor_channels.py"
+        ],
+        "production_root_referenced": true
+      },
+      {
+        "schedule": "15 */3 * * *",
+        "task_labels": [
+          "rescore_refresh.py"
+        ],
+        "production_root_referenced": true
+      },
+      {
+        "schedule": "* * * * *",
+        "task_labels": [
+          "run_publication_window.py"
+        ],
+        "production_root_referenced": true
+      }
+    ]
+  },
+  "launch_agents": [
+    {
+      "Label": "com.videopipeline.ai-cover-doer",
+      "WorkingDirectory": "/Users/ryusei",
+      "RunAtLoad": true,
+      "StartInterval": 180,
+      "file": "com.videopipeline.ai-cover-doer.plist",
+      "maintained_program_paths": [],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.bot",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "KeepAlive": true,
+      "RunAtLoad": true,
+      "file": "com.videopipeline.bot.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/bot/telegram_bot.py"
+      ],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.english-world-daily",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "StartCalendarInterval": [
+        {
+          "Hour": 2,
+          "Minute": 0
+        },
+        {
+          "Hour": 4,
+          "Minute": 30
+        },
+        {
+          "Hour": 10,
+          "Minute": 0
+        },
+        {
+          "Hour": 14,
+          "Minute": 0
+        },
+        {
+          "Hour": 16,
+          "Minute": 0
+        },
+        {
+          "Hour": 21,
+          "Minute": 0
+        }
+      ],
+      "file": "com.videopipeline.english-world-daily.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily.py"
+      ],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.english-world-forced-recovery",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "RunAtLoad": true,
+      "file": "com.videopipeline.english-world-forced-recovery.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily.py"
+      ],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.english-world-monitor",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "StartCalendarInterval": [
+        {
+          "Hour": 9,
+          "Minute": 15
+        },
+        {
+          "Hour": 19,
+          "Minute": 0
+        }
+      ],
+      "file": "com.videopipeline.english-world-monitor.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/monitor_english_world_daily.py"
+      ],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.periodic-qa-report",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "StartCalendarInterval": [
+        {
+          "Hour": 0,
+          "Minute": 5
+        },
+        {
+          "Hour": 3,
+          "Minute": 5
+        },
+        {
+          "Hour": 6,
+          "Minute": 5
+        },
+        {
+          "Hour": 9,
+          "Minute": 5
+        },
+        {
+          "Hour": 12,
+          "Minute": 5
+        },
+        {
+          "Hour": 15,
+          "Minute": 5
+        },
+        {
+          "Hour": 18,
+          "Minute": 5
+        },
+        {
+          "Hour": 21,
+          "Minute": 5
+        }
+      ],
+      "file": "com.videopipeline.periodic-qa-report.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/periodic_qa_report.py"
+      ],
+      "allowlisted_flags": {}
+    },
+    {
+      "Label": "com.videopipeline.ui",
+      "WorkingDirectory": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "KeepAlive": true,
+      "RunAtLoad": true,
+      "file": "com.videopipeline.ui.plist",
+      "maintained_program_paths": [
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/web/app.py"
+      ],
+      "allowlisted_flags": {}
+    }
+  ],
+  "processes": {
+    "monitor_channels.py": [],
+    "rescore_refresh.py": [],
+    "pipeline_manager": [
+      71494,
+      72427,
+      73484,
+      77063,
+      77323
+    ],
+    "run_publication_window.py": [
+      11634,
+      11640,
+      11642
+    ],
+    "run_english_world_daily": [],
+    "wechat_uploader.py": [],
+    "douyin_uploader.py": [],
+    "copywriter.py": [],
+    "cover_generator.py": [],
+    "auto-caption": [],
+    "ffmpeg": [
+      36212
+    ],
+    "src/web/app.py": [
+      99036
+    ]
+  },
+  "process_details": {
+    "src/web/app.py": [
+      "99036     1 Sun Oct 11 23:49:51 2026     /Users/ryusei/.pyenv/versions/3.12.4/bin/python"
+    ],
+    "pipeline_manager": [
+      "71494     1 Sun Oct 11 23:19:39 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+      "72427     1 Sun Oct 11 23:20:30 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+      "73484     1 Sun Oct 11 23:21:23 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+      "77063     1 Sun Oct 11 23:24:50 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python",
+      "77323     1 Sun Oct 11 23:25:11 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python"
+    ],
+    "run_publication_window.py": [
+      "11634 11633 Mon Oct 12 00:07:00 2026     /bin/sh",
+      "11640 11634 Mon Oct 12 00:07:00 2026     /usr/bin/lockf",
+      "11642 11640 Mon Oct 12 00:07:00 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python"
+    ],
+    "ffmpeg": [
+      "36212     1 Thu Oct  8 16:04:57 2026     /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python"
+    ]
+  },
+  "source_hashes": {
+    "src/web/app.py": {
+      "sha256": "6ef260ca820db54cb98d06ee770ce1c3a7b98a6ed7e90306935d903205d27d23",
+      "mtime": "2026-10-11T13:21:12.072463+00:00"
+    },
+    "src/web/templates/index.html": {
+      "sha256": "8a9b182d5ae770492a37c416bcb587966905a8382660cc948c4da026932ff7d7",
+      "mtime": "2026-10-11T15:21:00.196043+00:00"
+    },
+    "src/video_processing/db/database.py": {
+      "sha256": "1a7a339f5031d2e9b93fab07059295d9a5ecc54627d05d1e4b625cdcfc07d727",
+      "mtime": "2026-10-11T14:27:24.046698+00:00"
+    },
+    "scripts/monitor_channels.py": {
+      "sha256": "7f95c8310a49f5f980197f9436d8ea3291d1695177a0360b7e278326f3422372",
+      "mtime": "2026-09-23T10:40:23.863081+00:00"
+    },
+    "src/video_processing/utils/youtube_catalog.py": {
+      "sha256": "7d0f6669819b8fefc5bcbe410857fffa0c5aff6f8027a2493296515a465bd1ba",
+      "mtime": "2026-09-25T06:26:57.552241+00:00"
+    },
+    "src/config/settings.py": {
+      "sha256": "ccbd1947d95554b37328abbac30ff4251685a1ef3f325b8ddf1bbec665c4ac8e",
+      "mtime": "2026-10-11T13:24:21.334728+00:00"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "at": 1791794773.0309691,
+  "file": "scripts/generate_hillary_editorial_cover.py",
+  "sha256": "577779cd3d059c227b85cb5137c0a7dfb045e42bf9067575e590c126220a9ae0",
+  "same_inode_and_mtime": true,
+  "all_unrelated_source_hashes_preserved": true,
+  "ordering_incident": "source checkout advanced while backup precheck was rejected by another browser-session lock; no new service started, DB backup and full maintenance reinspection required before start"
+}

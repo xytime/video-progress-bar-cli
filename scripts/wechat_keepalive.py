@@ -21,6 +21,8 @@ Exit Codes:
     1 - 运行时错误（网络超时、SPA 未就绪、非微信来源、存储保存失败等）
     2 - Session 已过期（LOGIN_REQUIRED），需重新扫码
     11 - 锁占用（EXIT_WECHAT_SESSION_BUSY）
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 import os
@@ -70,6 +72,9 @@ _WARNED_FILE = "output/wechat_login_warned.flag"
 # 兼容保留内部函数
 _check_strong_video_publish_controls = check_strong_video_publish_controls
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def _is_login_page_dom(page) -> bool:
     is_login, _ = check_explicit_login_prompt(page)
@@ -137,6 +142,7 @@ def _maybe_warn_expiry(login_target: Path, warned_path: Path) -> None:
     timeout_seconds=0.0,
     busy_result=EXIT_WECHAT_SESSION_BUSY,
 )
+@guarded("wechat-keepalive")
 def run_keepalive(
     state_path: str = "output/wechat_state.json",
     dwell: int = 15,
@@ -372,6 +378,7 @@ def run_keepalive(
         return 0
 
 
+@single_script
 def main():
     parser = argparse.ArgumentParser(
         description="WeChat Session Keepalive — 维持微信视频号 Session 活跃"

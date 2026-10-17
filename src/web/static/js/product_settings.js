@@ -316,6 +316,7 @@
   }
   $('keep-editing').onclick = () => $('discard-dialog').close();
   $('discard').onclick = () => { $('discard-dialog').close(); dirty = false; discardAction(); };
+  window.consoleNavigationGuard = guard;
   $('back').onclick = event => { event.preventDefault(); guard(() => { window.location.href = '/'; }); };
   $('reload').onclick = () => guard(load);
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });

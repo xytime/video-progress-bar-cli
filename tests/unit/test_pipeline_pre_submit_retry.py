@@ -16,6 +16,7 @@
 
 import json
 
+import pytest
 import requests
 
 from config.settings import settings
@@ -93,6 +94,58 @@ def test_caption_watchdog_timeout_is_retryable_before_submission(tmp_path):
     row = manager.db.get_video_by_youtube_id("caption-watchdog-timeout")
     assert row["status"] == "PENDING"
     assert row["retry_count"] == 1
+
+
+VOCABULARY_TIMEOUT = (
+    'File "vocabulary_recovery.py", line 82, in recover_items\n'
+    'video_processing.utils.codex_text_provider.CodexTextError: codex_text:timeout'
+)
+
+
+def test_vocabulary_recovery_timeout_retries_at_most_twice(tmp_path):
+    manager = _manager(tmp_path)
+    manager.send_telegram_msg = lambda _message: None
+    for attempt in (1, 2):
+        manager.db.update_video_status("retryable-video", "TRANSCRIBING")
+        assert manager._requeue_transient_pre_submission_failure(
+            "retryable-video", "测试标题", VOCABULARY_TIMEOUT,
+        )
+        row = manager.db.get_video_by_youtube_id("retryable-video")
+        assert (row["status"], row["retry_count"]) == ("PENDING", attempt)
+
+    manager.db.update_video_status("retryable-video", "TRANSCRIBING")
+    assert not manager._requeue_transient_pre_submission_failure(
+        "retryable-video", "测试标题", VOCABULARY_TIMEOUT,
+    )
+    assert manager.db.get_video_by_youtube_id("retryable-video")["retry_count"] == 2
+
+
+@pytest.mark.parametrize("reason", [
+    "Censorship P1 Suspend: matched vpn",
+    "Channel Policy Reject: ukraine+war",
+    "ValueError: 生词卡文字超出版式容量: a long excerpt",
+    "CodexTextError: codex_text:invalid_json",
+])
+def test_vocabulary_retry_does_not_expand_to_policy_or_permanent_errors(tmp_path, reason):
+    manager = _manager(tmp_path)
+    manager.db.update_video_status("retryable-video", "TRANSCRIBING")
+    assert not manager._requeue_transient_pre_submission_failure(
+        "retryable-video", "测试标题", reason,
+    )
+    assert manager.db.get_video_by_youtube_id("retryable-video")["retry_count"] == 0
+
+
+@pytest.mark.parametrize("state", [
+    "PUBLISHING", "SUBMITTED_BOUND", "SUBMITTED_UNBOUND", "UNDER_REVIEW", "UNCERTAIN", "PUBLISHED",
+])
+def test_vocabulary_timeout_cannot_requeue_submission_states(tmp_path, state):
+    manager = _manager(tmp_path)
+    manager.db.update_video_status("retryable-video", state)
+    assert not manager._requeue_transient_pre_submission_failure(
+        "retryable-video", "测试标题", VOCABULARY_TIMEOUT,
+    )
+    row = manager.db.get_video_by_youtube_id("retryable-video")
+    assert (row["status"], row["retry_count"]) == (state, 0)
 
 
 def test_manager_uses_active_telegram_chat_id_fallback(monkeypatch, tmp_path):
@@ -290,7 +343,8 @@ def test_manager_rejects_ok_response_without_message_id(monkeypatch, tmp_path):
     assert not manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-no-message-id</code>")
 
 
-def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):
+@pytest.mark.parametrize("reason", ["curl exited with code 18", VOCABULARY_TIMEOUT])
+def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path, reason):
     manager = _manager(tmp_path, "submitted-video")
     manager.db.update_video_status("submitted-video", "DOWNLOADING")
     evidence = tmp_path / "wechat_evidence" / "submitted-video" / "123"
@@ -298,7 +352,7 @@ def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):
     (evidence / "post_list_after_submission.png").write_bytes(b"evidence")
 
     assert not manager._requeue_transient_pre_submission_failure(
-        "submitted-video", "测试标题", "curl exited with code 18"
+        "submitted-video", "测试标题", reason
     )
 
     row = manager.db.get_video_by_youtube_id("submitted-video")

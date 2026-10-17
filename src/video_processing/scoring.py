@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date       | Author          | Description                                                  |
 |---------|------------|-----------------|--------------------------------------------------------------|
+| 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager.score_pending_videos 抽出 compute_auto_score（v3.9.0 曲线逐字保留） |
 | 1.1.0   | 2026-08-08 | Codex           | 增加频道评分上限：The Economist 的任何写入评分不得超过 60 |
 | 1.2.0   | 2026-09-25 | Codex           | 固定 TED/TEDx 精确频道 ID，供新视频托底与历史候选隔离共用。 |
@@ -64,3 +65,18 @@ def compute_auto_score(view_count: int, like_count: int) -> int:
     v_ratio = min(1.0, views / HEAT_VIEW_THRESHOLD)
     l_ratio = min(1.0, like_rate / 3.0) if like_rate > 0 else 0.0
     return max(0, min(70, round(70 * v_ratio * l_ratio)))
+
+
+SCORE_POLICY_VERSION = "heat-v1-channel-policy-v1"
+
+
+def compute_policy_score(video, config):
+    """共享现有热度、精确频道托底与上限；关键词不授予 AUTO 专属资格。"""
+    score = compute_auto_score(video.get("view_count"), video.get("like_count"))
+    channel = video.get("channel_id")
+    floor = getattr(config, "channel_score_floor_map", {}).get(channel, 0)
+    cutoff = getattr(config, "ted_auto_publish_after_id", 0)
+    if (cutoff > 0 and (video.get("parent_id") or video.get("id", 0)) > cutoff
+            and video.get("source") == "AUTO" and channel in TED_AUTO_PUBLISH_CHANNEL_IDS):
+        floor = max(floor, config.speech_publish_score_line)
+    return cap_channel_score(channel, max(score, floor))

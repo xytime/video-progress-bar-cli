@@ -1,0 +1,154 @@
+{
+  "at": 1791794955.868042,
+  "cron_restored_exact": true,
+  "cron_sha256": "d8c6dc26f64b5e127604b40da0fe646560bc26269917c573ad37b02aa73ace0c",
+  "launchd": [
+    {
+      "label": "com.videopipeline.ai-cover-doer",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": true,
+      "schedule": {
+        "StartInterval": 180
+      },
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.bot",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": false,
+      "schedule": {
+        "KeepAlive": true
+      },
+      "state_lines": [
+        "state = xpcproxy",
+        "pid = 24732",
+        "last exit code = (never exited)",
+        "state = active",
+        "state = active"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-daily",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": false,
+      "schedule": {
+        "StartCalendarInterval": [
+          {
+            "Hour": 2,
+            "Minute": 0
+          },
+          {
+            "Hour": 4,
+            "Minute": 30
+          },
+          {
+            "Hour": 10,
+            "Minute": 0
+          },
+          {
+            "Hour": 14,
+            "Minute": 0
+          },
+          {
+            "Hour": 16,
+            "Minute": 0
+          },
+          {
+            "Hour": 21,
+            "Minute": 0
+          }
+        ]
+      },
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-forced-recovery",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": true,
+      "schedule": {},
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-monitor",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": false,
+      "schedule": {
+        "StartCalendarInterval": [
+          {
+            "Hour": 9,
+            "Minute": 15
+          },
+          {
+            "Hour": 19,
+            "Minute": 0
+          }
+        ]
+      },
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.periodic-qa-report",
+      "loaded": true,
+      "original_file_unchanged": true,
+      "suppress_one_time_run_at_load": false,
+      "schedule": {
+        "StartCalendarInterval": [
+          {
+            "Hour": 0,
+            "Minute": 5
+          },
+          {
+            "Hour": 3,
+            "Minute": 5
+          },
+          {
+            "Hour": 6,
+            "Minute": 5
+          },
+          {
+            "Hour": 9,
+            "Minute": 5
+          },
+          {
+            "Hour": 12,
+            "Minute": 5
+          },
+          {
+            "Hour": 15,
+            "Minute": 5
+          },
+          {
+            "Hour": 18,
+            "Minute": 5
+          },
+          {
+            "Hour": 21,
+            "Minute": 5
+          }
+        ]
+      },
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    }
+  ],
+  "no_missed_job_replay": true
+}

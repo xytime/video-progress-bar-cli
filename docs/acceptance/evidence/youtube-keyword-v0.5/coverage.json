@@ -1,0 +1,23 @@
+{
+  "runs": {
+    "video-pytest-cnynxo0q": {
+      "total": 1117,
+      "passed": 1112,
+      "failed": [
+        "tests.unit.test_vocabulary_outro::test_pipeline_tracked_hook_and_actual_selection",
+        "tests.unit.test_vocabulary_outro_settings::test_classification_and_independent_switches",
+        "tests.unit.test_vocabulary_outro_settings::test_preview_and_records_are_read_only_and_draft_based",
+        "tests.unit.test_vocabulary_outro_settings::test_recovery_failure_blocks_pipeline_and_disabled_task_ignores_cache",
+        "tests.browser.test_vocabulary_outro_settings_browser::test_type_preview_save_persists_across_reload"
+      ]
+    },
+    "video-pytest-iujjbp3u": {
+      "total": 146,
+      "passed": 146,
+      "failed": []
+    }
+  },
+  "unique_cases": 1117,
+  "remaining_failures": [],
+  "note": "Same integrated runtime except tested heading copy; initial five failures were site-config-dependent tests; fixtures corrected and affected 146 cases rerun. Not a single 1117-pass run."
+}

@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "version": 3,
+  "state": "MAINTENANCE",
+  "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+  "at": 1791794356.097245,
+  "active": [],
+  "unknown": [],
+  "phase": "IDLE",
+  "workers": {
+    "ui": {
+      "role": "ui",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794553.140200",
+      "pid": 22803,
+      "started_at": "2026-10-12T08:42:34.804252+00:00"
+    },
+    "auto-pipeline": {
+      "role": "auto-pipeline",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794553.140200",
+      "pid": 22803,
+      "started_at": "2026-10-12T08:42:34.901033+00:00"
+    },
+    "queue-runner": {
+      "role": "queue-runner",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794553.140200",
+      "pid": 22803,
+      "started_at": "2026-10-12T08:42:34.901155+00:00"
+    },
+    "ready-supervisor": {
+      "role": "ready-supervisor",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794553.140200",
+      "pid": 22803,
+      "started_at": "2026-10-12T08:42:34.899850+00:00"
+    },
+    "keepalive-watchdog": {
+      "role": "keepalive-watchdog",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794553.140200",
+      "pid": 22803,
+      "started_at": "2026-10-12T08:42:34.900342+00:00"
+    },
+    "ready-worker": {
+      "role": "ready-worker",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791785298.251257",
+      "pid": 33005,
+      "started_at": "2026-10-12T06:08:18.623166+00:00"
+    }
+  },
+  "safe": true
+}

@@ -948,8 +948,7 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
     if result.get("ok"):
         await notice.edit_text(
-            "🔐 *微信登录流程已启动*\n请等待二维码图片推送，然后用手机微信扫码。扫码成功后会自动保存登录态。",
-            parse_mode="Markdown",
+            result.get("message", "微信登录请求已受理，正在获取二维码。"),
         )
     else:
         await notice.edit_text(fmt.fmt_error(result.get("error", "启动微信登录失败")), parse_mode="Markdown")

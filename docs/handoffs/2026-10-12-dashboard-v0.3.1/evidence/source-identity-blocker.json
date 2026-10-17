@@ -1,0 +1,28 @@
+{
+  "at": 1791789691.198295,
+  "source_hash": "400daac27bfc540c50ff3c218bee4c7d02e59a13aa4e3b16b4177d38c5b817ae",
+  "diagnostic_exclusion": "scripts/probe_edit_dialog.py",
+  "hash_without_new_file": "35bed1eff1f0219aa2a97f22a88118a4a9317f833dd3a16892e6c0aecab02df6",
+  "owners": {
+    "ui": {
+      "role": "ui",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791785235.299121",
+      "pid": 32397,
+      "started_at": "2026-10-12T06:07:17.826985+00:00"
+    },
+    "ready-worker": {
+      "role": "ready-worker",
+      "protocol": 1,
+      "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791785298.251257",
+      "pid": 33005,
+      "started_at": "2026-10-12T06:08:18.623166+00:00"
+    }
+  },
+  "decision": "BLOCKED_SOURCE_IDENTITY",
+  "no_locks_modified": true
+}
