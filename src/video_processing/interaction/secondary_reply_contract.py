@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-17 | Antigravity | 收敛 SecondaryReplySubmissionGuard 至契约层以消除编排器对浏览器适配器的反向依赖；新增只读验证强类型契约 PlatformVerificationReport 并移除缺失证据默认成功行为 |
 | 1.1.0 | 2026-10-12 | Antigravity | 增强控制字符防御（严格拒绝 \\r 及 C0/C1 控制符）、新增 comment_list 强类型解析与一级/二级分页状态机 (T01/T02/T03/T12) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现长度方案 A (中<=75/英<=150/合<=230)、无内嵌换行/Emoji/标签、输入预算与意图合同 |
 """
@@ -12,11 +13,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+from urllib.parse import urlparse
 
 
 class SecondaryReplyIntent(str, Enum):
@@ -415,3 +418,591 @@ def parse_wechat_comment_list_payload(
         secondary_states=secondary_states,
         unsupported_comments=unsupported_comments,
     )
+
+
+COMMENT_SUBMIT_PATHS = {
+    "/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+}
+
+
+class SecondaryReplySubmissionGuard:
+    """二级回复网络发送前强校验守卫 (Route Guard)。
+
+    任何非受信来源、错作品、错 root/reply ID、错账号、错正文、缺少必填字段或重复出站请求均在网络发送前硬拦截。
+    """
+
+    def __init__(
+        self,
+        expected_export_id: str,
+        expected_root_comment_id: str,
+        expected_content: str,
+        expected_finder_id: Optional[str] = None,
+        trusted_origins: Tuple[str, ...] = (),
+    ) -> None:
+        from video_processing.core.wechat_page_contract import is_official_wechat_origin
+
+        self._is_official_wechat_origin = is_official_wechat_origin
+        self.trusted_origins = tuple(trusted_origins)
+        self.expected_export_id = expected_export_id
+        self.expected_root_comment_id = expected_root_comment_id
+        self.expected_content = expected_content
+        self.expected_finder_id = expected_finder_id
+        self.requests: List[Dict[str, Any]] = []
+        self.mismatched_requests: List[Dict[str, Any]] = []
+        self.responses: List[Dict[str, Any]] = []
+        self.allowed_request: Any = None
+        self.uncorrelated_responses: List[Dict[str, Any]] = []
+
+    def capture_request(self, request: Any) -> bool:
+        """检查出站发评请求。若合法则放行并记录，若不符则返回 False 触发硬阻断。"""
+        if request.method != "POST":
+            return True
+
+        url_path = urlparse(request.url).path
+        if url_path not in COMMENT_SUBMIT_PATHS:
+            return True
+
+        if self.requests:
+            self.mismatched_requests.append({
+                "reason": "DUPLICATE_SUBMISSION",
+                "details": "一次流程仅允许最多一次出站发评请求",
+                "url": request.url,
+            })
+            return False
+
+        is_safe_origin = self._is_official_wechat_origin(request.url) or any(
+            request.url.startswith(o) for o in self.trusted_origins
+        )
+        if not is_safe_origin:
+            self.mismatched_requests.append({
+                "reason": "UNTRUSTED_ORIGIN",
+                "url": request.url,
+            })
+            return False
+
+        try:
+            payload = request.post_data_json
+        except Exception:
+            payload = None
+
+        if not isinstance(payload, dict):
+            self.mismatched_requests.append({
+                "reason": "NON_JSON_OR_EMPTY_PAYLOAD",
+                "url": request.url,
+            })
+            return False
+
+        for req_f in ("exportId", "rootCommentId", "replyCommentId", "content"):
+            if not payload.get(req_f):
+                self.mismatched_requests.append({
+                    "reason": "MISSING_REQUIRED_FIELD",
+                    "details": f"Missing required field: {req_f}",
+                    "payload": payload,
+                })
+                return False
+
+        req_export_id = str(payload.get("exportId") or "").strip()
+        req_root_id = str(payload.get("rootCommentId") or "").strip()
+        req_reply_id = str(payload.get("replyCommentId") or "").strip()
+        req_finder_id = str(payload.get("_log_finder_id") or payload.get("username") or "").strip()
+
+        mismatches = []
+        if req_export_id != self.expected_export_id:
+            mismatches.append(f"exportId mismatch: '{req_export_id}' != '{self.expected_export_id}'")
+        if req_root_id != self.expected_root_comment_id:
+            mismatches.append(f"rootCommentId mismatch: '{req_root_id}' != '{self.expected_root_comment_id}'")
+        if req_reply_id != self.expected_root_comment_id:
+            mismatches.append(f"replyCommentId mismatch: '{req_reply_id}' != '{self.expected_root_comment_id}'")
+        if unicodedata.normalize("NFC", str(payload.get("content"))) != unicodedata.normalize("NFC", self.expected_content):
+            mismatches.append("content mismatch")
+        if not self.expected_finder_id:
+            mismatches.append("expected account not configured")
+        elif not req_finder_id:
+            mismatches.append("account field missing in request")
+        elif req_finder_id != self.expected_finder_id:
+            mismatches.append(f"account mismatch: '{req_finder_id}' != '{self.expected_finder_id}'")
+
+        if mismatches:
+            self.mismatched_requests.append({
+                "reason": "FIELD_MISMATCH",
+                "details": mismatches,
+                "payload": payload,
+            })
+            return False
+
+        self.requests.append(payload)
+        self.allowed_request = request
+        return True
+
+    def capture_response(self, response: Any) -> None:
+        """捕获提交回执；仅接受与唯一准许出站 Request 对应的 Response，其余记为无关回执。"""
+        url_path = urlparse(response.url).path
+        if url_path not in COMMENT_SUBMIT_PATHS:
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        item = {"status": response.status, "url": response.url, "data": payload}
+        if self.allowed_request is not None and getattr(response, "request", None) is self.allowed_request:
+            self.responses.append(item)
+        else:
+            self.uncorrelated_responses.append(item)
+
+    def validate_success_response(self) -> Tuple[bool, str, str]:
+        """校验与唯一出站 Request 关联的业务成功回执。返回 (ok, 原生回复 ID, 原因)。"""
+        if len(self.responses) != 1:
+            return False, "", f"correlated_responses={len(self.responses)}"
+        item = self.responses[0]
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        if item.get("status") not in (200, 201) or data.get("errCode") != 0:
+            return False, "", "NOT_BUSINESS_SUCCESS"
+        body = data.get("data") if isinstance(data.get("data"), dict) else {}
+        comment = body.get("comment") if isinstance(body.get("comment"), dict) else {}
+        reply_id = str(body.get("commentId") or "").strip()
+        if not reply_id or str(comment.get("commentId") or "").strip() != reply_id:
+            return False, "", "REPLY_ID_MISSING_OR_INCONSISTENT"
+        if str(comment.get("replyCommentId") or "").strip() != self.expected_root_comment_id:
+            return False, "", "PARENT_MISMATCH"
+        if not self.expected_finder_id or str(comment.get("username") or "").strip() != self.expected_finder_id:
+            return False, "", "AUTHOR_MISMATCH"
+        if unicodedata.normalize("NFC", str(comment.get("commentContent") or "")) != unicodedata.normalize("NFC", self.expected_content):
+            return False, "", "CONTENT_MISMATCH"
+        return True, reply_id, "OK"
+
+
+def _normalize_visible_text(value: object) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(value or ""))).strip()
+
+
+@dataclass(frozen=True)
+class ObservedChannelProfile:
+    """只读验证中的账号配置期望值与平台实测身份契约。
+
+    严格区分 expected_finder_id（配置期望）与 observed_native_username（平台实测），
+    绝不允许缺失实测身份时用配置值冒充或默认 identity_verified=True。
+    """
+
+    account_key: str
+    expected_finder_id: str
+    observed_native_username: str
+    channel_nickname: str
+    identity_verified: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "account_key": self.account_key,
+            "finder_id": self.expected_finder_id,
+            "expected_finder_id": self.expected_finder_id,
+            "native_username": self.observed_native_username,
+            "observed_native_username": self.observed_native_username,
+            "channel_nickname": self.channel_nickname,
+            "identity_verified": self.identity_verified,
+        }
+
+
+@dataclass(frozen=True)
+class ObservedTargetComment:
+    """只读验证中的目标作品/父评论期望值与平台实测值契约。
+
+    缺失 text_matched 或 fresh 证据时一律为 False，绝不默认 True。
+    """
+
+    expected_post_id: str
+    expected_comment_id: str
+    expected_comment_text: str
+    observed_post_id: str
+    observed_comment_id: str
+    video_title: str
+    author_nickname: str
+    observed_comment_text: str
+    text_matched: bool
+    fresh: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "post_id": self.observed_post_id,
+            "comment_id": self.observed_comment_id,
+            "expected_post_id": self.expected_post_id,
+            "expected_comment_id": self.expected_comment_id,
+            "expected_comment_text": self.expected_comment_text,
+            "video_title": self.video_title,
+            "author_nickname": self.author_nickname,
+            "comment_text": self.observed_comment_text,
+            "observed_comment_text": self.observed_comment_text,
+            "text_matched": self.text_matched,
+            "fresh": self.fresh,
+        }
+
+
+@dataclass(frozen=True)
+class CalibratedControlState:
+    """单个二级回复 DOM 控件的只读校准观测状态。"""
+
+    selector: Optional[str] = None
+    found: bool = False
+    count: int = 0
+    visible: bool = False
+    enabled: Optional[bool] = None
+    editable: Optional[bool] = None
+    is_empty: Optional[bool] = None
+    disabled_when_empty: Optional[bool] = None
+    enabled_when_filled: Optional[bool] = None
+    text: Optional[str] = None
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "CalibratedControlState":
+        if isinstance(raw, CalibratedControlState):
+            return raw
+        if not isinstance(raw, Mapping):
+            return cls()
+        count_val = raw.get("count", 0)
+        count = int(count_val) if isinstance(count_val, int) and not isinstance(count_val, bool) else 0
+        return cls(
+            selector=str(raw["selector"]) if raw.get("selector") else None,
+            found=raw.get("found") is True,
+            count=count,
+            visible=raw.get("visible") is True,
+            enabled=raw.get("enabled") if isinstance(raw.get("enabled"), bool) else None,
+            editable=raw.get("editable") if isinstance(raw.get("editable"), bool) else None,
+            is_empty=raw.get("is_empty") if isinstance(raw.get("is_empty"), bool) else None,
+            disabled_when_empty=(
+                raw.get("disabled_when_empty") if isinstance(raw.get("disabled_when_empty"), bool) else None
+            ),
+            enabled_when_filled=(
+                raw.get("enabled_when_filled") if isinstance(raw.get("enabled_when_filled"), bool) else None
+            ),
+            text=str(raw["text"]) if raw.get("text") is not None else None,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "selector": self.selector,
+            "found": self.found,
+            "count": self.count,
+            "visible": self.visible,
+        }
+        if self.enabled is not None:
+            out["enabled"] = self.enabled
+        if self.editable is not None:
+            out["editable"] = self.editable
+        if self.is_empty is not None:
+            out["is_empty"] = self.is_empty
+        if self.disabled_when_empty is not None:
+            out["disabled_when_empty"] = self.disabled_when_empty
+        if self.enabled_when_filled is not None:
+            out["enabled_when_filled"] = self.enabled_when_filled
+        if self.text is not None or ("enabled" not in out and "editable" not in out and "disabled_when_empty" not in out):
+            out["text"] = self.text
+        return out
+
+
+@dataclass(frozen=True)
+class ControlsCalibrationSummary:
+    """二级回复四个关键控件（回复触发、输入框、提交按钮、展开按钮）校准汇总。"""
+
+    reply_icon: CalibratedControlState = field(default_factory=CalibratedControlState)
+    editor_textarea: CalibratedControlState = field(default_factory=CalibratedControlState)
+    submit_button: CalibratedControlState = field(default_factory=CalibratedControlState)
+    expand_button: CalibratedControlState = field(default_factory=CalibratedControlState)
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "ControlsCalibrationSummary":
+        if isinstance(raw, ControlsCalibrationSummary):
+            return raw
+        if not isinstance(raw, Mapping):
+            return cls()
+        return cls(
+            reply_icon=CalibratedControlState.from_raw(raw.get("reply_icon")),
+            editor_textarea=CalibratedControlState.from_raw(raw.get("editor_textarea")),
+            submit_button=CalibratedControlState.from_raw(raw.get("submit_button")),
+            expand_button=CalibratedControlState.from_raw(raw.get("expand_button")),
+        )
+
+    def is_ready_for_unreplied(self) -> bool:
+        """检查未回复样本所需的三大发送控件是否均唯一定位且满足零写只读校准条件。"""
+        reply_ok = (
+            self.reply_icon.found is True
+            and self.reply_icon.count == 1
+            and self.reply_icon.visible is True
+            and self.reply_icon.enabled is True
+            and bool(self.reply_icon.selector)
+        )
+        editor_ok = (
+            self.editor_textarea.found is True
+            and self.editor_textarea.count == 1
+            and self.editor_textarea.visible is True
+            and self.editor_textarea.editable is True
+            and self.editor_textarea.is_empty is True
+            and bool(self.editor_textarea.selector)
+        )
+        submit_ok = (
+            self.submit_button.found is True
+            and self.submit_button.count == 1
+            and self.submit_button.visible is True
+            and self.submit_button.disabled_when_empty is True
+            and bool(self.submit_button.selector)
+        )
+        return bool(reply_ok and editor_ok and submit_ok)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "reply_icon": self.reply_icon.to_dict(),
+            "editor_textarea": self.editor_textarea.to_dict(),
+            "submit_button": self.submit_button.to_dict(),
+            "expand_button": self.expand_button.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class PlatformVerificationReport:
+    """只读平台核验与控件校准强类型结果契约。
+
+    铁律：
+    1. identity_verified 缺失绝不默认 True；native_username 缺失绝不用 expected_finder_id 冒充；
+       仅当实测 observed_native_username 非空且严格等于 expected_finder_id 时 identity_verified 才为 True。
+    2. text_matched 与 fresh 缺失绝不默认 True；必须有实测非空评论文本（当提供 expected_comment_text 时还须规范化等值）。
+    3. 区分 REPLIED 与 NOT_REPLIED 的判断条件：
+       - NOT_REPLIED 必须同时具备：identity_verified、fresh、text_matched、completeness == "COMPLETE"、
+         三大核心控件唯一就绪 (controls_calibration.is_ready_for_unreplied()) 且 editor_closed_cleanly。
+       - REPLIED 必须具备：identity_verified、fresh、text_matched 及显式非错误的 completeness
+         （已观察到作者回复时，不强求与未回复样本相同的完整分页或展开编辑器校准）。
+    4. 任何证据缺失、矛盾或异常均降级为 ok=False, status="UNKNOWN"（或 LOGIN_REQUIRED）。
+    """
+
+    ok: bool
+    status: str
+    completeness: str
+    channel_profile: ObservedChannelProfile
+    target: ObservedTargetComment
+    controls_calibration: ControlsCalibrationSummary
+    evidence_files: Dict[str, str]
+    mode: str = "PLATFORM_READ_ONLY_CALIBRATION_AND_VERIFICATION"
+    reason: Optional[str] = None
+    editor_closed_cleanly: bool = True
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: Any,
+        *,
+        account_key: str,
+        expected_finder_id: str,
+        expected_post_id: str,
+        expected_comment_id: str,
+        expected_video_title: Optional[str] = None,
+        expected_comment_text: Optional[str] = None,
+    ) -> "PlatformVerificationReport":
+        if isinstance(raw, PlatformVerificationReport):
+            raw_map: Mapping[str, Any] = raw.to_dict()
+        elif isinstance(raw, Mapping):
+            raw_map = raw
+        else:
+            raise SecondaryReplyContractError("平台只读核验返回结果必须为 PlatformVerificationReport 或显式映射字典")
+
+        raw_ok = raw_map.get("ok") is True
+        raw_status = str(raw_map.get("status") or "UNKNOWN").strip()
+        raw_completeness = str(raw_map.get("completeness") or "").strip()
+        raw_reason = str(raw_map.get("reason") or "").strip() or None
+        editor_closed_cleanly = raw_map.get("editor_closed_cleanly", True) is True
+
+        raw_profile = raw_map.get("channel_profile")
+        if isinstance(raw_profile, ObservedChannelProfile):
+            profile_map: Mapping[str, Any] = raw_profile.to_dict()
+        elif isinstance(raw_profile, Mapping):
+            profile_map = raw_profile
+        else:
+            profile_map = {}
+
+        observed_native_username = str(
+            profile_map.get("observed_native_username") or profile_map.get("native_username") or ""
+        ).strip()
+        channel_nickname = str(profile_map.get("channel_nickname") or "").strip()
+        raw_identity_flag = profile_map.get("identity_verified") is True
+        identity_verified = bool(
+            raw_identity_flag
+            and expected_finder_id
+            and observed_native_username
+            and observed_native_username == expected_finder_id
+        )
+
+        channel_profile = ObservedChannelProfile(
+            account_key=account_key,
+            expected_finder_id=expected_finder_id,
+            observed_native_username=observed_native_username,
+            channel_nickname=channel_nickname,
+            identity_verified=identity_verified,
+        )
+
+        raw_target = raw_map.get("target")
+        if isinstance(raw_target, ObservedTargetComment):
+            target_map: Mapping[str, Any] = raw_target.to_dict()
+        elif isinstance(raw_target, Mapping):
+            target_map = raw_target
+        else:
+            target_map = {}
+
+        observed_post_id = str(
+            target_map.get("observed_post_id") or target_map.get("post_id") or ""
+        ).strip()
+        observed_comment_id = str(
+            target_map.get("observed_comment_id") or target_map.get("comment_id") or ""
+        ).strip()
+        observed_comment_text = str(
+            target_map.get("observed_comment_text") or target_map.get("comment_text") or ""
+        ).strip()
+        author_nickname = str(target_map.get("author_nickname") or "").strip()
+        video_title = str(target_map.get("video_title") or expected_video_title or "").strip()
+
+        raw_fresh_flag = target_map.get("fresh") is True
+        ids_bound = bool(
+            expected_post_id
+            and expected_comment_id
+            and observed_post_id == expected_post_id
+            and observed_comment_id == expected_comment_id
+        )
+        fresh = bool(raw_fresh_flag and ids_bound)
+
+        raw_text_flag = target_map.get("text_matched") is True
+        expected_text_str = str(expected_comment_text or "").strip()
+        if expected_text_str:
+            text_matched = bool(
+                raw_text_flag
+                and observed_comment_text
+                and _normalize_visible_text(observed_comment_text) == _normalize_visible_text(expected_text_str)
+            )
+        else:
+            text_matched = bool(raw_text_flag and observed_comment_text)
+
+        target = ObservedTargetComment(
+            expected_post_id=expected_post_id,
+            expected_comment_id=expected_comment_id,
+            expected_comment_text=expected_text_str,
+            observed_post_id=observed_post_id,
+            observed_comment_id=observed_comment_id,
+            video_title=video_title,
+            author_nickname=author_nickname,
+            observed_comment_text=observed_comment_text,
+            text_matched=text_matched,
+            fresh=fresh,
+        )
+
+        controls = ControlsCalibrationSummary.from_raw(raw_map.get("controls_calibration"))
+        raw_ev = raw_map.get("evidence_files")
+        evidence_files: Dict[str, str] = {}
+        if isinstance(raw_ev, Mapping):
+            for k, v in raw_ev.items():
+                if v is not None and str(v).strip():
+                    evidence_files[str(k)] = str(v).strip()
+
+        if raw_status == "LOGIN_REQUIRED":
+            return cls(
+                ok=False,
+                status="LOGIN_REQUIRED",
+                completeness=raw_completeness or "UNKNOWN",
+                channel_profile=channel_profile,
+                target=target,
+                controls_calibration=controls,
+                evidence_files=evidence_files,
+                reason=raw_reason or "LOGIN_REQUIRED",
+                editor_closed_cleanly=editor_closed_cleanly,
+            )
+
+        missing_reasons: List[str] = []
+        if not identity_verified:
+            missing_reasons.append("IDENTITY_NOT_VERIFIED")
+        if not fresh:
+            missing_reasons.append("TARGET_NOT_FRESH_OR_ID_MISMATCH")
+        if not text_matched:
+            missing_reasons.append("COMMENT_TEXT_NOT_VERIFIED")
+
+        if raw_status == "REPLIED":
+            completeness_valid = bool(raw_completeness) and raw_completeness not in ("UNKNOWN", "INVALID", "ERROR")
+            if not completeness_valid:
+                missing_reasons.append("REPLIED_COMPLETENESS_EVIDENCE_MISSING")
+            if raw_ok and not missing_reasons:
+                return cls(
+                    ok=True,
+                    status="REPLIED",
+                    completeness=raw_completeness,
+                    channel_profile=channel_profile,
+                    target=target,
+                    controls_calibration=controls,
+                    evidence_files=evidence_files,
+                    reason=None,
+                    editor_closed_cleanly=editor_closed_cleanly,
+                )
+            return cls(
+                ok=False,
+                status="UNKNOWN",
+                completeness=raw_completeness or "UNKNOWN",
+                channel_profile=channel_profile,
+                target=target,
+                controls_calibration=controls,
+                evidence_files=evidence_files,
+                reason=raw_reason or "; ".join(missing_reasons) or "REPLIED_EVIDENCE_INCOMPLETE",
+                editor_closed_cleanly=editor_closed_cleanly,
+            )
+
+        if raw_status == "NOT_REPLIED":
+            if raw_completeness != "COMPLETE":
+                missing_reasons.append(f"PAGINATION_COMPLETENESS_NOT_COMPLETE({raw_completeness or 'MISSING'})")
+            if not controls.is_ready_for_unreplied():
+                missing_reasons.append("CONTROLS_CALIBRATION_INCOMPLETE")
+            if raw_ok and not missing_reasons:
+                return cls(
+                    ok=True,
+                    status="NOT_REPLIED",
+                    completeness="COMPLETE",
+                    channel_profile=channel_profile,
+                    target=target,
+                    controls_calibration=controls,
+                    evidence_files=evidence_files,
+                    reason=None,
+                    editor_closed_cleanly=editor_closed_cleanly,
+                )
+            return cls(
+                ok=False,
+                status="UNKNOWN",
+                completeness=raw_completeness or "UNKNOWN",
+                channel_profile=channel_profile,
+                target=target,
+                controls_calibration=controls,
+                evidence_files=evidence_files,
+                reason=raw_reason or "; ".join(missing_reasons) or "NOT_REPLIED_EVIDENCE_INCOMPLETE",
+                editor_closed_cleanly=editor_closed_cleanly,
+            )
+
+        return cls(
+            ok=False,
+            status="UNKNOWN",
+            completeness=raw_completeness or "UNKNOWN",
+            channel_profile=channel_profile,
+            target=target,
+            controls_calibration=controls,
+            evidence_files=evidence_files,
+            reason=raw_reason or "; ".join(missing_reasons) or f"UNVERIFIED_STATUS({raw_status})",
+            editor_closed_cleanly=editor_closed_cleanly,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "status": self.status,
+            "completeness": self.completeness,
+            "reason": self.reason,
+            "channel_profile": self.channel_profile.to_dict(),
+            "target": self.target.to_dict(),
+            "controls_calibration": self.controls_calibration.to_dict(),
+            "editor_closed_cleanly": self.editor_closed_cleanly,
+            "evidence_files": dict(self.evidence_files),
+            "mode": self.mode,
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        return self.to_dict()[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.to_dict().get(key, default)
+

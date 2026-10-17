@@ -230,8 +230,7 @@ def test_restart_reconcile_only_after_lost_response_and_tombstone_after_delete(s
     assert out2.status == "VERIFIED", out2
     assert len(_sends(s)) == 1
     # 删除任务行后：账本墓碑仍阻止再次发送（新建同目标任务）
-    with s.db.get_connection() as conn:
-        conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (tid,))
+    s.db.delete_secondary_reply_task(tid)
     s.h["server_replies"].clear()  # 页面看不到已发回复（折叠/延迟）：只能靠防重账本拦截
     tid2 = _task(s)
     out3 = s.orch.submit(tid2)
@@ -261,17 +260,23 @@ def test_cli_entry_single_item_through_browser_port(stack, monkeypatch, capsys):
     db_path = s.h["tmp_path"] / "test.db"
     monkeypatch.setattr(settings, "wechat_reply_account_key", TEST_ACCOUNT, raising=False)
     monkeypatch.setattr(settings, "wechat_reply_author_finder_id", AUTHOR, raising=False)
+    monkeypatch.setattr(settings, "telegram_admin_ids", "555", raising=False)
     monkeypatch.setattr(settings, "wechat_reply_approver_telegram_id", "555", raising=False)
-    monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", "", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", "555000", raising=False)
     monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
     monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
     monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00", raising=False)
     monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:59", raising=False)
     monkeypatch.setattr(ops, "DEFAULT_STOP_FILE", s.h["tmp_path"] / "STOP")
+    cli_transport = FakeApprovalTransport()
 
     def run(*argv):
         capsys.readouterr()
-        code = cli.main(list(argv) + ["--db-path", str(db_path)], platform_factory=lambda a: s.platform)
+        code = cli.main(
+            list(argv) + ["--db-path", str(db_path)],
+            platform_factory=lambda a: s.platform,
+            approval_transport=cli_transport,
+        )
         return code, _json.loads(capsys.readouterr().out)
 
     code, imp = run("import-draft", "--post-id", POST, "--comment-id", "synth_cmt_101",
@@ -279,8 +284,19 @@ def test_cli_entry_single_item_through_browser_port(stack, monkeypatch, capsys):
     assert code == 0, imp
     tid = imp["task_id"]
     code, pre = run("preflight", "--task-id", str(tid))
-    code, ap = run("approve", "--task-id", str(tid), "--confirm-reply-sha12", pre["reply_sha256"][:12])
-    assert code == 0, ap
+    sha12 = pre["reply_sha256"][:12]
+    # 旧自批入口被禁用
+    code_self, ap_self = run("approve", "--task-id", str(tid), "--confirm-reply-sha12", sha12)
+    assert code_self == 1 and ap_self["reason"] == "SELF_APPROVAL_DISABLED_REQUIRES_VERIFIED_CALLBACK"
+    # 发起审批请求 + 白名单回调消费
+    code_req, req = run("request-approval", "--task-id", str(tid), "--confirm-reply-sha12", sha12)
+    assert code_req == 0 and req["status"] == "PENDING_REVIEW", req
+    cb_data = cli_transport.sent_messages[-1]["inline_keyboard"][0][0]["callback_data"]
+    code, ap = run(
+        "approve-callback", "--callback-data", cb_data,
+        "--approver-user-id", "555", "--approver-chat-id", "555000",
+    )
+    assert code == 0 and ap["result"] == "APPROVED", ap
     code, pre2 = run("preflight", "--task-id", str(tid))
     assert code == 0 and pre2["ok"], pre2
     code, res = run("submit", "--task-id", str(tid), "--evidence-dir", str(s.h["tmp_path"] / "cli_receipts"))

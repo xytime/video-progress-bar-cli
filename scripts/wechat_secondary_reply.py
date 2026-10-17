@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 PipelineDB.delete_secondary_reply_task；拆分 request-approval 与 approve-callback 审批入口 |
 | 1.5.0 | 2026-10-17 | Codex | 完善 main() 返回码保护与 verify-platform / calibrate-dom 统一集成测试支持 (M3) |
 | 1.4.0 | 2026-10-17 | Codex | 支持 verify-platform 传递 comment-text 原文校验与原生作者身份回传 (M2) |
 | 1.3.0 | 2026-10-17 | Codex | 新增 verify-platform / calibrate-dom 只读平台校准与状态验证子命令 (R1) |
@@ -39,12 +40,12 @@ from video_processing.interaction.secondary_reply_approval import (
 )
 from video_processing.interaction.secondary_reply_browser_adapter import (
     SecondaryReplyBrowserAdapter,
-    SecondaryReplySubmissionGuard,
 )
 from video_processing.interaction.secondary_reply_contract import (
     AudienceCommentRecord,
     SecondaryReplyIntent,
     SecondaryReplyStyle,
+    SecondaryReplySubmissionGuard,
     TopLevelPaginationStatus,
     SecondaryPaginationStatus,
     parse_wechat_comment_list_payload,
@@ -205,8 +206,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         }
 
         # ---- 路径四：任务删除后墓碑仍阻断 ----
-        with db.get_connection() as conn:
-            conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (task_1,))
+        db.delete_secondary_reply_task(task_1)
         tombstone = db.check_secondary_reply_idempotency(post_id, base.comment_id, account_key="acct_demo")
         # 绕过采集（评论已 PROCESSED）直接重建同目标任务，并走真实审批回调，最后仍应被账本拦截
         task_4 = db.create_or_update_secondary_reply_task(
@@ -256,6 +256,8 @@ def _read_only_refusal(db_path):
 SUBCOMMANDS = {
     "import-draft",
     "preflight",
+    "request-approval",
+    "approve-callback",
     "approve",
     "submit",
     "reconcile-platform",
@@ -285,8 +287,8 @@ def _build_real_platform(args):
     )
 
 
-def ops_main(argv: List[str], platform_factory=None) -> int:
-    """M3 单条操作入口：预检/导入/本地审批/提交/平台对账/状态/停用/平台验证。所有发送经统一编排。"""
+def ops_main(argv: List[str], platform_factory=None, approval_transport=None) -> int:
+    """M3 单条操作入口：预检/导入/发起审批/审批回调/提交/平台对账/状态/停用/平台验证。所有发送经统一编排。"""
     from video_processing.interaction import secondary_reply_ops as ops
 
     parser = argparse.ArgumentParser(prog="wechat_secondary_reply")
@@ -299,7 +301,10 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     parser.add_argument("--zh")
     parser.add_argument("--en")
     parser.add_argument("--style", default="CASUAL_LIGHT", choices=[s.value for s in SecondaryReplyStyle])
-    parser.add_argument("--confirm-reply-sha12", help="approve：回填预检输出 reply_sha256 前 12 位")
+    parser.add_argument("--confirm-reply-sha12", help="request-approval：回填预检输出 reply_sha256 前 12 位")
+    parser.add_argument("--callback-data", help="approve-callback：Telegram 回调载荷 sr|<action>|<task_id>|<token>")
+    parser.add_argument("--approver-user-id", help="approve-callback：触发回调的审批人 Telegram ID")
+    parser.add_argument("--approver-chat-id", help="approve-callback：触发回调的私聊会话 ID")
     parser.add_argument("--ttl-minutes", type=int, default=60)
     parser.add_argument("--video-title", default="", help="仅用于页面卡片导航提示；不作为作品绑定依据")
     parser.add_argument("--evidence-dir", type=Path)
@@ -359,6 +364,15 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
             db, account_key=account_key, post_id=args.post_id, comment_id=args.comment_id,
             comment_text=args.comment_text, zh=args.zh, en=args.en, style=args.style,
         ))
+    if args.command == "approve-callback":
+        need("callback-data", "approver-user-id", "approver-chat-id")
+        return show(ops.approve_callback(
+            db,
+            callback_data=args.callback_data,
+            user_id=args.approver_user_id,
+            chat_id=args.approver_chat_id,
+            account_key=account_key,
+        ))
     if args.command in ("verify-platform", "calibrate-dom"):
         if not finder:
             return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
@@ -392,6 +406,16 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     need("task-id")
     if args.command == "preflight":
         return show(ops.preflight(db, args.task_id, account_key=account_key, finder_id=finder))
+    if args.command == "request-approval":
+        need("confirm-reply-sha12")
+        return show(ops.request_approval(
+            db,
+            args.task_id,
+            account_key=account_key,
+            confirm_reply_sha12=args.confirm_reply_sha12,
+            transport=approval_transport,
+            ttl_minutes=args.ttl_minutes,
+        ))
     if args.command == "approve":
         need("confirm-reply-sha12")
         return show(ops.approve_local(
@@ -418,11 +442,11 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     return 2
 
 
-def main(argv: Optional[List[str]] = None, platform_factory=None):
+def main(argv: Optional[List[str]] = None, platform_factory=None, approval_transport=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         if argv and argv[0] in SUBCOMMANDS:
-            return ops_main(argv, platform_factory)
+            return ops_main(argv, platform_factory, approval_transport=approval_transport)
 
         parser = argparse.ArgumentParser(
             description="视频号二级回复（旧式只读/演示开关；真实操作请使用子命令: " + ", ".join(sorted(SUBCOMMANDS)) + "）"
@@ -465,3 +489,4 @@ def main(argv: Optional[List[str]] = None, platform_factory=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+

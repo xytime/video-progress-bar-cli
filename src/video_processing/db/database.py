@@ -9,6 +9,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.98.0 | 2026-10-17 | Antigravity | 收回二级回复观众评论查询与任务物理删除至 PipelineDB 具名方法，并在审批绑定/消费/提交意图事务内拒绝 local_operator 与 local-cli 伪身份。 |
 | 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
 | 3.96.0 | 2026-10-12 | Codex | 新增视频号二级回复观众评论、任务状态机、防重账本与尝试历史 DAL，支持原子预占与配额检查。 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
@@ -12984,6 +12985,20 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_audience_comment(
+        self,
+        account_key: str,
+        platform_post_id: str,
+        comment_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """按账号、作品与评论原生 ID 查询单条观众评论记录。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
+                (account_key, platform_post_id, comment_id),
+            ).fetchone()
+            return dict(row) if row else None
+
     def create_or_update_secondary_reply_task(
         self,
         *,
@@ -13081,6 +13096,16 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             ).fetchone()
             return dict(row) if row else None
 
+    def delete_secondary_reply_task(self, task_id: int) -> bool:
+        """物理删除指定的二级回复任务行（仅用于离线墓碑防重验证或归档清理，不触碰独立防重账本）。"""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM wechat_secondary_reply_tasks WHERE id = ?",
+                (int(task_id),),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def bind_reply_task_approval_request(
         self,
         task_id: int,
@@ -13095,6 +13120,10 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         expected_account_key: Optional[str] = None,
     ) -> bool:
         """服务端绑定随机审批 Token、审批人、审批 chat 与过期时间，状态置为 PENDING_REVIEW。"""
+        clean_approver = str(approver_id or "").strip()
+        clean_chat = str(approver_chat_id or "").strip()
+        if clean_approver == "local_operator" or clean_chat.startswith("local-cli:"):
+            return False
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task = conn.execute(
@@ -13145,6 +13174,10 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         """一次性原子消费审批 Token 并更新状态为 APPROVED 或 REJECTED。"""
         if action not in ("APPROVE", "REJECT"):
             return False, f"Unsupported approval action: {action}"
+        if str(approver_id or "").strip() == "local_operator":
+            return False, "UNVERIFIED_LOCAL_OPERATOR_FORBIDDEN"
+        if str(chat_id or "").strip().startswith("local-cli:"):
+            return False, "UNVERIFIED_LOCAL_CHAT_FORBIDDEN"
         now_iso = now_utc_iso or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         with self.get_connection() as conn:
@@ -13423,6 +13456,10 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             # 发送前最后一次核对批准：必须由真实审批消费产生，且有效期、版本、正文、源评论均未变
             if not task["approved_at"] or not task["is_token_consumed"]:
                 return False, "NOT_APPROVED"
+            task_approver = str(task["approver_id"] or "").strip()
+            task_chat = str(task["approver_chat_id"] or "").strip()
+            if not task_approver or not task_chat or task_approver == "local_operator" or task_chat.startswith("local-cli:"):
+                return False, "UNVERIFIED_APPROVAL_IDENTITY"
             if task["approval_expires_at"] and task["approval_expires_at"] < now_iso:
                 return False, "APPROVAL_EXPIRED"
             if task["bound_draft_revision"] is None or task["revision"] != task["bound_draft_revision"]:

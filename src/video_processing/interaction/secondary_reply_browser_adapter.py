@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-17 | Antigravity | 统一校准与发送的卡片绑定、父评论与回复控件唯一定位逻辑；从契约层导入 SecondaryReplySubmissionGuard；公开 create_evidence_dir 与 execute_page_reply_flow；收紧 calibrate_page_controls 身份与文本证据要求 |
 | 1.4.0 | 2026-10-17 | Codex | 修复 _interact_with_page 中回复按钮选择器联合碰撞缺陷，采用单候选迭代；将 calibrate_comment_controls 编辑器检测限定于当前父评论范围 (M2) |
 | 1.3.0 | 2026-10-17 | Codex | 实装真实平台只读控件校准 (calibrate_comment_controls)、校准 DOM 选择器、卡片列表滚轮分页支持与只读平台验证 (R1) |
 | 1.2.0 | 2026-10-13 | Antigravity | 接入二级回复折叠与分页完整性校验 (Fail-Closed)、支持展开后续页作者回复与捕获 comment_list 响应 |
@@ -48,16 +49,53 @@ from video_processing.core.wechat_session_lock import (
     canonical_wechat_session_lock_path,
 )
 from video_processing.db.database import PipelineDB
+from video_processing.interaction.secondary_reply_contract import (
+    COMMENT_SUBMIT_PATHS,
+    SecondaryReplySubmissionGuard,
+)
 
 logger = logging.getLogger(__name__)
 
 WECHAT_COMMENT_URL = "https://channels.weixin.qq.com/platform/interaction/comment"
 COMMENT_POST_LIST_PATH = "/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list"
 COMMENT_LIST_PATH = "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/comment_list"
-COMMENT_SUBMIT_PATHS = {
-    "/cgi-bin/mmfinderassistant-bin/comment/create_comment",
-    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
-}
+
+REPLY_TRIGGER_SELECTORS: Tuple[str, ...] = (
+    ".action-icon.weui-icon-outlined-comment",
+    ".action-item:has(.weui-icon-outlined-comment)",
+    "[data-reply]",
+    "button[aria-label='回复'], [role='button'][aria-label='回复']",
+    "button:text-is('回复'), [role='button']:text-is('回复')",
+    ".weui-desktop-icon[aria-label='回复'], [title='回复']",
+    "button:has-text('回复'), [role='button']:has-text('回复')",
+    "[data-action='reply']",
+    ".comment-item__action:has-text('回复')",
+)
+
+EDITOR_INPUT_SELECTORS: Tuple[str, ...] = (
+    ".edit-area[contenteditable='true']",
+    ".comment-reply-wrap .edit-area",
+    "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
+    "textarea.create-input, textarea[placeholder*='说点什么']",
+    "textarea",
+)
+
+SUBMIT_BUTTON_SELECTORS: Tuple[str, ...] = (
+    ".comment-reply-wrap button.weui-desktop-btn_primary:text-is('评论')",
+    ".reply-opt button:text-is('评论')",
+    "button:text-is('评论'), button:text-is('发送'), button[data-submit]",
+    ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
+    "button[type='submit']",
+    "[data-action='submit']",
+)
+
+EXPAND_REPLIES_SELECTORS: Tuple[str, ...] = (
+    ".comment-reply-list button:has-text('展开'), .comment-reply-list [data-action='expand-replies'], .comment-reply-list .show-more-replies, .comment-reply-list :text-matches('展开|查看.*回复')",
+    "button:has-text('展开'), [role='button']:has-text('展开')",
+    "[data-action='expand-replies'], [data-expand-replies]",
+    ".show-more-replies, .show-more:has-text('展开')",
+    "span:has-text('展开'), a:has-text('展开')",
+)
 
 
 def _resolve_default_state_file() -> Path:
@@ -73,163 +111,6 @@ _PLATFORM_POST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/=-]{0,255}\Z")
 def _normalized_text(value: object) -> str:
     """按浏览器可见文本语义规范化空白。"""
     return re.sub(r"\s+", " ", str(value or "")).strip()
-
-
-class SecondaryReplySubmissionGuard:
-    """二级回复网络发送前强校验守卫 (Route Guard)。
-
-    任何非受信来源、错作品、错 root/reply ID、错账号、错正文、缺少必填字段或重复出站请求均在网络发送前硬拦截。
-    """
-
-    def __init__(
-        self,
-        expected_export_id: str,
-        expected_root_comment_id: str,
-        expected_content: str,
-        expected_finder_id: Optional[str] = None,
-        trusted_origins: Tuple[str, ...] = (),
-    ) -> None:
-        # 显式注入的受信测试源（如离线 fixture），生产默认为空，不再硬编码域名豁免
-        self.trusted_origins = tuple(trusted_origins)
-        self.expected_export_id = expected_export_id
-        self.expected_root_comment_id = expected_root_comment_id
-        self.expected_content = expected_content
-        self.expected_finder_id = expected_finder_id
-        self.requests: List[Dict[str, Any]] = []
-        self.mismatched_requests: List[Dict[str, Any]] = []
-        self.responses: List[Dict[str, Any]] = []
-        # 唯一被准许出站的 Request 对象；只有与它关联的 Response 才算本次发送的回执
-        self.allowed_request: Any = None
-        self.uncorrelated_responses: List[Dict[str, Any]] = []
-
-    def capture_request(self, request) -> bool:
-        """检查出站发评请求。若合法则放行并记录，若不符则返回 False 触发硬阻断。"""
-        if request.method != "POST":
-            return True
-
-        url_path = urlparse(request.url).path
-        if url_path not in COMMENT_SUBMIT_PATHS:
-            return True
-
-        # T05: 防重复出站发评请求（页面重复请求硬拦截）
-        if self.requests:
-            logger.error("[SecondaryReplySubmissionGuard] 拦截到重复出站发评请求，触发硬阻断！")
-            self.mismatched_requests.append({
-                "reason": "DUPLICATE_SUBMISSION",
-                "details": "一次流程仅允许最多一次出站发评请求",
-                "url": request.url,
-            })
-            return False
-
-        is_safe_origin = is_official_wechat_origin(request.url) or any(
-            request.url.startswith(o) for o in self.trusted_origins
-        )
-        if not is_safe_origin:
-            self.mismatched_requests.append({
-                "reason": "UNTRUSTED_ORIGIN",
-                "url": request.url,
-            })
-            return False
-
-        try:
-            payload = request.post_data_json
-        except Exception:
-            payload = None
-
-        if not isinstance(payload, dict):
-            self.mismatched_requests.append({
-                "reason": "NON_JSON_OR_EMPTY_PAYLOAD",
-                "url": request.url,
-            })
-            return False
-
-        # T06: 必填字段缺失核验
-        for req_f in ("exportId", "rootCommentId", "replyCommentId", "content"):
-            if not payload.get(req_f):
-                logger.error("[SecondaryReplySubmissionGuard] 拦截到缺少必填字段 %s 的出站请求", req_f)
-                self.mismatched_requests.append({
-                    "reason": "MISSING_REQUIRED_FIELD",
-                    "details": f"Missing required field: {req_f}",
-                    "payload": payload,
-                })
-                return False
-
-        req_export_id = str(payload.get("exportId") or "").strip()
-        req_root_id = str(payload.get("rootCommentId") or "").strip()
-        req_reply_id = str(payload.get("replyCommentId") or "").strip()
-        req_content = str(payload.get("content") or "").strip()
-        req_finder_id = str(payload.get("_log_finder_id") or payload.get("username") or "").strip()
-
-        # 核心契约核对
-        mismatches = []
-        if req_export_id != self.expected_export_id:
-            mismatches.append(f"exportId mismatch: '{req_export_id}' != '{self.expected_export_id}'")
-        if req_root_id != self.expected_root_comment_id:
-            mismatches.append(f"rootCommentId mismatch: '{req_root_id}' != '{self.expected_root_comment_id}'")
-        if req_reply_id != self.expected_root_comment_id:
-            mismatches.append(f"replyCommentId mismatch: '{req_reply_id}' != '{self.expected_root_comment_id}'")
-        # 正文必须与获批全文逐字一致（仅做 NFC 归一化，不折叠空白/换行）
-        if unicodedata.normalize("NFC", str(payload.get("content"))) != unicodedata.normalize("NFC", self.expected_content):
-            mismatches.append("content mismatch")
-        # 账号强校验：未配置期望账号、请求缺账号字段或不一致，一律拒绝
-        if not self.expected_finder_id:
-            mismatches.append("expected account not configured")
-        elif not req_finder_id:
-            mismatches.append("account field missing in request")
-        elif req_finder_id != self.expected_finder_id:
-            mismatches.append(f"account mismatch: '{req_finder_id}' != '{self.expected_finder_id}'")
-
-        if mismatches:
-            logger.error("[SecondaryReplySubmissionGuard] 网络发送前守卫拦截到错帖/错ID/错账号请求: %s", mismatches)
-            self.mismatched_requests.append({
-                "reason": "FIELD_MISMATCH",
-                "details": mismatches,
-                "payload": payload,
-            })
-            return False
-
-        self.requests.append(payload)
-        self.allowed_request = request
-        return True
-
-    def capture_response(self, response) -> None:
-        """捕获提交回执；仅接受与唯一准许出站 Request 对应的 Response，其余记为无关回执。"""
-        url_path = urlparse(response.url).path
-        if url_path not in COMMENT_SUBMIT_PATHS:
-            return
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-        item = {"status": response.status, "url": response.url, "data": payload}
-        if self.allowed_request is not None and getattr(response, "request", None) is self.allowed_request:
-            self.responses.append(item)
-        else:
-            self.uncorrelated_responses.append(item)
-
-    def validate_success_response(self) -> Tuple[bool, str, str]:
-        """校验与唯一出站 Request 关联的业务成功回执。返回 (ok, 原生回复 ID, 原因)。
-
-        要求：HTTP 200/201、errCode==0、非空回复 ID、回执中的父评论/作者/正文与获批内容一致。
-        """
-        if len(self.responses) != 1:
-            return False, "", f"correlated_responses={len(self.responses)}"
-        item = self.responses[0]
-        data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        if item.get("status") not in (200, 201) or data.get("errCode") != 0:
-            return False, "", "NOT_BUSINESS_SUCCESS"
-        body = data.get("data") if isinstance(data.get("data"), dict) else {}
-        comment = body.get("comment") if isinstance(body.get("comment"), dict) else {}
-        reply_id = str(body.get("commentId") or "").strip()
-        if not reply_id or str(comment.get("commentId") or "").strip() != reply_id:
-            return False, "", "REPLY_ID_MISSING_OR_INCONSISTENT"
-        if str(comment.get("replyCommentId") or "").strip() != self.expected_root_comment_id:
-            return False, "", "PARENT_MISMATCH"
-        if not self.expected_finder_id or str(comment.get("username") or "").strip() != self.expected_finder_id:
-            return False, "", "AUTHOR_MISMATCH"
-        if unicodedata.normalize("NFC", str(comment.get("commentContent") or "")) != unicodedata.normalize("NFC", self.expected_content):
-            return False, "", "CONTENT_MISMATCH"
-        return True, reply_id, "OK"
 
 
 class SecondaryReplyBrowserAdapter:
@@ -321,12 +202,191 @@ class SecondaryReplyBrowserAdapter:
         page.on("request", on_request)
         page.on("response", on_response)
 
-    def _new_evidence_dir(self, parent: Optional[Path | str] = None) -> Path:
+    def create_evidence_dir(self, parent: Optional[Path | str] = None) -> Path:
         base = Path(parent) if parent else (Path(__file__).resolve().parents[3] / "output" / "secondary_reply_evidence")
         attempt_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
         out_dir = base / attempt_id
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
+
+    _new_evidence_dir = create_evidence_dir
+
+    def _select_and_bind_post_card(
+        self,
+        page: Any,
+        *,
+        platform_post_id: str,
+        video_title: Optional[str] = None,
+        published_description: Optional[str] = None,
+        wait_ms: int = 1500,
+    ) -> Tuple[bool, Optional[str]]:
+        """唯一定位作品卡片、点击并校验详情面板已绑定到目标原生 exportId。"""
+        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
+        if card is None:
+            return False, f"未找到作品卡片 (exportId: {platform_post_id})"
+        self._captured_comments.clear()
+        self._active_export_id = None
+        card.click()
+        page.wait_for_timeout(wait_ms)
+
+        bound = page.locator("[data-current-object-id]")
+        bound_ok = False
+        if bound.count() >= 1 and all(
+            (bound.nth(i).get_attribute("data-current-object-id") or "") == platform_post_id
+            for i in range(bound.count())
+        ):
+            bound_ok = True
+        elif self._active_export_id and self._active_export_id == platform_post_id:
+            bound_ok = True
+
+        if not bound_ok:
+            return False, f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})，拒绝继续"
+        return True, None
+
+    def _locate_unique_visible_control(
+        self,
+        scope: Any,
+        candidates: Tuple[str, ...],
+        *,
+        control_label: str,
+        fallback_scope: Optional[Any] = None,
+        fallback_candidates: Tuple[str, ...] = (),
+    ) -> Tuple[Optional[str], Optional[Any], Optional[str]]:
+        """在指定作用域按优先级查找唯一可见控件；任何候选出现 count > 1 立即触发歧义阻断，绝不回退首个节点。"""
+        for cand in candidates:
+            loc = scope.locator(cand).filter(visible=True)
+            cnt = loc.count()
+            if cnt == 1:
+                return cand, loc.first, None
+            if cnt > 1:
+                return (
+                    None,
+                    None,
+                    f"{control_label}匹配到多个可见控件 ({cnt}) [选择器: '{cand}']，触发歧义阻断",
+                )
+        if fallback_scope is not None:
+            for cand in fallback_candidates:
+                loc = fallback_scope.locator(cand).filter(visible=True)
+                cnt = loc.count()
+                if cnt == 1:
+                    return cand, loc.first, None
+                if cnt > 1:
+                    return (
+                        None,
+                        None,
+                        f"{control_label}在全局弹层匹配到多个可见控件 ({cnt}) [选择器: '{cand}']，触发歧义阻断",
+                    )
+        return None, None, None
+
+    def _locate_expand_control(
+        self, parent_item: Any
+    ) -> Tuple[Optional[str], int, Optional[str], Optional[Any]]:
+        """在父评论作用域内定位二级回复展开按钮；若 count > 1 则返回数量供调用方按歧义拒绝。"""
+        for cand in EXPAND_REPLIES_SELECTORS:
+            loc = parent_item.locator(cand).filter(visible=True)
+            cnt = loc.count()
+            if cnt == 1:
+                text = None
+                try:
+                    text = loc.first.inner_text().strip()
+                except Exception:
+                    pass
+                return cand, 1, text, loc.first
+            if cnt > 1:
+                return cand, cnt, None, None
+        return None, 0, None, None
+
+    def _open_and_bind_reply_controls(
+        self,
+        page: Any,
+        parent_item: Any,
+        *,
+        root_comment_id: str = "",
+        close_on_error: bool = True,
+    ) -> Dict[str, Any]:
+        """校准与发送共享的控件唯一定位与展开绑定流程（不输入正文、不点击提交）。"""
+        if parent_item is None or parent_item.count() != 1:
+            return {
+                "ok": False,
+                "error": f"一级评论节点不唯一或未找到 (commentId: {root_comment_id})",
+            }
+
+        reply_selector, reply_btn_loc, reply_err = self._locate_unique_visible_control(
+            parent_item,
+            REPLY_TRIGGER_SELECTORS,
+            control_label="父评论内回复按钮",
+        )
+        if reply_err:
+            return {"ok": False, "error": reply_err}
+        if not reply_selector or reply_btn_loc is None:
+            return {
+                "ok": False,
+                "error": "未能唯一定位可用的二级回复触发按钮；禁止按图标顺序或通用 button 猜测",
+            }
+
+        reply_enabled = reply_btn_loc.is_enabled()
+        if not reply_enabled:
+            return {"ok": False, "error": f"回复按钮处于禁用状态: {reply_selector}"}
+
+        expand_selector, expand_count, expand_text, _expand_loc = self._locate_expand_control(parent_item)
+        if expand_count > 1:
+            return {
+                "ok": False,
+                "error": f"父评论内展开回复按钮选择器 '{expand_selector}' 匹配到多个可见控件 ({expand_count})，触发歧义阻断",
+            }
+
+        editor_already_open = parent_item.locator(".edit-area:visible, textarea:visible").count() > 0
+        if not editor_already_open:
+            reply_btn_loc.click()
+            page.wait_for_timeout(500)
+
+        textarea_selector, textarea_loc, textarea_err = self._locate_unique_visible_control(
+            parent_item,
+            EDITOR_INPUT_SELECTORS,
+            control_label="父评论内输入框",
+            fallback_scope=page,
+            fallback_candidates=EDITOR_INPUT_SELECTORS[:3],
+        )
+        if textarea_err:
+            if close_on_error:
+                self._safe_close_editor(page, parent_item, editor_already_open)
+            return {"ok": False, "error": textarea_err}
+        if not textarea_selector or textarea_loc is None:
+            if close_on_error:
+                self._safe_close_editor(page, parent_item, editor_already_open)
+            return {"ok": False, "error": "未能定位到二级回复输入框"}
+
+        submit_selector, submit_loc, submit_err = self._locate_unique_visible_control(
+            parent_item,
+            SUBMIT_BUTTON_SELECTORS,
+            control_label="父评论内提交按钮",
+            fallback_scope=page,
+            fallback_candidates=SUBMIT_BUTTON_SELECTORS[:2],
+        )
+        if submit_err:
+            if close_on_error:
+                self._safe_close_editor(page, parent_item, editor_already_open, textarea_loc)
+            return {"ok": False, "error": submit_err}
+        if not submit_selector or submit_loc is None:
+            if close_on_error:
+                self._safe_close_editor(page, parent_item, editor_already_open, textarea_loc)
+            return {"ok": False, "error": "未能定位到二级回复提交按钮"}
+
+        return {
+            "ok": True,
+            "error": None,
+            "reply_selector": reply_selector,
+            "reply_btn": reply_btn_loc,
+            "reply_enabled": reply_enabled,
+            "textarea_selector": textarea_selector,
+            "textarea": textarea_loc,
+            "submit_selector": submit_selector,
+            "submit_btn": submit_loc,
+            "expand_selector": expand_selector,
+            "expand_count": expand_count,
+            "expand_text": expand_text,
+            "editor_already_open": editor_already_open,
+        }
 
     def post_secondary_reply(
         self,
@@ -370,7 +430,7 @@ class SecondaryReplyBrowserAdapter:
         if not self.state_path.exists():
             return "FAILED", None, f"登录态文件不存在: {self.state_path}"
 
-        attempt_dir = self._new_evidence_dir(evidence_dir)
+        attempt_dir = self.create_evidence_dir(evidence_dir)
         guard = SecondaryReplySubmissionGuard(
             post_id, root_id, content,
             expected_finder_id=expected_finder_id, trusted_origins=trusted_origins,
@@ -397,7 +457,6 @@ class SecondaryReplyBrowserAdapter:
             return "RETRY_WAIT", None, f"会话锁忙: {exc}"
         except Exception as exc:
             logger.error("[SecondaryReplyBrowser] 执行过程中未捕获异常: %s", exc)
-            # 若已持久化提交意图，必须返回 UNCERTAIN，禁止普通重试！
             if guard.requests:
                 return "UNCERTAIN", str(attempt_dir / "error.png"), f"提交后崩溃: {exc}"
             return "FAILED", str(attempt_dir / "error.png"), str(exc)
@@ -431,7 +490,6 @@ class SecondaryReplyBrowserAdapter:
             page = context.new_page()
             self._setup_page_listeners(page, guard)
 
-            # 路由守卫拦截
             def route_interceptor(route):
                 req = route.request
                 is_safe = guard.capture_request(req)
@@ -450,7 +508,7 @@ class SecondaryReplyBrowserAdapter:
                 except Exception:
                     page.wait_for_timeout(2000)
 
-                return self._interact_with_page(
+                return self.execute_page_reply_flow(
                     page,
                     task_id=task_id,
                     platform_post_id=platform_post_id,
@@ -469,7 +527,7 @@ class SecondaryReplyBrowserAdapter:
                 context.close()
                 browser.close()
 
-    def _interact_with_page(
+    def execute_page_reply_flow(
         self,
         page,
         *,
@@ -492,37 +550,20 @@ class SecondaryReplyBrowserAdapter:
         ``send_only=True`` 时发出唯一出站请求并检查守卫后即返回 ``SENT``（不在本会话内回读、不写库），
         由业务编排在全新会话中独立回读并落终态。
         """
-        # 检查登录态有效性
         is_login, _ = check_explicit_login_prompt(page)
         if is_login:
             return "FAILED", None, "LOGIN_REQUIRED"
 
-        # 1. 定位目标作品卡片
-        # 遵循 AGENTS.md: 不依赖 DOM 索引，依赖文案强校验与 post_list API
-        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
-        if card is None:
-            return "FAILED", None, f"未找到作品卡片 (exportId: {platform_post_id})"
-        self._captured_comments.clear()
-        self._active_export_id = None
-        card.click()
-        page.wait_for_timeout(2000)
-
-        # 文案前缀只用于导航：点开后详情区必须携带与原生作品 ID 一致的标识，否则拒绝（不信任标题匹配）
-        bound = page.locator("[data-current-object-id]")
-        bound_ok = False
-        if bound.count() >= 1 and all(
-            (bound.nth(i).get_attribute("data-current-object-id") or "") == platform_post_id
-            for i in range(bound.count())
-        ):
-            bound_ok = True
-        elif self._active_export_id and self._active_export_id == platform_post_id:
-            bound_ok = True
-
+        bound_ok, bind_err = self._select_and_bind_post_card(
+            page,
+            platform_post_id=platform_post_id,
+            video_title=video_title,
+            published_description=published_description,
+            wait_ms=2000,
+        )
         if not bound_ok:
-            return "FAILED", None, f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})，拒绝继续"
+            return "FAILED", None, bind_err
 
-        # 2. 定位指定的一级观众评论 (通过 root_comment_id 绑定)
-        # 检查是否已存在作者二级回复（锁内复审）与分页完整性
         if not guard.expected_finder_id:
             return "FAILED", None, "缺少已验证的作者账号标识，无法判定是否已回复，拒绝继续"
         already_replied, completeness, parent_item = self._check_author_already_replied(
@@ -535,7 +576,6 @@ class SecondaryReplyBrowserAdapter:
             except Exception:
                 pass
             if verify_only:
-                # 只读对账仅发现“作者已有回复”，但没有本任务的原生回复 ID，不得伪造 ID 或标记成功
                 return "FOUND_UNVERIFIED", str(evidence_img), "对账发现作者二级回复存在，但无法绑定到本任务的原生回复 ID，需人工确认"
             if db:
                 db.record_secondary_reply_skipped(
@@ -566,101 +606,35 @@ class SecondaryReplyBrowserAdapter:
                 return "VERIFIED_ABSENT", calib.get("evidence_screenshot"), "只读核验：目标评论存在、作者未回复且控件校准通过"
             return "VERIFIED_ABSENT", None, "只读核验：目标评论存在且作者尚未回复"
 
-        # 3. 点击该一级评论的“回复”按钮展开回复输入框
-        reply_candidates = [
-            ".action-icon.weui-icon-outlined-comment",
-            ".action-item:has(.weui-icon-outlined-comment)",
-            "[data-reply]",
-            "button[aria-label='回复'], [role='button'][aria-label='回复']",
-            "button:text-is('回复'), [role='button']:text-is('回复')",
-            ".weui-desktop-icon[aria-label='回复'], [title='回复']",
-            "button:has-text('回复'), [role='button']:has-text('回复')",
-            "[data-action='reply']",
-            ".comment-item__action:has-text('回复')",
-        ]
-        reply_btn = None
-        for cand in reply_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                reply_btn = loc.first
-                break
-            elif loc.count() > 1:
-                return "FAILED", None, f"回复按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断"
+        bound_controls = self._open_and_bind_reply_controls(
+            page,
+            parent_item,
+            root_comment_id=root_comment_id,
+            close_on_error=True,
+        )
+        if not bound_controls["ok"]:
+            return "FAILED", None, bound_controls["error"]
 
-        if reply_btn is None or not reply_btn.is_enabled():
-            return "FAILED", None, "未能唯一定位可用的回复按钮；禁止按图标顺序或通用 button 猜测"
-        reply_btn.click()
-        page.wait_for_timeout(1000)
-
-        # 定位输入框
-        editor_candidates = [
-            ".edit-area[contenteditable='true']",
-            ".comment-reply-wrap .edit-area",
-            "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
-            "textarea.create-input, textarea[placeholder*='说点什么']",
-            "textarea",
-        ]
-        textarea = None
-        for cand in editor_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                textarea = loc.first
-                break
-            elif loc.count() > 1:
-                return "FAILED", None, f"父评论内输入框匹配到多个 ({loc.count()})，选择器: {cand}"
-
-        if textarea is None:
-            for cand in editor_candidates[:3]:
-                loc = page.locator(cand).filter(visible=True)
-                if loc.count() == 1:
-                    textarea = loc.first
-                    break
-
-        if textarea is None:
-            return "FAILED", None, "未能定位到二级回复输入框"
+        textarea = bound_controls["textarea"]
+        submit_btn = bound_controls["submit_btn"]
+        editor_already_open = bound_controls["editor_already_open"]
 
         textarea.fill(reply_content)
         page.wait_for_timeout(500)
 
-        # 确认唯一且可用的提交控件后，才持久化意图；后续不明结果不得重发。
-        submit_candidates = [
-            ".comment-reply-wrap button.weui-desktop-btn_primary:text-is('评论')",
-            ".reply-opt button:text-is('评论')",
-            "button:text-is('评论'), button:text-is('发送'), button[data-submit]",
-            ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
-            "button[type='submit']",
-            "[data-action='submit']",
-        ]
-        submit_btn = None
-        for cand in submit_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                submit_btn = loc.first
-                break
-            elif loc.count() > 1:
-                return "FAILED", None, f"提交按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断"
-
-        if submit_btn is None:
-            for cand in submit_candidates[:2]:
-                loc = page.locator(cand).filter(visible=True)
-                if loc.count() == 1:
-                    submit_btn = loc.first
-                    break
-
-        if submit_btn is None or not submit_btn.is_enabled():
+        if not submit_btn.is_enabled():
+            self._safe_close_editor(page, parent_item, editor_already_open, textarea)
             return "FAILED", None, "未能唯一定位可用的提交按钮"
 
-        # 4. 提交前持久化提交意图 (SUBMIT_INTENT)
         if before_submit is not None:
             intent_ok = before_submit()
             if not intent_ok:
+                self._safe_close_editor(page, parent_item, editor_already_open, textarea)
                 return "FAILED", None, "持久化提交意图失败（配额超限或防重冲突），中止发送"
 
-        # 5. 点击提交
-        submit_btn.first.click()
+        submit_btn.click()
         page.wait_for_timeout(3000)
 
-        # 6. 验证出站拦截情况
         if guard.mismatched_requests and not guard.requests:
             mism = guard.mismatched_requests[0]
             return "FAILED", None, f"发送前路由守卫拦截: {mism.get('reason')} ({mism.get('details')})"
@@ -670,10 +644,8 @@ class SecondaryReplyBrowserAdapter:
                 return "SENT", None, None
             return "UNCERTAIN", None, "意图已持久化，但未观察到出站请求"
 
-        # 7. 验证接口响应：只认与唯一准许出站 Request 关联且字段一致的业务成功回执
         api_success, new_reply_id, _resp_reason = guard.validate_success_response()
 
-        # 8. 刷新并进行独立回读校验（刷新前截图只作为“未经核对”的现场记录，不作为成功证据）
         pre_reload_img = attempt_dir / "post_submit_pre_reload_unverified.png"
         evidence_img = attempt_dir / "verified_reply.png"
         try:
@@ -681,11 +653,8 @@ class SecondaryReplyBrowserAdapter:
         except Exception:
             pass
 
-        # T10 铁律：双重成功确认 — 平台返回成功 且 独立回读确认存在于父评论下
         if api_success:
             readback_ok = False
-            # 必须有非空的平台回复 ID，且在“重新加载页面”后由服务器数据渲染出：
-            # 同作品、父评论下、原生作者身份一致、正文（专用内容节点）NFC 后完整等值
             if new_reply_id:
                 try:
                     page.reload()
@@ -696,11 +665,10 @@ class SecondaryReplyBrowserAdapter:
                         video_title=video_title, published_description=published_description,
                     )
                     readback_ok = state == "FOUND" and found_id == new_reply_id
-                except Exception as exc:  # 回读异常不得判成功
+                except Exception as exc:
                     logger.warning("[SecondaryReplyBrowser] 重新加载回读异常: %s", exc)
 
             if readback_ok:
-                # 成功证据必须是刷新并核对通过之后的页面状态；保存失败则不得报告 VERIFIED（避免无证据成功）
                 try:
                     page.screenshot(path=str(evidence_img))
                 except Exception as exc:
@@ -719,7 +687,6 @@ class SecondaryReplyBrowserAdapter:
                         evidence_path=str(evidence_img),
                     )
                     if not persisted:
-                        # 成功落库被拒（状态不符/缺 ID）时不得对外报告 VERIFIED
                         db.record_secondary_reply_uncertain(
                             task_id=task_id,
                             error_message="平台回读确认但本地成功落库被拒绝，转入只读对账",
@@ -739,7 +706,6 @@ class SecondaryReplyBrowserAdapter:
                     )
                 return "UNCERTAIN", str(pre_reload_img), "平台返回 201 但独立回读未确认，转入 UNCERTAIN"
 
-        # 若发出了请求但未收到明确成功回执，必须进入 UNCERTAIN 只读对账
         if guard.requests:
             if db:
                 db.record_secondary_reply_uncertain(
@@ -751,12 +717,11 @@ class SecondaryReplyBrowserAdapter:
 
         return "FAILED", str(pre_reload_img), "未触发发评网络请求"
 
+    _interact_with_page = execute_page_reply_flow
+
     @contextlib.contextmanager
     def open_session(self, guard: Optional[SecondaryReplySubmissionGuard] = None):
-        """会话锁 + 全新 Chromium 上下文 + 发送路由守卫，yield 已打开评论页的 page。
-
-        每次调用都是全新会话，因此在其中读到的数据来自服务器而非上一次会话的乐观 DOM。
-        """
+        """会话锁 + 全新 Chromium 上下文 + 发送路由守卫，yield 已打开评论页的 page。"""
         if not self.state_path.exists():
             raise FileNotFoundError(f"登录态文件不存在: {self.state_path}")
         with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):
@@ -782,7 +747,6 @@ class SecondaryReplyBrowserAdapter:
 
                         page.route("**/comment/create_comment*", route_interceptor)
                     else:
-                        # 只读会话不携带发送许可；即使页面意外触发提交也必须拦截。
                         page.route("**/comment/create_comment*", lambda route: route.abort())
                     page.goto(self.comment_url, timeout=45000, wait_until="domcontentloaded")
                     try:
@@ -805,23 +769,21 @@ class SecondaryReplyBrowserAdapter:
         video_title: Optional[str] = None,
         published_description: Optional[str] = None,
     ) -> Tuple[str, str]:
-        """只读：在已打开页面的正确作品/父评论下，查找同作者且正文 NFC 完整等值的回复。
-
-        返回 (状态, 回复原生 ID)；状态为 FOUND / NOT_FOUND / AMBIGUOUS / UNKNOWN。
-        只有恰好一个匹配才 FOUND；找不到不代表未发出，仅代表“未观察到”。
-        """
+        """只读：在已打开页面的正确作品/父评论下，查找同作者且正文 NFC 完整等值的回复。"""
         if not author_id or "'" in author_id:
             return "UNKNOWN", ""
         is_login, _ = check_explicit_login_prompt(page)
         if is_login:
             return "UNKNOWN", ""
-        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
-        if card is None:
+        bound_ok, _bind_err = self._select_and_bind_post_card(
+            page,
+            platform_post_id=platform_post_id,
+            video_title=video_title,
+            published_description=published_description,
+            wait_ms=1500,
+        )
+        if not bound_ok:
             return "UNKNOWN", ""
-        self._captured_comments.clear()
-        self._active_export_id = None
-        card.click()
-        page.wait_for_timeout(1500)
         _replied, _comp, parent = self._check_author_already_replied(page, root_comment_id, author_id)
         if parent is None or _comp != "COMPLETE":
             return "UNKNOWN", ""
@@ -866,21 +828,24 @@ class SecondaryReplyBrowserAdapter:
         video_title: Optional[str],
         published_description: Optional[str],
     ):
-        """解析并绑定唯一的视频卡片。"""
-        # 1. 尝试按 data-object-id 定位（测试 fixture 兼容）
+        """解析并绑定唯一的视频卡片；若出现多个候选卡片立即拒绝，绝不回退首个节点。"""
         card = page.locator(f"[data-object-id='{platform_post_id}']").filter(visible=True)
         if card.count() == 1:
             return card.first
+        if card.count() > 1:
+            logger.warning("[SecondaryReplyBrowser] data-object-id '%s' 匹配到多个卡片 (%d)，触发歧义阻断", platform_post_id, card.count())
+            return None
 
-        # 2. 尝试按文案前缀强校验匹配
         title_hint = self._post_descriptions.get(platform_post_id) or video_title or published_description or ""
         clean_hint = _normalized_text(title_hint)[:20]
         if clean_hint:
             cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
             if cards.count() == 1:
                 return cards.first
+            if cards.count() > 1:
+                logger.warning("[SecondaryReplyBrowser] 文案 '%s' 匹配到多个卡片 (%d)，触发歧义阻断", clean_hint, cards.count())
+                return None
 
-        # 3. 若初始未找到且页面存在滚动列表容器，执行滚轮分页向下查找
         scroll_container = page.locator(".scroll-list__wrp, .feeds-container, .scroll-list").filter(visible=True)
         if scroll_container.count() > 0:
             for _ in range(15):
@@ -891,17 +856,18 @@ class SecondaryReplyBrowserAdapter:
                 page.mouse.wheel(0, 2500)
                 page.wait_for_timeout(800)
 
-                # 重新检查 data-object-id
                 card = page.locator(f"[data-object-id='{platform_post_id}']").filter(visible=True)
                 if card.count() == 1:
                     return card.first
+                if card.count() > 1:
+                    logger.warning("[SecondaryReplyBrowser] 滚动后 data-object-id '%s' 匹配到多个卡片 (%d)，触发歧义阻断", platform_post_id, card.count())
+                    return None
 
-                # 重新检查文案匹配
                 if clean_hint:
                     cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
                     if cards.count() == 1:
                         return cards.first
-                    elif cards.count() > 1:
+                    if cards.count() > 1:
                         logger.warning("[SecondaryReplyBrowser] 文案 '%s' 匹配到多个卡片 (%d)，触发歧义阻断", clean_hint, cards.count())
                         return None
 
@@ -913,20 +879,17 @@ class SecondaryReplyBrowserAdapter:
         root_comment_id: str,
         author_id: Optional[str],
     ) -> Tuple[bool, str, Any]:
-        """检查指定一级评论下是否已有作者回复与分页完整性。
-
-        返回 (already_replied, completeness, parent_node)
-        - already_replied: 是否已存在作者二级回复（以原生作者 ID 为准）
-        - completeness: 分页完整性状态 (COMPLETE / PAGINATION_UNKNOWN / PAGINATION_INCOMPLETE)
-        - parent_node: 一级评论节点定位器
-        """
-        # 1. 定位一级评论 DOM 节点
-        parent_loc = page.locator(f"[data-comment-id='{root_comment_id}']")
+        """检查指定一级评论下是否已有作者回复与分页完整性。"""
+        parent_loc = page.locator(f"[data-comment-id='{root_comment_id}']").filter(visible=True)
         parent_node = None
         if parent_loc.count() == 1:
             parent_node = parent_loc.first
+        elif parent_loc.count() > 1:
+            return False, "AMBIGUOUS_COMMENT_ID", None
         else:
-            # 真实平台回退：通过 captured_comments 中的内容特征唯一定位
+            raw_loc = page.locator(f"[data-comment-id='{root_comment_id}']")
+            if raw_loc.count() > 0:
+                return False, "HIDDEN_OR_AMBIGUOUS_COMMENT_NODE", None
             info = self._captured_comments.get(root_comment_id)
             if info and info.get("content_prefix") and info.get("export_id") == self._active_export_id:
                 candidates = page.locator(".comment-item:visible").filter(has_text=info["content_prefix"])
@@ -934,6 +897,8 @@ class SecondaryReplyBrowserAdapter:
                              if c.get("content_prefix") == info["content_prefix"]]
                 if candidates.count() == 1 and len(same_text) == 1:
                     parent_node = candidates.first
+                elif candidates.count() > 1 or len(same_text) > 1:
+                    return False, "AMBIGUOUS_COMMENT_TEXT", None
 
         if parent_node is None:
             return False, "NOT_FOUND", None
@@ -941,65 +906,55 @@ class SecondaryReplyBrowserAdapter:
         if not author_id or "'" in author_id:
             return False, "INVALID_AUTHOR_ID", parent_node
 
-        # 2. 检查当前已渲染的二级回复中是否已有作者回复
         author_nodes = parent_node.locator(".level-two, [data-level-two], .comment-reply-list").locator(
             f"[data-author-id='{author_id}']"
         )
         if author_nodes.count() > 0:
             return True, "COMPLETE", parent_node
 
-        # 检查网络监听捕获的回复数据
         api_info = self._captured_comments.get(root_comment_id, {})
         if any(isinstance(sub, dict) and sub.get("username") == author_id
                for sub in api_info.get("levelTwoComment", [])):
             return True, "COMPLETE", parent_node
 
-        # 3. 检查是否有折叠或后续分页
         dom_status = parent_node.get_attribute("data-pagination-status") or ""
         if dom_status in ("unknown", "error", "timeout"):
             return False, "PAGINATION_UNKNOWN", parent_node
 
-        expand_btn = parent_node.locator(
-            "button:has-text('展开'), [data-action='expand-replies'], .show-more-replies, [data-expand-replies]"
-        ).filter(visible=True)
+        _expand_sel, expand_count, _expand_txt, expand_btn_loc = self._locate_expand_control(parent_node)
+        if expand_count > 1:
+            return False, "PAGINATION_UNKNOWN", parent_node
 
-        if expand_btn.count() > 0:
+        if expand_count == 1 and expand_btn_loc is not None:
             try:
-                expand_btn.first.click()
+                expand_btn_loc.click()
                 page.wait_for_timeout(1000)
             except Exception as exc:
                 logger.warning("[SecondaryReplyBrowser] 点击展开二级回复失败: %s", exc)
                 return False, "PAGINATION_UNKNOWN", parent_node
 
-            # 展开后重新检查是否有作者回复
             author_nodes_after = parent_node.locator(".level-two, [data-level-two], .comment-reply-list").locator(
                 f"[data-author-id='{author_id}']"
             )
             if author_nodes_after.count() > 0:
                 return True, "COMPLETE", parent_node
 
-            # 检查展开后是否依然有未穷尽分页
             api_info = self._captured_comments.get(root_comment_id, {})
             if any(isinstance(sub, dict) and sub.get("username") == author_id
                    for sub in api_info.get("levelTwoComment", [])):
                 return True, "COMPLETE", parent_node
-            still_has_btn = parent_node.locator(
-                "button:has-text('展开'), [data-action='expand-replies'], .show-more-replies, [data-expand-replies]"
-            ).filter(visible=True).count() > 0
+            _after_sel, still_expand_count, _after_txt, _after_loc = self._locate_expand_control(parent_node)
             new_status = parent_node.get_attribute("data-pagination-status") or ""
-            if still_has_btn or new_status in ("unknown", "incomplete") or (api_info.get("downContinueFlag") == 1):
+            if still_expand_count > 0 or new_status in ("unknown", "incomplete") or (api_info.get("downContinueFlag") == 1):
                 return False, "PAGINATION_INCOMPLETE", parent_node
 
         elif api_info.get("downContinueFlag") == 1 or parent_node.get_attribute("data-down-continue-flag") == "1":
-            # API 或 DOM 明确标记有更多回复，但界面上没有可展开按钮 -> 无法证明完整
             return False, "PAGINATION_INCOMPLETE", parent_node
 
-        # 真实接口缺少明确的分页终止标记不能当成空列表；DOM 夹具保留兼容。
         if parent_loc.count() != 1 and (
             type(api_info.get("downContinueFlag")) is not int or api_info["downContinueFlag"] != 0
         ):
             return False, "PAGINATION_UNKNOWN", parent_node
-        # 完整确认无作者回复
         return False, "COMPLETE", parent_node
 
     def calibrate_comment_controls(
@@ -1010,7 +965,7 @@ class SecondaryReplyBrowserAdapter:
         root_comment_id: str,
         attempt_dir: Optional[Path | str] = None,
     ) -> Dict[str, Any]:
-        """只读探测并校准目标一级评论下的二级回复相关控件。
+        """只读探测并校准目标一级评论下的二级回复相关控件（与发送共用同一套定位规则）。
 
         严格执行零写安全：
         - 不向 textarea / edit-area 输入任何真实内容；
@@ -1019,105 +974,18 @@ class SecondaryReplyBrowserAdapter:
         - 若打开了回复编辑器，在探测结束后通过取消按钮或 ESC 恢复现场；
         - 产出各控件的选择器、数量、可见性与可用性诊断字典。
         """
-        if parent_item is None or parent_item.count() != 1:
-            return {"ok": False, "error": f"一级评论节点不唯一或未找到 (commentId: {root_comment_id})"}
+        bound = self._open_and_bind_reply_controls(
+            page,
+            parent_item,
+            root_comment_id=root_comment_id,
+            close_on_error=True,
+        )
+        if not bound["ok"]:
+            return {"ok": False, "error": bound["error"]}
 
-        # 1. 探测回复图标按钮
-        reply_candidates = [
-            ".action-icon.weui-icon-outlined-comment",
-            ".action-item:has(.weui-icon-outlined-comment)",
-            "[data-reply]",
-            "button[aria-label='回复'], [role='button'][aria-label='回复']",
-            "button:text-is('回复'), [role='button']:text-is('回复')",
-            ".weui-desktop-icon[aria-label='回复'], [title='回复']",
-            "button:has-text('回复'), [role='button']:has-text('回复')",
-            "[data-action='reply']",
-            ".comment-item__action:has-text('回复')",
-        ]
-        reply_selector_matched = None
-        reply_btn_loc = None
-        for cand in reply_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                reply_selector_matched = cand
-                reply_btn_loc = loc.first
-                break
-            elif loc.count() > 1:
-                return {
-                    "ok": False,
-                    "error": f"回复按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断",
-                }
-
-        if not reply_selector_matched or not reply_btn_loc:
-            return {"ok": False, "error": "未能唯一定位可用的二级回复触发按钮"}
-
-        reply_enabled = reply_btn_loc.is_enabled()
-        if not reply_enabled:
-            return {"ok": False, "error": f"回复按钮处于禁用状态: {reply_selector_matched}"}
-
-        # 2. 探测二级回复展开折叠按钮
-        expand_candidates = [
-            ".comment-reply-list button:has-text('展开'), .comment-reply-list [data-action='expand-replies'], .comment-reply-list .show-more-replies, .comment-reply-list :text-matches('展开|查看.*回复')",
-            "button:has-text('展开'), [role='button']:has-text('展开')",
-            "[data-action='expand-replies'], [data-expand-replies]",
-            ".show-more-replies, .show-more:has-text('展开')",
-            "span:has-text('展开'), a:has-text('展开')",
-        ]
-        expand_matched = None
-        expand_count = 0
-        expand_text = None
-        for cand in expand_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() > 0:
-                expand_matched = cand
-                expand_count = loc.count()
-                try:
-                    expand_text = loc.first.inner_text().strip()
-                except Exception:
-                    pass
-                break
-
-        # 3. 展开回复编辑器（若尚未展开）
-        editor_already_open = parent_item.locator(".edit-area:visible, textarea:visible").count() > 0
-        if not editor_already_open:
-            reply_btn_loc.click()
-            page.wait_for_timeout(500)
-
-        # 4. 探测输入框
-        editor_candidates = [
-            ".edit-area[contenteditable='true']",
-            ".comment-reply-wrap .edit-area",
-            "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
-            "textarea.create-input, textarea[placeholder*='说点什么']",
-            "textarea",
-        ]
-        textarea_matched = None
-        textarea_loc = None
-        for cand in editor_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                textarea_matched = cand
-                textarea_loc = loc.first
-                break
-            elif loc.count() > 1:
-                self._safe_close_editor(page, parent_item, editor_already_open)
-                return {
-                    "ok": False,
-                    "error": f"父评论内输入框匹配到多个 ({loc.count()})，选择器: {cand}",
-                }
-
-        if not textarea_loc:
-            # 针对微前端悬浮或 Portal 弹层，在全局页面兜底查找
-            for cand in editor_candidates[:3]:
-                loc = page.locator(cand).filter(visible=True)
-                if loc.count() == 1:
-                    textarea_matched = cand
-                    textarea_loc = loc.first
-                    break
-
-        if not textarea_loc:
-            self._safe_close_editor(page, parent_item, editor_already_open)
-            return {"ok": False, "error": "未能定位到二级回复输入框"}
+        textarea_loc = bound["textarea"]
+        submit_loc = bound["submit_btn"]
+        editor_already_open = bound["editor_already_open"]
 
         textarea_editable = textarea_loc.is_editable()
         try:
@@ -1127,53 +995,14 @@ class SecondaryReplyBrowserAdapter:
         except Exception:
             textarea_empty = True
 
-        # 5. 探测提交按钮
-        submit_candidates = [
-            ".comment-reply-wrap button.weui-desktop-btn_primary:text-is('评论')",
-            ".reply-opt button:text-is('评论')",
-            "button:text-is('评论'), button:text-is('发送'), button[data-submit]",
-            ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
-            "button[type='submit']",
-            "[data-action='submit']",
-        ]
-        submit_matched = None
-        submit_loc = None
-        for cand in submit_candidates:
-            loc = parent_item.locator(cand).filter(visible=True)
-            if loc.count() == 1:
-                submit_matched = cand
-                submit_loc = loc.first
-                break
-            elif loc.count() > 1:
-                self._safe_close_editor(page, parent_item, editor_already_open)
-                return {
-                    "ok": False,
-                    "error": f"父评论内提交按钮匹配到多个 ({loc.count()})，选择器: {cand}",
-                }
-
-        if not submit_loc:
-            # 微前端 portal 弹层兜底
-            for cand in submit_candidates[:2]:
-                loc = page.locator(cand).filter(visible=True)
-                if loc.count() == 1:
-                    submit_matched = cand
-                    submit_loc = loc.first
-                    break
-
-        if not submit_loc:
-            self._safe_close_editor(page, parent_item, editor_already_open)
-            return {"ok": False, "error": "未能定位到二级回复提交按钮"}
-
         is_disabled_when_empty = bool(
             submit_loc.is_disabled()
             or submit_loc.get_attribute("aria-disabled") == "true"
             or "disabled" in (submit_loc.get_attribute("class") or "")
         )
 
-        # 6. 安全关闭编辑器，恢复现场
         editor_closed = self._safe_close_editor(page, parent_item, editor_already_open, textarea_loc)
 
-        # 7. 截图留证
         evidence_path = None
         if attempt_dir:
             shot_target = Path(attempt_dir) / f"controls_calibration_{root_comment_id}.png"
@@ -1183,19 +1012,20 @@ class SecondaryReplyBrowserAdapter:
             except Exception:
                 pass
 
+        expand_count = int(bound["expand_count"])
         return {
             "ok": True,
             "error": None,
             "controls_calibration": {
                 "reply_icon": {
-                    "selector": reply_selector_matched,
+                    "selector": bound["reply_selector"],
                     "found": True,
                     "count": 1,
                     "visible": True,
-                    "enabled": reply_enabled,
+                    "enabled": bound["reply_enabled"],
                 },
                 "editor_textarea": {
-                    "selector": textarea_matched,
+                    "selector": bound["textarea_selector"],
                     "found": True,
                     "count": 1,
                     "visible": True,
@@ -1203,7 +1033,7 @@ class SecondaryReplyBrowserAdapter:
                     "is_empty": textarea_empty,
                 },
                 "submit_button": {
-                    "selector": submit_matched,
+                    "selector": bound["submit_selector"],
                     "found": True,
                     "count": 1,
                     "visible": True,
@@ -1211,11 +1041,11 @@ class SecondaryReplyBrowserAdapter:
                     "disabled_when_empty": is_disabled_when_empty,
                 },
                 "expand_button": {
-                    "selector": expand_matched,
+                    "selector": bound["expand_selector"],
                     "found": bool(expand_count > 0),
                     "count": expand_count,
                     "visible": bool(expand_count > 0),
-                    "text": expand_text,
+                    "text": bound["expand_text"],
                 },
             },
             "editor_closed_cleanly": editor_closed,
@@ -1276,12 +1106,22 @@ class SecondaryReplyBrowserAdapter:
             return {
                 "ok": False,
                 "status": "LOGIN_REQUIRED",
+                "completeness": "UNKNOWN",
                 "reason": "LOGIN_REQUIRED",
-                "channel_profile": {"finder_id": author_id},
-                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+                "channel_profile": {
+                    "finder_id": author_id,
+                    "native_username": "",
+                    "channel_nickname": "",
+                    "identity_verified": False,
+                },
+                "target": {
+                    "post_id": platform_post_id,
+                    "comment_id": root_comment_id,
+                    "text_matched": False,
+                    "fresh": False,
+                },
             }
 
-        # 0. 检验原生作者身份与登录态
         native_username = ""
         channel_nickname = ""
         try:
@@ -1299,7 +1139,7 @@ class SecondaryReplyBrowserAdapter:
         except Exception:
             pass
 
-        identity_verified = bool(author_id and (native_username == author_id or author_id in native_username))
+        identity_verified = bool(author_id and native_username and native_username == author_id)
         channel_profile = {
             "finder_id": author_id,
             "native_username": native_username,
@@ -1307,39 +1147,26 @@ class SecondaryReplyBrowserAdapter:
             "identity_verified": identity_verified,
         }
 
-        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
-        if card is None:
-            return {
-                "ok": False,
-                "status": "UNKNOWN",
-                "reason": f"未找到作品卡片 (exportId: {platform_post_id})",
-                "channel_profile": channel_profile,
-                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
-            }
-
-        self._captured_comments.clear()
-        self._active_export_id = None
-        card.click()
-        page.wait_for_timeout(1500)
-
-        # 校验卡片详情归属
-        bound = page.locator("[data-current-object-id]")
-        bound_ok = False
-        if bound.count() >= 1 and all(
-            (bound.nth(i).get_attribute("data-current-object-id") or "") == platform_post_id
-            for i in range(bound.count())
-        ):
-            bound_ok = True
-        elif self._active_export_id and self._active_export_id == platform_post_id:
-            bound_ok = True
-
+        bound_ok, bind_err = self._select_and_bind_post_card(
+            page,
+            platform_post_id=platform_post_id,
+            video_title=video_title,
+            published_description=published_description,
+            wait_ms=1500,
+        )
         if not bound_ok:
             return {
                 "ok": False,
                 "status": "UNKNOWN",
-                "reason": f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})",
+                "completeness": "UNKNOWN",
+                "reason": bind_err,
                 "channel_profile": channel_profile,
-                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+                "target": {
+                    "post_id": platform_post_id,
+                    "comment_id": root_comment_id,
+                    "text_matched": False,
+                    "fresh": False,
+                },
             }
 
         already_replied, completeness, parent_item = self._check_author_already_replied(
@@ -1352,16 +1179,19 @@ class SecondaryReplyBrowserAdapter:
         if not actual_text and parent_item is not None:
             try:
                 dom_text_loc = parent_item.locator(
-                    ".comment-content, .content, [data-comment-content], [data-reply-content]"
+                    ".comment-content, .content, .text, p, [data-comment-content], [data-reply-content]"
                 ).filter(visible=True)
                 if dom_text_loc.count() > 0:
                     actual_text = dom_text_loc.first.inner_text().strip()
             except Exception:
                 pass
 
-        text_matched = True
-        if expected_comment_text:
-            text_matched = _normalized_text(actual_text) == _normalized_text(expected_comment_text)
+        if expected_comment_text is not None and str(expected_comment_text).strip():
+            text_matched = bool(actual_text) and (
+                _normalized_text(actual_text) == _normalized_text(expected_comment_text)
+            )
+        else:
+            text_matched = bool(actual_text)
 
         target_info = {
             "post_id": platform_post_id,
@@ -1370,8 +1200,33 @@ class SecondaryReplyBrowserAdapter:
             "author_nickname": actual_nickname,
             "comment_text": actual_text,
             "text_matched": text_matched,
-            "fresh": True,
+            "fresh": parent_item is not None,
         }
+
+        if parent_item is None:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "completeness": completeness or "NOT_FOUND",
+                "reason": f"评论区未找到原生 commentId 为 {root_comment_id} 的一级评论 ({completeness})",
+                "channel_profile": channel_profile,
+                "target": {
+                    "post_id": platform_post_id,
+                    "comment_id": root_comment_id,
+                    "text_matched": False,
+                    "fresh": False,
+                },
+            }
+
+        if not text_matched:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "completeness": completeness or "UNKNOWN",
+                "reason": f"目标评论正文与预期不符或未读到 (实际: '{actual_text[:30]}...', 预期: '{(expected_comment_text or '')[:30]}...')",
+                "channel_profile": channel_profile,
+                "target": target_info,
+            }
 
         shot_path = ""
         if already_replied:
@@ -1382,38 +1237,23 @@ class SecondaryReplyBrowserAdapter:
                     shot_path = str(shot_target)
                 except Exception:
                     pass
+            ok_replied = bool(identity_verified and text_matched and completeness not in ("INVALID", "ERROR", "INVALID_AUTHOR_ID"))
             return {
-                "ok": True,
-                "status": "REPLIED",
-                "completeness": completeness,
+                "ok": ok_replied,
+                "status": "REPLIED" if ok_replied else "UNKNOWN",
+                "completeness": completeness or "OBSERVED_REPLIED",
+                "reason": None if ok_replied else ("作者原生身份核对失败" if not identity_verified else "回复状态核验不完整"),
                 "channel_profile": channel_profile,
                 "target": target_info,
                 "controls_calibration": {},
                 "evidence_files": {"screenshot": shot_path},
             }
 
-        if parent_item is None:
-            return {
-                "ok": False,
-                "status": "UNKNOWN",
-                "reason": f"评论区未找到原生 commentId 为 {root_comment_id} 的一级评论",
-                "channel_profile": channel_profile,
-                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
-            }
-
-        if not text_matched:
-            return {
-                "ok": False,
-                "status": "UNKNOWN",
-                "reason": f"目标评论正文与预期不符 (实际: '{actual_text[:30]}...', 预期: '{expected_comment_text[:30]}...')",
-                "channel_profile": channel_profile,
-                "target": target_info,
-            }
-
         if completeness != "COMPLETE":
             return {
                 "ok": False,
                 "status": "UNKNOWN",
+                "completeness": completeness or "UNKNOWN",
                 "reason": f"二级回复分页未穷尽 ({completeness})，无法证明作者未回复",
                 "channel_profile": channel_profile,
                 "target": target_info,
@@ -1422,15 +1262,19 @@ class SecondaryReplyBrowserAdapter:
         calib = self.calibrate_comment_controls(
             page, parent_item=parent_item, root_comment_id=root_comment_id, attempt_dir=attempt_dir
         )
+        editor_closed_cleanly = bool(calib.get("editor_closed_cleanly", False))
+        ok_unreplied = bool(calib["ok"] and identity_verified and text_matched)
         return {
-            "ok": calib["ok"] and identity_verified and text_matched,
-            "status": "NOT_REPLIED",
+            "ok": ok_unreplied,
+            "status": "NOT_REPLIED" if ok_unreplied else "UNKNOWN",
             "completeness": "COMPLETE",
-            "reason": calib.get("error") if not calib["ok"] else (None if identity_verified else "作者原生身份核对失败"),
+            "reason": calib.get("error") if not calib["ok"] else (
+                None if ok_unreplied else "作者原生身份核对失败"
+            ),
             "channel_profile": channel_profile,
             "target": target_info,
             "controls_calibration": calib.get("controls_calibration", {}),
-            "editor_closed_cleanly": calib.get("editor_closed_cleanly", False),
+            "editor_closed_cleanly": editor_closed_cleanly,
             "evidence_files": {
                 "screenshot": calib.get("evidence_screenshot") or "",
             },
@@ -1448,7 +1292,7 @@ class SecondaryReplyBrowserAdapter:
         evidence_dir: Optional[Path | str] = None,
     ) -> Dict[str, Any]:
         """只读环境下的完整卡片导航、作者状态核验及控件校准入口（无写操作、无许可守卫、路由硬拦截）。"""
-        out_dir = self._new_evidence_dir(evidence_dir)
+        out_dir = self.create_evidence_dir(evidence_dir)
         with self.open_session(guard=None) as page:
             return self.calibrate_page_controls(
                 page,
@@ -1460,3 +1304,4 @@ class SecondaryReplyBrowserAdapter:
                 expected_comment_text=expected_comment_text,
                 attempt_dir=out_dir,
             )
+

@@ -213,8 +213,7 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
 
     # 第二次尝试运行：必须在 before_submit 时被独立防重账本直接拦截！
     # VERIFIED 任务受保护不可重新审批；删除任务行后重建，验证独立账本仍然生效
-    with db.get_connection() as conn:
-        conn.execute("DELETE FROM wechat_secondary_reply_tasks WHERE id = ?", (task_id,))
+    db.delete_secondary_reply_task(task_id)
     task_id_second = approved_task(db, platform_post_id=post_id,
         comment_id=root_id,
         intent="REPLY",

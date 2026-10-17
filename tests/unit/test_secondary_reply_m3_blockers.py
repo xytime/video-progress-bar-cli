@@ -47,14 +47,32 @@ def test_other_account_cannot_approve_task(env, capsys, monkeypatch):
     _, imported = _import(env, capsys)
     db = PipelineDB(str(env.db_path))
     before = db.get_secondary_reply_task(imported['task_id'])
+    sha12 = imported['reply_sha256'][:12]
     monkeypatch.setattr(settings, 'wechat_reply_account_key', 'other_account')
-    code, result = env.run(capsys, 'approve', '--task-id', str(imported['task_id']),
-                           '--confirm-reply-sha12', imported['reply_sha256'][:12])
+    code, result = env.run(capsys, 'request-approval', '--task-id', str(imported['task_id']),
+                           '--confirm-reply-sha12', sha12)
     assert code == 1 and result['reason'] == 'ACCOUNT_MISMATCH'
     assert db.get_secondary_reply_task(imported['task_id']) == before
+
+    # 切回正确账号可成功发起审批请求，但跨账号回调消费仍被拒绝
     monkeypatch.setattr(settings, 'wechat_reply_account_key', 'acct_cli')
-    assert env.run(capsys, 'approve', '--task-id', str(imported['task_id']),
-                   '--confirm-reply-sha12', imported['reply_sha256'][:12])[0] == 0
+    assert env.run(capsys, 'request-approval', '--task-id', str(imported['task_id']),
+                   '--confirm-reply-sha12', sha12)[0] == 0
+    callback_data = env.transport.sent_messages[-1]['inline_keyboard'][0][0]['callback_data']
+
+    monkeypatch.setattr(settings, 'wechat_reply_account_key', 'other_account')
+    code_cb_bad, res_cb_bad = env.run(
+        capsys, 'approve-callback', '--callback-data', callback_data,
+        '--approver-user-id', '777', '--approver-chat-id', '777000',
+    )
+    assert code_cb_bad == 1 and res_cb_bad['reason'] == 'ACCOUNT_MISMATCH'
+
+    monkeypatch.setattr(settings, 'wechat_reply_account_key', 'acct_cli')
+    code_cb_ok, res_cb_ok = env.run(
+        capsys, 'approve-callback', '--callback-data', callback_data,
+        '--approver-user-id', '777', '--approver-chat-id', '777000',
+    )
+    assert code_cb_ok == 0 and res_cb_ok['result'] == 'APPROVED'
 
 
 def test_dal_checks_account_on_bind_and_atomic_consume(env, capsys):
@@ -65,6 +83,14 @@ def test_dal_checks_account_on_bind_and_atomic_consume(env, capsys):
     kwargs = dict(approval_token='random-test-token', expires_at_iso='2099-01-01 00:00:00',
                   approver_id='777', approver_chat_id='chat')
     assert not db.bind_reply_task_approval_request(tid, expected_account_key='other', **kwargs)
+    assert not db.bind_reply_task_approval_request(
+        tid, expected_account_key='acct_cli', approval_token='random-test-token',
+        expires_at_iso='2099-01-01 00:00:00', approver_id='local_operator', approver_chat_id='chat',
+    )
+    assert not db.bind_reply_task_approval_request(
+        tid, expected_account_key='acct_cli', approval_token='random-test-token',
+        expires_at_iso='2099-01-01 00:00:00', approver_id='777', approver_chat_id='local-cli:777',
+    )
     assert db.get_secondary_reply_task(tid) == before
     assert db.bind_reply_task_approval_request(tid, expected_account_key='acct_cli', **kwargs)
     bound = db.get_secondary_reply_task(tid)

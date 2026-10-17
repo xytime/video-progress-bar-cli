@@ -10,6 +10,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 db.get_audience_comment、强制要求可信审批传输通道并拒绝 local_operator/local-cli 伪身份 (R3/R4) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复 Telegram 审批发送、防重放消费、HTML 转义与 64B callback_data 防护 |
 """
 
@@ -27,6 +28,8 @@ from video_processing.db.database import PipelineDB
 logger = logging.getLogger(__name__)
 
 MAX_TELEGRAM_CALLBACK_BYTES = 64
+DISALLOWED_LOCAL_APPROVER_IDS = ("local_operator", "unconfigured")
+DISALLOWED_LOCAL_CHAT_PREFIXES = ("local-cli:", "unconfigured")
 
 
 class ApprovalTransportError(Exception):
@@ -111,12 +114,13 @@ def format_approval_html_and_keyboard(
 
 
 def is_authorized_approver(approver_id: str, admin_ids_override: Optional[str] = None) -> bool:
-    """检查审批人是否在系统管理员白名单中。"""
-    if not approver_id:
+    """检查审批人是否在系统管理员白名单中（显式拒绝 local_operator 等非人类占位身份）。"""
+    clean_id = str(approver_id or "").strip()
+    if not clean_id or clean_id == "local_operator":
         return False
-    admin_str = admin_ids_override or settings.telegram_admin_ids or ""
-    admin_list = [a.strip() for a in admin_str.split(",") if a.strip()]
-    return str(approver_id).strip() in admin_list
+    admin_str = admin_ids_override if admin_ids_override is not None else (settings.telegram_admin_ids or "")
+    admin_list = [a.strip() for a in admin_str.split(",") if a.strip() and a.strip() != "local_operator"]
+    return clean_id in admin_list
 
 
 def dispatch_approval_request(
@@ -127,21 +131,27 @@ def dispatch_approval_request(
     approver_telegram_id: Optional[str] = None,
     approver_chat_id: Optional[str] = None,
     admin_ids_override: Optional[str] = None,
+    expected_account_key: Optional[str] = None,
+    ttl_minutes: Optional[int] = None,
 ) -> Tuple[bool, str]:
     """向指定审批人派发二级回复人工审批请求。
 
     失败关闭铁律：
-    未配置审批人或审批人不在白名单内时，任务必须停留在 PENDING_REVIEW，
-    不广播、不暗中回退“第一管理员”。
+    未配置审批人、审批人不在白名单内、chat_id 为本地伪造前缀或未接通可信传输通道时，
+    任务必须停留在 PENDING_REVIEW，不广播、不暗中回退“第一管理员”或伪造发送成功。
     """
-    configured_approver = approver_telegram_id or settings.wechat_reply_approver_telegram_id
-    configured_chat = approver_chat_id or settings.wechat_reply_approver_chat_id
+    configured_approver = str(approver_telegram_id or settings.wechat_reply_approver_telegram_id or "").strip()
+    configured_chat = str(approver_chat_id or settings.wechat_reply_approver_chat_id or "").strip()
 
     if not configured_approver or not configured_chat:
         logger.info(
             "[SecondaryReplyApproval] 未显式配置 wechat_reply_approver_telegram_id 或 wechat_reply_approver_chat_id，任务留在待审核状态。"
         )
         return False, "APPROVER_NOT_CONFIGURED"
+
+    if configured_chat.startswith("local-cli:"):
+        logger.warning("[SecondaryReplyApproval] 拒绝使用 local-cli: 伪造会话 ID 派发审批请求: %s", configured_chat)
+        return False, "INVALID_APPROVER_CHAT_ID"
 
     if not is_authorized_approver(configured_approver, admin_ids_override=admin_ids_override):
         logger.warning(
@@ -150,26 +160,33 @@ def dispatch_approval_request(
         )
         return False, "APPROVER_NOT_IN_WHITELIST"
 
+    if transport is None:
+        logger.info("[SecondaryReplyApproval] 未接通外部可信审批传输通道，保持待审核状态。")
+        return False, "APPROVAL_TRANSPORT_UNAVAILABLE"
+
     task = db.get_secondary_reply_task(task_id)
     if not task:
         return False, "TASK_NOT_FOUND"
+    if expected_account_key is not None and (not expected_account_key or task.get("account_key") != expected_account_key):
+        return False, "ACCOUNT_MISMATCH"
+    if task.get("provider") == "rule_secondary_provider" and not getattr(transport, "allow_fixture_drafts", True):
+        return False, "FIXTURE_PROVIDER_DRAFT_NOT_APPROVABLE"
 
-    # 获取观众评论原文
-    audience_comment = None
-    with db.get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM wechat_audience_comments WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?",
-            (task["account_key"], task["platform_post_id"], task["comment_id"]),
-        ).fetchone()
-        if row:
-            audience_comment = dict(row)
-
+    # 获取观众评论原文（经 PipelineDB 封装方法）
+    audience_comment = db.get_audience_comment(
+        task["account_key"], task["platform_post_id"], task["comment_id"]
+    )
     nick = audience_comment.get("nickname", "观众") if audience_comment else "观众"
     content = audience_comment.get("content", "") if audience_comment else ""
 
     # 1. 生成不可预测随机 Token 与过期时间
     token = secrets.token_urlsafe(16)
-    expires_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=expiry_hours)
+    ttl_delta = (
+        datetime.timedelta(minutes=max(1, int(ttl_minutes)))
+        if ttl_minutes is not None
+        else datetime.timedelta(hours=expiry_hours)
+    )
+    expires_dt = datetime.datetime.now(datetime.timezone.utc) + ttl_delta
     expires_iso = expires_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     # 2. 服务端绑定 Token
@@ -179,6 +196,7 @@ def dispatch_approval_request(
         expires_at_iso=expires_iso,
         approver_id=configured_approver,
         approver_chat_id=configured_chat,
+        expected_account_key=expected_account_key,
     )
     if not bound:
         return False, "FAILED_TO_BIND_TOKEN"
@@ -197,9 +215,8 @@ def dispatch_approval_request(
     )
 
     # 4. 发送通知
-    active_transport = transport or FakeApprovalTransport()
     try:
-        active_transport.send_approval_message(
+        transport.send_approval_message(
             chat_id=configured_chat,
             text=msg_html,
             inline_keyboard=keyboard,
@@ -216,10 +233,11 @@ def handle_approval_callback(
     user_id: str,
     chat_id: str,
     admin_ids_override: Optional[str] = None,
+    expected_account_key: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """处理审批按钮回调并原子执行状态机消费。"""
     # 格式: rep:{task_id}:{token}:{action}
-    parts = callback_data.split(":")
+    parts = (callback_data or "").split(":")
     if len(parts) != 4 or parts[0] != "rep":
         return False, "INVALID_CALLBACK_FORMAT"
 
@@ -236,7 +254,7 @@ def handle_approval_callback(
     if not action:
         return False, f"INVALID_ACTION_CODE: {action_code}"
 
-    # 审批人白名单校验
+    # 审批人白名单校验（显式拒绝 local_operator 等自封身份）
     if not is_authorized_approver(user_id, admin_ids_override=admin_ids_override):
         logger.warning("[SecondaryReplyApproval] 非法用户 %s 试图点击审批按钮，拒绝！", user_id)
         return False, "UNAUTHORIZED_USER"
@@ -245,14 +263,16 @@ def handle_approval_callback(
     if not task:
         return False, "TASK_NOT_FOUND"
 
-    # chat 身份必须由可信回调传入；缺失一律拒绝，是否与审批记录绑定的 chat 一致由 DAL 在原子消费内核对
-    if chat_id is None or str(chat_id).strip() == "":
+    # chat 身份必须由可信回调传入；缺失或为 local-cli: 伪造前缀一律拒绝
+    clean_chat = str(chat_id or "").strip()
+    if not clean_chat or clean_chat.startswith("local-cli:"):
         return False, "CHAT_MISMATCH"
 
     return db.consume_reply_task_approval(
         task_id=task_id,
         token=callback_token,
-        approver_id=str(user_id),
-        chat_id=str(chat_id),
+        approver_id=str(user_id).strip(),
+        chat_id=clean_chat,
         action=action,
+        expected_account_key=expected_account_key,
     )

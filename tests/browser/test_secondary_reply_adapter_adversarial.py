@@ -1037,3 +1037,102 @@ def test_browser_platform_calibrate_and_verify_e2e(chromium, adapter_instance, t
         page.close()
 
 
+def test_shared_locator_rejects_ambiguous_controls_hidden_nodes_and_duplicate_comments_in_both_flows(
+    chromium, adapter_instance, tmp_path
+):
+    """回归：校准与发送共享同一套控件定位与唯一性规则；多控件歧义、隐藏节点、同文多评论在进入 before_submit 前被一致拒绝。"""
+    page = chromium.new_page()
+    try:
+        # 1. 隐藏父评论节点 + 同文多条评论 -> 校准与发送均拒绝，且不触发 before_submit
+        page.set_content("""
+        <html>
+        <body data-finder-username="author@finder">
+          <div class="comment-feed-wrap" data-object-id="export/post_shared">目标作品</div>
+          <div data-current-object-id="export/post_shared">
+            <div class="comment-item" data-comment-id="cmt_hidden" style="display:none;">
+              <span class="comment-content">被隐藏的评论</span>
+            </div>
+            <div class="comment-item">
+              <span class="comment-content">完全相同的评论文本</span>
+            </div>
+            <div class="comment-item">
+              <span class="comment-content">完全相同的评论文本</span>
+            </div>
+          </div>
+        </body></html>
+        """)
+
+        intent_called = [0]
+        guard_hidden = SecondaryReplySubmissionGuard(
+            expected_export_id="export/post_shared",
+            expected_root_comment_id="cmt_hidden",
+            expected_content="回复正文",
+            expected_finder_id="author@finder",
+        )
+        calib_hidden = adapter_instance.calibrate_page_controls(
+            page,
+            platform_post_id="export/post_shared",
+            root_comment_id="cmt_hidden",
+            author_id="author@finder",
+            attempt_dir=tmp_path,
+        )
+        assert calib_hidden["ok"] is False and calib_hidden["status"] == "UNKNOWN"
+        assert "HIDDEN_OR_AMBIGUOUS_COMMENT_NODE" in calib_hidden["reason"]
+
+        send_hidden, _, err_hidden = adapter_instance.execute_page_reply_flow(
+            page,
+            task_id=10,
+            platform_post_id="export/post_shared",
+            root_comment_id="cmt_hidden",
+            reply_content="回复正文",
+            guard=guard_hidden,
+            before_submit=lambda: intent_called.__setitem__(0, intent_called[0] + 1) or True,
+            attempt_dir=tmp_path,
+        )
+        assert send_hidden == "FAILED" and intent_called[0] == 0
+
+        # 2. 父评论唯一可见，但存在两个可见回复图标 -> 校准与发送使用同一 _open_and_bind_reply_controls 拒绝
+        page.set_content("""
+        <html>
+        <body data-finder-username="author@finder">
+          <div class="comment-feed-wrap" data-object-id="export/post_shared">目标作品</div>
+          <div data-current-object-id="export/post_shared">
+            <div class="comment-item" data-comment-id="cmt_ambig">
+              <span class="comment-content">唯一评论文本</span>
+              <span class="action-icon weui-icon-outlined-comment" style="display:inline-block;width:16px;height:16px;"></span>
+              <span class="action-icon weui-icon-outlined-comment" style="display:inline-block;width:16px;height:16px;"></span>
+            </div>
+          </div>
+        </body></html>
+        """)
+        calib_ambig = adapter_instance.calibrate_page_controls(
+            page,
+            platform_post_id="export/post_shared",
+            root_comment_id="cmt_ambig",
+            author_id="author@finder",
+            attempt_dir=tmp_path,
+        )
+        send_ambig, _, err_ambig = adapter_instance.execute_page_reply_flow(
+            page,
+            task_id=11,
+            platform_post_id="export/post_shared",
+            root_comment_id="cmt_ambig",
+            reply_content="回复正文",
+            guard=SecondaryReplySubmissionGuard(
+                expected_export_id="export/post_shared",
+                expected_root_comment_id="cmt_ambig",
+                expected_content="回复正文",
+                expected_finder_id="author@finder",
+            ),
+            before_submit=lambda: intent_called.__setitem__(0, intent_called[0] + 1) or True,
+            attempt_dir=tmp_path,
+        )
+        assert calib_ambig["ok"] is False and calib_ambig["status"] == "UNKNOWN"
+        assert send_ambig == "FAILED" and intent_called[0] == 0
+        assert calib_ambig["reason"] == err_ambig
+        assert "父评论内回复按钮匹配到多个可见控件 (2)" in (err_ambig or "")
+    finally:
+        page.close()
+
+
+

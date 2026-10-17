@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Antigravity | 从契约层导入 SecondaryReplySubmissionGuard 并实现 make_guard 端口方法 |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：可注入的离线平台替身（多种故障模式） |
 """
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplySubmissionGuard
+from video_processing.interaction.secondary_reply_contract import SecondaryReplySubmissionGuard
 from video_processing.interaction.secondary_reply_orchestrator import LookupResult, PlatformSendResult
 
 _SUBMIT_URL = "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/comment/create_comment"
@@ -48,6 +49,11 @@ class FakeSecondaryReplyPlatform:
     _seq: int = 0
 
     # ---- 端口实现 ----
+    def make_guard(self, post_id: str, root_id: str, text: str) -> SecondaryReplySubmissionGuard:
+        return SecondaryReplySubmissionGuard(
+            post_id, root_id, text, expected_finder_id=self.account_finder_id
+        )
+
     def seed_author_reply(self, post_id: str, root_id: str, content: str = "手机端先回复") -> None:
         self._store(post_id, root_id, content, self.account_finder_id, "phone_reply_1")
 

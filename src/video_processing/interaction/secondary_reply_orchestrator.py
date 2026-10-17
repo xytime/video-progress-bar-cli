@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Antigravity | 移除对 secondary_reply_browser_adapter 的直接依赖，从契约层导入 SecondaryReplySubmissionGuard 并纳入平台端口协议 |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：统一编排服务，演示 CLI 与测试共用；终审、意图、守卫、回读、对账同一路径 |
 """
 
@@ -30,10 +31,10 @@ from video_processing.interaction.secondary_reply_approval import (
     dispatch_approval_request,
     handle_approval_callback,
 )
-from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplySubmissionGuard
 from video_processing.interaction.secondary_reply_contract import (
     AudienceCommentRecord,
     SecondaryReplyIntent,
+    SecondaryReplySubmissionGuard,
 )
 from video_processing.interaction.secondary_reply_service import (
     CensorshipViolationError,
@@ -65,6 +66,9 @@ class LookupResult:
 
 class SecondaryReplyPlatformPort(Protocol):
     account_finder_id: str
+
+    def make_guard(self, post_id: str, root_id: str, text: str) -> SecondaryReplySubmissionGuard:
+        """构造绑定当前平台账号与受信源的出站请求守卫。"""
 
     def author_reply_state(self, *, post_id: str, root_id: str) -> str:
         """返回 REPLIED / NOT_REPLIED / UNKNOWN（以原生作者 ID 判断）。"""

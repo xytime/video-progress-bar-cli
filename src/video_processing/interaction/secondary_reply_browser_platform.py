@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-17 | Antigravity | 移除对适配器私有方法 (_interact_with_page / _new_evidence_dir) 的直接调用，改为使用公开接口并从契约层导入 SecondaryReplySubmissionGuard |
 | 1.1.0 | 2026-10-17 | Codex | 新增 calibrate_controls 与 calibrate_and_verify 只读控件校准及平台状态验证 (R1/R2) |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：浏览器适配器的平台端口封装（只读复核/唯一发送/全新会话回读） |
 """
@@ -23,10 +24,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Dict, Optional, Tuple
 
-from video_processing.interaction.secondary_reply_browser_adapter import (
-    SecondaryReplyBrowserAdapter,
-    SecondaryReplySubmissionGuard,
-)
+from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplyBrowserAdapter
+from video_processing.interaction.secondary_reply_contract import SecondaryReplySubmissionGuard
 from video_processing.interaction.secondary_reply_orchestrator import LookupResult, PlatformSendResult
 
 logger = logging.getLogger(__name__)
@@ -68,10 +67,10 @@ class BrowserSecondaryReplyPlatform:
         title, desc = self._hints(post_id)
         try:
             with self._session(None) as page:
-                status, _ev, _reason = self.adapter._interact_with_page(
+                status, _ev, _reason = self.adapter.execute_page_reply_flow(
                     page, task_id=0, platform_post_id=post_id, root_comment_id=root_id,
                     reply_content="-", video_title=title, published_description=desc,
-                    attempt_dir=self.adapter._new_evidence_dir(self._evidence_dir),
+                    attempt_dir=self.adapter.create_evidence_dir(self._evidence_dir),
                     guard=self.make_guard(post_id, root_id, "-"), verify_only=True,
                 )
         except Exception as exc:
@@ -97,10 +96,10 @@ class BrowserSecondaryReplyPlatform:
         title, desc = self._hints(post_id)
         try:
             with self._session(guard) as page:
-                status, _evidence, reason = self.adapter._interact_with_page(
+                status, _evidence, reason = self.adapter.execute_page_reply_flow(
                     page, task_id=0, platform_post_id=post_id, root_comment_id=root_id,
                     reply_content=text, video_title=title, published_description=desc,
-                    attempt_dir=self.adapter._new_evidence_dir(self._evidence_dir),
+                    attempt_dir=self.adapter.create_evidence_dir(self._evidence_dir),
                     guard=guard, before_submit=wrapped_before_submit, send_only=True,
                 )
                 if status not in ("SENT", "VERIFIED"):
@@ -121,9 +120,8 @@ class BrowserSecondaryReplyPlatform:
                     author_id=self.account_finder_id, video_title=title, published_description=desc,
                 )
                 if state == "FOUND" and reply_id:
-                    # 此刻页面是全新会话加载并核对通过的服务器状态；在此取证
                     try:
-                        out_dir = self.adapter._new_evidence_dir(self._evidence_dir)
+                        out_dir = self.adapter.create_evidence_dir(self._evidence_dir)
                         target = out_dir / f"readback_{reply_id.replace('/', '_')}.png"
                         page.screenshot(path=str(target))
                         if not target.exists():
@@ -169,7 +167,7 @@ class BrowserSecondaryReplyPlatform:
         """在会话锁与路由强拦截下，执行三态回复分类、目标作品/父评论验证与控件校准。"""
         title = video_title or (self._hints(post_id)[0] if self._hints else "")
         desc = self._hints(post_id)[1] if self._hints else ""
-        out_dir = self.adapter._new_evidence_dir(evidence_dir or self._evidence_dir)
+        out_dir = self.adapter.create_evidence_dir(evidence_dir or self._evidence_dir)
         try:
             with self._session(None) as page:
                 return self.adapter.calibrate_page_controls(
@@ -187,9 +185,11 @@ class BrowserSecondaryReplyPlatform:
             return {
                 "ok": False,
                 "status": "UNKNOWN",
+                "completeness": "UNKNOWN",
                 "reason": f"PLATFORM_VERIFICATION_EXCEPTION: {exc}",
                 "target": {"post_id": post_id, "comment_id": root_id, "fresh": False},
                 "controls_calibration": {},
             }
+
 
 
