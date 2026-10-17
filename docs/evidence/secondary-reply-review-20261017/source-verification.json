@@ -1,0 +1,7 @@
+{
+  "code_commit": "34ad0bb",
+  "checked_files": 686,
+  "mismatches": [],
+  "scope": "src/, scripts/, tests/, .env.example, pyproject.toml, pytest.ini; delivery documentation generated after test run is excluded",
+  "tested_source_manifest_sha256": "5ff22d6adf08d73883ceacc1ad9b9d6c1b039c8e4e273b5f8b8353aa0ee53e02"
+}

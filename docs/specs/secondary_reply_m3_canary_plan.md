@@ -1,5 +1,7 @@
 # 二级回复 M3 单条 canary：可执行命令与唯一阻塞清单
 
+> 2026-10-17：当前裁定以 `docs/secondary-reply-review-20261017.md` 和根目录 `candidate.json` 为准。本文保留操作流程；历史测试数量与平台结论不代表当前版本已可发送。
+
 编制：Antigravity，2026-10-13。状态：**M3 可执行候选，未达 `M3_READY`**（见 §5 唯一阻塞清单）。
 本文命令均已有实现并经隔离测试验证；真实平台部分**未经真实验证**。
 
@@ -28,7 +30,7 @@ wxreply resume                    # 删除停止文件
 
 # 1) 人工撰写文案导入（唯一文案来源：人工；不是自动生成能力）
 wxreply import-draft --post-id "<exportId>" --comment-id "<一级评论原生ID>" \
-     --comment-text "<该评论原文>" --zh "<中文>" --en "<English>" --style CASUAL
+     --comment-text "<该评论原文>" --zh "<中文>" --en "<English>" --style CASUAL_LIGHT
 #   经确定性格式 + 政策终审检查，不合格直接拒绝；评论原文作为审批绑定的源评论快照
 
 # 2) 预检（本地只读，不访问平台）：账号/作品/父评论/正文/哈希/审批绑定/配额/阻断项

@@ -1,70 +1,47 @@
 {
-  "status": "M3_READY_FOR_SINGLE_CANARY_APPROVAL",
-  "m3_ready": true,
-  "authoritative": true,
-  "note": "Antigravity 验证完成：正式平台适配器路径（SecondaryReplyBrowserAdapter + BrowserSecondaryReplyPlatform + create_wechat_context）只读实测验证闭环；作者原生身份（v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder）、作品与父评论定位、二级回复折叠与分页完整性检查均经正式适配器验证通过；两个历史阻断关闭经 187 项隔离测试通过（187 passed, 0 failed）。单条 Canary 试发审批包已整理完毕，默认开关保持关闭，等待用户单条真实发送授权。",
-  "baseline": "0419de5",
-  "m0_m2_accepted_by_codex": {
-    "head": "fe10d00",
-    "code_commit": "e947fd4",
-    "tests": "170 passed (Codex 独立复跑)"
-  },
+  "status": "ENGINEERING_REVIEW_CANDIDATE_PLATFORM_PENDING",
+  "m3_ready": false,
+  "date": "2026-10-17",
+  "prepared_by": "Codex",
+  "baseline": "749a1dd",
   "branch": "task/secondary-reply-m0-m2",
   "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
-  "pushed": false,
   "merged": false,
-  "interpreter": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python (仅经 scripts/run_isolated_tests.py --browser)",
-  "tests": {
-    "command": "<venv>/python scripts/run_isolated_tests.py --browser -- -q tests/unit/test_secondary_reply_*.py tests/browser/test_secondary_reply_browser.py tests/browser/test_secondary_reply_orchestrated_browser.py tests/unit/test_wechat_interaction*.py",
-    "result": "187 passed, 0 failed, 0 skipped",
-    "log": "docs/evidence/secondary-reply-m3-20261013/full-pytest.log",
-    "log_sha256": "64a925b4177f64069ca60ddaf78d4cb57ecb563c099e6e68763f33e6a6193ab5",
-    "receipt": "docs/evidence/secondary-reply-m3-20261013/full-receipt.json",
-    "source_manifest_sha256": "affd1763f1859564ef664b4c977aa0b9ccb9ad094900cff425729a8fb4844510"
-  },
-  "new_in_this_round": {
-    "pagination_completeness": "将分页、折叠及完整性检查接入正式发送前判重链路 (Fail-Closed)；无法证明完整时禁止出站，新增'作者回复位于后续页'和'分页状态未知'的回归测试",
-    "real_platform_readonly_formal_adapter": "使用正式 CLI 相同的会话创建 (create_wechat_context)、平台适配器 (SecondaryReplyBrowserAdapter) 和目标校验路径，完成真实平台只读验证，留存现场截图及结构化凭据",
-    "regressions": "新增 4 项针对性浏览器与编排回归测试，测试数由 183 项提升至 187 项全绿通过"
-  },
-  "verification_tiers": {
-    "isolated_tests": "通过：CLI 全流程（导入/预检/审批/提交/重复提交/开关与停止/平台对账/不重发）；隔离 Chromium：实际 CLI -> 统一编排 -> 浏览器端口 -> 夹具网络 -> 全新会话回读 -> 凭据 (187 passed)",
-    "real_readonly_verification": "VERIFIED_SUCCESS：通过正式适配器路径（SecondaryReplyBrowserAdapter + BrowserSecondaryReplyPlatform）只读实测，成功验证作者原生标识、视频作品定位、二级回复数据结构及 downContinueFlag。详见 docs/evidence/secondary-reply-m3-20261013/platform-readonly.json",
-    "human_review": "真实单条试发审批包已就绪，等待用户集中单次审批",
-    "real_send": "未发生（默认开关保持关闭，严防非授权出站）",
-    "public_visibility": "未验证（待 Canary 发送后核验）"
-  },
-  "canary_approval_package": {
-    "account_key": "sphjAH8AbMh8oYP",
-    "author_finder_id": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
-    "platform_post_id": "export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ",
-    "video_title": "面对癌症，财富究竟能带来什么？",
-    "target_comment_id": "15031175812304083586",
-    "target_audience_nickname": "隽永",
-    "target_comment_text": "B 我保留意见，大多数人都不具备演讲者的医学背景或者查询更多资料的条件以及跟专家讨论的能力，决定权还是在于治疗的医生。当然，财富确实可以获得更多的信息，更有助于自我的判断，以及心理安慰。另外，不同癌症的特点和治疗方式以及生存期都是不一样的，特别是像这种晚期肺癌，包括胰腺癌，经过统计存活率是很低的。所以我觉得她的观点比较泛泛。",
-    "candidate_reply_zh": "决定权确实在主治医生，统计概率往往冰冷。财富最大的价值，或许只是让患者在有限选择中，少一分被动，多一份自主与从容。",
-    "candidate_reply_en": "Physicians hold the decisions, and survival odds are soberingly tough. Wealth only offers a bit more agency and calm amidst constrained choices.",
-    "formatted_reply": "决定权确实在主治医生，统计概率往往冰冷。财富最大的价值，或许只是让患者在有限选择中，少一分被动，多一份自主与从容。\nPhysicians hold the decisions, and survival odds are soberingly tough. Wealth only offers a bit more agency and calm amidst constrained choices.",
-    "reply_sha256": "5f07f3b875f12cca1d4b520624edacce4be7c5e65814d7e8ef230bb0a545051b",
-    "confirm_reply_sha12": "5f07f3b875f1",
-    "zh_len": 57,
-    "en_len": 144,
-    "total_len": 202,
-    "compliance_checks": "通过 (<=75/150/230, 无Emoji/标签/控制符, 双语一致, 频道审查通过)",
-    "send_flags_default": "false (严格关闭，禁止自动出站)"
-  },
+  "pushed": false,
+  "real_send_performed": false,
+  "review_document": "docs/secondary-reply-review-20261017.md",
+  "human_review_package": "docs/evidence/secondary-reply-review-20261017/human-review-package.json",
   "flags_default": {
     "enable_wechat_secondary_reply": false,
     "enable_wechat_secondary_reply_live_submission": false
   },
-  "closed_blockers": [
-    "只读预检初始化可写数据库并修改无关任务",
-    "跨账号本地审批被接受",
-    "真实平台访问被误认为宿主安全策略阻断（已通过 Playwright 与 DevTools 双重证实访问畅通）",
-    "作者原生身份与业务账号绑定未验证（已由正式适配器只读路径实测验证）",
-    "作品与父评论原生定位未验证（已实测验证）",
-    "二级回复折叠与分页完整性未接入判重链路（已接入 Fail-Closed 并完成回归测试）",
-    "未以正式平台适配器路径完成真实只读验证（已完成适配器全链路只读实测并留存证据）"
+  "runtime_flags_changed": false,
+  "historical_m0_m2_acceptance": {
+    "head": "fe10d00",
+    "code_commit": "e947fd4",
+    "tests": "170 passed (Codex 独立复跑)"
+  },
+  "superseded_candidate": "docs/evidence/secondary-reply-review-20261017/prior-candidate-749a1dd.json",
+  "tests": {
+    "status": "PASSED",
+    "result": "198 passed, 0 failed",
+    "receipt": "docs/evidence/secondary-reply-review-20261017/full-receipt.json",
+    "log": "docs/evidence/secondary-reply-review-20261017/full-pytest.log",
+    "log_sha256": "c87a3303571271fa786617a745e50125b4be1062a5c33fcdc298f8fb7b12f83f",
+    "source_manifest_sha256": "5ff22d6adf08d73883ceacc1ad9b9d6c1b039c8e4e273b5f8b8353aa0ee53e02",
+    "source_verification": "docs/evidence/secondary-reply-review-20261017/source-verification.json",
+    "evidence_run": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls",
+    "scope_note": "src/, scripts/, tests/, .env.example, pyproject.toml, pytest.ini; delivery documentation generated after test run is excluded"
+  },
+  "remaining_send_gates": [
+    "宿主允许的访问恢复后，以正式适配器补齐当前版本真实只读证据；不能以旁路访问证明限制解除。",
+    "核实真实回复图标及编辑器的唯一语义定位；未知控件保持拒绝。",
+    "刷新历史账号、作品、父评论及未回复状态；获得最终正文与目标的单条发送授权。"
   ],
-  "real_canary_gate": "前置工程与只读平台验证已完全闭环。待用户核对单条审批包并明确授权真实发送；当前发送开关保持严格关闭。"
+  "scope_limits": [
+    "单账号、人工正文、单条人工审批；不开放批量或自动批准。",
+    "多账号独立配额未实现；当前共享首评预算按更严格的全局计数保留。"
+  ],
+  "acceptance_note": "当前供工程与文案审核，不是 M3_READY 或单条发送许可。历史187项测试和平台截图不作为此版本的验收证据。",
+  "code_commit": "34ad0bb"
 }

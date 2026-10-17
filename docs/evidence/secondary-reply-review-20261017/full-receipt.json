@@ -1,0 +1,53 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
+  "started_at": "2026-10-17T04:36:21.558185+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.081
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_secondary_reply_account_and_source.py",
+    "tests/unit/test_secondary_reply_cli_readonly.py",
+    "tests/unit/test_secondary_reply_cli_real_entry.py",
+    "tests/unit/test_secondary_reply_contract_and_dal.py",
+    "tests/unit/test_secondary_reply_final_review.py",
+    "tests/unit/test_secondary_reply_m3_blockers.py",
+    "tests/unit/test_secondary_reply_orchestration.py",
+    "tests/unit/test_secondary_reply_review_counterexamples.py",
+    "tests/unit/test_secondary_reply_service_and_corpus.py",
+    "tests/browser/test_secondary_reply_browser.py",
+    "tests/browser/test_secondary_reply_orchestrated_browser.py",
+    "tests/browser/test_secondary_reply_native_contract.py",
+    "tests/unit/test_wechat_interaction.py",
+    "tests/unit/test_wechat_interaction_browser.py",
+    "tests/unit/test_wechat_interaction_cli.py",
+    "tests/unit/test_wechat_interaction_dispatch.py",
+    "tests/unit/test_wechat_interaction_notifier.py",
+    "tests/unit/test_wechat_interaction_state.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "5ff22d6adf08d73883ceacc1ad9b9d6c1b039c8e4e273b5f8b8353aa0ee53e02",
+  "profile_sha256": "4221995054792ae1e56d3cdbc2ba3f8aef97da5615d2cb0fac3df44091942592",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "7714cdb94abf568b702dfc6de31c3c3e6f856e427b307fd2d24602b9c95a601e",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 219.478
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox"
+  },
+  "finished_at": "2026-10-17T04:40:01.787337+00:00"
+}
