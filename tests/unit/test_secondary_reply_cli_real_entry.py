@@ -2,6 +2,12 @@
 
 使用 ``main(argv, platform_factory=...)`` 注入离线平台替身；入口、预检、本地审批、提交、平台对账、停用均走真实代码路径，
 不手写任何成功状态。每个拒绝类断言都有相邻合法对照。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Codex | 新增 verify-platform 与 calibrate-dom CLI 子命令参数校验、契约结构与零写验证 (M3) |
+| 1.0.0 | 2026-10-13 | Antigravity | 新增：M3 单条真实操作入口 CLI 集成测试 |
 """
 
 from __future__ import annotations
@@ -160,3 +166,213 @@ def test_reconcile_platform_reads_platform_and_never_resends(env, capsys):
 
 def test_legacy_invocation_without_subcommand_no_longer_exits_3(cli, capsys):
     assert cli.main([]) == 2  # 打印用法，不再是“链路未接线”的 exit 3
+
+
+def test_verify_platform_cli_missing_args_and_config(env, capsys, monkeypatch):
+    # 1. 缺失 post-id / comment-id
+    code, res = env.run(capsys, "verify-platform")
+    assert code == 2
+    assert "MISSING_ARGS" in res.get("reason", "")
+    assert "post-id" in res.get("args", [])
+
+    # 2. 缺失 account_key
+    monkeypatch.setattr(settings, "wechat_reply_account_key", "", raising=False)
+    code, res = env.run(capsys, "verify-platform", "--post-id", POST, "--comment-id", COMMENT)
+    assert code == 2
+    assert res.get("reason") == "ACCOUNT_KEY_NOT_CONFIGURED"
+
+    # 3. 缺失 author_finder_id
+    monkeypatch.setattr(settings, "wechat_reply_account_key", "acct_cli", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_author_finder_id", "", raising=False)
+    code, res = env.run(capsys, "verify-platform", "--post-id", POST, "--comment-id", COMMENT)
+    assert code in (1, 2)
+    assert "AUTHOR_FINDER_ID_NOT_CONFIGURED" in res.get("reason", "")
+
+
+def test_verify_platform_cli_unsupported_platform(env, capsys):
+    # env.platform 为 FakeSecondaryReplyPlatform，未实现 calibrate_and_verify
+    code, res = env.run(capsys, "verify-platform", "--post-id", POST, "--comment-id", COMMENT)
+    assert code == 1
+    assert res["ok"] is False
+    assert res["reason"] == "PLATFORM_DOES_NOT_SUPPORT_CALIBRATION"
+
+
+def test_verify_platform_and_calibrate_dom_success_contract(env, capsys, cli):
+    captured_calls = []
+
+    class MockCalibratingPlatform:
+        def __init__(self, account_finder_id):
+            self.account_finder_id = account_finder_id
+
+        def calibrate_and_verify(self, *, post_id, root_id, video_title=None, comment_text=None, evidence_dir=None):
+            captured_calls.append({
+                "post_id": post_id,
+                "root_id": root_id,
+                "video_title": video_title,
+                "comment_text": comment_text,
+                "evidence_dir": evidence_dir,
+            })
+            return {
+                "ok": True,
+                "status": "NOT_REPLIED",
+                "channel_profile": {
+                    "account_key": "acct_cli",
+                    "finder_id": self.account_finder_id,
+                    "native_username": self.account_finder_id,
+                    "channel_nickname": "六维时空号",
+                    "identity_verified": True,
+                },
+                "target": {
+                    "post_id": post_id,
+                    "comment_id": root_id,
+                    "video_title": video_title or "",
+                    "author_nickname": "隽永",
+                    "comment_text": comment_text or "",
+                    "text_matched": True,
+                    "fresh": True,
+                },
+                "controls_calibration": {
+                    "reply_icon": {
+                        "selector": ".action-icon.weui-icon-outlined-comment",
+                        "found": True,
+                        "count": 1,
+                        "visible": True,
+                        "enabled": True,
+                    },
+                    "editor_textarea": {
+                        "selector": "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
+                        "found": True,
+                        "count": 1,
+                        "visible": True,
+                        "editable": True,
+                        "is_empty": True,
+                    },
+                    "submit_button": {
+                        "selector": ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
+                        "found": True,
+                        "count": 1,
+                        "visible": True,
+                        "enabled_when_filled": True,
+                        "disabled_when_empty": True,
+                    },
+                    "expand_button": {
+                        "selector": None,
+                        "found": False,
+                        "count": 0,
+                        "visible": False,
+                        "text": None,
+                    },
+                },
+                "evidence_files": {
+                    "json": str(evidence_dir / "platform_verification.json") if evidence_dir else "/tmp/v.json",
+                    "screenshot": str(evidence_dir / "controls.png") if evidence_dir else "/tmp/v.png",
+                },
+                "mode": "PLATFORM_READ_ONLY_CALIBRATION_AND_VERIFICATION",
+            }
+
+    mock_platform = MockCalibratingPlatform("fake_author_finder@finder")
+
+    # 1. 直接传参调用 verify-platform
+    capsys.readouterr()
+    code = cli.main(
+        [
+            "verify-platform",
+            "--db-path", str(env.db_path),
+            "--post-id", POST,
+            "--comment-id", COMMENT,
+            "--video-title", "面对癌症，财富究竟能带来什么？",
+            "--comment-text", "测试评论原文",
+        ],
+        platform_factory=lambda a: mock_platform,
+    )
+    out = capsys.readouterr().out
+    res = json.loads(out)
+    assert code == 0
+    assert res["ok"] is True
+    assert res["status"] == "NOT_REPLIED"
+    assert res["channel_profile"]["identity_verified"] is True
+    assert res["channel_profile"]["account_key"] == "acct_cli"
+    assert res["channel_profile"]["finder_id"] == "fake_author_finder@finder"
+    assert res["target"]["post_id"] == POST
+    assert res["target"]["comment_id"] == COMMENT
+    assert res["target"]["text_matched"] is True
+    assert res["target"]["fresh"] is True
+    calib = res["controls_calibration"]
+    assert calib["reply_icon"]["selector"] == ".action-icon.weui-icon-outlined-comment"
+    assert calib["reply_icon"]["found"] is True
+    assert calib["editor_textarea"]["found"] is True
+    assert calib["submit_button"]["found"] is True
+    assert calib["submit_button"]["enabled_when_filled"] is True
+    assert res["mode"] == "PLATFORM_READ_ONLY_CALIBRATION_AND_VERIFICATION"
+
+    # 2. calibrate-dom 别名行为一致
+    capsys.readouterr()
+    code_alias = cli.main(
+        [
+            "calibrate-dom",
+            "--db-path", str(env.db_path),
+            "--post-id", POST,
+            "--comment-id", COMMENT,
+        ],
+        platform_factory=lambda a: mock_platform,
+    )
+    out_alias = capsys.readouterr().out
+    res_alias = json.loads(out_alias)
+    assert code_alias == 0
+    assert res_alias["ok"] is True
+    assert res_alias["status"] == "NOT_REPLIED"
+
+    # 3. 通过 task-id 解析目标作品与评论
+    tid = _approve_flow(env, capsys)
+    capsys.readouterr()
+    code_task = cli.main(
+        [
+            "verify-platform",
+            "--db-path", str(env.db_path),
+            "--task-id", str(tid),
+        ],
+        platform_factory=lambda a: mock_platform,
+    )
+    out_task = capsys.readouterr().out
+    res_task = json.loads(out_task)
+    assert code_task == 0
+    assert res_task["ok"] is True
+    assert res_task["target"]["post_id"] == POST
+    assert res_task["target"]["comment_id"] == COMMENT
+
+
+def test_verify_platform_zero_write_guarantee_even_with_flags_on(env, capsys, cli, monkeypatch):
+    # 即使开启所有实时发评开关，verify-platform 绝不出站发评
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
+
+    outbound = []
+    class SafePlatform:
+        def calibrate_and_verify(self, **kwargs):
+            return {
+                "ok": True,
+                "status": "NOT_REPLIED",
+                "channel_profile": {"account_key": "acct_cli", "finder_id": "fake_author_finder@finder"},
+                "target": {"post_id": POST, "comment_id": COMMENT, "fresh": True},
+                "controls_calibration": {},
+            }
+        def send_reply(self, **kwargs):
+            outbound.append(kwargs)
+            raise RuntimeError("CRITICAL: verify-platform invoked send_reply!")
+
+    capsys.readouterr()
+    code = cli.main(
+        [
+            "verify-platform",
+            "--db-path", str(env.db_path),
+            "--post-id", POST,
+            "--comment-id", COMMENT,
+        ],
+        platform_factory=lambda a: SafePlatform(),
+    )
+    out = capsys.readouterr().out
+    res = json.loads(out)
+    assert code == 0
+    assert res["ok"] is True
+    assert len(outbound) == 0
+

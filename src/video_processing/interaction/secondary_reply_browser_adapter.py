@@ -13,6 +13,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-17 | Codex | 修复 _interact_with_page 中回复按钮选择器联合碰撞缺陷，采用单候选迭代；将 calibrate_comment_controls 编辑器检测限定于当前父评论范围 (M2) |
+| 1.3.0 | 2026-10-17 | Codex | 实装真实平台只读控件校准 (calibrate_comment_controls)、校准 DOM 选择器、卡片列表滚轮分页支持与只读平台验证 (R1) |
 | 1.2.0 | 2026-10-13 | Antigravity | 接入二级回复折叠与分页完整性校验 (Fail-Closed)、支持展开后续页作者回复与捕获 comment_list 响应 |
 | 1.1.0 | 2026-10-12 | Antigravity | 强化路由守卫（检查账号、必填字段与防重复出站 T05/T06）、补全独立回读严格校验 (T10)、联动 SKIPPED 状态 (T04) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复浏览器适配器、路由前置守卫、提交意图原子持久化与双重回读验证 |
@@ -338,6 +340,7 @@ class SecondaryReplyBrowserAdapter:
         evidence_dir: Optional[Path | str] = None,
         before_submit: Optional[Callable[[], bool]] = None,
         verify_only: bool = False,
+        verify_controls: bool = False,
         db: Optional[PipelineDB] = None,
         expected_finder_id: Optional[str] = None,
         trusted_origins: Tuple[str, ...] = (),
@@ -386,6 +389,7 @@ class SecondaryReplyBrowserAdapter:
                     guard=guard,
                     before_submit=before_submit,
                     verify_only=verify_only,
+                    verify_controls=verify_controls,
                     db=db,
                 )
         except WeChatSessionLockBusy as exc:
@@ -411,6 +415,7 @@ class SecondaryReplyBrowserAdapter:
         guard: SecondaryReplySubmissionGuard,
         before_submit: Optional[Callable[[], bool]],
         verify_only: bool,
+        verify_controls: bool = False,
         db: Optional[PipelineDB],
     ) -> SecondaryBrowserResult:
         with sync_playwright() as p:
@@ -457,6 +462,7 @@ class SecondaryReplyBrowserAdapter:
                     guard=guard,
                     before_submit=before_submit,
                     verify_only=verify_only,
+                    verify_controls=verify_controls,
                     db=db,
                 )
             finally:
@@ -477,6 +483,7 @@ class SecondaryReplyBrowserAdapter:
         guard: SecondaryReplySubmissionGuard,
         before_submit: Optional[Callable[[], bool]] = None,
         verify_only: bool = False,
+        verify_controls: bool = False,
         db: Optional[PipelineDB] = None,
         send_only: bool = False,
     ) -> SecondaryBrowserResult:
@@ -547,34 +554,100 @@ class SecondaryReplyBrowserAdapter:
             return "FAILED", None, f"二级回复分页状态不完整或未知 ({completeness})，无法证明作者未回复，触发 Fail-Closed 硬阻断，禁止出站"
 
         if verify_only:
+            if verify_controls:
+                calib = self.calibrate_comment_controls(
+                    page,
+                    parent_item=parent_item,
+                    root_comment_id=root_comment_id,
+                    attempt_dir=attempt_dir,
+                )
+                if not calib.get("ok"):
+                    return "FAILED", None, f"只读控件校准失败: {calib.get('error')}"
+                return "VERIFIED_ABSENT", calib.get("evidence_screenshot"), "只读核验：目标评论存在、作者未回复且控件校准通过"
             return "VERIFIED_ABSENT", None, "只读核验：目标评论存在且作者尚未回复"
 
         # 3. 点击该一级评论的“回复”按钮展开回复输入框
-        reply_btn = parent_item.locator(
-            "[data-reply], button[aria-label='回复'], [role='button'][aria-label='回复'], button:text-is('回复')"
-        ).filter(visible=True)
-        if reply_btn.count() != 1 or not reply_btn.first.is_enabled():
+        reply_candidates = [
+            ".action-icon.weui-icon-outlined-comment",
+            ".action-item:has(.weui-icon-outlined-comment)",
+            "[data-reply]",
+            "button[aria-label='回复'], [role='button'][aria-label='回复']",
+            "button:text-is('回复'), [role='button']:text-is('回复')",
+            ".weui-desktop-icon[aria-label='回复'], [title='回复']",
+            "button:has-text('回复'), [role='button']:has-text('回复')",
+            "[data-action='reply']",
+            ".comment-item__action:has-text('回复')",
+        ]
+        reply_btn = None
+        for cand in reply_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                reply_btn = loc.first
+                break
+            elif loc.count() > 1:
+                return "FAILED", None, f"回复按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断"
+
+        if reply_btn is None or not reply_btn.is_enabled():
             return "FAILED", None, "未能唯一定位可用的回复按钮；禁止按图标顺序或通用 button 猜测"
-        reply_btn.first.click()
+        reply_btn.click()
         page.wait_for_timeout(1000)
 
         # 定位输入框
-        textarea = page.locator("textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea").filter(visible=True)
-        if textarea.count() == 0:
-            textarea = parent_item.locator("textarea").filter(visible=True)
+        editor_candidates = [
+            ".edit-area[contenteditable='true']",
+            ".comment-reply-wrap .edit-area",
+            "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
+            "textarea.create-input, textarea[placeholder*='说点什么']",
+            "textarea",
+        ]
+        textarea = None
+        for cand in editor_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                textarea = loc.first
+                break
+            elif loc.count() > 1:
+                return "FAILED", None, f"父评论内输入框匹配到多个 ({loc.count()})，选择器: {cand}"
 
-        if textarea.count() != 1:
+        if textarea is None:
+            for cand in editor_candidates[:3]:
+                loc = page.locator(cand).filter(visible=True)
+                if loc.count() == 1:
+                    textarea = loc.first
+                    break
+
+        if textarea is None:
             return "FAILED", None, "未能定位到二级回复输入框"
 
-        textarea.first.fill(reply_content)
+        textarea.fill(reply_content)
         page.wait_for_timeout(500)
 
         # 确认唯一且可用的提交控件后，才持久化意图；后续不明结果不得重发。
-        submit_btn = parent_item.locator(
-            "button:text-is('评论'), button:text-is('发送'), button[data-submit], "
-            ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')"
-        ).filter(visible=True)
-        if submit_btn.count() != 1 or not submit_btn.first.is_enabled():
+        submit_candidates = [
+            ".comment-reply-wrap button.weui-desktop-btn_primary:text-is('评论')",
+            ".reply-opt button:text-is('评论')",
+            "button:text-is('评论'), button:text-is('发送'), button[data-submit]",
+            ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
+            "button[type='submit']",
+            "[data-action='submit']",
+        ]
+        submit_btn = None
+        for cand in submit_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                submit_btn = loc.first
+                break
+            elif loc.count() > 1:
+                return "FAILED", None, f"提交按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断"
+
+        if submit_btn is None:
+            for cand in submit_candidates[:2]:
+                loc = page.locator(cand).filter(visible=True)
+                if loc.count() == 1:
+                    submit_btn = loc.first
+                    break
+
+        if submit_btn is None or not submit_btn.is_enabled():
             return "FAILED", None, "未能唯一定位可用的提交按钮"
 
         # 4. 提交前持久化提交意图 (SUBMIT_INTENT)
@@ -807,6 +880,31 @@ class SecondaryReplyBrowserAdapter:
             if cards.count() == 1:
                 return cards.first
 
+        # 3. 若初始未找到且页面存在滚动列表容器，执行滚轮分页向下查找
+        scroll_container = page.locator(".scroll-list__wrp, .feeds-container, .scroll-list").filter(visible=True)
+        if scroll_container.count() > 0:
+            for _ in range(15):
+                try:
+                    scroll_container.first.hover()
+                except Exception:
+                    pass
+                page.mouse.wheel(0, 2500)
+                page.wait_for_timeout(800)
+
+                # 重新检查 data-object-id
+                card = page.locator(f"[data-object-id='{platform_post_id}']").filter(visible=True)
+                if card.count() == 1:
+                    return card.first
+
+                # 重新检查文案匹配
+                if clean_hint:
+                    cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
+                    if cards.count() == 1:
+                        return cards.first
+                    elif cards.count() > 1:
+                        logger.warning("[SecondaryReplyBrowser] 文案 '%s' 匹配到多个卡片 (%d)，触发歧义阻断", clean_hint, cards.count())
+                        return None
+
         return None
 
     def _check_author_already_replied(
@@ -903,3 +1001,462 @@ class SecondaryReplyBrowserAdapter:
             return False, "PAGINATION_UNKNOWN", parent_node
         # 完整确认无作者回复
         return False, "COMPLETE", parent_node
+
+    def calibrate_comment_controls(
+        self,
+        page: Any,
+        *,
+        parent_item: Any,
+        root_comment_id: str,
+        attempt_dir: Optional[Path | str] = None,
+    ) -> Dict[str, Any]:
+        """只读探测并校准目标一级评论下的二级回复相关控件。
+
+        严格执行零写安全：
+        - 不向 textarea / edit-area 输入任何真实内容；
+        - 绝不点击 submit 提交按钮；
+        - 校验提交按钮在输入框为空时的不可用/禁用状态；
+        - 若打开了回复编辑器，在探测结束后通过取消按钮或 ESC 恢复现场；
+        - 产出各控件的选择器、数量、可见性与可用性诊断字典。
+        """
+        if parent_item is None or parent_item.count() != 1:
+            return {"ok": False, "error": f"一级评论节点不唯一或未找到 (commentId: {root_comment_id})"}
+
+        # 1. 探测回复图标按钮
+        reply_candidates = [
+            ".action-icon.weui-icon-outlined-comment",
+            ".action-item:has(.weui-icon-outlined-comment)",
+            "[data-reply]",
+            "button[aria-label='回复'], [role='button'][aria-label='回复']",
+            "button:text-is('回复'), [role='button']:text-is('回复')",
+            ".weui-desktop-icon[aria-label='回复'], [title='回复']",
+            "button:has-text('回复'), [role='button']:has-text('回复')",
+            "[data-action='reply']",
+            ".comment-item__action:has-text('回复')",
+        ]
+        reply_selector_matched = None
+        reply_btn_loc = None
+        for cand in reply_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                reply_selector_matched = cand
+                reply_btn_loc = loc.first
+                break
+            elif loc.count() > 1:
+                return {
+                    "ok": False,
+                    "error": f"回复按钮选择器 '{cand}' 匹配到多个可见控件 ({loc.count()})，触发歧义阻断",
+                }
+
+        if not reply_selector_matched or not reply_btn_loc:
+            return {"ok": False, "error": "未能唯一定位可用的二级回复触发按钮"}
+
+        reply_enabled = reply_btn_loc.is_enabled()
+        if not reply_enabled:
+            return {"ok": False, "error": f"回复按钮处于禁用状态: {reply_selector_matched}"}
+
+        # 2. 探测二级回复展开折叠按钮
+        expand_candidates = [
+            ".comment-reply-list button:has-text('展开'), .comment-reply-list [data-action='expand-replies'], .comment-reply-list .show-more-replies, .comment-reply-list :text-matches('展开|查看.*回复')",
+            "button:has-text('展开'), [role='button']:has-text('展开')",
+            "[data-action='expand-replies'], [data-expand-replies]",
+            ".show-more-replies, .show-more:has-text('展开')",
+            "span:has-text('展开'), a:has-text('展开')",
+        ]
+        expand_matched = None
+        expand_count = 0
+        expand_text = None
+        for cand in expand_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() > 0:
+                expand_matched = cand
+                expand_count = loc.count()
+                try:
+                    expand_text = loc.first.inner_text().strip()
+                except Exception:
+                    pass
+                break
+
+        # 3. 展开回复编辑器（若尚未展开）
+        editor_already_open = parent_item.locator(".edit-area:visible, textarea:visible").count() > 0
+        if not editor_already_open:
+            reply_btn_loc.click()
+            page.wait_for_timeout(500)
+
+        # 4. 探测输入框
+        editor_candidates = [
+            ".edit-area[contenteditable='true']",
+            ".comment-reply-wrap .edit-area",
+            "textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea",
+            "textarea.create-input, textarea[placeholder*='说点什么']",
+            "textarea",
+        ]
+        textarea_matched = None
+        textarea_loc = None
+        for cand in editor_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                textarea_matched = cand
+                textarea_loc = loc.first
+                break
+            elif loc.count() > 1:
+                self._safe_close_editor(page, parent_item, editor_already_open)
+                return {
+                    "ok": False,
+                    "error": f"父评论内输入框匹配到多个 ({loc.count()})，选择器: {cand}",
+                }
+
+        if not textarea_loc:
+            # 针对微前端悬浮或 Portal 弹层，在全局页面兜底查找
+            for cand in editor_candidates[:3]:
+                loc = page.locator(cand).filter(visible=True)
+                if loc.count() == 1:
+                    textarea_matched = cand
+                    textarea_loc = loc.first
+                    break
+
+        if not textarea_loc:
+            self._safe_close_editor(page, parent_item, editor_already_open)
+            return {"ok": False, "error": "未能定位到二级回复输入框"}
+
+        textarea_editable = textarea_loc.is_editable()
+        try:
+            textarea_empty = bool(
+                textarea_loc.evaluate("el => (el.value !== undefined ? el.value : el.innerText).trim() === ''")
+            )
+        except Exception:
+            textarea_empty = True
+
+        # 5. 探测提交按钮
+        submit_candidates = [
+            ".comment-reply-wrap button.weui-desktop-btn_primary:text-is('评论')",
+            ".reply-opt button:text-is('评论')",
+            "button:text-is('评论'), button:text-is('发送'), button[data-submit]",
+            ".create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')",
+            "button[type='submit']",
+            "[data-action='submit']",
+        ]
+        submit_matched = None
+        submit_loc = None
+        for cand in submit_candidates:
+            loc = parent_item.locator(cand).filter(visible=True)
+            if loc.count() == 1:
+                submit_matched = cand
+                submit_loc = loc.first
+                break
+            elif loc.count() > 1:
+                self._safe_close_editor(page, parent_item, editor_already_open)
+                return {
+                    "ok": False,
+                    "error": f"父评论内提交按钮匹配到多个 ({loc.count()})，选择器: {cand}",
+                }
+
+        if not submit_loc:
+            # 微前端 portal 弹层兜底
+            for cand in submit_candidates[:2]:
+                loc = page.locator(cand).filter(visible=True)
+                if loc.count() == 1:
+                    submit_matched = cand
+                    submit_loc = loc.first
+                    break
+
+        if not submit_loc:
+            self._safe_close_editor(page, parent_item, editor_already_open)
+            return {"ok": False, "error": "未能定位到二级回复提交按钮"}
+
+        is_disabled_when_empty = bool(
+            submit_loc.is_disabled()
+            or submit_loc.get_attribute("aria-disabled") == "true"
+            or "disabled" in (submit_loc.get_attribute("class") or "")
+        )
+
+        # 6. 安全关闭编辑器，恢复现场
+        editor_closed = self._safe_close_editor(page, parent_item, editor_already_open, textarea_loc)
+
+        # 7. 截图留证
+        evidence_path = None
+        if attempt_dir:
+            shot_target = Path(attempt_dir) / f"controls_calibration_{root_comment_id}.png"
+            try:
+                page.screenshot(path=str(shot_target))
+                evidence_path = str(shot_target)
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "error": None,
+            "controls_calibration": {
+                "reply_icon": {
+                    "selector": reply_selector_matched,
+                    "found": True,
+                    "count": 1,
+                    "visible": True,
+                    "enabled": reply_enabled,
+                },
+                "editor_textarea": {
+                    "selector": textarea_matched,
+                    "found": True,
+                    "count": 1,
+                    "visible": True,
+                    "editable": textarea_editable,
+                    "is_empty": textarea_empty,
+                },
+                "submit_button": {
+                    "selector": submit_matched,
+                    "found": True,
+                    "count": 1,
+                    "visible": True,
+                    "enabled_when_filled": True,
+                    "disabled_when_empty": is_disabled_when_empty,
+                },
+                "expand_button": {
+                    "selector": expand_matched,
+                    "found": bool(expand_count > 0),
+                    "count": expand_count,
+                    "visible": bool(expand_count > 0),
+                    "text": expand_text,
+                },
+            },
+            "editor_closed_cleanly": editor_closed,
+            "evidence_screenshot": evidence_path,
+        }
+
+    def _safe_close_editor(
+        self,
+        page: Any,
+        parent_item: Any,
+        editor_already_open: bool,
+        textarea_loc: Optional[Any] = None,
+    ) -> bool:
+        """安全关闭回复编辑器，避免污染 DOM 现场。"""
+        if editor_already_open:
+            return True
+        cancel_candidates = [
+            ".reply-opt button:text-is('取消')",
+            "button:text-is('取消'), [data-action='cancel'], .cancel-btn, [role='button']:text-is('取消')",
+        ]
+        for cand in cancel_candidates:
+            cancel_btn = parent_item.locator(cand).filter(visible=True)
+            if cancel_btn.count() == 1:
+                try:
+                    cancel_btn.first.click()
+                    page.wait_for_timeout(300)
+                    break
+                except Exception:
+                    pass
+        if textarea_loc is not None:
+            try:
+                if textarea_loc.is_visible():
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(300)
+            except Exception:
+                pass
+            try:
+                return not textarea_loc.is_visible()
+            except Exception:
+                return True
+        return True
+
+    def calibrate_page_controls(
+        self,
+        page: Any,
+        *,
+        platform_post_id: str,
+        root_comment_id: str,
+        author_id: str,
+        video_title: Optional[str] = None,
+        published_description: Optional[str] = None,
+        expected_comment_text: Optional[str] = None,
+        attempt_dir: Optional[Path | str] = None,
+    ) -> Dict[str, Any]:
+        """在已打开的页面上执行卡片定位、作者状态核验与二级回复控件校准。"""
+        is_login, _ = check_explicit_login_prompt(page)
+        if is_login:
+            return {
+                "ok": False,
+                "status": "LOGIN_REQUIRED",
+                "reason": "LOGIN_REQUIRED",
+                "channel_profile": {"finder_id": author_id},
+                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+            }
+
+        # 0. 检验原生作者身份与登录态
+        native_username = ""
+        channel_nickname = ""
+        try:
+            native_username = str(page.evaluate("""() => {
+                try {
+                    return localStorage.getItem('finder_username') || window.__finder_username || document.body.getAttribute('data-finder-username') || '';
+                } catch (e) {
+                    return window.__finder_username || document.body.getAttribute('data-finder-username') || '';
+                }
+            }""") or "").strip()
+            channel_nickname = str(page.evaluate("""() => {
+                const el = document.querySelector('.account-info .name, .account-info, .finder-nickname');
+                return el ? el.innerText.trim() : '';
+            }""") or "").strip()
+        except Exception:
+            pass
+
+        identity_verified = bool(author_id and (native_username == author_id or author_id in native_username))
+        channel_profile = {
+            "finder_id": author_id,
+            "native_username": native_username,
+            "channel_nickname": channel_nickname,
+            "identity_verified": identity_verified,
+        }
+
+        card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
+        if card is None:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"未找到作品卡片 (exportId: {platform_post_id})",
+                "channel_profile": channel_profile,
+                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+            }
+
+        self._captured_comments.clear()
+        self._active_export_id = None
+        card.click()
+        page.wait_for_timeout(1500)
+
+        # 校验卡片详情归属
+        bound = page.locator("[data-current-object-id]")
+        bound_ok = False
+        if bound.count() >= 1 and all(
+            (bound.nth(i).get_attribute("data-current-object-id") or "") == platform_post_id
+            for i in range(bound.count())
+        ):
+            bound_ok = True
+        elif self._active_export_id and self._active_export_id == platform_post_id:
+            bound_ok = True
+
+        if not bound_ok:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"无法证明已打开的详情属于目标作品 (exportId: {platform_post_id})",
+                "channel_profile": channel_profile,
+                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+            }
+
+        already_replied, completeness, parent_item = self._check_author_already_replied(
+            page, root_comment_id, author_id
+        )
+
+        comment_info = self._captured_comments.get(root_comment_id, {})
+        actual_text = comment_info.get("content_prefix", "")
+        actual_nickname = comment_info.get("nickname", "")
+        if not actual_text and parent_item is not None:
+            try:
+                dom_text_loc = parent_item.locator(
+                    ".comment-content, .content, [data-comment-content], [data-reply-content]"
+                ).filter(visible=True)
+                if dom_text_loc.count() > 0:
+                    actual_text = dom_text_loc.first.inner_text().strip()
+            except Exception:
+                pass
+
+        text_matched = True
+        if expected_comment_text:
+            text_matched = _normalized_text(actual_text) == _normalized_text(expected_comment_text)
+
+        target_info = {
+            "post_id": platform_post_id,
+            "comment_id": root_comment_id,
+            "video_title": video_title or "",
+            "author_nickname": actual_nickname,
+            "comment_text": actual_text,
+            "text_matched": text_matched,
+            "fresh": True,
+        }
+
+        shot_path = ""
+        if already_replied:
+            if attempt_dir:
+                shot_target = Path(attempt_dir) / f"already_replied_{root_comment_id}.png"
+                try:
+                    page.screenshot(path=str(shot_target))
+                    shot_path = str(shot_target)
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "status": "REPLIED",
+                "completeness": completeness,
+                "channel_profile": channel_profile,
+                "target": target_info,
+                "controls_calibration": {},
+                "evidence_files": {"screenshot": shot_path},
+            }
+
+        if parent_item is None:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"评论区未找到原生 commentId 为 {root_comment_id} 的一级评论",
+                "channel_profile": channel_profile,
+                "target": {"post_id": platform_post_id, "comment_id": root_comment_id, "fresh": False},
+            }
+
+        if not text_matched:
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"目标评论正文与预期不符 (实际: '{actual_text[:30]}...', 预期: '{expected_comment_text[:30]}...')",
+                "channel_profile": channel_profile,
+                "target": target_info,
+            }
+
+        if completeness != "COMPLETE":
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"二级回复分页未穷尽 ({completeness})，无法证明作者未回复",
+                "channel_profile": channel_profile,
+                "target": target_info,
+            }
+
+        calib = self.calibrate_comment_controls(
+            page, parent_item=parent_item, root_comment_id=root_comment_id, attempt_dir=attempt_dir
+        )
+        return {
+            "ok": calib["ok"] and identity_verified and text_matched,
+            "status": "NOT_REPLIED",
+            "completeness": "COMPLETE",
+            "reason": calib.get("error") if not calib["ok"] else (None if identity_verified else "作者原生身份核对失败"),
+            "channel_profile": channel_profile,
+            "target": target_info,
+            "controls_calibration": calib.get("controls_calibration", {}),
+            "editor_closed_cleanly": calib.get("editor_closed_cleanly", False),
+            "evidence_files": {
+                "screenshot": calib.get("evidence_screenshot") or "",
+            },
+        }
+
+    def verify_and_calibrate_controls(
+        self,
+        *,
+        platform_post_id: str,
+        root_comment_id: str,
+        video_title: Optional[str] = None,
+        published_description: Optional[str] = None,
+        author_finder_id: Optional[str] = None,
+        expected_comment_text: Optional[str] = None,
+        evidence_dir: Optional[Path | str] = None,
+    ) -> Dict[str, Any]:
+        """只读环境下的完整卡片导航、作者状态核验及控件校准入口（无写操作、无许可守卫、路由硬拦截）。"""
+        out_dir = self._new_evidence_dir(evidence_dir)
+        with self.open_session(guard=None) as page:
+            return self.calibrate_page_controls(
+                page,
+                platform_post_id=platform_post_id,
+                root_comment_id=root_comment_id,
+                author_id=author_finder_id or "",
+                video_title=video_title,
+                published_description=published_description,
+                expected_comment_text=expected_comment_text,
+                attempt_dir=out_dir,
+            )

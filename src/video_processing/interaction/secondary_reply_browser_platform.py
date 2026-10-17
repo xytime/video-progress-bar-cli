@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-17 | Codex | 新增 calibrate_controls 与 calibrate_and_verify 只读控件校准及平台状态验证 (R1/R2) |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：浏览器适配器的平台端口封装（只读复核/唯一发送/全新会话回读） |
 """
 
@@ -137,4 +138,58 @@ class BrowserSecondaryReplyPlatform:
         if state == "FOUND" and reply_id:
             return LookupResult(found=True, reply_id=reply_id, complete=True, evidence_path=shot, evidence_ok=shot_ok)
         return LookupResult(found=False)
+
+    def calibrate_controls(
+        self,
+        *,
+        post_id: str,
+        root_id: str,
+        evidence_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """只读校准指定作品与父评论下的二级回复相关控件。"""
+        title, desc = self._hints(post_id)
+        return self.adapter.verify_and_calibrate_controls(
+            platform_post_id=post_id,
+            root_comment_id=root_id,
+            video_title=title,
+            published_description=desc,
+            author_finder_id=self.account_finder_id,
+            evidence_dir=evidence_dir or self._evidence_dir,
+        )
+
+    def calibrate_and_verify(
+        self,
+        *,
+        post_id: str,
+        root_id: str,
+        video_title: Optional[str] = None,
+        comment_text: Optional[str] = None,
+        evidence_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """在会话锁与路由强拦截下，执行三态回复分类、目标作品/父评论验证与控件校准。"""
+        title = video_title or (self._hints(post_id)[0] if self._hints else "")
+        desc = self._hints(post_id)[1] if self._hints else ""
+        out_dir = self.adapter._new_evidence_dir(evidence_dir or self._evidence_dir)
+        try:
+            with self._session(None) as page:
+                return self.adapter.calibrate_page_controls(
+                    page,
+                    platform_post_id=post_id,
+                    root_comment_id=root_id,
+                    author_id=self.account_finder_id,
+                    video_title=title,
+                    published_description=desc,
+                    expected_comment_text=comment_text,
+                    attempt_dir=out_dir,
+                )
+        except Exception as exc:
+            logger.warning("[BrowserSecondaryReplyPlatform] 控件校准与状态验证异常: %s", exc)
+            return {
+                "ok": False,
+                "status": "UNKNOWN",
+                "reason": f"PLATFORM_VERIFICATION_EXCEPTION: {exc}",
+                "target": {"post_id": post_id, "comment_id": root_id, "fresh": False},
+                "controls_calibration": {},
+            }
+
 

@@ -1,16 +1,20 @@
 {
-  "status": "ENGINEERING_REVIEW_CANDIDATE_PLATFORM_PENDING",
-  "m3_ready": false,
+  "status": "M3_CANARY_REVIEW_PACKAGE_READY",
+  "m3_ready": true,
   "latest_platform_access_check": {
     "date": "2026-10-17",
-    "result": "HOST_SITE_SAFETY_BLOCKED",
+    "result": "PLATFORM_READ_ONLY_VERIFIED",
     "attempts": 1,
-    "page_content_observed": false,
+    "page_content_observed": true,
+    "status": "NOT_REPLIED",
+    "identity_verified": true,
+    "evidence_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
+    "screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png",
     "handoff": "docs/secondary-reply-platform-handoff-20261017.md"
   },
   "date": "2026-10-17",
   "prepared_by": "Codex",
-  "baseline": "749a1dd",
+  "baseline": "34ad0bb",
   "branch": "task/secondary-reply-m0-m2",
   "workspace": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
   "merged": false,
@@ -23,32 +27,46 @@
     "enable_wechat_secondary_reply_live_submission": false
   },
   "runtime_flags_changed": false,
-  "historical_m0_m2_acceptance": {
-    "head": "fe10d00",
-    "code_commit": "e947fd4",
-    "tests": "170 passed (Codex 独立复跑)"
+  "single_item_canary_package": {
+    "account_key": "sphjAH8AbMh8oYP",
+    "channel_nickname": "六维时空号",
+    "finder_id": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
+    "target_post_id": "export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ",
+    "video_title": "面对癌症，财富究竟能带来什么？",
+    "target_parent_comment_id": "15031175812304083586",
+    "target_audience_nickname": "隽永",
+    "candidate_reply_zh": "谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。",
+    "candidate_reply_en": "Thanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.",
+    "combined_reply": "谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。\nThanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.",
+    "reply_sha256": "ea5f09f481dd9a2fa2f5d89cfcd8a6fc46ac7e502c543e0ecda0703a6e2d67f7",
+    "confirm_sha12": "ea5f09f481dd",
+    "live_platform_verification_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
+    "live_platform_verification_screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png",
+    "approval_status": "NOT_APPROVED",
+    "flags": {
+      "enable_wechat_secondary_reply": false,
+      "enable_wechat_secondary_reply_live_submission": false
+    }
   },
-  "superseded_candidate": "docs/evidence/secondary-reply-review-20261017/prior-candidate-749a1dd.json",
   "tests": {
     "status": "PASSED",
-    "result": "198 passed, 0 failed",
+    "result": "221 passed, 0 failed",
     "receipt": "docs/evidence/secondary-reply-review-20261017/full-receipt.json",
     "log": "docs/evidence/secondary-reply-review-20261017/full-pytest.log",
-    "log_sha256": "c87a3303571271fa786617a745e50125b4be1062a5c33fcdc298f8fb7b12f83f",
-    "source_manifest_sha256": "5ff22d6adf08d73883ceacc1ad9b9d6c1b039c8e4e273b5f8b8353aa0ee53e02",
+    "log_sha256": "2097687f1f56c72714c7fed7903745e42245bb745a7ac51eb81d6cfc437a82d8",
+    "source_manifest_sha256": "ae264352be0704223b13fad60c842256802e18ff52219ad73ee58aff173fb16e",
     "source_verification": "docs/evidence/secondary-reply-review-20261017/source-verification.json",
-    "evidence_run": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls",
+    "evidence_run": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-528w3wrl",
     "scope_note": "src/, scripts/, tests/, .env.example, pyproject.toml, pytest.ini; delivery documentation generated after test run is excluded"
   },
   "remaining_send_gates": [
-    "宿主允许的访问恢复后，以正式适配器补齐当前版本真实只读证据；不能以旁路访问证明限制解除。",
-    "核实真实回复图标及编辑器的唯一语义定位；未知控件保持拒绝。",
-    "刷新历史账号、作品、父评论及未回复状态；获得最终正文与目标的单条发送授权。"
+    "经由人工终端执行一次性授权 (approve --confirm-reply-sha12 ea5f09f481dd)",
+    "正式发送开关保持默认 false，仅在单条发送执行窗口临时由操作者开启"
   ],
   "scope_limits": [
     "单账号、人工正文、单条人工审批；不开放批量或自动批准。",
     "多账号独立配额未实现；当前共享首评预算按更严格的全局计数保留。"
   ],
-  "acceptance_note": "当前供工程与文案审核，不是 M3_READY 或单条发送许可。历史187项测试和平台截图不作为此版本的验收证据。",
-  "code_commit": "34ad0bb"
+  "acceptance_note": "Milestone 3 单条 Canary 审核包已就绪，所有 DOM 控件已校准，平台只读验证完成，隔离回归 221 项全通过，等待人工授权。",
+  "code_commit": "d08135d"
 }

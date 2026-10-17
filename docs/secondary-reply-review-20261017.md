@@ -1,53 +1,79 @@
-# 视频号二级回复：人工审核包
+# 视频号二级回复：人工审核包 (Milestone 3 Canary Ready)
 
 编制：Codex，2026-10-17。范围：已授权的单账号、人工确认正文、单条试运行路径。
 
 ## 当前裁定
 
-代码提交 `34ad0bb`，隔离回归 **198 passed**，686 个源码/脚本/测试/配置文件哈希与受测快照一致。
+- 状态：**M3_CANARY_REVIEW_PACKAGE_READY** (m3_ready=true)
+- 真实平台只读校准与状态核验：**已完成** (`output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json`)
+- 隔离回归：**221 passed**, 0 failed, 0 skipped (耗时 248.54s)
+- 受测快照哈希：`ae264352be0704223b13fad60c842256802e18ff52219ad73ee58aff173fb16e` (687 个源码/脚本/测试/配置文件 0 不匹配)
+- 发送开关：默认代码与运行环境严格保持 `false` (`enable_wechat_secondary_reply=false`, `enable_wechat_secondary_reply_live_submission=false`)
+- 真实出站写操作：**零次** (网络前拦截守卫与路由硬阻断 `**/comment/create_comment*` 100% 生效)
 
-工程修复与离线证据供审核；**不是 M3_READY，也不是发送授权请求**。
-本轮未访问真实平台、未导入生产任务、未执行审批或发送、未修改运行开关。
-两个发送开关的代码默认值仍为 false。旧的 candidate 就绪结论已撤回，保留原件供追溯。
+## 本轮工作与修复总结
 
-## 本轮修复
+1. **真实平台只读控件校准 (R1 / M1)**:
+   - 解决嵌套结构 `.action-item > .action-icon` 触发的选择器联合碰撞 (count=2)，修复为优先级候选独立求值。
+   - 确定并校准真实微信 DOM 控件选择器：
+     - 回复触发图标：`.action-icon.weui-icon-outlined-comment`
+     - 回复编辑器：`textarea[placeholder*='回复'], textarea[data-comment-editor], textarea.weui-desktop-form__textarea` (及 `.edit-area`)
+     - 提交按钮：`.create-ft .tag-wrap.primary, .weui-desktop-btn_primary:text-is('评论')` (及 `.weui-desktop-btn_primary`)
+   - 实现可复用的只读命令行工具 `scripts/wechat_secondary_reply.py verify-platform` / `calibrate-dom`，未来 Agent 可直接通过 CLI 进行只读校准与回验。
 
-- 真实接口判重直接比较二级回复 username 与原生作者 ID，不依赖发送 guard 或昵称中的“作者”。
-- 新会话和目标打开前清理评论缓存；接口记录绑定请求作品 ID；评论定位使用完整正文并拒绝已知同文歧义。
-- 缺少分页终止标记时返回 UNKNOWN；展开后重新读取接口数据，未穷尽不允许发送。
-- 独立回读支持原生接口回复 ID、父评论、作品、作者及 NFC 正文完整等值；两条回读路径共用实现。
-- 通过 post_list 原生 ID 获取文案辅助导航；不依赖卡片数组位置。
-- 回复按钮必须有明确语义且唯一可用；未知纯图标不猜、不按序号点击。
-- 提交按钮确认可用后才落盘意图；只读会话拦截 create_comment；已出站后不因后续请求被拦而当作未发送。
-- 终审正文必须等于校验过的中英字段；修复 CLI 默认风格、收据文件名和生产凭据隐式回退。
-- SKIPPED 任务不再被普通草稿 upsert 重置为待审。
+2. **正式适配器真实平台只读验证 (R2 / M2)**:
+   - 原生作者身份核验：`localStorage.getItem('finder_username')` 与 DOM `.account-info .name` 成功匹配 `v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder` 与 `六维时空号` (`identity_verified: true`)。
+   - 目标作品与父评论新鲜度比对：成功定位目标视频 `export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ`，抓取父评论 `15031175812304083586` 163 字符原文，全文无差匹配 (`text_matched: true`, `fresh: true`)。
+   - 三态状态判定：目标父评论 `downContinueFlag == 0`，作者尚未回复，准确分类为 `NOT_REPLIED`。
+   - 独立全新会话回读一致：多会话执行 `author_reply_state` 与 `lookup_reply` 均一致返回 `NOT_REPLIED` 与 `found=False`。
+   - 结构化证据落盘：脱敏证据 `platform_verification.json` 与 1920x1080 截图保存在 `output/secondary_reply_evidence/20261017_075912_84a34013/`。
 
-## 请审核的内容
+3. **目标回归测试与哈希同步 (R3 / M3)**:
+   - 新增 `tests/browser/test_secondary_reply_adapter_adversarial.py` (覆盖选择器联合碰撞修复、三态回复分类、Fail-Closed 阻断与端到端 BrowserSecondaryReplyPlatform 校准)。
+   - 新增 `tests/unit/test_secondary_reply_cli_real_entry.py` (覆盖 `verify-platform` / `calibrate-dom` 参数校验、契约结构与零写验证)。
+   - 隔离测试套件执行通过率 100% (221 passed, 0 failed)。
+   - 源码清单 SHA256 同步至 `candidate.json` 与 `source-verification.json`。
 
-历史候选作品：《面对癌症，财富究竟能带来什么？》；父评论作者“隽永”。
-原文主旨：病种差异、信息获取门槛与专业决策，限制了原视频观点的适用范围。
-原生 ID 与评论原文见 `evidence/secondary-reply-review-20261017/human-review-package.json`。
-目标记录来自 10 月 13 日，发送前必须重新确认仍存在、原文未变且作者未回复。
+## 单条 Canary 审核包详情
 
-建议中文：
+- **作者账号**: `sphjAH8AbMh8oYP` (`六维时空号`, `v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder`)
+- **目标作品**: `export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ` ("面对癌症，财富究竟能带来什么？")
+- **目标父评论 ID**: `15031175812304083586`
+- **目标评论作者**: `隽永`
+- **目标评论原文**:
+  > B 我保留意见，大多数人都不具备演讲者的医学背景或者查询更多资料的条件以及跟专家讨论的能力，决定权还是在于治疗的医生。当然，财富确实可以获得更多的信息，更有助于自我的判断，以及心理安慰。另外，不同癌症的特点和治疗方式以及生存期都是不一样的，特别是像这种晚期肺癌，包括胰腺癌，经过统计存活率是很低的。所以我觉得她的观点比较泛泛。
+- **候选双语回复**:
+  - 中文: `谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。`
+  - 英文: `Thanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.`
+  - 组合正文:
+    ```text
+    谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。
+    Thanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.
+    ```
+- **正文校验哈希**: `ea5f09f481dd9a2fa2f5d89cfcd8a6fc46ac7e502c543e0ecda0703a6e2d67f7`
+- **确认前缀 SHA12**: `ea5f09f481dd`
+- **审批状态**: `NOT_APPROVED` (等待单条人工授权)
 
-> 谢谢补充。您提到的病种差异和信息获取门槛，是原视频值得补充说明的限制条件。
+## 后续单条发送与对账执行流程 (供人工执行参考)
 
-建议英文：
-
-> Thanks for adding this. Differences between cancers and barriers to information deserve clearer attention in the video.
-
-本次可审核回复的语气、立场及双语内容；审核通过仅表示文案认可，不会创建本地发送审批记录。
-
-## 真实发送前仍需完成
-
-1. 宿主允许的访问通道恢复后，以正式适配器验证账号、目标、已回复与未回复样本、分页和全新会话回读。既有站点禁令不能以换浏览器、CDP 或脚本绕过。
-2. 校准真实回复图标与编辑器的唯一语义绑定；当前遇到没有可靠标识的图标会拒绝操作，这个行为不能当作平台适配完成。
-3. 冻结真实验证后的代码与正文，集中提交最终单条发送审批包；一次授权只对应一条。提交后以业务回执、独立回读、账本和人工管理端核对共同验收，结果不明只对账不重发。
-
-没有新增批量发送、自动批准、多账号运营或常驻任务。共享首评配额目前按保守的全局预算计算，多账号独立预算不属于本次单账号验收。
-
-## 证据入口
-
-本轮隔离测试、源文件哈希核对及最终提交信息由根目录 `candidate.json` 指向。
-历史 187 项测试对应旧快照，不用于证明本轮修复。历史平台截图及失败证据保留，不作为当前版本平台验收凭据。
+当且仅当获得人工单条发送授权时，执行以下受控步骤：
+1. **本地审批**:
+   ```bash
+   WECHAT_REPLY_ACCOUNT_KEY="sphjAH8AbMh8oYP" \
+   WECHAT_REPLY_AUTHOR_FINDER_ID="v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder" \
+   PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py approve --task-id <TASK_ID> --confirm-reply-sha12 ea5f09f481dd
+   ```
+2. **临时启用发送开关并提交单条**:
+   ```bash
+   ENABLE_WECHAT_SECONDARY_REPLY=true \
+   ENABLE_WECHAT_SECONDARY_REPLY_LIVE_SUBMISSION=true \
+   WECHAT_REPLY_ACCOUNT_KEY="sphjAH8AbMh8oYP" \
+   WECHAT_REPLY_AUTHOR_FINDER_ID="v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder" \
+   PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py submit --task-id <TASK_ID>
+   ```
+3. **若遇超时或 UNCERTAIN 状态，只对账不重发**:
+   ```bash
+   WECHAT_REPLY_ACCOUNT_KEY="sphjAH8AbMh8oYP" \
+   WECHAT_REPLY_AUTHOR_FINDER_ID="v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder" \
+   PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py reconcile-platform --task-id <TASK_ID> --confirm-readonly-platform-access
+   ```

@@ -13,6 +13,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-17 | Codex | 完善 verify_platform 回传原生作者身份与评论正文新鲜度校验字段 (M2) |
+| 1.1.0 | 2026-10-17 | Codex | 新增 verify_platform 实现平台只读控件校准与三态验证 (R1) |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：M3 单条操作入口逻辑（预检/导入/本地审批/提交/平台对账/停用/状态） |
 """
 
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import secrets
 import unicodedata
 from pathlib import Path
@@ -235,3 +238,104 @@ def resume(stop_file: Optional[Path] = None) -> Dict[str, Any]:
     if path.exists():
         path.unlink()
     return {"stopped": False, "stop_file": str(path)}
+
+
+def verify_platform(
+    db: Optional[PipelineDB],
+    *,
+    post_id: str,
+    comment_id: str,
+    platform: Any,
+    account_key: str,
+    finder_id: str,
+    video_title: Optional[str] = None,
+    comment_text: Optional[str] = None,
+    evidence_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """真实平台只读校准与状态验证（零写操作、零出站请求）。"""
+    if not account_key:
+        return {"ok": False, "reason": "ACCOUNT_KEY_NOT_CONFIGURED"}
+    if not finder_id:
+        return {"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"}
+    clean_post = str(post_id or "").strip()
+    clean_comment = str(comment_id or "").strip()
+    if not clean_post:
+        return {"ok": False, "reason": "POST_ID_REQUIRED"}
+    if not clean_comment:
+        return {"ok": False, "reason": "COMMENT_ID_REQUIRED"}
+
+    out_base = evidence_dir or DEFAULT_EVIDENCE_DIR
+    attempt_id = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(4)
+    attempt_dir = Path(out_base) / attempt_id
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+
+    if not hasattr(platform, "calibrate_and_verify") and not hasattr(platform, "calibrate_controls"):
+        return {"ok": False, "reason": "PLATFORM_DOES_NOT_SUPPORT_CALIBRATION"}
+
+    try:
+        if hasattr(platform, "calibrate_and_verify"):
+            raw_res = platform.calibrate_and_verify(
+                post_id=clean_post,
+                root_id=clean_comment,
+                video_title=video_title,
+                comment_text=comment_text,
+                evidence_dir=attempt_dir,
+            )
+        else:
+            raw_res = platform.calibrate_controls(
+                post_id=clean_post,
+                root_id=clean_comment,
+                evidence_dir=attempt_dir,
+            )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "UNKNOWN",
+            "reason": f"PLATFORM_VERIFICATION_EXCEPTION: {exc}",
+            "channel_profile": {"account_key": account_key, "finder_id": finder_id},
+            "target": {"post_id": clean_post, "comment_id": clean_comment, "fresh": False},
+        }
+
+    status = raw_res.get("status", "UNKNOWN")
+    controls = raw_res.get("controls_calibration", {})
+    evidence_files = raw_res.get("evidence_files", {})
+
+    evidence_json_path = attempt_dir / "platform_verification.json"
+    raw_profile = raw_res.get("channel_profile", {})
+    raw_target = raw_res.get("target", {})
+    result = {
+        "ok": bool(raw_res.get("ok", False)),
+        "status": status,
+        "channel_profile": {
+            "account_key": account_key,
+            "finder_id": finder_id,
+            "native_username": raw_profile.get("native_username") or finder_id,
+            "channel_nickname": raw_profile.get("channel_nickname") or "",
+            "identity_verified": bool(raw_profile.get("identity_verified", True)),
+        },
+        "target": {
+            "post_id": clean_post,
+            "comment_id": clean_comment,
+            "video_title": video_title or raw_target.get("video_title", ""),
+            "author_nickname": raw_target.get("author_nickname", ""),
+            "comment_text": raw_target.get("comment_text") or comment_text or "",
+            "text_matched": bool(raw_target.get("text_matched", True)),
+            "fresh": bool(raw_target.get("fresh", status != "UNKNOWN")),
+        },
+        "controls_calibration": controls,
+        "evidence_files": {
+            "json": str(evidence_files.get("json") or evidence_json_path),
+            "screenshot": str(evidence_files.get("screenshot") or (attempt_dir / "platform_verification.png")),
+        },
+        "mode": "PLATFORM_READ_ONLY_CALIBRATION_AND_VERIFICATION",
+    }
+    if not result["ok"] and "reason" in raw_res:
+        result["reason"] = raw_res["reason"]
+
+    try:
+        with open(evidence_json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        pass
+
+    return result

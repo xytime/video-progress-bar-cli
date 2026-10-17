@@ -1,12 +1,12 @@
 {
   "source": "/Users/ryusei/.codex/worktrees/c446/Video-precessing",
-  "started_at": "2026-10-17T04:36:21.558185+00:00",
-  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls",
+  "started_at": "2026-10-17T08:29:14.046209+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-528w3wrl",
   "storage_policy": "external-auto-cleanup",
-  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox/repo",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-528w3wrl/sandbox/repo",
   "probe": {
     "exit_code": 0,
-    "seconds": 0.081
+    "seconds": 0.151
   },
   "pytest_arguments": [
     "-q",
@@ -19,9 +19,10 @@
     "tests/unit/test_secondary_reply_orchestration.py",
     "tests/unit/test_secondary_reply_review_counterexamples.py",
     "tests/unit/test_secondary_reply_service_and_corpus.py",
+    "tests/browser/test_secondary_reply_adapter_adversarial.py",
     "tests/browser/test_secondary_reply_browser.py",
-    "tests/browser/test_secondary_reply_orchestrated_browser.py",
     "tests/browser/test_secondary_reply_native_contract.py",
+    "tests/browser/test_secondary_reply_orchestrated_browser.py",
     "tests/unit/test_wechat_interaction.py",
     "tests/unit/test_wechat_interaction_browser.py",
     "tests/unit/test_wechat_interaction_cli.py",
@@ -30,24 +31,24 @@
     "tests/unit/test_wechat_interaction_state.py"
   ],
   "timeout_seconds": 600,
-  "source_manifest_sha256": "5ff22d6adf08d73883ceacc1ad9b9d6c1b039c8e4e273b5f8b8353aa0ee53e02",
-  "profile_sha256": "4221995054792ae1e56d3cdbc2ba3f8aef97da5615d2cb0fac3df44091942592",
+  "source_manifest_sha256": "ae264352be0704223b13fad60c842256802e18ff52219ad73ee58aff173fb16e",
+  "profile_sha256": "2e00558ce8349b0ab010209608b3c1dde2ffc3addde1cd684ce2680e8f23832e",
   "browser_runtime": {
     "revision": "1223",
     "version": "148.0.7778.96",
-    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-528w3wrl/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
   },
-  "browser_runtime_sha256": "7714cdb94abf568b702dfc6de31c3c3e6f856e427b307fd2d24602b9c95a601e",
+  "browser_runtime_sha256": "9370c26ce94b3d0469872732743150c40590b23b6bff8fb32d1a99152a0405aa",
   "media_runtime": null,
   "media_runtime_sha256": null,
   "pytest": {
     "exit_code": 0,
-    "seconds": 219.478
+    "seconds": 248.54
   },
   "exit_code": 0,
   "cleanup": {
     "status": "removed",
-    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-79vdquls/sandbox"
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-528w3wrl/sandbox"
   },
-  "finished_at": "2026-10-17T04:40:01.787337+00:00"
+  "finished_at": "2026-10-17T08:33:24.192833+00:00"
 }

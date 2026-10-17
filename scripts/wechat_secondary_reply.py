@@ -7,6 +7,9 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-17 | Codex | 完善 main() 返回码保护与 verify-platform / calibrate-dom 统一集成测试支持 (M3) |
+| 1.4.0 | 2026-10-17 | Codex | 支持 verify-platform 传递 comment-text 原文校验与原生作者身份回传 (M2) |
+| 1.3.0 | 2026-10-17 | Codex | 新增 verify-platform / calibrate-dom 只读平台校准与状态验证子命令 (R1) |
 | 1.2.0 | 2026-10-12 | Antigravity | 接入严格 API 载荷解析器 (T01/T02/T03/T12) 与只读对账 (--reconcile) 审计支持 |
 | 1.1.0 | 2026-10-12 | Codex | 新增 --demo 离线 4 路径重现验证套件（成功防重/守卫拦截/异常对账/墓碑持久） |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复 CLI、dry-run、审批流与状态机调度 |
@@ -250,7 +253,18 @@ def _read_only_refusal(db_path):
     return None
 
 
-SUBCOMMANDS = {"import-draft", "preflight", "approve", "submit", "reconcile-platform", "status", "stop", "resume"}
+SUBCOMMANDS = {
+    "import-draft",
+    "preflight",
+    "approve",
+    "submit",
+    "reconcile-platform",
+    "status",
+    "stop",
+    "resume",
+    "verify-platform",
+    "calibrate-dom",
+}
 
 
 def _build_real_platform(args):
@@ -262,11 +276,17 @@ def _build_real_platform(args):
         raise SystemExit("AUTHOR_FINDER_ID_NOT_CONFIGURED: 请配置 wechat_reply_author_finder_id")
     adapter = SecondaryReplyBrowserAdapter(headless=not getattr(args, "headed", False))
     title = getattr(args, "video_title", "") or ""
-    return BrowserSecondaryReplyPlatform(adapter, account_finder_id=finder, post_hints=lambda _p: (title, ""))
+    evidence_dir = getattr(args, "evidence_dir", None)
+    return BrowserSecondaryReplyPlatform(
+        adapter,
+        account_finder_id=finder,
+        post_hints=lambda _p: (title, ""),
+        evidence_dir=evidence_dir,
+    )
 
 
 def ops_main(argv: List[str], platform_factory=None) -> int:
-    """M3 单条操作入口：预检/导入/本地审批/提交/平台对账/状态/停用。所有发送经统一编排。"""
+    """M3 单条操作入口：预检/导入/本地审批/提交/平台对账/状态/停用/平台验证。所有发送经统一编排。"""
     from video_processing.interaction import secondary_reply_ops as ops
 
     parser = argparse.ArgumentParser(prog="wechat_secondary_reply")
@@ -300,16 +320,24 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
     if not account_key:
         print(json.dumps({"ok": False, "reason": "ACCOUNT_KEY_NOT_CONFIGURED"}, ensure_ascii=False))
         return 2
-    if not args.db_path.exists() and args.command != "import-draft":
-        print(json.dumps({"ok": False, "reason": "DB_NOT_FOUND"}, ensure_ascii=False))
-        return 2
-    read_only = args.command in {"preflight", "status"}
-    if read_only:
-        refusal = _read_only_refusal(args.db_path)
-        if refusal:
-            print(json.dumps({"ok": False, "reason": refusal}, ensure_ascii=False))
+
+    db = None
+    if not args.db_path.exists():
+        if args.command in ("verify-platform", "calibrate-dom"):
+            db = None
+        elif args.command == "import-draft":
+            db = PipelineDB(db_path=str(args.db_path), read_only=False)
+        else:
+            print(json.dumps({"ok": False, "reason": "DB_NOT_FOUND"}, ensure_ascii=False))
             return 2
-    db = PipelineDB(db_path=str(args.db_path), read_only=read_only)
+    else:
+        read_only = args.command in {"preflight", "status", "verify-platform", "calibrate-dom"}
+        if read_only:
+            refusal = _read_only_refusal(args.db_path)
+            if refusal:
+                print(json.dumps({"ok": False, "reason": refusal}, ensure_ascii=False))
+                return 2
+        db = PipelineDB(db_path=str(args.db_path), read_only=read_only)
 
     def need(*names):
         missing = [n for n in names if getattr(args, n.replace("-", "_")) in (None, "")]
@@ -321,6 +349,8 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
         print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
         return 0 if res.get("ok", True) else 1
 
+    factory = platform_factory or _build_real_platform
+
     if args.command == "status":
         return show(ops.status_summary(db))
     if args.command == "import-draft":
@@ -329,6 +359,36 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
             db, account_key=account_key, post_id=args.post_id, comment_id=args.comment_id,
             comment_text=args.comment_text, zh=args.zh, en=args.en, style=args.style,
         ))
+    if args.command in ("verify-platform", "calibrate-dom"):
+        if not finder:
+            return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
+        if not account_key:
+            return show({"ok": False, "reason": "ACCOUNT_KEY_NOT_CONFIGURED"})
+
+        target_post = args.post_id
+        target_comment = args.comment_id
+        target_title = args.video_title or ""
+        target_text = args.comment_text or ""
+        if (not target_post or not target_comment) and args.task_id and db is not None:
+            task = db.get_secondary_reply_task(args.task_id)
+            if task:
+                target_post = target_post or task.get("platform_post_id")
+                target_comment = target_comment or task.get("comment_id")
+        if not target_post or not target_comment:
+            need("post-id", "comment-id")
+
+        return show(ops.verify_platform(
+            db,
+            post_id=target_post,
+            comment_id=target_comment,
+            platform=factory(args),
+            account_key=account_key,
+            finder_id=finder,
+            video_title=target_title,
+            comment_text=target_text,
+            evidence_dir=args.evidence_dir,
+        ))
+
     need("task-id")
     if args.command == "preflight":
         return show(ops.preflight(db, args.task_id, account_key=account_key, finder_id=finder))
@@ -339,7 +399,6 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
             confirm_reply_sha12=args.confirm_reply_sha12, ttl_minutes=args.ttl_minutes,
         ))
 
-    factory = platform_factory or _build_real_platform
     if args.command == "submit":
         if not settings.enable_wechat_secondary_reply or not settings.enable_wechat_secondary_reply_live_submission:
             return show({"ok": False, "reason": "FLAGS_OFF（默认关闭，M3 窗口内临时开启）"})
@@ -361,44 +420,47 @@ def ops_main(argv: List[str], platform_factory=None) -> int:
 
 def main(argv: Optional[List[str]] = None, platform_factory=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in SUBCOMMANDS:
-        return ops_main(argv, platform_factory)
+    try:
+        if argv and argv[0] in SUBCOMMANDS:
+            return ops_main(argv, platform_factory)
 
-    parser = argparse.ArgumentParser(
-        description="视频号二级回复（旧式只读/演示开关；真实操作请使用子命令: " + ", ".join(sorted(SUBCOMMANDS)) + "）"
-    )
-    parser.add_argument("--post-id", type=str, help="视频号平台作品 exportId")
-    parser.add_argument("--task-id", type=int, help="指定的二级回复任务 ID")
-    parser.add_argument("--dry-run", action="store_true", help="本地只读模式，零写操作零副作用")
-    parser.add_argument("--reconcile", action="store_true", help="仅本地检视待对账任务（不访问平台；平台对账请用 reconcile-platform）")
-    parser.add_argument("--demo", action="store_true", help="运行离线 4 路径重现验证 Demo")
+        parser = argparse.ArgumentParser(
+            description="视频号二级回复（旧式只读/演示开关；真实操作请使用子命令: " + ", ".join(sorted(SUBCOMMANDS)) + "）"
+        )
+        parser.add_argument("--post-id", type=str, help="视频号平台作品 exportId")
+        parser.add_argument("--task-id", type=int, help="指定的二级回复任务 ID")
+        parser.add_argument("--dry-run", action="store_true", help="本地只读模式，零写操作零副作用")
+        parser.add_argument("--reconcile", action="store_true", help="仅本地检视待对账任务（不访问平台；平台对账请用 reconcile-platform）")
+        parser.add_argument("--demo", action="store_true", help="运行离线 4 路径重现验证 Demo")
 
-    args = parser.parse_args(argv)
+        args = parser.parse_args(argv)
 
-    if args.demo:
-        results = run_offline_4path_demo()
-        print(json.dumps(results, ensure_ascii=False, indent=2))
-        return 0
+        if args.demo:
+            results = run_offline_4path_demo()
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+            return 0
 
-    # 先决定模式，再打开数据库：只读模式绝不构造可写 PipelineDB（会触发建表/迁移/幽灵任务整理）
-    if args.reconcile or args.dry_run:
-        db_path = DEFAULT_DB_PATH
-        refuse = _read_only_refusal(db_path)
-        if refuse:
-            print(json.dumps({"mode": "inspection", "refused": refuse}, ensure_ascii=False, indent=2))
-            return 2
-        db = PipelineDB(db_path=str(db_path), read_only=True)
-        if args.reconcile:
-            logger.info("[Local inspection] 本地待对账任务只读检视（不访问平台，不等于平台对账）...")
-            res = run_reconcile_inspection(db, args.post_id)
-        else:
-            logger.info("[DryRun] 本地只读模式，不执行任何外部操作或写事务。")
-            res = run_dry_run_inspection(db, args.post_id or "export/default_dry_run")
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-        return 0
+        # 先决定模式，再打开数据库：只读模式绝不构造可写 PipelineDB（会触发建表/迁移/幽灵任务整理）
+        if args.reconcile or args.dry_run:
+            db_path = DEFAULT_DB_PATH
+            refuse = _read_only_refusal(db_path)
+            if refuse:
+                print(json.dumps({"mode": "inspection", "refused": refuse}, ensure_ascii=False, indent=2))
+                return 2
+            db = PipelineDB(db_path=str(db_path), read_only=True)
+            if args.reconcile:
+                logger.info("[Local inspection] 本地待对账任务只读检视（不访问平台，不等于平台对账）...")
+                res = run_reconcile_inspection(db, args.post_id)
+            else:
+                logger.info("[DryRun] 本地只读模式，不执行任何外部操作或写事务。")
+                res = run_dry_run_inspection(db, args.post_id or "export/default_dry_run")
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0
 
-    parser.print_help()
-    return 2
+        parser.print_help()
+        return 2
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
 
 
 if __name__ == "__main__":

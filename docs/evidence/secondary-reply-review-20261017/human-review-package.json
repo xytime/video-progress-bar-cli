@@ -1,5 +1,6 @@
 {
   "account_key": "sphjAH8AbMh8oYP",
+  "channel_nickname": "六维时空号",
   "author_finder_id": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
   "platform_post_id": "export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ",
   "video_title": "面对癌症，财富究竟能带来什么？",
@@ -14,8 +15,22 @@
   "zh_len": 37,
   "en_len": 119,
   "total_len": 157,
-  "send_flags_default": "false (严格关闭，禁止自动出站)",
+  "send_flags_default": {
+    "enable_wechat_secondary_reply": false,
+    "enable_wechat_secondary_reply_live_submission": false
+  },
   "approval_status": "NOT_APPROVED",
-  "target_snapshot_date": "2026-10-13",
-  "target_requires_fresh_readonly_verification": true
+  "target_snapshot_date": "2026-10-17",
+  "target_requires_fresh_readonly_verification": false,
+  "live_platform_verification": {
+    "verified_at": "2026-10-17T07:59:12Z",
+    "status": "NOT_REPLIED",
+    "identity_verified": true,
+    "native_username": "v2_060000231003b20faec8c6e6811acad1ca06e534b07788b29eed6dd8e71aca67283987b679b6@finder",
+    "channel_nickname": "六维时空号",
+    "text_matched": true,
+    "fresh": true,
+    "evidence_json": "output/secondary_reply_evidence/20261017_075912_84a34013/platform_verification.json",
+    "screenshot": "output/secondary_reply_evidence/20261017_075912_84a34013/20261017_075912_aee5d0d3/controls_calibration_15031175812304083586.png"
+  }
 }
