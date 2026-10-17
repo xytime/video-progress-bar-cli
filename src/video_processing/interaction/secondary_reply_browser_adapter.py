@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments_on_page 接口与 comment_list 原始载荷捕获，供 M3.5 Tick 扫描复用 |
 | 1.5.0 | 2026-10-17 | Antigravity | 统一校准与发送的卡片绑定、父评论与回复控件唯一定位逻辑；从契约层导入 SecondaryReplySubmissionGuard；公开 create_evidence_dir 与 execute_page_reply_flow；收紧 calibrate_page_controls 身份与文本证据要求 |
 | 1.4.0 | 2026-10-17 | Codex | 修复 _interact_with_page 中回复按钮选择器联合碰撞缺陷，采用单候选迭代；将 calibrate_comment_controls 编辑器检测限定于当前父评论范围 (M2) |
 | 1.3.0 | 2026-10-17 | Codex | 实装真实平台只读控件校准 (calibrate_comment_controls)、校准 DOM 选择器、卡片列表滚轮分页支持与只读平台验证 (R1) |
@@ -131,12 +132,14 @@ class SecondaryReplyBrowserAdapter:
         self._captured_comments: Dict[str, Dict[str, Any]] = {}
         self._active_export_id: Optional[str] = None
         self._post_descriptions: Dict[str, str] = {}
+        self._last_comment_list_payload: Optional[Dict[str, Any]] = None
 
     def _setup_page_listeners(self, page, guard: Optional[SecondaryReplySubmissionGuard] = None) -> None:
         """注册页面网络监听：捕获 comment_list 响应数据、折叠/分页标志与活跃作品 ID。"""
         self._captured_comments.clear()
         self._post_descriptions.clear()
         self._active_export_id = None
+        self._last_comment_list_payload = None
         def on_request(req):
             if req.method == "POST" and "comment/comment_list" in req.url:
                 try:
@@ -171,6 +174,8 @@ class SecondaryReplyBrowserAdapter:
                     if not export_id or export_id != self._active_export_id:
                         return
                     payload = res.json()
+                    if isinstance(payload, dict):
+                        self._last_comment_list_payload = payload
                     body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
                     if isinstance(body, dict):
                         for c in body.get("comment") or []:
@@ -226,6 +231,7 @@ class SecondaryReplyBrowserAdapter:
             return False, f"未找到作品卡片 (exportId: {platform_post_id})"
         self._captured_comments.clear()
         self._active_export_id = None
+        self._last_comment_list_payload = None
         card.click()
         page.wait_for_timeout(wait_ms)
 
@@ -1304,4 +1310,30 @@ class SecondaryReplyBrowserAdapter:
                 expected_comment_text=expected_comment_text,
                 attempt_dir=out_dir,
             )
+
+    def discover_comments_on_page(
+        self,
+        page: Any,
+        *,
+        platform_post_id: str,
+        video_title: Optional[str] = None,
+        published_description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """只读绑定指定作品卡片并返回捕获到的 comment_list 原始载荷。"""
+        is_login, _ = check_explicit_login_prompt(page)
+        if is_login:
+            return {"ok": False, "reason": "LOGIN_REQUIRED", "payload": None}
+        bound_ok, bind_err = self._select_and_bind_post_card(
+            page,
+            platform_post_id=platform_post_id,
+            video_title=video_title,
+            published_description=published_description,
+            wait_ms=1500,
+        )
+        if not bound_ok:
+            return {"ok": False, "reason": bind_err or "CARD_BIND_FAILED", "payload": None}
+        if isinstance(self._last_comment_list_payload, dict):
+            return {"ok": True, "reason": None, "payload": self._last_comment_list_payload}
+        return {"ok": False, "reason": "NO_COMMENT_LIST_PAYLOAD_CAPTURED", "payload": None}
+
 

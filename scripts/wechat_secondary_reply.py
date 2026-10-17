@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-10-17 | Antigravity | 接入 M3.5 tick 定时周期子命令、默认 TelegramApprovalTransport、持久化证据目录与 DB 作品标题回填 (CR-01/CR-02/CR-04) |
 | 1.6.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 PipelineDB.delete_secondary_reply_task；拆分 request-approval 与 approve-callback 审批入口 |
 | 1.5.0 | 2026-10-17 | Codex | 完善 main() 返回码保护与 verify-platform / calibrate-dom 统一集成测试支持 (M3) |
 | 1.4.0 | 2026-10-17 | Codex | 支持 verify-platform 传递 comment-text 原文校验与原生作者身份回传 (M2) |
@@ -35,6 +36,7 @@ from config.settings import settings
 from video_processing.db.database import PipelineDB
 from video_processing.interaction.secondary_reply_approval import (
     FakeApprovalTransport,
+    build_default_approval_transport,
     dispatch_approval_request,
     handle_approval_callback,
 )
@@ -266,30 +268,53 @@ SUBCOMMANDS = {
     "resume",
     "verify-platform",
     "calibrate-dom",
+    "tick",
 }
 
+_UNSET_TRANSPORT = object()
 
-def _build_real_platform(args):
+
+def _build_real_platform(args, db: Optional[PipelineDB] = None):
     """真实浏览器端口：账号标识来自配置；缺失时拒绝。"""
+    from video_processing.interaction import secondary_reply_ops as ops
     from video_processing.interaction.secondary_reply_browser_platform import BrowserSecondaryReplyPlatform
 
     finder = (settings.wechat_reply_author_finder_id or "").strip()
     if not finder:
         raise SystemExit("AUTHOR_FINDER_ID_NOT_CONFIGURED: 请配置 wechat_reply_author_finder_id")
     adapter = SecondaryReplyBrowserAdapter(headless=not getattr(args, "headed", False))
-    title = getattr(args, "video_title", "") or ""
-    evidence_dir = getattr(args, "evidence_dir", None)
+    cli_title = getattr(args, "video_title", "") or ""
+    evidence_dir = getattr(args, "evidence_dir", None) or ops.DEFAULT_EVIDENCE_DIR
+
+    def _resolve_hints(post_id: str):
+        if cli_title:
+            return cli_title, ""
+        if db is not None and post_id:
+            try:
+                post_row = db.get_commentable_wechat_post_by_platform_id(post_id)
+                if isinstance(post_row, dict):
+                    return (
+                        str(post_row.get("video_title") or post_row.get("zh_title") or post_row.get("title") or ""),
+                        str(post_row.get("published_description") or post_row.get("description") or ""),
+                    )
+            except Exception:
+                pass
+        return "", ""
+
     return BrowserSecondaryReplyPlatform(
         adapter,
         account_finder_id=finder,
-        post_hints=lambda _p: (title, ""),
+        post_hints=_resolve_hints,
         evidence_dir=evidence_dir,
+        lookup_max_attempts=2,
+        lookup_retry_delay_seconds=2.0,
     )
 
 
-def ops_main(argv: List[str], platform_factory=None, approval_transport=None) -> int:
-    """M3 单条操作入口：预检/导入/发起审批/审批回调/提交/平台对账/状态/停用/平台验证。所有发送经统一编排。"""
+def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_TRANSPORT) -> int:
+    """M3/M3.5 操作入口：预检/导入/发起审批/审批回调/提交/平台对账/状态/停用/平台验证/定时Tick。所有发送经统一编排。"""
     from video_processing.interaction import secondary_reply_ops as ops
+    from video_processing.interaction.secondary_reply_runner import run_secondary_reply_tick
 
     parser = argparse.ArgumentParser(prog="wechat_secondary_reply")
     parser.add_argument("command", choices=sorted(SUBCOMMANDS))
@@ -302,7 +327,7 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=None) ->
     parser.add_argument("--en")
     parser.add_argument("--style", default="CASUAL_LIGHT", choices=[s.value for s in SecondaryReplyStyle])
     parser.add_argument("--confirm-reply-sha12", help="request-approval：回填预检输出 reply_sha256 前 12 位")
-    parser.add_argument("--callback-data", help="approve-callback：Telegram 回调载荷 sr|<action>|<task_id>|<token>")
+    parser.add_argument("--callback-data", help="approve-callback：Telegram 回调载荷 rep:<action>:<task_id>:<token>")
     parser.add_argument("--approver-user-id", help="approve-callback：触发回调的审批人 Telegram ID")
     parser.add_argument("--approver-chat-id", help="approve-callback：触发回调的私聊会话 ID")
     parser.add_argument("--ttl-minutes", type=int, default=60)
@@ -311,6 +336,10 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=None) ->
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--confirm-readonly-platform-access", action="store_true",
                         help="reconcile-platform：明确确认本次将只读访问真实平台")
+    parser.add_argument("--max-reconcile", type=int, default=2, help="tick：单次最多对账 UNCERTAIN 条数")
+    parser.add_argument("--max-submit", type=int, default=1, help="tick：单次最多发送 APPROVED 条数")
+    parser.add_argument("--scan-posts", type=int, default=None, help="tick：单次最多扫描作品数")
+    parser.add_argument("--max-drafts", type=int, default=None, help="tick：单次最多生成草稿数")
     args = parser.parse_args(argv)
 
     if args.command == "stop":
@@ -354,10 +383,36 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=None) ->
         print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
         return 0 if res.get("ok", True) else 1
 
-    factory = platform_factory or _build_real_platform
+    factory = platform_factory or (lambda a: _build_real_platform(a, db=db))
+    resolved_transport = (
+        build_default_approval_transport(db)
+        if approval_transport is _UNSET_TRANSPORT
+        else approval_transport
+    )
 
     if args.command == "status":
         return show(ops.status_summary(db))
+    if args.command == "tick":
+        if not settings.enable_wechat_secondary_reply:
+            return show({
+                "ok": False,
+                "status": "SKIPPED_FEATURE_DISABLED",
+                "reason": "FLAG_enable_wechat_secondary_reply_OFF",
+            })
+        if not finder:
+            return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
+        return show(run_secondary_reply_tick(
+            db,
+            platform=factory(args),
+            approval_transport=resolved_transport,
+            account_key=account_key,
+            finder_id=finder,
+            evidence_dir=args.evidence_dir or ops.DEFAULT_EVIDENCE_DIR,
+            max_reconcile_per_tick=args.max_reconcile,
+            max_submit_per_tick=args.max_submit,
+            scan_posts_per_tick=args.scan_posts,
+            max_drafts_per_tick=args.max_drafts,
+        ))
     if args.command == "import-draft":
         need("post-id", "comment-id", "comment-text", "zh", "en")
         return show(ops.import_manual_draft(
@@ -413,7 +468,7 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=None) ->
             args.task_id,
             account_key=account_key,
             confirm_reply_sha12=args.confirm_reply_sha12,
-            transport=approval_transport,
+            transport=resolved_transport,
             ttl_minutes=args.ttl_minutes,
         ))
     if args.command == "approve":
@@ -442,7 +497,7 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=None) ->
     return 2
 
 
-def main(argv: Optional[List[str]] = None, platform_factory=None, approval_transport=None):
+def main(argv: Optional[List[str]] = None, platform_factory=None, approval_transport=_UNSET_TRANSPORT):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         if argv and argv[0] in SUBCOMMANDS:

@@ -48,6 +48,7 @@
 | 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
 | 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
 | 1.29.0  | 2026-10-08 | Antigravity                         | 落实 RFC-2026-DEEP-CREATION-001：新增 /masterpiece 远程指令，支持重大新闻高品质二创母带一键调度。 |
+| 1.30.0  | 2026-10-17 | Antigravity                         | M3.5: 新增 handle_secondary_reply_callback (^rep:)，在纯短事务内消费视频号二级回复一次性审批回调。 |
 """
 from __future__ import annotations
 
@@ -427,6 +428,75 @@ async def handle_manual_publish_lease_callback(update: Update, ctx: ContextTypes
         "\n\n当前只证明本地 worker 调度请求已提交；平台受理和公开可见仍需各自账本证据。",
         parse_mode="HTML",
     )
+
+
+async def handle_secondary_reply_callback(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    db_path: str | None = None,
+) -> None:
+    """处理视频号二级回复审批卡片回调（rep:{task_id}:{token}:app|rej）。
+
+    设计边界：
+    - 仅执行纯 SQLite 短事务消费一次性 Token（将任务转为 APPROVED 或 REJECTED）；
+    - 严禁在 Bot 事件循环协程中启动 Playwright 或竞争 WeChatSessionLock；
+    - 真实发评动作由后台有界 Tick 工作进程在合规发送窗口内异步领取并执行。
+    """
+    _ = ctx
+    if not _check_admin(update):
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+
+    from config.settings import settings
+    from video_processing.db.database import PipelineDB
+    from video_processing.interaction import secondary_reply_ops as reply_ops
+
+    callback_data = str(query.data or "").strip()
+    user_id = str(getattr(update.effective_user, "id", "") or "").strip()
+    chat_id = str(getattr(update.effective_chat, "id", "") or "").strip()
+    account_key = str(getattr(settings, "wechat_reply_account_key", "") or "").strip()
+
+    def _consume_sync() -> dict:
+        db = PipelineDB(db_path=db_path) if db_path else PipelineDB()
+        return reply_ops.approve_callback(
+            db,
+            callback_data=callback_data,
+            user_id=user_id,
+            chat_id=chat_id,
+            account_key=account_key,
+        )
+
+    res = await asyncio.to_thread(_consume_sync)
+    parts = callback_data.split(":")
+    task_id_label = html.escape(parts[1]) if len(parts) >= 2 else "?"
+
+    if not res.get("ok"):
+        reason = html.escape(str(res.get("reason") or "UNKNOWN_ERROR"))
+        await query.edit_message_text(
+            f"❌ <b>二级回复审批未生效</b>（任务 <code>#{task_id_label}</code>）\n"
+            f"原因：<code>{reason}</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    result_status = str(res.get("result") or "")
+    if result_status == "APPROVED":
+        await query.edit_message_text(
+            f"✅ <b>二级回复已批准</b>（任务 <code>#{task_id_label}</code>）\n"
+            f"审批人：<code>{html.escape(user_id)}</code>\n"
+            "任务已进入 APPROVED 队列，将由后台 Tick 工作进程在合规发送窗口（08:30–23:00）内自动投递并独立回读。",
+            parse_mode="HTML",
+        )
+    else:
+        await query.edit_message_text(
+            f"🚫 <b>二级回复已拒绝</b>（任务 <code>#{task_id_label}</code>）\n"
+            f"审批人：<code>{html.escape(user_id)}</code>",
+            parse_mode="HTML",
+        )
 
 
 def _highlight_source_text(source: dict) -> str:
@@ -1853,6 +1923,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))
     app.add_handler(CallbackQueryHandler(handle_english_world_callback, pattern=r"^ew:"))
     app.add_handler(CallbackQueryHandler(handle_manual_publish_lease_callback, pattern=r"^lease:"))
+    app.add_handler(CallbackQueryHandler(handle_secondary_reply_callback, pattern=r"^rep:"))
 
     # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))

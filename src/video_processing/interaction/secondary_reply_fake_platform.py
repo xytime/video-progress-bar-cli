@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-17 | Antigravity | 新增 comment_list_payloads 与 discover_comments 模拟支持，用于 M3.5 Tick 扫描测试 |
 | 1.1.0 | 2026-10-17 | Antigravity | 从契约层导入 SecondaryReplySubmissionGuard 并实现 make_guard 端口方法 |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：可注入的离线平台替身（多种故障模式） |
 """
@@ -45,6 +46,7 @@ class FakeSecondaryReplyPlatform:
     mode: str = "success"
     # 服务器持久化数据: (post_id, root_id) -> [{"commentId","authorId","content"}]
     server_replies: Dict[tuple, List[Dict[str, str]]] = field(default_factory=dict)
+    comment_list_payloads: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     outbound_requests: List[Dict[str, Any]] = field(default_factory=list)  # 真正放行出站的请求
     _seq: int = 0
 
@@ -124,6 +126,24 @@ class FakeSecondaryReplyPlatform:
             if r["authorId"] == self.account_finder_id and r["content"] == text:
                 return LookupResult(True, r["commentId"], complete=True)
         return LookupResult(False, "", complete=False)
+
+    def discover_comments(
+        self,
+        *,
+        post_id: str,
+        video_title: str = "",
+        published_description: str = "",
+    ) -> Dict[str, Any]:
+        if self.mode == "discover-error":
+            return {"ok": False, "reason": "SIMULATED_DISCOVER_ERROR", "payload": None}
+        payload = self.comment_list_payloads.get(post_id)
+        if payload is not None:
+            return {"ok": True, "reason": None, "payload": payload}
+        return {
+            "ok": True,
+            "reason": None,
+            "payload": {"errCode": 0, "data": {"comment": [], "downContinueFlag": 0, "lastBuff": ""}},
+        }
 
     # ---- 内部 ----
     def _next_id(self) -> str:

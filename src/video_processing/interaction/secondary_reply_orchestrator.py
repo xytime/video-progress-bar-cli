@@ -186,7 +186,8 @@ class SecondaryReplyOrchestrator:
             return SubmitOutcome("NOT_CLAIMABLE", "任务不存在", task_id)
         if (existing.get("account_key") or "") != self.account_key:
             return SubmitOutcome("REJECTED_ACCOUNT_MISMATCH", "ACCOUNT_KEY_MISMATCH（未改动任何状态）", task_id)
-        claimed = self.db.claim_approved_reply_task(task_id=task_id)
+        now_dt = self.clock() if self.clock else None
+        claimed = self.db.claim_approved_reply_task(task_id=task_id, now_utc=now_dt)
         if not claimed:
             return SubmitOutcome("NOT_CLAIMABLE", "任务不是已批准状态或租约仍有效", task_id)
         lease = claimed["lease_token"]
@@ -327,6 +328,7 @@ class SecondaryReplyOrchestrator:
             return SubmitOutcome("NOT_RECONCILABLE", "", task_id)
         if (task.get("account_key") or "") != self.account_key:
             return SubmitOutcome("REJECTED_ACCOUNT_MISMATCH", "ACCOUNT_KEY_MISMATCH（未改动任何状态）", task_id)
+        now_dt = self.clock() if self.clock else None
         look = self.platform.lookup_reply(
             post_id=task["platform_post_id"], root_id=task["comment_id"], text=task["formatted_reply"]
         )
@@ -340,12 +342,13 @@ class SecondaryReplyOrchestrator:
                 return SubmitOutcome("UNCERTAIN", "EVIDENCE_NOT_SAVED", task_id)
             if not self.db.reconcile_secondary_reply_uncertain(
                 task_id, verified=True, platform_reply_comment_id=look.reply_id, outcome="FOUND",
-                evidence_path=evidence_ref, account_key=self.account_key,
+                evidence_path=evidence_ref, account_key=self.account_key, now_utc=now_dt,
             ):
                 return SubmitOutcome("UNCERTAIN", "RECONCILE_PERSIST_REJECTED", task_id)
             return SubmitOutcome("VERIFIED", look.reply_id, task_id, {"evidence": evidence_ref})
         self.db.reconcile_secondary_reply_uncertain(
             task_id, verified=False, outcome="NOT_OBSERVED_INCOMPLETE",
             reason="未观察到回复，无法证明未发出，保持 UNCERTAIN", account_key=self.account_key,
+            now_utc=now_dt,
         )
         return SubmitOutcome("UNCERTAIN", "NOT_OBSERVED_INCOMPLETE", task_id)

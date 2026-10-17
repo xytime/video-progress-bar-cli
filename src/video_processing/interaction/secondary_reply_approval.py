@@ -10,6 +10,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-17 | Antigravity | M3.5: 新增真实 TelegramApprovalTransport（对接 telegram_delivery.send_text 回执账本）与 build_default_approval_transport，支持持久化 approval_message_id |
 | 1.1.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 db.get_audience_comment、强制要求可信审批传输通道并拒绝 local_operator/local-cli 伪身份 (R3/R4) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复 Telegram 审批发送、防重放消费、HTML 转义与 64B callback_data 防护 |
 """
@@ -20,10 +21,11 @@ import datetime
 import html
 import logging
 import secrets
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config.settings import settings
 from video_processing.db.database import PipelineDB
+from video_processing.telegram_delivery import send_text as send_telegram_text
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,8 @@ class ApprovalTransportError(Exception):
 
 class FakeApprovalTransport:
     """用于测试与离线演示的 Fake Telegram 传输客户端。"""
+
+    allow_fixture_drafts = True
 
     def __init__(self) -> None:
         self.sent_messages: List[Dict[str, Any]] = []
@@ -56,6 +60,72 @@ class FakeApprovalTransport:
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         })
         return True
+
+
+class TelegramApprovalTransport:
+    """真实 Telegram Bot API 审批卡片传输通道（对接 telegram_delivery.send_text 账本）。
+
+    严格执行失败关闭（Fail-Closed）：
+    - 拒绝发送 rule_secondary_provider 等离线夹具草稿（allow_fixture_drafts = False）；
+    - 拒绝未配置 token 或使用 local-cli: 伪会话前缀；
+    - 仅当 Telegram API 返回 ok=True 且携带非空 message_id（state == 'ACCEPTED'）时视为派发成功。
+    """
+
+    allow_fixture_drafts = False
+
+    def __init__(
+        self,
+        *,
+        db: Optional[PipelineDB] = None,
+        token: Optional[str] = None,
+        send_fn: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        self._db = db
+        self._token = token
+        self._send_fn = send_fn or send_telegram_text
+
+    def send_approval_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        inline_keyboard: List[List[Dict[str, str]]],
+        task_id: Optional[int] = None,
+    ) -> str:
+        clean_chat = str(chat_id or "").strip()
+        if not clean_chat or any(clean_chat.lower().startswith(p) for p in DISALLOWED_LOCAL_CHAT_PREFIXES):
+            raise ApprovalTransportError(f"非法的审批私聊目标 chat_id: {clean_chat}")
+        bot_token = str(self._token if self._token is not None else (settings.telegram_bot_token or "")).strip()
+        if not bot_token:
+            raise ApprovalTransportError("TELEGRAM_BOT_TOKEN_NOT_CONFIGURED")
+
+        result = self._send_fn(
+            text,
+            parse_mode="HTML",
+            chat_id=clean_chat,
+            token=bot_token,
+            reply_markup={"inline_keyboard": inline_keyboard},
+            workflow="wechat_secondary_reply_approval",
+            step="approval_card",
+            ref_key=f"secondary_reply_task:{task_id or 0}",
+            db=self._db,
+        )
+        state = getattr(result, "state", None)
+        message_id = str(getattr(result, "message_id", "") or "").strip()
+        error = getattr(result, "error", None)
+        if state != "ACCEPTED" or not message_id:
+            raise ApprovalTransportError(
+                f"Telegram 审批卡片未获平台受理: state={state}, error={error or 'missing_message_id'}"
+            )
+        return message_id
+
+
+def build_default_approval_transport(db: Optional[PipelineDB] = None) -> Optional[TelegramApprovalTransport]:
+    """当已配置真实 telegram_bot_token 时构造默认 TelegramApprovalTransport，否则返回 None。"""
+    token = (settings.telegram_bot_token or "").strip()
+    if not token:
+        return None
+    return TelegramApprovalTransport(db=db, token=token)
 
 
 def format_approval_html_and_keyboard(
@@ -133,6 +203,7 @@ def dispatch_approval_request(
     admin_ids_override: Optional[str] = None,
     expected_account_key: Optional[str] = None,
     ttl_minutes: Optional[int] = None,
+    now_utc: Optional[datetime.datetime] = None,
 ) -> Tuple[bool, str]:
     """向指定审批人派发二级回复人工审批请求。
 
@@ -186,7 +257,10 @@ def dispatch_approval_request(
         if ttl_minutes is not None
         else datetime.timedelta(hours=expiry_hours)
     )
-    expires_dt = datetime.datetime.now(datetime.timezone.utc) + ttl_delta
+    base_now = now_utc or datetime.datetime.now(datetime.timezone.utc)
+    if base_now.tzinfo is None:
+        base_now = base_now.replace(tzinfo=datetime.timezone.utc)
+    expires_dt = base_now + ttl_delta
     expires_iso = expires_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     # 2. 服务端绑定 Token
@@ -216,11 +290,23 @@ def dispatch_approval_request(
 
     # 4. 发送通知
     try:
-        transport.send_approval_message(
-            chat_id=configured_chat,
-            text=msg_html,
-            inline_keyboard=keyboard,
-        )
+        try:
+            send_res = transport.send_approval_message(
+                chat_id=configured_chat,
+                text=msg_html,
+                inline_keyboard=keyboard,
+                task_id=task_id,
+            )
+        except TypeError:
+            send_res = transport.send_approval_message(
+                chat_id=configured_chat,
+                text=msg_html,
+                inline_keyboard=keyboard,
+            )
+        if not send_res:
+            return False, "TRANSPORT_REJECTED"
+        if isinstance(send_res, str) and send_res.strip():
+            db.record_reply_task_approval_message_id(task_id, send_res.strip())
         return True, "DISPATCHED"
     except Exception as exc:
         logger.error("[SecondaryReplyApproval] 审批消息推送异常: %s", exc)

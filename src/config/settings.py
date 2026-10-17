@@ -250,6 +250,12 @@ class Settings(BaseSettings):
     wechat_reply_min_interval_seconds: int = Field(default=15, ge=5, le=300)
     wechat_reply_window_start_shanghai: str = "08:30"
     wechat_reply_window_end_shanghai: str = "23:00"
+    wechat_reply_approval_mode: Literal["manual", "hybrid_auto"] = "manual"
+    wechat_reply_scan_posts_per_tick: int = Field(default=2, ge=1, le=10)
+    wechat_reply_max_drafts_per_tick: int = Field(default=3, ge=1, le=20)
+    wechat_reply_max_reconcile_attempts: int = Field(default=4, ge=1, le=10)
+    wechat_reply_agy_model: str = "gemini-3.7-flash-high"
+    wechat_reply_agy_timeout_seconds: int = Field(default=60, ge=10, le=180)
 
     # 常规视频号发布默认尝试挂载图书商品；失败且清空就绪时允许无商品继续。
     enable_wechat_product_link: bool = True

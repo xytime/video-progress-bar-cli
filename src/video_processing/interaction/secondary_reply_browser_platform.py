@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments 端口方法与 lookup_reply 可选短退避重试，吸收平台异步索引延迟 (CR-01 / M3.5) |
 | 1.2.0 | 2026-10-17 | Antigravity | 移除对适配器私有方法 (_interact_with_page / _new_evidence_dir) 的直接调用，改为使用公开接口并从契约层导入 SecondaryReplySubmissionGuard |
 | 1.1.0 | 2026-10-17 | Codex | 新增 calibrate_controls 与 calibrate_and_verify 只读控件校准及平台状态验证 (R1/R2) |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：浏览器适配器的平台端口封装（只读复核/唯一发送/全新会话回读） |
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Dict, Optional, Tuple
 
@@ -47,6 +49,8 @@ class BrowserSecondaryReplyPlatform:
         session_factory: Optional[SessionFactory] = None,
         trusted_origins: Tuple[str, ...] = (),
         evidence_dir: Optional[Path] = None,
+        lookup_max_attempts: int = 1,
+        lookup_retry_delay_seconds: float = 0.0,
     ) -> None:
         if not account_finder_id:
             raise ValueError("account_finder_id 不能为空（必须是已验证的作者原生账号标识）")
@@ -56,6 +60,8 @@ class BrowserSecondaryReplyPlatform:
         self._session = session_factory or adapter.open_session
         self._trusted_origins = trusted_origins
         self._evidence_dir = evidence_dir or Path(tempfile.gettempdir()) / "secondary_reply_evidence"
+        self._lookup_max_attempts = max(1, int(lookup_max_attempts))
+        self._lookup_retry_delay_seconds = max(0.0, float(lookup_retry_delay_seconds))
 
     def make_guard(self, post_id: str, root_id: str, text: str) -> SecondaryReplySubmissionGuard:
         return SecondaryReplySubmissionGuard(
@@ -111,31 +117,59 @@ class BrowserSecondaryReplyPlatform:
 
     def lookup_reply(self, *, post_id: str, root_id: str, text: str) -> LookupResult:
         title, desc = self._hints(post_id)
-        shot = ""
-        shot_ok = True
+        for attempt in range(self._lookup_max_attempts):
+            shot = ""
+            shot_ok = True
+            state = "UNKNOWN"
+            reply_id = ""
+            try:
+                with self._session(None) as page:
+                    state, reply_id = self.adapter.find_author_reply(
+                        page, platform_post_id=post_id, root_comment_id=root_id, reply_content=text,
+                        author_id=self.account_finder_id, video_title=title, published_description=desc,
+                    )
+                    if state == "FOUND" and reply_id:
+                        try:
+                            out_dir = self.adapter.create_evidence_dir(self._evidence_dir)
+                            target = out_dir / f"readback_{reply_id.replace('/', '_')}.png"
+                            page.screenshot(path=str(target))
+                            if not target.exists():
+                                raise OSError("screenshot file missing")
+                            shot = str(target)
+                        except Exception as exc:
+                            logger.warning("回读证据截图保存失败: %s", exc)
+                            shot_ok = False
+            except Exception as exc:
+                logger.warning("回读会话异常，按未观察到处理: %s", exc)
+                return LookupResult(found=False)
+            if state == "FOUND" and reply_id:
+                return LookupResult(found=True, reply_id=reply_id, complete=True, evidence_path=shot, evidence_ok=shot_ok)
+            if attempt + 1 < self._lookup_max_attempts and self._lookup_retry_delay_seconds > 0:
+                time.sleep(self._lookup_retry_delay_seconds)
+        return LookupResult(found=False)
+
+    def discover_comments(
+        self,
+        *,
+        post_id: str,
+        video_title: str = "",
+        published_description: str = "",
+    ) -> Dict[str, Any]:
+        """在只读会话锁与路由强拦截下，绑定目标作品卡片并返回捕获到的 comment_list 原始载荷。"""
+        hint_title, hint_desc = self._hints(post_id) if self._hints else ("", "")
+        title = video_title or hint_title
+        desc = published_description or hint_desc
         try:
             with self._session(None) as page:
-                state, reply_id = self.adapter.find_author_reply(
-                    page, platform_post_id=post_id, root_comment_id=root_id, reply_content=text,
-                    author_id=self.account_finder_id, video_title=title, published_description=desc,
+                return self.adapter.discover_comments_on_page(
+                    page,
+                    platform_post_id=post_id,
+                    video_title=title,
+                    published_description=desc,
                 )
-                if state == "FOUND" and reply_id:
-                    try:
-                        out_dir = self.adapter.create_evidence_dir(self._evidence_dir)
-                        target = out_dir / f"readback_{reply_id.replace('/', '_')}.png"
-                        page.screenshot(path=str(target))
-                        if not target.exists():
-                            raise OSError("screenshot file missing")
-                        shot = str(target)
-                    except Exception as exc:
-                        logger.warning("回读证据截图保存失败: %s", exc)
-                        shot_ok = False
         except Exception as exc:
-            logger.warning("回读会话异常，按未观察到处理: %s", exc)
-            return LookupResult(found=False)
-        if state == "FOUND" and reply_id:
-            return LookupResult(found=True, reply_id=reply_id, complete=True, evidence_path=shot, evidence_ok=shot_ok)
-        return LookupResult(found=False)
+            logger.warning("[BrowserSecondaryReplyPlatform] 只读评论扫描异常: %s", exc)
+            return {"ok": False, "reason": f"DISCOVER_COMMENTS_EXCEPTION: {exc}", "payload": None}
 
     def calibrate_controls(
         self,
@@ -190,6 +224,7 @@ class BrowserSecondaryReplyPlatform:
                 "target": {"post_id": post_id, "comment_id": root_id, "fresh": False},
                 "controls_calibration": {},
             }
+
 
 
 
