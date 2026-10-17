@@ -4,9 +4,11 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 固化 v4 视觉，三词分页和每页 3 秒的局部翻页 |
+| 1.0.1 | 2026-10-17 | Codex | 长例句显示含完整生词的原文片段，省略明确可见，保留既有版式 |
 """
 from pathlib import Path
 import math
+import re
 import subprocess
 
 from PIL import Image, ImageDraw, ImageFont
@@ -57,6 +59,57 @@ def text_fit(draw, xy, text, role, width, size, minimum, fill, max_lines=1):
         draw.text((xy[0], xy[1] + index * (face.size + 3)), line, font=face, fill=fill)
 
 
+def fit_example(text, word):
+    """短句原样显示；长句只取含完整目标词的连续原文，用省略号标明两端省略。"""
+    try:
+        face, lines = fit(text, 'ipa', 774, 32, 28)
+        return face, lines, text
+    except ValueError:
+        try:
+            face, lines = fit(text, 'ipa', 774, 23, 20, max_lines=2)
+            return face, lines, text
+        except ValueError:
+            pass
+    match = re.search(r'(?<![A-Za-z])' + re.escape(word) + r'(?![A-Za-z])', text, re.I)
+    if match is None:
+        raise ValueError(f'生词卡例句不含完整目标词: {word}')
+    tokens = list(re.finditer(r'\S+', text))
+    left = next(i for i, token in enumerate(tokens) if token.end() > match.start())
+    right = next(i for i, token in enumerate(tokens) if token.end() >= match.end())
+
+    def window(first, last):
+        start, end = tokens[first].start(), tokens[last].end()
+        return ('… ' if start else '') + text[start:end] + (' …' if end < len(text) else '')
+
+    # 目标词或词组本身也必须完整放下；不裁词、不缩到最低字号以下。
+    fit(window(left, right), 'ipa', 774, 20, 20, max_lines=2)
+    while True:
+        expanded = False
+        candidates = ((left - 1, right), (left, right + 1))
+        if match.start() - tokens[left].start() > tokens[right].end() - match.end():
+            candidates = candidates[::-1]
+        for first, last in candidates:
+            if first < 0 or last >= len(tokens):
+                continue
+            try:
+                fit(window(first, last), 'ipa', 774, 20, 20, max_lines=2)
+            except ValueError:
+                continue
+            left, right = first, last
+            expanded = True
+            break
+        if not expanded:
+            break
+    excerpt = window(left, right)
+    face, lines = fit(excerpt, 'ipa', 774, 23, 20, max_lines=2)
+    return face, lines, excerpt
+
+
+def prepare_examples(items):
+    """为回执保存实际显示片段；context_sentence 与输入词条均保留原值。"""
+    return [dict(item, excerpt=fit_example(item['excerpt'], item['word'])[2]) for item in items]
+
+
 def render_cards(items, title):
     cards = []
     pages = math.ceil(len(items) / PAGE_SIZE)
@@ -84,11 +137,10 @@ def render_cards(items, title):
             text_fit(d, (132+meaning_face.getlength(lines[0]), y+161), item['pos'],
                      'ipa', 100, 26, 20, MUTED)
             d.line((112, y+215, 112, y+239), fill=TEAL, width=3)
-            try:
-                fit(item['excerpt'], 'ipa', 774, 32, 28)
-                text_fit(d, (130, y+207), item['excerpt'], 'ipa', 774, 32, 28, MUTED)
-            except ValueError:
-                text_fit(d, (130, y+203), item['excerpt'], 'ipa', 774, 23, 20, MUTED, max_lines=2)
+            face, lines, _ = fit_example(item['excerpt'], item['word'])
+            top = y + (207 if face.size >= 28 else 203)
+            for index, line in enumerate(lines):
+                d.text((130, top + index * (face.size + 3)), line, font=face, fill=MUTED)
         d.rounded_rectangle((80, 1393, 936, 1508), radius=16, fill='#DFCA9F')
         d.line((508, 1416, 508, 1485), fill='#A08D69', width=2)
         for x, heading, caption in [(125, '单击暂停', '可截屏复习'), (558, '双击收藏', '随时回看')]:

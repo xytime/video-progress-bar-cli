@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 接入已确认的三词分页、3 秒翻页和字幕绑定缓存 |
+| 1.0.1 | 2026-10-17 | Codex | 回执同时保存完整例句和实际显示的长句片段，继续复用既有有效成片 |
 """
 from __future__ import annotations
 
@@ -163,7 +164,8 @@ def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_emp
                                                   recovery_checked=True, items=[]))
         return source
     enrich_items(items, subtitle)
-    from .vocabulary_outro_layout import render_cards, render_outro
+    from .vocabulary_outro_layout import prepare_examples, render_cards, render_outro
+    items = prepare_examples(items)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.vocab-', dir=output.parent) as temp:
         temp = Path(temp)
@@ -194,6 +196,7 @@ def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_emp
         if fingerprint(source, subtitle, title) != inputs:
             raise ValueError('渲染中源视频或字幕变化')
         receipt = dict(inputs=inputs, status='rendered', items=items, pages=len(cards),
+                       example_policy='source-window-v1',
                        duration=actual, output_sha256=sha256(pending), recovery_checked=recovered)
         for number, card in enumerate(cards, 1):
             card.save(temp / f'page-{number}.png')
