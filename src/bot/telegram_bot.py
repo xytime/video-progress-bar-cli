@@ -1186,7 +1186,7 @@ async def handle_delivery_recovery_callback(update: Update, ctx: ContextTypes.DE
         return
     query = update.callback_query
     await query.answer()
-    match = re.fullmatch(r'recover:(view|ask|confirm|retry|hold):([a-f0-9]{32})', str(query.data or ''))
+    match = re.fullmatch(r'recover:(view|ask|confirm|retry|hold|resume):([a-f0-9]{32})', str(query.data or ''))
     if not match:
         return
     action, rid = match.groups()

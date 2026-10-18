@@ -12,7 +12,8 @@ from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
 from video_processing.db.database import PipelineDB
 from video_processing.delivery_recovery import DeliveryRecoveryService, file_fingerprint, notice
 from video_processing.telegram_delivery import send_text
-from video_processing.utils.retry_policy import backoff_seconds, failure_kind
+from video_processing.utils.retry_policy import backoff_seconds
+from video_processing.utils.production_recovery import recovery_arguments, read_outcome
 from video_processing.utils.subprocess_env import build_subprocess_env
 
 
@@ -40,22 +41,24 @@ def execute(db):
             raise ValueError("原失败记录已变化，需人工核验")
         if json.loads(Path(item["path"]).read_text()).get("kind") != "failure":
             raise ValueError("已有交付产物，禁止重做")
+        context = payload["production_context"]
+        if file_fingerprint(Path(context["path"])) != context:
+            raise ValueError("原制作配置已变化，需重新核验")
+        arguments = recovery_arguments(Path(context["path"]), ROOT)
         log_path = ROOT / "output" / f"recovery_{rid}_{row['attempts']}.log"
+        status_path = log_path.with_suffix(".status.txt")
         with log_path.open("w") as log:
             result = run_admitted([
                 str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/run_english_world_daily.py"),
+                *arguments,
                 "--max-attempts", "1", "--recovery-parent-id", rid,
+                "--recovery-status-path", str(status_path),
             ], cwd=ROOT, env=build_subprocess_env(), stdout=log, stderr=log,
                 timeout=3 * 60 * 60, check=False)
-        if result.returncode == 0:
-            message = "本轮协调器结束；制作、Telegram 与平台状态请查看本轮阶段回执，退出码不代表发布成功"
-        else:
-            detail = log_path.read_text(errors="replace")[-12000:]
-            category = failure_kind(detail)
-            message = f"恢复执行退出 {result.returncode}；分类 {category}；日志 {log_path}"
-            if category == "TRANSIENT":
-                # 自动入队已等待第一个区间；执行失败后的下一间隔继续翻倍。
-                delay = backoff_seconds(row["attempts"] + 1)
+        message, retryable = read_outcome(status_path, ROOT, result.returncode)
+        if retryable:
+            # 自动入队已等待第一个区间；执行失败后的下一间隔继续翻倍。
+            delay = backoff_seconds(row["attempts"] + 1)
     except Exception as exc:
         message = f"执行中断，需核验已有阶段记录：{type(exc).__name__}: {exc}"
     db.finish_delivery_recovery(rid, result=message, retry_delay=delay)

@@ -431,7 +431,7 @@ def main() -> int:
         elif args.failure_request:
             recovery = recovery_service.register_production(
                 args.failure_request, args.failure, allow_retry=args.allow_production_retry)
-            if (args.allow_production_retry and recovery['failure_kind'] == 'TRANSIENT'
+            if (json.loads(recovery['payload_json']).get('allow_retry') and recovery['failure_kind'] == 'TRANSIENT'
                     and recovery['state'] == 'WAITING'):
                 recovery = recovery_db.queue_delivery_recovery(
                     recovery['id'], actor='AUTO_TRANSIENT', action='retry', delay_seconds=backoff_seconds(1))
@@ -441,12 +441,10 @@ def main() -> int:
             text=(
                 "⚠️ <b>英语世界短视频｜今日未交付</b>\n"
                 f"任务：{safe_title}\n"
-                f"原因：{html.escape(args.failure.strip())}\n"
-                "制作、通知与平台状态以对应阶段账本为准。\n"
-                + (f"恢复编号：<code>{recovery['id'][:8]}</code>；分类：{recovery['failure_kind']}；"
-                   f"状态：{recovery['state']}；下次 UTC {recovery['next_attempt_at'] or '等待操作'}\n"
+                + (html.escape(recovery_service.view(recovery['id'])['text']) + "\n"
                    "可点下方按钮，或发送 /recoveries 找回任务。" if recovery else
-                   "发送 /recoveries 查看恢复任务。")
+                   f"原因：{html.escape(args.failure.strip())}\n发送 /recoveries 查看恢复任务。")
+                + "\n制作、通知与平台状态以对应阶段账本为准。"
             ),
         )
         _write_delivery_receipt(

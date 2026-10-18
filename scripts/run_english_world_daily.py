@@ -218,6 +218,8 @@ class RuntimePaths:
     agy_bin: Path = DEFAULT_AGY_BIN
     agy_model: str = "gemini-3.8-flash-high"
     recovery_parent_id: str | None = None
+    codex_model: str | None = None
+    recovery_status_path: Path | None = None
 
 
 class CoordinatorInterrupted(RuntimeError):
@@ -982,7 +984,8 @@ def _run_coordinator(
     prompt = prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path))
     prompt += _product_production_prompt(product_intent=product_intent, product_id=product_id,
                                         product_title=product_title, shadow_only=shadow_only)
-    codex_model = (environment or os.environ).get("ENGLISH_WORLD_CODEX_MODEL", "").strip()
+    codex_model = (paths.codex_model if paths.codex_model is not None
+                   else (environment or os.environ).get("ENGLISH_WORLD_CODEX_MODEL", "")).strip()
     if settings.enable_english_world_language_qa:
         prompt += ("\n\n新英语世界语言协议已启用。本段覆盖上文旧8条密度及仅离线释义规则："
                    "先完整阅读 docs/english-world-language-generation.md 并执行 source/prepare/review。"
@@ -1127,12 +1130,17 @@ def run(
     paths.log_dir.mkdir(parents=True, exist_ok=True)
     paths.lock_dir.parent.mkdir(parents=True, exist_ok=True)
     response_path = paths.log_dir / "last_codex_response.md"
-    status_path = paths.log_dir / "last_run_status.txt"
+    status_path = paths.recovery_status_path or paths.log_dir / "last_run_status.txt"
     run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S_%f')}.log"
     delivery_receipt_path = run_log.with_suffix(".delivery.json")
     delivery_request_path = run_log.with_suffix(
         ".shadow-request.json" if shadow_only else ".delivery-request.json"
     )
+    from video_processing.utils.production_recovery import write_context
+    write_context(delivery_request_path, paths, retry_delay_seconds=retry_delay_seconds,
+                  wait_for_lock_seconds=wait_for_lock_seconds, excluded_youtube_ids=excluded_youtube_ids,
+                  recoverable=not (job_id or resume_delivery_request or forced_youtube_id or shadow_only or force)
+                  and source_access_preflight)
     if not _acquire_lock_with_wait(paths.lock_dir, wait_for_lock_seconds):
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, "skipped: daily English World run is already active")
@@ -1569,6 +1577,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--recovery-parent-id", help="具名恢复队列内部关联 ID，防止递归创建恢复任务")
+    parser.add_argument("--recovery-status-path", type=Path, help="具名恢复本轮独立结果记录，避免读取共享状态")
     parser.add_argument("--retry-delay-seconds", type=float, default=15)
     parser.add_argument(
         "--skip-source-access-preflight",
@@ -1629,6 +1638,8 @@ def main(argv: list[str] | None = None) -> int:
         agy_bin=args.agy_bin,
         agy_model=args.agy_model,
         recovery_parent_id=args.recovery_parent_id,
+        codex_model=args.codex_model,
+        recovery_status_path=args.recovery_status_path,
     )
     return run(
         paths,

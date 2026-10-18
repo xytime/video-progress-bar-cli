@@ -50,30 +50,40 @@ class DeliveryRecoveryDAL:
                   (recovery_id, action, actor, json.dumps(payload, ensure_ascii=False), stamp()))
 
     def queue_delivery_recovery(self, recovery_id, *, actor, action, delay_seconds=0):
-        """一次性领取操作授权；等待期间重复点击不得重置退避或计数。"""
+        """暂停/恢复原子迁移；保留原到期时间和次数，运行中只暂停后续重试。"""
         with self.get_connection() as c:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute("SELECT * FROM delivery_recoveries WHERE id=?", (recovery_id,)).fetchone()
-            if not row or row['state'] != 'WAITING' or row['expires_at'] <= stamp():
+            if not row or row['expires_at'] <= stamp():
                 raise ValueError("按钮已消费、任务已更新或已过期，请刷新 /recoveries")
-            if not actor or action not in {'retry', 'verify', 'hold'}:
+            if not actor or action not in {'retry', 'resume', 'hold'}:
                 raise ValueError("恢复动作无效")
-            if action == 'retry' and row['kind'] != 'EW_PRODUCTION':
-                raise ValueError("此任务不能自动重传")
-            state = 'HELD' if action == 'hold' else 'QUEUED'
+            due = row['next_attempt_at']
+            if action == 'hold' and row['state'] in {'WAITING', 'QUEUED', 'RUNNING'}:
+                state = 'PAUSE_REQUESTED' if row['state'] == 'RUNNING' else 'HELD'
+            elif (action == 'retry' and row['kind'] == 'EW_PRODUCTION'
+                  and row['state'] in {'WAITING', 'HELD'} and row['attempts'] < 3
+                  and json.loads(row['payload_json']).get('allow_retry')):
+                state = 'QUEUED'
+                # 保留暂停前的等待时间，反复点击不能缩短退避。
+                due = due or stamp(datetime.now(timezone.utc) + timedelta(seconds=delay_seconds))
+            elif action == 'resume' and row['kind'] == 'WECHAT_UNKNOWN' and row['state'] == 'HELD':
+                state, due = 'WAITING', None
+            else:
+                raise ValueError("任务已更新或此状态不能执行该操作，请刷新 /recoveries")
             self._recovery_event(c, recovery_id, action, actor, {'previous_state': row['state']})
             c.execute("UPDATE delivery_recoveries SET state=?,actor=?,next_attempt_at=?,updated_at=? WHERE id=?",
-                      (state, actor, stamp(datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)), stamp(), recovery_id))
+                      (state, actor, due, stamp(), recovery_id))
             return dict(c.execute("SELECT * FROM delivery_recoveries WHERE id=?", (recovery_id,)).fetchone())
 
     def claim_delivery_recovery(self):
         with self.get_connection() as c:
             c.execute("BEGIN IMMEDIATE")
-            c.execute("UPDATE delivery_recoveries SET state='EXPIRED',updated_at=? WHERE state IN ('WAITING','QUEUED') AND expires_at<=?", (stamp(), stamp()))
+            c.execute("UPDATE delivery_recoveries SET state='EXPIRED',updated_at=? WHERE state IN ('WAITING','QUEUED','HELD') AND expires_at<=?", (stamp(), stamp()))
             # 中途退出的动作绝不自动重放；保留结果核验入口。
             c.execute("""UPDATE delivery_recoveries SET state='NEEDS_REVIEW',
                 result='执行者中断或超时；需核验已有阶段记录，未自动重放',updated_at=?
-                WHERE state='RUNNING' AND updated_at < datetime('now','-4 hours')""", (stamp(),))
+                WHERE state IN ('RUNNING','PAUSE_REQUESTED') AND updated_at < datetime('now','-4 hours')""", (stamp(),))
             row = c.execute("""SELECT * FROM delivery_recoveries WHERE state='QUEUED'
                 AND next_attempt_at<=? AND expires_at>? ORDER BY next_attempt_at LIMIT 1""", (stamp(), stamp())).fetchone()
             if not row:
@@ -86,17 +96,17 @@ class DeliveryRecoveryDAL:
         with self.get_connection() as c:
             c.execute("""UPDATE delivery_recoveries SET state='NEEDS_REVIEW',
                 result='恢复执行者中断，需核验已有阶段记录；未自动重放',updated_at=?
-                WHERE state='RUNNING' AND updated_at < datetime('now','-4 hours')""", (stamp(),))
+                WHERE state IN ('RUNNING','PAUSE_REQUESTED') AND updated_at < datetime('now','-4 hours')""", (stamp(),))
             return bool(c.execute("SELECT 1 FROM delivery_recoveries WHERE state='QUEUED' AND next_attempt_at<=? AND expires_at>? LIMIT 1", (stamp(), stamp())).fetchone())
 
     def finish_delivery_recovery(self, recovery_id, *, result, retry_delay=None):
         with self.get_connection() as c:
             c.execute("BEGIN IMMEDIATE")
-            row = c.execute("SELECT * FROM delivery_recoveries WHERE id=? AND state='RUNNING'", (recovery_id,)).fetchone()
+            row = c.execute("SELECT * FROM delivery_recoveries WHERE id=? AND state IN ('RUNNING','PAUSE_REQUESTED')", (recovery_id,)).fetchone()
             if not row:
                 return None
             delay = retry_delay if row['attempts'] < 3 else None
-            state = 'QUEUED' if delay is not None else 'DONE'
+            state = ('HELD' if row['state'] == 'PAUSE_REQUESTED' else 'QUEUED') if delay is not None else 'DONE'
             due = stamp(datetime.now(timezone.utc) + timedelta(seconds=delay)) if delay is not None else None
             self._recovery_event(c, recovery_id, 'result', row['actor'], {'result': result, 'next_attempt_at': due})
             c.execute("UPDATE delivery_recoveries SET state=?,result=?,next_attempt_at=?,updated_at=? WHERE id=?",

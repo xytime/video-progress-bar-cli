@@ -4,9 +4,12 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .utils.retry_policy import failure_kind
+from .utils.production_recovery import context_path, recovery_arguments
 
 BACKEND_URL = "https://channels.weixin.qq.com/platform/post/list"
 
@@ -30,7 +33,16 @@ class DeliveryRecoveryService:
         request = json.loads(path.read_text())
         if request.get("kind") != "failure":
             raise ValueError("已有成片交付请求不能重做生产")
-        payload = {"request": file_fingerprint(path), "allow_retry": bool(allow_retry)}
+        payload = {"request": file_fingerprint(path), "allow_retry": False}
+        if allow_retry:
+            try:
+                context = context_path(path)
+                if not context.resolve().is_relative_to(self.root / "output/english_world_daily"):
+                    raise ValueError("原制作配置路径无效")
+                recovery_arguments(context, self.root)
+                payload.update(allow_retry=True, production_context=file_fingerprint(context))
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                payload["retry_blocked_reason"] = f"缺少可核验的原制作配置，不能恢复此旧任务（{type(exc).__name__}）"
         return self.db.create_delivery_recovery(
             event_key="ew:" + str(path), kind="EW_PRODUCTION", payload=payload,
             detail=detail, failure_kind=failure_kind(detail))
@@ -60,9 +72,18 @@ class DeliveryRecoveryService:
         if not row:
             raise ValueError("恢复任务不存在")
         p = json.loads(row["payload_json"])
-        text = (f"恢复编号：{row['id'][:8]}\n类型：{row['kind']}\n状态：{row['state']}\n"
+        labels = {"WAITING": "等待操作", "QUEUED": "已安排重试", "RUNNING": "正在执行",
+                  "PAUSE_REQUESTED": "已请求本轮结束后暂停", "HELD": "已暂停", "DONE": "本轮已结束",
+                  "EXPIRED": "操作已过期", "NEEDS_REVIEW": "执行结果待核验"}
+        text = (f"恢复编号：{row['id'][:8]}\n任务：{'英语世界制作' if row['kind'] == 'EW_PRODUCTION' else '视频号投稿核验'}\n"
+                f"状态：{labels.get(row['state'], row['state'])}\n"
                 f"原因：{row['detail']}\n分类：{row['failure_kind']}\n执行次数：{row['attempts']}/3\n"
-                f"下次执行：{row['next_attempt_at'] or '未安排'} UTC\n按钮有效至：{row['expires_at']} UTC")
+                f"{'恢复后最早执行' if row['state'] == 'HELD' else '下次执行'}：{local_time(row['next_attempt_at'])}\n"
+                f"按钮有效至：{local_time(row['expires_at'])}")
+        if row['state'] == 'PAUSE_REQUESTED':
+            text += "\n当前一轮会完成并记录结果；后续重试已暂停。"
+        if row['state'] == 'HELD':
+            text += "\n暂停保留重试次数和原等待时间，点击恢复后继续。"
         if row.get("result"):
             text += "\n执行结果：" + row["result"]
         if row["kind"] == "WECHAT_UNKNOWN":
@@ -72,7 +93,8 @@ class DeliveryRecoveryService:
         else:
             text += "\n重试沿用日常制作与发布策略，重新检查库存、上限和已投稿保护。"
             if not p.get("allow_retry"):
-                text += "\n此实例只提供查看；手工选题请在 /english_world 重新确认制作。"
+                text += "\n" + p.get("retry_blocked_reason", "此实例不允许通用生产重试")
+                text += "；可在 /english_world 创建并确认新制作任务。"
         return {"id": row["id"], "text": text, "reply_markup": keyboard(row)}
 
     def validate_confirmed_artifacts(self, youtube_id, slice_index=0):
@@ -96,7 +118,7 @@ class DeliveryRecoveryService:
                 if not path.is_relative_to(self.root / "output") or file_fingerprint(path) != item:
                     raise ValueError("产物已变化，请刷新任务后重新核验")
             self.db.confirm_unpublished_delivery_recovery(recovery_id, actor=actor)
-        elif action in {"retry", "hold"}:
+        elif action in {"retry", "hold", "resume"}:
             if action == "retry":
                 if row["kind"] != "EW_PRODUCTION" or not payload.get("allow_retry"):
                     raise ValueError("此实例未授权通用生产重试")
@@ -105,23 +127,38 @@ class DeliveryRecoveryService:
                     raise ValueError("原运行记录已变化，请刷新")
                 if json.loads(Path(item["path"]).read_text()).get("kind") != "failure":
                     raise ValueError("已有交付产物，禁止重做")
+                context = payload.get("production_context")
+                if not context or file_fingerprint(Path(context["path"])) != context:
+                    raise ValueError("原制作配置缺失或变化，不能使用默认参数恢复")
+                recovery_arguments(Path(context["path"]), self.root)
             self.db.queue_delivery_recovery(recovery_id, action=action, actor=actor)
         elif action != "view":
             raise ValueError("未知恢复动作")
         return self.view(recovery_id)
 
 
+def local_time(value: str | None) -> str:
+    if not value:
+        return "未安排"
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone(
+        ZoneInfo("Asia/Shanghai")).strftime("%m-%d %H:%M:%S 北京时间")
+
+
 def keyboard(row: dict) -> dict:
     rid = row["id"]
     buttons = [[{"text": "🔎 查看原因与最新状态", "callback_data": f"recover:view:{rid}"}]]
+    expired = row.get("expires_at", "9999") <= datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     if row["kind"] == "WECHAT_UNKNOWN":
         buttons += [[{"text": "打开视频号后台核验", "url": BACKEND_URL}]]
-        if row["state"] == "WAITING":
+        if row["state"] == "WAITING" and not expired:
             buttons += [[{"text": "我已核验未发布，申请重传", "callback_data": f"recover:ask:{rid}"}]]
-    elif row["state"] == "WAITING" and json.loads(row["payload_json"]).get("allow_retry"):
+        elif row["state"] == "HELD" and not expired:
+            buttons += [[{"text": "▶️ 恢复核验", "callback_data": f"recover:resume:{rid}"}]]
+    elif row["state"] in {"WAITING", "HELD"} and not expired and json.loads(row["payload_json"]).get("allow_retry"):
         buttons += [[{"text": "▶️ 恢复制作", "callback_data": f"recover:retry:{rid}"}]]
-    if row["state"] == "WAITING":
-        buttons += [[{"text": "⏸ 暂停此恢复", "callback_data": f"recover:hold:{rid}"}]]
+    if row["state"] in {"WAITING", "QUEUED", "RUNNING"} and not expired:
+        label = "⏸ 本轮结束后暂停" if row['state'] == 'RUNNING' else "⏸ 暂停此恢复"
+        buttons += [[{"text": label, "callback_data": f"recover:hold:{rid}"}]]
     return {"inline_keyboard": buttons}
 
 

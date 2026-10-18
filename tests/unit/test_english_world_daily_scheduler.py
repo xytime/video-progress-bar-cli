@@ -201,6 +201,27 @@ def test_parse_args_accepts_explicit_codex_model() -> None:
     assert args.codex_model == "gpt-5.6-sol"
 
 
+def test_recovery_has_private_result_file_and_original_context(tmp_path: Path):
+    """真实宿主入口与假外部生产程序：验证日志分流、配置快照和具名结果文件。"""
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=2)
+    private_result = tmp_path / 'recovery_attempt.status.txt'
+    arguments.extend(['--recovery-status-path', str(private_result), '--codex-model', 'original-model'])
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert private_result.is_file()
+    assert not (log_dir / 'last_run_status.txt').exists()
+    status = dict(line.split('=', 1) for line in private_result.read_text().splitlines() if '=' in line)
+    assert status['phase'] == 'FAILED_COORDINATOR'
+    log = Path(status['run_log'])
+    assert 'coordinator attempt' in log.read_text()
+    assert 'coordinator attempt' not in result.stdout
+    from video_processing.utils.production_recovery import context_path
+    saved = json.loads(context_path(log.with_suffix('.delivery-request.json')).read_text())
+    assert saved['options']['coordinator_provider'] == 'codex'
+    assert saved['options']['codex_model'] == 'original-model'
+    assert saved['options']['codex_bin'] == str(tmp_path / 'codex')
+
+
 def test_failure_delivery_request_rejects_host_coordination_state(tmp_path: Path) -> None:
     request_path = tmp_path / "invalid.delivery-request.json"
     request_path.write_text(
