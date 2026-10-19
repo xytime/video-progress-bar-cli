@@ -1,0 +1,63 @@
+/* 普通封面 B 方案：逐行实底，不压暗整张底图。2026-10-20 / Codex。 */
+.badge-capsule {
+    position: absolute;
+    left: 7%;
+    top: 12%;
+    z-index: 10;
+    color: #ffffff;
+    background: #142331;
+    font: 700 44px/1 "PingFang SC", "Hiragino Sans GB", sans-serif;
+    letter-spacing: 4px;
+    padding: 12px 20px;
+    border-left: 8px solid #e6be76;
+    border-radius: 3px;
+    box-sizing: border-box;
+}
+.badge-capsule:empty { display: none; }
+.content-area {
+    position: absolute;
+    left: 7%;
+    width: 86%;
+    bottom: 12.6%;
+    z-index: 10;
+    font-family: "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+.main-title {
+    font-size: 144px;
+    font-weight: 900;
+    line-height: 1.08;
+    letter-spacing: 0;
+    color: #ffffff;
+    text-shadow: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+.title-line {
+    display: block;
+    width: fit-content;
+    white-space: nowrap;
+    color: #ffffff;
+    background: #142331;
+    padding: 7px 20px 12px;
+    margin-left: -20px;
+    box-sizing: border-box;
+}
+.sub-title {
+    font-size: 52px;
+    line-height: 1.35;
+    font-weight: 700;
+    color: #141c23;
+    background: #fff8e9;
+    border-left: 9px solid #b4483b;
+    padding: 11px 20px 13px;
+    margin-top: 28px;
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-wrap: break-word;
+}
+/* 文字区域只保留标题和副标题，避免旧版前景装饰覆盖实底条。 */
+.divider, .watermark, .metaphor-icon { display: none; }

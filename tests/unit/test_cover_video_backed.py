@@ -13,6 +13,7 @@
 | 1.8.0 | 2026-08-03 | Codex | 覆盖无大面积遮罩版式来源清单和模板硬门槛 |
 | 1.9.0 | 2026-08-03 | Codex | 覆盖移动端大字可读性模板硬门槛 |
 | 2.0.0 | 2026-08-21 | Codex | 覆盖系统告警式运营装饰的模板硬门槛 |
+| 2.1.0 | 2026-10-20 | Codex | B 方案共享模板校验及超长文本禁止降级。 |
 """
 
 from pathlib import Path
@@ -24,6 +25,7 @@ import pytest
 
 from scripts import cover_generator
 from video_processing.core.cover_policy import (
+    CoverReadabilityError,
     assert_template_respects_cover_policy,
     compliant_cover_layout_policy,
     validate_dedicated_cover_file,
@@ -173,6 +175,21 @@ def test_visual_asset_render_failure_never_falls_back_to_default_cover(tmp_path,
     assert not provenance.exists()
 
 
+def test_unreadable_title_never_falls_back_even_without_visual(tmp_path, monkeypatch):
+    class OverflowingEngine:
+        def generate(self, payload, output_path):
+            raise CoverReadabilityError("主标题无法完整排入两行")
+
+    import cover
+    monkeypatch.setattr(cover, "CoverEngine", OverflowingEngine)
+    output = tmp_path / "cover.jpg"
+    monkeypatch.setattr(sys, "argv", ["cover_generator.py", "--payload", '{"title":"标题"}',
+                                     "--output", str(output)])
+    with pytest.raises(CoverReadabilityError, match="无法完整"):
+        cover_generator.main()
+    assert not output.exists()
+
+
 def test_cover_engine_success_path_applies_mandarin_ribbon(tmp_path, monkeypatch):
     output = tmp_path / "cover.jpg"
     provenance = tmp_path / "cover_provenance.json"
@@ -291,7 +308,7 @@ def test_minimal_template_uses_the_actual_category_not_a_hard_coded_tech_label()
     )
     template = template_path.read_text(encoding="utf-8")
 
-    assert '<div class="watermark">{{ badge }}</div>' in template
+    assert '<div class="watermark">{{ badge | e }}</div>' in template
     assert "科技前沿" not in template
     assert "visual_asset_url" in template
 
@@ -299,7 +316,11 @@ def test_minimal_template_uses_the_actual_category_not_a_hard_coded_tech_label()
 def test_cover_templates_respect_no_broad_overlay_policy():
     template_dir = Path(__file__).resolve().parents[2] / "resources" / "cover" / "template"
     for template_path in template_dir.glob("cover*.html.j2"):
+        regular = template_path.stem.removesuffix(".html") in {"cover", "cover_minimal", "cover_drama"}
+        template = template_path.read_text(encoding="utf-8")
+        if regular:
+            template = template.replace("{{ regular_typography_css }}", (template_dir / "regular_typography.css").read_text())
         assert_template_respects_cover_policy(
-            template_path.read_text(encoding="utf-8"),
-            template_path,
+            template, template_path,
+            headline_style="opaque_title_strips_v1" if regular else None,
         )

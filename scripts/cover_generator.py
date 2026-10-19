@@ -15,6 +15,7 @@
 | 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
 | 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
 | 2.7.0   | 2026-08-03 | Codex                        | 来源清单写入无大面积遮罩版式硬门槛，旧缓存不得继续复用且 Pillow 兜底去卡片 |
+| 2.9.0 | 2026-10-20 | Codex | 来源清单记录 B 方案实际字号、分行与文字边界，保留历史版式兼容。 |
 | 2.8.0   | 2026-09-18 | Antigravity                  | 增加 --payload-file 参数，消除 CLI 长 JSON 字符串转义脆弱性 |
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
@@ -29,7 +30,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 sys.path.append(str(Path(__file__).parent.parent / "src"))
-from video_processing.core.cover_policy import compliant_cover_layout_policy
+from video_processing.core.cover_policy import CoverReadabilityError, compliant_cover_layout_policy
 
 # 旧 Pillow 兜底海报的竖屏标准分辨率。
 W, H = 1080, 1920
@@ -267,7 +268,9 @@ def _apply_edition_label(output_path: str, payload: dict) -> None:
     image.convert("RGB").save(path, quality=95)
 
 
-def _write_cover_provenance(output_path: str, provenance_output: str | None, payload: dict) -> None:
+def _write_cover_provenance(
+    output_path: str, provenance_output: str | None, payload: dict, layout: dict | None = None,
+) -> None:
     """为封面写入不可把视频帧冒充为专门设计图的来源证明。"""
     if not provenance_output:
         return
@@ -294,7 +297,10 @@ def _write_cover_provenance(output_path: str, provenance_output: str | None, pay
                 "cover_sha256": digest,
                 "audio_edition": payload.get("audio_edition", "original_audio_subtitled"),
                 "visual_asset": visual_asset_payload,
-                "layout_policy": compliant_cover_layout_policy(),
+                "layout_policy": compliant_cover_layout_policy(
+                    (layout or {}).get("rendered_typography", {}).get("style")
+                ),
+                "rendered_typography": (layout or {}).get("rendered_typography"),
             },
             ensure_ascii=False,
             indent=2,
@@ -381,8 +387,10 @@ def main():
                 print(f"Content-aware cover style: {creative_brief['style_id']}")
             persist_creative_brief()
             _apply_edition_label(args.output, payload)
-            _write_cover_provenance(args.output, args.provenance_output, payload)
+            _write_cover_provenance(args.output, args.provenance_output, payload, layout)
             return
+        except CoverReadabilityError:
+            raise
         except Exception as e:
             # 有独立底图时，Pillow 回退会丢失底图却仍可能写出来源证明，必须失败关闭。
             if str(payload.get("visual_asset_path", "") or "").strip():

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-20 | Codex | 允许经批准的逐行实底标题，保留历史版式校验以避免重做旧封面。 |
 | 1.0.0 | 2026-08-03 | Codex | 将无大面积遮罩/卡片遮挡底图规则固化为来源清单和模板硬校验 |
 | 1.1.0 | 2026-08-03 | Codex | 将移动端大字可读性纳入封面来源清单和模板静态校验 |
 | 1.2.0 | 2026-08-21 | Codex | 禁止系统告警式运营装饰，防止无关文字破坏封面可信度 |
@@ -20,9 +21,13 @@ from typing import Any, Mapping
 COVER_LAYOUT_POLICY_VERSION = "no_broad_overlay_v2"
 
 
-def compliant_cover_layout_policy() -> dict[str, Any]:
+class CoverReadabilityError(ValueError):
+    """文字无法完整、清晰地排入封面；禁止降级到小字或裁切结果。"""
+
+
+def compliant_cover_layout_policy(headline_style: str | None = None) -> dict[str, Any]:
     """生产封面必须携带的版式规则声明。"""
-    return {
+    policy = {
         "policy_version": COVER_LAYOUT_POLICY_VERSION,
         "no_broad_dark_overlay": True,
         "no_large_text_card": True,
@@ -32,6 +37,16 @@ def compliant_cover_layout_policy() -> dict[str, Any]:
         "min_title_font_px": 84,
         "requires_local_text_stroke_or_shadow": True,
     }
+    if headline_style == "opaque_title_strips_v1":
+        policy.update(
+            policy_version=headline_style,
+            text_legibility_method="opaque_per_line_background",
+            min_title_font_px=128,
+            requires_local_text_stroke_or_shadow=False,
+            opaque_title_strips=True,
+            max_title_lines=2,
+        )
+    return policy
 
 
 def has_compliant_cover_layout_policy(provenance: Mapping[str, Any]) -> bool:
@@ -39,7 +54,10 @@ def has_compliant_cover_layout_policy(provenance: Mapping[str, Any]) -> bool:
     policy = provenance.get("layout_policy")
     if not isinstance(policy, Mapping):
         return False
-    expected = compliant_cover_layout_policy()
+    style = policy.get("policy_version")
+    if style not in {COVER_LAYOUT_POLICY_VERSION, "opaque_title_strips_v1"}:
+        return False
+    expected = compliant_cover_layout_policy(style)
     return all(policy.get(key) == value for key, value in expected.items())
 
 
@@ -69,7 +87,9 @@ _MAIN_TITLE_BLOCK_RE = re.compile(r"^\s*\.main-title\s*\{(?P<body>.*?)\}", re.IG
 _FONT_SIZE_RE = re.compile(r"font-size\s*:\s*(?P<size>\d+)px", re.IGNORECASE)
 
 
-def assert_template_respects_cover_policy(template_text: str, template_path: Path) -> None:
+def assert_template_respects_cover_policy(
+    template_text: str, template_path: Path, *, headline_style: str | None = None,
+) -> None:
     """阻止模板重新引入覆盖主视觉的大面积暗渐变或文字卡片。"""
     violations: list[str] = []
     if _BROAD_VISUAL_OVERLAY_RE.search(template_text):
@@ -79,12 +99,19 @@ def assert_template_respects_cover_policy(template_text: str, template_path: Pat
     if "SYS_ALERT" in template_text:
         violations.append("system-alert marketing decoration is prohibited on production covers")
     title_match = _MAIN_TITLE_BLOCK_RE.search(template_text)
+    if headline_style == "opaque_title_strips_v1" and not title_match:
+        violations.append("approved title typography is missing")
     if title_match:
         title_block = title_match.group("body")
         size_match = _FONT_SIZE_RE.search(title_block)
-        if not size_match or int(size_match.group("size")) < 84:
-            violations.append("main title font-size must be at least 84px for mobile cover readability")
-        if "-webkit-text-stroke" not in title_block and "text-shadow" not in title_block:
+        minimum = 128 if headline_style == "opaque_title_strips_v1" else 84
+        if not size_match or int(size_match.group("size")) < minimum:
+            violations.append(f"main title font-size must be at least {minimum}px for mobile cover readability")
+        if headline_style == "opaque_title_strips_v1":
+            strip = re.search(r"\.title-line\s*\{([^}]+)\}", template_text)
+            if not strip or "background: #142331;" not in strip[1] or "color: #ffffff;" not in strip[1]:
+                violations.append("opaque title strips require the approved solid background and white text")
+        elif "-webkit-text-stroke" not in title_block and "text-shadow" not in title_block:
             violations.append("main title must use local stroke or shadow for readability")
     if violations:
         joined = "; ".join(violations)

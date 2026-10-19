@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .engine import CoverEngine
-from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.core.cover_policy import compliant_cover_layout_policy, validate_dedicated_cover_file
 
 
 def render_horizontal_cover(
@@ -41,13 +41,15 @@ def render_horizontal_cover(
     # 横版重新排版不猜分类；只有原标题与已验收底图是当前函数的权威输入。
     layout.update(canvas_width=1440, canvas_height=1080, template_variant="cover", badge="")
     temporary = output.with_name(f".{output.stem}.rendering.jpg")
-    engine.renderer.render(layout, str(temporary))
+    typography = engine.renderer.render(layout, str(temporary))
     temporary.replace(output)
     provenance.update(
         cover_filename=output.name,
         cover_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
         source_cover=str(source_cover),
         aspect_ratio="4:3", rendering="native_html_reflow",
+        rendered_typography=typography,
+        layout_policy=compliant_cover_layout_policy((typography or {}).get("style")),
     )
     output.with_name(f"{output.stem}_provenance.json").write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",

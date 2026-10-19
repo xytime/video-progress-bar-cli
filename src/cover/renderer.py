@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
+| 1.6.0 | 2026-10-20 | Codex | 普通封面采用已批准的 B 方案，实测词界排版并拒绝截字和安全区溢出。 |
 | 1.5.1 | 2026-09-23 | Codex | 英语封面截图前验证实际教学文本未溢出或被页脚覆盖。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 模板目录化：接受 template_dir 替代单文件，根据 layout_spec.template_variant 动态选择 .html.j2 文件 |
@@ -15,8 +16,10 @@
 import os
 from pathlib import Path
 from jinja2 import Template
-from playwright.sync_api import sync_playwright
-from video_processing.core.cover_policy import assert_template_respects_cover_policy
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
+from video_processing.core.cover_policy import CoverReadabilityError, assert_template_respects_cover_policy
+
+REGULAR_TEMPLATES = {"cover", "cover_minimal", "cover_drama"}
 
 class HTMLRenderer:
     """
@@ -49,7 +52,7 @@ class HTMLRenderer:
         # Fallback to a simple default dot/circle SVG if metaphor not found
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>'
 
-    def render(self, layout_spec: dict, output_path: str) -> None:
+    def render(self, layout_spec: dict, output_path: str) -> dict | None:
         """
         [Gemini_3.5_Flash_planning] 将 LayoutSpec 渲染成 HTML，并通过 Playwright 无头浏览器截图输出为图片
         [Gemini_2.5_Pro_planning] v1.1.0: 依据 layout_spec.template_variant 选择对应的 .html.j2 文件
@@ -60,6 +63,7 @@ class HTMLRenderer:
         # 文件不存在时阶梯到默认模板
         if not template_path.exists():
             template_path = self.template_dir / "cover.html.j2"
+            variant = "cover"
         if not template_path.exists():
             raise FileNotFoundError(f"No template found in: {self.template_dir}")
 
@@ -79,9 +83,16 @@ class HTMLRenderer:
 
         # 2. 渲染 Jinja2 模板得到 HTML
         template_text = template_path.read_text(encoding="utf-8")
-        assert_template_respects_cover_policy(template_text, template_path)
+        if variant in REGULAR_TEMPLATES:
+            layout_spec["regular_typography_css"] = (
+                self.template_dir / "regular_typography.css"
+            ).read_text(encoding="utf-8")
         template = Template(template_text)
         rendered_html = template.render(**layout_spec)
+        assert_template_respects_cover_policy(
+            rendered_html, template_path,
+            headline_style="opaque_title_strips_v1" if variant in REGULAR_TEMPLATES else None,
+        )
 
         # 3. 创建临时 HTML 文件
         temp_html_path = Path(output_path).parent / f"temp_{Path(output_path).stem}.html"
@@ -102,7 +113,17 @@ class HTMLRenderer:
                 # 导航到临时文件 URL
                 file_url = temp_html_path.resolve().as_uri()
                 page.goto(file_url, wait_until="networkidle")
-                
+                page.evaluate("document.fonts.ready")
+                typography = None
+                if variant in REGULAR_TEMPLATES:
+                    try:
+                        typography = page.evaluate(
+                            (self.template_dir / "regular_title.js").read_text(encoding="utf-8")
+                        )
+                    except PlaywrightError as error:
+                        browser.close()
+                        raise CoverReadabilityError(str(error)) from error
+
                 if variant == "cover_english_newspaper":
                     page.evaluate("document.fonts.ready")
                     fits = page.evaluate("""() => {
@@ -124,6 +145,7 @@ class HTMLRenderer:
                 page.screenshot(path=str(out_p), type="jpeg", quality=95)
                 
                 browser.close()
+                return typography
         finally:
             # 5. 清理临时 HTML 文件
             if temp_html_path.exists():

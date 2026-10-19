@@ -71,102 +71,6 @@
         .divider-top { top: 20%; }
         .divider-bottom { bottom: 20%; }
 
-        /* 徽章 */
-        .badge-capsule {
-            position: absolute;
-            top: 12%; /* [Gemini_3.5_Flash_planning] 还原 6:7 比例定位 */
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 10;
-            background: transparent;
-            border: 2px solid var(--accent-color);
-            color: var(--accent-color);
-            padding: 10px 42px;
-            border-radius: 40px;
-            font-size: 54px;
-            font-weight: 700;
-            letter-spacing: 4px;
-            white-space: nowrap;
-            box-shadow: var(--accent-glow);
-        }
-
-        /* 核心文字区 */
-        .content-area {
-            position: absolute;
-            top: calc(50% - 84px);
-            left: 8%;
-            right: 8%;
-            transform: translateY(-50%);
-            z-index: 10;
-            text-align: center;
-        }
-
-        .content-area.upper_left {
-            /* 左上版受顶部类别标签约束，至少保留约 27px 的安全间隔。 */
-            top: max(22%, calc(23% - 84px));
-            left: 7%;
-            right: 20%;
-            transform: none;
-            text-align: left;
-        }
-
-        .content-area.upper_left .main-title,
-        .content-area.upper_left .sub-title {
-            text-align: left;
-        }
-
-        .content-area.upper_left .main-title {
-            font-size: 88px;
-        }
-
-        .content-area.upper_left .sub-title {
-            font-size: 42px;
-            margin-left: 0;
-            margin-right: 0;
-        }
-
-        /* 主标题 */
-        .main-title {
-            font-size: 108px;
-            font-weight: 900;
-            color: #ffffff;
-            text-align: center;
-            line-height: 1.3;
-            text-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-            -webkit-text-stroke: 4px rgba(3, 8, 13, 0.74);
-            word-break: break-all;
-            margin: 0 0 40px 0;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-
-        /* 副标题 */
-        .sub-title {
-            font-size: 50px;
-            font-weight: 800;
-            color: #11151a;
-            text-align: center;
-            line-height: 1.5;
-            width: fit-content;
-            max-width: 100%;
-            margin-left: auto;
-            margin-right: auto;
-            padding: 16px 24px 18px 28px;
-            background: rgba(255, 248, 233, 0.94);
-            border-left: 10px solid #ef4444;
-            border-radius: 3px 12px 12px 3px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
-            box-sizing: border-box;
-            word-break: break-all;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            letter-spacing: 1px;
-        }
-
         /* 隐喻矢量图标 */
         .metaphor-icon {
             position: absolute;
@@ -212,6 +116,7 @@
             white-space: nowrap;
         }
 
+        {{ regular_typography_css }}
     </style>
 </head>
 <body class="{% if visual_asset_url %}has-visual{% endif %}">
@@ -238,13 +143,13 @@
     <div class="divider divider-bottom"></div>
 
     <!-- 徽章 -->
-    <div class="badge-capsule">{{ badge }}</div>
+    <div class="badge-capsule">{{ badge | e }}</div>
 
     <!-- 核心内容区 -->
     <div class="content-area {{ headline_position }}">
-        <h1 class="main-title">{{ title }}</h1>
+        <h1 class="main-title">{{ title | e }}</h1>
         {% if subtitle %}
-        <div class="sub-title">{{ subtitle }}</div>
+        <div class="sub-title">{{ subtitle | e }}</div>
         {% endif %}
     </div>
 
@@ -316,7 +221,7 @@
 
     <!-- 水印 -->
     {% if not has_visual_asset %}
-    <div class="watermark">{{ badge }}</div>
+    <div class="watermark">{{ badge | e }}</div>
     {% endif %}
 </body>
 </html>

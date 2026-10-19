@@ -63,5 +63,8 @@ class CoverEngine:
             output_path: str，输出的 JPEG 图片绝对路径
         """
         layout = self.plan(payload)
-        self.renderer.render(layout, output_path)
+        typography = self.renderer.render(layout, output_path)
+        if typography:
+            layout["rendered_typography"] = typography
+            layout["headline_position"] = typography["headline_position"]
         return layout
