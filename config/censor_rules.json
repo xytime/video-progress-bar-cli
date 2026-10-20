@@ -866,6 +866,153 @@
       "presidential"
     ],
     "exemptions_zh": [],
-    "exemptions_en": []
+    "exemptions_en": [],
+    "social_unrest": {
+      "window_chars": 180,
+      "cue_window_seconds": 15,
+      "families": {
+        "unrest": {
+          "terms": [
+            "骚乱",
+            "暴乱",
+            "打砸抢",
+            "抢掠",
+            "抢劫商店",
+            "街头暴力",
+            "警民冲突",
+            "街头冲突",
+            "暴动",
+            "纵火",
+            "焚烧车辆",
+            "\\briots?\\b",
+            "\\brioting\\b",
+            "\\bloot(?:ing|ed|ers?)?\\b",
+            "\\bcivil\\s+unrest\\b",
+            "\\bstreet\\s+clashes\\b",
+            "\\bclash(?:es|ed|ing)?\\s+with\\s+(?:the\\s+)?police\\b"
+          ],
+          "requires_context": false
+        },
+        "protest": {
+          "terms": [
+            "抗议",
+            "示威",
+            "游行",
+            "封堵道路",
+            "封锁道路",
+            "\\bprotest(?:s|ed|ing|ers?)?\\b",
+            "\\bdemonstrat(?:e|es|ed|ion|ions|ors?|ing)\\b",
+            "\\broad\\s+blockad(?:e|es|ing)\\b"
+          ],
+          "requires_context": true,
+          "non_civic": [
+            "\\bdemonstrations?\\s+of\\s+(?:(?:a|an|the|new|latest)\\s+)*(?:ai|software|chips?|devices?|(?:police\\s+)?robots?)\\b"
+          ]
+        },
+        "collective_action": {
+          "terms": [
+            "集会",
+            "罢工",
+            "\\b(?:mass\\s+)?rall(?:y|ies|ied|ying)\\b",
+            "\\b(?:general\\s+)?strik(?:e|es|ers?|ing)\\b"
+          ],
+          "requires_context": true,
+          "non_civic": [
+            "\\b(?:stock|bond|market|equity|price|prices)\\s+(?:market\\s+)?rall(?:y|ies)\\b",
+            "\\brall(?:y|ies)\\s+in\\s+(?:(?:stock|bond|share)\\s+)?prices\\b",
+            "\\bstrik(?:e|es|ing)\\s+out\\b"
+          ],
+          "context": [
+            "群众",
+            "民众",
+            "工人",
+            "学生",
+            "街头",
+            "警察",
+            "政府",
+            "全国",
+            "\\b(?:crowds?|workers?|students?|streets?|police|government|nationwide|union|unions)\\b",
+            "\\b(?:mass\\s+rally|general\\s+strike)\\b"
+          ]
+        },
+        "mobilization": {
+          "terms": [
+            "起义",
+            "叛乱",
+            "造反",
+            "推翻政权",
+            "号召上街",
+            "走上街头",
+            "革命",
+            "\\buprisings?\\b",
+            "\\binsurrections?\\b",
+            "\\brebellions?\\b",
+            "\\boverthrow(?:s|ing|n)?\\b",
+            "\\brevolutions?\\b",
+            "\\btak(?:e|es|ing)\\s+to\\s+the\\s+streets\\b"
+          ],
+          "requires_context": true,
+          "context": [
+            "政权",
+            "推翻",
+            "起义",
+            "叛乱",
+            "造反",
+            "号召上街",
+            "走上街头",
+            "警察",
+            "\\b(?:regime|overthrow(?:n|ing)?|police|streets?|uprising|insurrection)\\b"
+          ]
+        }
+      },
+      "context": [
+        "民众",
+        "群众",
+        "工人",
+        "学生",
+        "街头",
+        "街道",
+        "警方",
+        "警察",
+        "政府",
+        "政权",
+        "燃油",
+        "油价",
+        "生活成本",
+        "物价",
+        "养老金",
+        "抗议者",
+        "示威者",
+        "全国",
+        "爆发",
+        "镇压",
+        "\\b(?:police|government|regime|crowds?|workers?|students?|marchers?|streets?)\\b",
+        "\\b(?:fuel|diesel|petrol|pension|tax|prices?|costs?)\\b",
+        "\\b(?:nationwide|anti-government|erupt(?:s|ed|ing)?|crackdown)\\b",
+        "\\b(?:protesters?|demonstrators?)\\b"
+      ],
+      "historical": [
+        "(?:^|\\bin\\s+)(?:1[0-8][0-9]{2}|19[0-6][0-9])\\b",
+        "法国大革命",
+        "辛亥革命",
+        "\\bfrench\\s+revolution\\b",
+        "\\bancient\\b",
+        "古代",
+        "历史上的"
+      ],
+      "current": [
+        "今天",
+        "昨日",
+        "昨天",
+        "近日",
+        "本周",
+        "周末",
+        "再次",
+        "目前",
+        "如今",
+        "\\b(?:today|yesterday|tonight|recent(?:ly)?|now|ongoing|this\\s+week|again)\\b",
+        "\\berupts?\\b"
+      ]
+    }
   }
 }

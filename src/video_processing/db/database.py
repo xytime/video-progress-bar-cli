@@ -6328,6 +6328,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             WHEN pv.status='SEGMENTED' THEN 'ENG_SEGMENTED'
             WHEN pv.status='LOGIN_REQUIRED' THEN 'ENG_LOGIN'
             WHEN pv.status='FAILED' AND (COALESCE(pv.error_msg,'') LIKE 'Censorship %'
+                OR COALESCE(pv.error_msg,'') LIKE 'Social Unrest Review:%'
                 OR COALESCE(pv.error_msg,'') LIKE 'Channel Policy Reject:%') THEN 'ENG_POLICY'
             WHEN pv.status IN ('PROCESSING','PUBLISH_PRECHECK','DOWNLOADING','COPYWRITING',
                                'TRANSCRIBING','RENDERING','AI_COVER_PENDING') THEN 'ENG_ACTIVE'

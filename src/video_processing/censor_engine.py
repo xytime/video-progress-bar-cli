@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config.settings import settings
+from .core.social_unrest import DEFAULT_RULES as _SOCIAL_UNREST_DEFAULTS, MATCHER_VERSION
+from .core.social_unrest import classify as _classify_social_unrest, validate_rules as _validate_social_unrest
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +544,8 @@ def _validate_rules(data: dict) -> tuple:
             raise ValueError(f"channel_policy.{k} must be a list")
     cp.setdefault("exemptions_zh", [])
     cp.setdefault("exemptions_en", [])
+    cp.setdefault("social_unrest", copy.deepcopy(_SOCIAL_UNREST_DEFAULTS))
+    _validate_social_unrest(cp["social_unrest"])
     return bl, cp
 
 
@@ -596,7 +600,8 @@ def dump_default_rules() -> dict:
                     "P0 层不得为空；action 取值见 censor_engine.ACTION_* 常量。",
         "version": 1,
         "blocklist": copy.deepcopy(_DEFAULT_BLOCKLIST),
-        "channel_policy": copy.deepcopy(_DEFAULT_CHANNEL_POLICY),
+        "channel_policy": {**copy.deepcopy(_DEFAULT_CHANNEL_POLICY),
+                           "social_unrest": copy.deepcopy(_SOCIAL_UNREST_DEFAULTS)},
     }
 
 
@@ -604,13 +609,20 @@ def current_rules_fingerprint() -> str:
     """返回当前生效规则包的短 hash，用于事故复盘时确认命中依据。"""
     blocklist, channel_policy = _load_external_rules()
     payload = json.dumps(
-        {"blocklist": blocklist, "channel_policy": channel_policy,
-         "matcher": "cp-latin-boundary-v1"},
+        {"blocklist": blocklist, "channel_policy": {
+            **channel_policy, "social_unrest": channel_policy.get("social_unrest", _SOCIAL_UNREST_DEFAULTS)},
+         "matcher": "cp-latin-boundary-v1/" + MATCHER_VERSION},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def check_social_unrest(documents):
+    """独立的平台题材风险；不向 P0/P1/P2 追加含糊的裸词。"""
+    rules = _get_channel_policy().get("social_unrest", _SOCIAL_UNREST_DEFAULTS)
+    return _classify_social_unrest(documents, rules)
 
 
 @dataclass

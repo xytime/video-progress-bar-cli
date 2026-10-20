@@ -143,6 +143,13 @@ def test_channel_policy_fail_open_is_ignored_in_publish_fail_closed_mode(temp_db
     cp = SimpleNamespace(hit=True, tag="CP_OUT_OF_SCOPE", matched="ukraine+war", channel="en")
     monkeypatch.setattr(censor_engine, "check_channel_policy", lambda zh_text="", en_text="": cp)
     pm = _make_pm(db)
+    # 最终门现在要求完整可定位字幕；保持本例只检验 CP fail-open 的发布边界。
+    from pathlib import Path
+    import pysubs2
+    pm._OUT_DIR = Path(temp_db).parent
+    subtitles = pysubs2.SSAFile()
+    subtitles.append(pysubs2.SSAEvent(start=0, end=1000, text="Safe science content."))
+    subtitles.save(str(pm._OUT_DIR / "vid12345678_s1.ass"))
 
     assert pm._check_censorship("vid12345678", "ukraine war coverage", slice_index=1) is False
     assert db.get_video_by_youtube_id("vid12345678", slice_index=1)["status"] == "DOWNLOADING"

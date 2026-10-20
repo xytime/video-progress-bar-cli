@@ -2876,6 +2876,8 @@ def _read_censorship_review_subtitle(
 def _censor_layer_from_error(error_msg: str):
     """从 error_msg 反推审查层级与告警严重度。返回 (layer, label, severity)。"""
     em = error_msg or ""
+    if "Social Unrest Review" in em:
+        return ("RISK", "平台题材风险 · 社会动荡", "high")
     if "Censorship P0" in em:
         return ("P0", "P0 · 政治安全违禁", "critical")
     if "Censorship P1" in em:
@@ -2957,6 +2959,15 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
                           or path.name.startswith(f"{youtube_id}_source_subtitle."))
     evidence = review_evidence(video, db.get_censorship_incidents(
         youtube_id, slice_index=slice_index, limit=1), subtitle, source_files)
+    if layer == "RISK":
+        from video_processing.social_unrest_review import replay
+        incident = next((row for row in db.get_censorship_incidents(
+            youtube_id, slice_index=slice_index, limit=100) if row.get("stage") == "social_unrest"), {})
+        evidence = replay(video, incident, _OUT_DIR)
+        if evidence["status"] == "VERIFIED_REPLAY":
+            matched += [{"term": term["actual"], "layer": "RISK", "channel": "context",
+                         "tag": "平台题材风险：社会动荡"} for term in evidence["terms"]]
+            keywords = _build_keyword_cloud(text_zh, text_en, matched)
 
     return {
         "success": True,
@@ -3003,7 +3014,7 @@ def bypass_censor(
         return {"success": False, "error": guard_reason}
 
     em = video.get("error_msg") or ""
-    is_censor_fail = ("Censorship" in em) or ("Channel Policy" in em) or bool(video.get("censor_tag"))
+    is_censor_fail = ("Censorship" in em) or ("Channel Policy" in em) or ("Social Unrest Review" in em) or bool(video.get("censor_tag"))
     if video.get("status") != "FAILED" or not is_censor_fail:
         return {"success": False,
                 "error": f"仅审查类失败(FAILED)的视频可复核放行（当前状态：{video.get('status')}）"}
@@ -3037,6 +3048,23 @@ def bypass_censor(
             title=video.get("title") or "",
             zh_title=video.get("zh_title") or "",
             text_excerpt="Operator confirmed content review and pipeline resume in dashboard.",
+        )
+
+    if layer == "RISK":
+        from video_processing.social_unrest_review import replay, APPROVAL, TAG
+        incident = next((row for row in db.get_censorship_incidents(
+            youtube_id, slice_index=slice_index, limit=100) if row.get("stage") == "social_unrest"), {})
+        evidence = replay(video, incident, _OUT_DIR)
+        if evidence["status"] != "VERIFIED_REPLAY":
+            return {"success": False, "error": "原输入或规则无法核实，禁止泛化放行：" + evidence["message"]}
+        db.record_censorship_incident(
+            youtube_id, slice_index=slice_index, stage="manual_review", level="RISK",
+            action="MANUAL_BYPASS", tag=TAG, score=None, matched=incident.get("matched"), channel="operator",
+            decision=APPROVAL, rule_pack_version=evidence["rule_version"], input_hash=evidence["input_hash"],
+            rule_id="dashboard.social_unrest_input_bound", source_field=incident.get("source_field"),
+            review_stage=incident.get("review_stage"), platform=incident.get("platform"),
+            title=video.get("title"), zh_title=video.get("zh_title"),
+            text_excerpt="Operator approved only the verified input and rule fingerprint.",
         )
 
     # 1) 置放行标志。P0 还须由上方 MANUAL_P0_APPROVED 审计记录配对认可。

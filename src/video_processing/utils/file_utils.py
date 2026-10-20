@@ -328,7 +328,7 @@ def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
     return "\n".join(cue["text"] for cue in read_webvtt_cues(subtitle_files, max_chars))
 
 
-def read_webvtt_cues(subtitle_files: Iterable[Path], max_chars: int = 40000) -> list[dict]:
+def read_webvtt_cues(subtitle_files: Iterable[Path], max_chars: Optional[int] = 40000) -> list[dict]:
     """与审查原文共用解析和截断，额外保留 cue 时间及来源，不合并重叠字幕。"""
     parts: list[dict] = []
     total = 0
@@ -355,7 +355,7 @@ def read_webvtt_cues(subtitle_files: Iterable[Path], max_chars: int = 40000) -> 
             parts.append({"text": text, "file": subtitle_file.name,
                           "start": times[0].strip(), "end": end_parts[0] if end_parts else ""})
             total += len(text)
-            return total >= max_chars
+            return max_chars is not None and total >= max_chars
 
         for raw_line in lines:
             line = raw_line.strip()

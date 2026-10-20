@@ -3765,13 +3765,23 @@ class PipelineManager:
         """
         # [Claude_Opus_4.8 架构B] 审查执行已抽至 CensorshipService（内聚单元，可独立测试）。
         # 这里按调用方既有契约（仅需 self.db + self.send_telegram_msg）即时构造，零状态。
+        review_description = description
         if settings.enable_deep_insight_enrichment:
             prefix = f"{yid}_s{slice_index}" if slice_index else yid
             description += "\n" + self._insight_review_text(prefix)
+        from .social_unrest_review import collect_documents
+        def review_documents():
+            video = self.db.get_video_by_youtube_id(yid, slice_index=slice_index) or {
+                "youtube_id": yid, "slice_index": slice_index,
+            }
+            return collect_documents(
+                video, self._OUT_DIR, title=title, zh_title=zh_title,
+                description=review_description, subtitle=subtitle_text, stage=stage,
+            )
         return CensorshipService(self.db, self.send_telegram_msg).check(
             yid, title, description, zh_title=zh_title,
             slice_index=slice_index, subtitle_text=subtitle_text,
-            stage=stage, fail_closed=fail_closed, platform=platform,
+            stage=stage, fail_closed=fail_closed, platform=platform, review_documents=review_documents,
         )
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
@@ -3938,6 +3948,14 @@ class PipelineManager:
         slice_index = int(video.get("slice_index") or 0)
         prefix = f"{yid}_s{slice_index}" if slice_index else yid
         title = video.get("title", yid)
+        # 封面完成后、任何上传动作前，用实际发布文案与完整字幕重审；缓存/旧放行不能绕开。
+        if self._check_censorship(
+            yid, title_file.read_text(encoding="utf-8").strip(), copy_file.read_text(encoding="utf-8"),
+            zh_title=title_file.read_text(encoding="utf-8").strip(), slice_index=slice_index,
+            subtitle_text=read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index),
+            stage="wechat_publish", fail_closed=True, platform="微信",
+        ):
+            return
         from .delivery_recovery import DeliveryRecoveryService
         try:
             DeliveryRecoveryService(self.db, self._PRJ_ROOT).validate_confirmed_artifacts(yid, slice_index)

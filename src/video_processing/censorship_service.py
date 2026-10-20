@@ -30,6 +30,7 @@ from typing import Callable
 from config.settings import settings
 from . import censor_engine
 from .censorship_evidence import blocklist_inputs
+from . import social_unrest_review
 from .utils.platform_events import format_youtube_source_link_html
 # 动作常量在 import 时绑定即可（不会被运行时替换）；判定函数 check_text/check_channel_policy
 # 通过 censor_engine.<fn> 在调用时查找，保证测试 monkeypatch censor_engine.check_text 生效。
@@ -142,13 +143,45 @@ class CensorshipService:
         except Exception as exc:
             logger.warning("[CensorLedger] failed to record incident for %s: %s", yid, exc)
 
+    def _social_unrest_blocked(self, yid, slice_index, documents, *, title, zh_title, description, stage, platform):
+        evidence = social_unrest_review.evaluate(documents)
+        if not evidence:
+            return False
+        incidents = self.db.get_censorship_incidents(yid, slice_index=slice_index, limit=100)
+        if social_unrest_review.approved(incidents, evidence):
+            return False
+        self.db.record_censorship_incident(
+            yid, slice_index=slice_index, stage="social_unrest", level="RISK",
+            action=ACTION_SUSPEND_MANUAL, tag=social_unrest_review.TAG, score=80,
+            matched=evidence["matched"], channel="context", decision="SOCIAL_UNREST_MANUAL_REVIEW",
+            rule_pack_version=evidence["rule_version"], rule_id="social_unrest." + evidence["family"],
+            source_field=evidence["source_field"], review_stage=stage, platform=platform,
+            input_hash=evidence["input_hash"], title=title, zh_title=zh_title,
+            description_preview=next((doc["text"] for doc in documents if doc["source"] == "description"), ""),
+            text_excerpt=social_unrest_review.ledger_excerpt(evidence),
+        )
+        self.db.update_video_censor_status(yid, social_unrest_review.TAG, 80, slice_index=slice_index)
+        self.db.update_video_status(
+            yid, "FAILED", error_msg=f"Social Unrest Review: {social_unrest_review.TAG} ({evidence['matched']})",
+            slice_index=slice_index,
+        )
+        try:
+            self.notify(f"⏸ <b>平台题材风险：社会动荡，等待人工复核</b>"
+                        f"\nTitle: {html.escape(title)}\nEvidence: {html.escape(evidence['context'])}"
+                        f"\nSource: {html.escape(evidence['source_field'])}"
+                        f"{self._notification_video_context(yid, slice_index)}")
+        except Exception as exc:
+            logger.warning("社会动荡审查通知失败（保持拦截）：%s", exc)
+        return True
+
     def check(self, yid: str, title: str, description: str = "", zh_title: str = "",
               slice_index: int = 0, subtitle_text: str = "", *, stage: str = "pipeline",
-              fail_closed: bool = False, platform: str = "") -> bool:
+              fail_closed: bool = False, platform: str = "", review_documents=None) -> bool:
         """执行审查。返回 True 表示命中（任意层）→ 需要拦截/中断；False 表示全部通过。
 
         subtitle_text（症结 8）：仅并入违法层 P0/P1/P2（精确词匹配，对长转录安全），
         刻意不并入 CP 共现层——CP「国名+冲突词」全文共现在长转录上几乎必然误杀。
+        独立题材层使用 review_documents 的完整本地输入，按句段和 cue 时间限制共现。
         slice_index（BUG-1）：透传到每一处 db.* 写入，避免切片命中污染父行。
         fail_closed：发布前最终闸门必须置 True；审查异常视为拦截，且 CP fail-open 不生效。
         """
@@ -177,11 +210,21 @@ class CensorshipService:
                 logger.warning(f"[Censor] Video {yid} from trusted channel {_ch} — CP bypass only; P0/P1/P2 still enforced.")
 
         try:
+            zh_for_censor, en_for_censor = blocklist_inputs(title, zh_title, description, subtitle_text)
+            result = (censor_engine.check_text(zh_text=zh_for_censor, en_text=en_for_censor)
+                      if settings.enable_censorship_engine else censor_engine.CensorResult(hit=False))
+            # P0 保持最高优先级；其余层之前执行独立题材复核，旧白名单/bypass 不作豁免。
+            if getattr(result, "level", None) != "P0" or manual_p0_approved:
+                documents = (review_documents() if review_documents is not None else
+                             social_unrest_review.text_documents(title, zh_title, description, subtitle_text))
+                if self._social_unrest_blocked(
+                    yid, slice_index, documents, title=title, zh_title=zh_title, description=description,
+                    stage=stage, platform=platform,
+                ):
+                    return True
             # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────
             if settings.enable_censorship_engine:
                 # zh_text 用中文标题；为空但 title 含中文则 fallback 到 title
-                zh_for_censor, en_for_censor = blocklist_inputs(title, zh_title, description, subtitle_text)
-                result = censor_engine.check_text(zh_text=zh_for_censor, en_text=en_for_censor)
                 if result.hit:
                     if manual_bypass and (result.level != "P0" or manual_p0_approved):
                         logger.warning(
