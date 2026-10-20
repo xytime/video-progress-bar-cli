@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.11.1 | 2026-10-21 | Codex | 公开归档兼容同原生 ID 的已发表组件凭据，逐项核验公开、处理与预约状态。 |
 | 1.10.0 | 2026-10-09 | Codex | 复用已有每分钟巡航恢复二创队列。 |
 | 1.9.2 | 2026-10-06 | Codex | 英语世界回查区分平台拒绝与 UI 未确认，停止受限作品后续尝试。 |
 | 1.9.1 | 2026-09-25 | Codex | 具名一次只读复核及 24 小时公开确认缺失提醒，公开归档校验原生 ID 回读凭据。 |
@@ -483,11 +484,18 @@ def _has_explicit_published_readback(evidence_dir: Path, platform_post_id: str) 
         readback = json.loads((evidence_dir / "management_readback.json").read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return False
+    if not isinstance(readback, dict):
+        return False
+    component = readback.get("component_state")
+    explicit_status = readback.get("reason") == "DOM_STATUS_TEXT"
+    if readback.get("reason") == "DOM_POSTED_PUBLIC_COMPONENT" and isinstance(component, dict):
+        explicit_status = all(component.get(key) is True for key in (
+            "has_posted", "process_success", "posted_info_visible", "public_visibility",
+        )) and all(component.get(key) is False for key in ("processing", "scheduled"))
     return bool(
-        isinstance(readback, dict)
-        and readback.get("platform_post_id") == platform_post_id
+        readback.get("platform_post_id") == platform_post_id
         and readback.get("state") == "PUBLISHED"
-        and readback.get("reason") == "DOM_STATUS_TEXT"
+        and explicit_status
         and (evidence_dir / "management_published.png").is_file()
     )
 

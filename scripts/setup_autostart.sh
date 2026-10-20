@@ -5,6 +5,7 @@
 # # Modification History
 # | Version | Date       | Author                         | Description               |
 # |---------|------------|--------------------------------|---------------------------|
+# | 1.0.1 | 2026-10-21 | Codex | launchd 启动输出改存本机 HOME，避免外置卷日志打开权限拒绝导致 EX_CONFIG。 |
 # | 1.0.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 初始创建自动启动配置脚本  |
 # =======================================================================
 
@@ -13,8 +14,9 @@ set -euo pipefail
 # [Gemini_3.5_Flash_High_planning] 动态获取项目根目录
 PRJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+LOCAL_LOG_DIR="$HOME/Library/Logs/VideoProcessing"
 
-mkdir -p "$LAUNCH_AGENTS_DIR"
+mkdir -p "$LAUNCH_AGENTS_DIR" "$LOCAL_LOG_DIR"
 
 BOT_PLIST="$LAUNCH_AGENTS_DIR/com.videopipeline.bot.plist"
 UI_PLIST="$LAUNCH_AGENTS_DIR/com.videopipeline.ui.plist"
@@ -40,9 +42,9 @@ cat <<EOF > "$BOT_PLIST"
         <string>$PRJ_ROOT/src</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>$PRJ_ROOT/output/bot.log</string>
+    <string>$LOCAL_LOG_DIR/com.videopipeline.bot.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>$PRJ_ROOT/output/bot.log</string>
+    <string>$LOCAL_LOG_DIR/com.videopipeline.bot.launchd.log</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -67,9 +69,9 @@ cat <<EOF > "$UI_PLIST"
     <key>WorkingDirectory</key>
     <string>$PRJ_ROOT</string>
     <key>StandardOutPath</key>
-    <string>$PRJ_ROOT/output/dashboard.log</string>
+    <string>$LOCAL_LOG_DIR/com.videopipeline.ui.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>$PRJ_ROOT/output/dashboard.log</string>
+    <string>$LOCAL_LOG_DIR/com.videopipeline.ui.launchd.log</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

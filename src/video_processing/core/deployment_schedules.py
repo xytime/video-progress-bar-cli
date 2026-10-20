@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-21 | Codex | launchd 输出日志放本机 HOME，避免启动阶段打开外置卷日志被系统拒绝；保留原虚拟环境。 |
 | 1.1.0 | 2026-10-21 | Codex | 保存已核验运行调度意图，阻止冻结现场成为新基线；恢复定义使用本机私有目录。 |
 | 1.0.0 | 2026-10-13 | Codex | cron/launchd 受控快照与回读、保留原禁用及一次性任务 |
 """
@@ -222,6 +223,20 @@ class Schedules:
             if label != UI:
                 require(not self.service(label)["loaded"], "UNFROZEN_SERVICE")
 
+    def restored_definition(self, definition):
+        """调度器先打开的日志放本机；业务仍使用原虚拟环境及原日志配置。"""
+        config = dict(definition)
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            value = config.get(key)
+            if isinstance(value, str) and Path(value).is_relative_to(self.root):
+                shared = definition.get("StandardOutPath") == definition.get("StandardErrorPath")
+                suffix = "launchd.log" if shared else key.lower() + ".log"
+                config[key] = str(Path.home() / "Library/Logs/VideoProcessing" /
+                                  (str(config["Label"]) + "." + suffix))
+        if config.get("RunAtLoad") and not config.get("KeepAlive"):
+            config["RunAtLoad"] = False
+        return config
+
     def restore(self, plan):
         self.frozen(plan, ui_started=True)
         for row in plan["launchd"]:
@@ -231,10 +246,10 @@ class Schedules:
                 continue
             if row["loaded"]:
                 original = self.directory / "plists" / (label + ".plist")
-                config = plistlib.loads(original.read_bytes())
-                # 恢复周期/日历，但不把已完成的一次性任务再跑一遍。
-                if config.get("RunAtLoad") and not config.get("KeepAlive"):
-                    config["RunAtLoad"] = False
+                config = self.restored_definition(plistlib.loads(original.read_bytes()))
+                for key in ("StandardOutPath", "StandardErrorPath"):
+                    if config.get(key):
+                        Path(config[key]).parent.mkdir(parents=True, exist_ok=True)
                 folder = self.runtime_directory / sha(str(self.directory.resolve()).encode())[:20]
                 folder.mkdir(parents=True, exist_ok=True, mode=0o700)
                 path = folder / (label + ".restore.plist")
@@ -259,6 +274,6 @@ class Schedules:
             require(disabled.get(row["label"], row["disabled"]) == row["disabled"], "ENABLED_STATE_NOT_RESTORED")
             if row["loaded"]:
                 expected = plistlib.loads((self.directory / "plists" / (row["label"] + ".plist")).read_bytes())
-                if row["label"] != UI and expected.get("RunAtLoad") and not expected.get("KeepAlive"):
-                    expected["RunAtLoad"] = False
+                if row["label"] != UI:
+                    expected = self.restored_definition(expected)
                 require(plistlib.loads(Path(observed["path"]).read_bytes()) == expected, "RESTORED_DEFINITION_MISMATCH")

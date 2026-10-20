@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-21 | Codex | 外置日志迁入本机但不改 Python 参数；周期不立即重放、KeepAlive 维持运行。 |
 | 1.1.0 | 2026-10-21 | Codex | 冻结后再计划、部分恢复、外置备份、本机定义及他项目 cron 反例。 |
 | 1.0.0 | 2026-10-13 | Codex | KeepAlive、来源冲突、原禁用与 RunAtLoad 恢复 |
 """
@@ -96,6 +97,22 @@ def test_d09_restore_preserves_disabled_unloaded_and_suppresses_oneoff(schedulin
     assert commands.bootstraps[0]["RunAtLoad"] is False
     assert commands.bootstraps[0]["StartInterval"] == 180
     schedules.restored(plan)
+
+
+@pytest.mark.parametrize("keepalive", [False, True])
+def test_external_logs_move_home_without_changing_venv_or_arguments(scheduling, keepalive):
+    schedules, _, _ = scheduling
+    args = [str(schedules.root / ".venv/bin/python"), "job with spaces.py", "$(must-stay-literal)"]
+    original = dict(Label="com.videopipeline.bot", ProgramArguments=args, RunAtLoad=True, KeepAlive=keepalive,
+                    StandardOutPath=str(schedules.root / "output/bot.log"),
+                    StandardErrorPath=str(schedules.root / "output/bot.log"))
+    result = schedules.restored_definition(original)
+    assert result["ProgramArguments"] == args
+    assert Path(result["StandardOutPath"]).is_relative_to(Path.home())
+    assert result["StandardOutPath"] == result["StandardErrorPath"]
+    assert result["RunAtLoad"] is keepalive
+    assert original["ProgramArguments"] == args and original["RunAtLoad"] is True
+    assert schedules.restored_definition(result) == result
 
 
 @pytest.mark.parametrize("change", ["cron", "plist", "process"])

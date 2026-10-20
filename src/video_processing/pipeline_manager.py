@@ -4135,6 +4135,10 @@ class PipelineManager:
                 self.db.defer_ready_publication(yid, '商品等待：未点击发表，保留原商品和成片，按有界退避重新核验', slice_index=slice_index)
                 return
             if upload_err.returncode == 11:
+                rearm_fn = getattr(self.db, "rearm_manual_publish_lease_on_busy", None)
+                if callable(rearm_fn):
+                    rearm_fn(yid, slice_index=slice_index, attempt_id=evidence_dir.name,
+                             exit_code=upload_err.returncode)
                 self.db.defer_ready_publication(yid, "同账号浏览器会话占用，等待释放后自动重试", slice_index=slice_index)
                 return
             if upload_err.returncode == PRE_SUBMIT_UPLOAD_TIMEOUT:
