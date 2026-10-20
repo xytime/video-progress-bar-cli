@@ -164,6 +164,42 @@ def test_ex_config_retries_then_notifies_with_durable_status(tmp_path: Path):
     assert "coordinator attempt 3/3" in run_logs[0].read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("original", [None, {"status": "PENDING"},
+    {"kind": "review_and_auto_submission", "status": "ACCEPTED", "review_state": "UNDER_REVIEW"},
+    {"kind": "review", "status": "INCOMPLETE"}, "corrupt"])
+def test_fallback_failure_notification_records_receipt_without_overwriting_delivery(tmp_path, monkeypatch, original):
+    notifier = tmp_path / "notifier.py"
+    notifier.write_text("# fake notifier")
+    paths = runner.RuntimePaths(project_root=tmp_path, codex_home=tmp_path,
+        codex_bin=tmp_path / "codex", python_bin=Path(sys.executable), notifier_script=notifier,
+        log_dir=tmp_path, lock_dir=tmp_path / "lock", coordinator_timeout_seconds=60)
+    run_log = tmp_path / "run_2026-10-20_100000.log"
+    receipt = run_log.with_suffix(".delivery.json")
+    if original is not None:
+        receipt.write_text(json.dumps(original))
+    before = receipt.read_bytes() if receipt.exists() else None
+    accepted = {"kind": "failure_notice", "status": "ACCEPTED", "telegram_message_id": 123}
+    calls = []
+
+    def notify(command, **kwargs):
+        calls.append(command)
+        destination = Path(command[command.index("--delivery-receipt") + 1])
+        destination.write_text(json.dumps(accepted))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner, "run_admitted", notify)
+    with run_log.open("w") as stream:
+        runner._notify_failure(paths, "agy exit 1: location ineligible", stream)
+    assert len(calls) == 1
+    destination = receipt if original is None or original == {"status": "PENDING"} else run_log.with_suffix(".failure-notice.json")
+    assert json.loads(destination.read_text()) == accepted
+    if destination != receipt:
+        assert receipt.read_bytes() == before
+    from scripts import monitor_english_world_daily as monitor
+    assert accepted["kind"] not in monitor.ACCEPTED_DELIVERY_KINDS
+    assert accepted["kind"] in monitor.ACCEPTED_FAILURE_KINDS
+
+
 def test_success_does_not_send_failure_notification(tmp_path: Path):
     arguments, calls, log_dir = _runner_arguments(
         tmp_path, codex_exit=0, write_delivery_request=True, write_delivery_receipt=True,

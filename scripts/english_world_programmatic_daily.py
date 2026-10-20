@@ -1200,7 +1200,8 @@ def run(
                 break
             continue
     request.parent.mkdir(parents=True, exist_ok=True)
-    reason = "；".join(failures)[:800] or "没有取得可预检的授权候选"
+    # 历史候选的预算拒绝不能截掉或误分类最终供应商故障；逐项原因已留在候选回执。
+    reason = _failure_summary(failures)
     command = [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/record_english_world_delivery_request.py"),
                "--request", str(request), "--title", "今日英语世界短视频", "--failure", reason,
                "--failure-kind", "internal_error" if internal_failure else "source_quality"]
@@ -1208,6 +1209,15 @@ def run(
         command.append(f"--rejected-youtube-id={video_id}")
     _run(command, cwd=ROOT, timeout=120)
     raise ProgrammaticDailyError(reason)
+
+
+def _failure_summary(failures: list[str]) -> str:
+    if not failures:
+        return "没有取得可预检的授权候选"
+    reason = failures[-1][:650]
+    if len(failures) > 1:
+        reason += f"；此前另有 {len(failures) - 1} 个候选未通过，详见各候选 qa/candidate_failure.json"
+    return reason
 
 
 def main(argv: list[str] | None = None) -> int:

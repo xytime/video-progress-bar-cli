@@ -21,6 +21,21 @@ from scripts import english_world_programmatic_daily as daily
 import pytest
 
 
+@pytest.mark.parametrize("last,category", [
+    ("new:agy_draft:agy exit 1: location ineligible", "PROVIDER_BLOCKED"),
+    ("new:agy_draft:agy timed out after 180s", "TRANSIENT"),
+])
+def test_failure_summary_keeps_stopping_cause_without_previous_budget_errors(last, category):
+    from video_processing.utils.retry_policy import failure_kind
+    previous = ["old:language_admission:REVIEW_TERMINAL;" + "x" * 450] * 9
+    summary = daily._failure_summary(previous + [last])
+    assert summary.startswith(last)
+    assert len(summary) <= 800
+    assert "9 个候选" in summary
+    assert failure_kind(summary) == category
+    assert "没有取得可预检" in daily._failure_summary([])
+
+
 @pytest.mark.parametrize("ledger,reason", [
     ({"attempts": 3, "keys": []}, "ATTEMPT_BUDGET_EXHAUSTED"),
     ({"attempts": 1, "keys": [], "terminal": True}, "REVIEW_TERMINAL"),

@@ -901,6 +901,16 @@ def _notify_failure(
             pass
     if paths.recovery_parent_id:
         command.extend(["--recovery-parent-id", paths.recovery_parent_id])
+    if request_path:
+        receipt_path = Path(stream.name).with_suffix(".delivery.json")
+        # 兜底失败通知也须留下机器回执；已有成片交付证据绝不被通知覆盖。
+        try:
+            pending = not receipt_path.exists() or json.loads(receipt_path.read_text(encoding="utf-8")) == {"status": "PENDING"}
+        except (OSError, ValueError):
+            pending = False
+        if not pending:
+            receipt_path = Path(stream.name).with_suffix(".failure-notice.json")
+        command.extend(["--delivery-receipt", str(receipt_path)])
     from video_processing.utils.retry_policy import backoff_seconds
     for attempt in range(1, max_attempts + 1):
         result = run_admitted(
