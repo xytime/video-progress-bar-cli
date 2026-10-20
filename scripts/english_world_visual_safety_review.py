@@ -203,7 +203,7 @@ def _run_agy(*, agy_bin: str, model: str, work_dir: Path, timeout_seconds: int) 
         "--add-dir", str(work_dir),
         "--json-schema", str(schema_path),
         "--output-format", "json",
-        "--print-timeout", f"{timeout_seconds}s",
+        "--print-timeout", "0s",
         "--print", _contact_sheet_prompt(fulltext=fulltext),
     ]
     try:

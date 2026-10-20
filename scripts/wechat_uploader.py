@@ -4,6 +4,7 @@
 | Version | Date       | Author                              | Description                                              |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| readback-v1 | 2026-10-20 | Codex | 校验原生作品列表内层业务码，限流与畸形响应不得声明有效空基线。 |
 | 5.25.0 | 2026-10-12 | Antigravity | 修复 P1/P2 残留缺陷：_write_submission_receipt 补全 NONE 分支的商品未绑与 identity_source 回读；优化无参数 target_type 检测与多回执优先级；_finalize_submission_attachments 保留强制商品退出码 14；cli_article 补充完整版本摘要字段。 |
 | 5.24.0 | 2026-10-12 | Antigravity | 修复 P1/P2: 上传器执行边界严格落实 enable_wechat_article_link 开关，关闭时拒绝显式文章参数并保留既有流程；NONE 分支传入本次任务；_write_submission_receipt 限定读取本次提交回执，防御回执覆盖。 |
 | 5.23.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：商品优先与文章降级仲裁、超时安全清退、身份冲突阻断、独立发表前核验与管理页文章回读。 |
@@ -815,9 +816,47 @@ def _read_management_product_detail(page, evidence_root: Path, record: dict) -> 
         return unknown
 
 
+class ManagementListRateLimited(RuntimeError):
+    """平台 -360 限流；当前会话不得即时回退或继续投稿。"""
+
+
+def _post_list_rate_limited(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    base = data.get("baseResp") if isinstance(data, dict) else None
+    return any(layer.get(key) == -360 for layer in (payload, base) if isinstance(layer, dict)
+               for key in ("errCode", "errcode", "ret"))
+
+
+def _record_management_rate_limit(evidence_root: Path, *, phase: str) -> None:
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    (evidence_root / "management_rate_limit.json").write_text(json.dumps({
+        "state": MANAGEMENT_UNCERTAIN, "reason": "PLATFORM_RATE_LIMITED",
+        "business_code": -360, "phase": phase,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _post_list_payload_usable(payload: object) -> bool:
+    """外层成功不能覆盖 baseResp 业务错误；限流空列表不是有效基线。"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return False
+    data = payload["data"]
+    if not isinstance(data.get("list"), list):
+        return False
+    base = data.get("baseResp", {})
+    if not isinstance(base, dict):
+        return False
+    for layer in (payload, base):
+        for key in ("errCode", "errcode", "ret"):
+            if key in layer and (type(layer[key]) is not int or layer[key] != 0):
+                return False
+    return True
+
+
 def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
     """从作品管理原生列表响应提取 objectId，绝不从标题反向寻找历史作品。"""
-    if not isinstance(payload, dict):
+    if not _post_list_payload_usable(payload):
         return {}
     data = payload.get("data")
     records = data.get("list") if isinstance(data, dict) else None
@@ -927,7 +966,11 @@ def resolve_submission_platform_identity_after_publish(
     retry_delay_ms: int = 1500,
 ) -> dict[str, str] | None:
     """在同次提交后的作品列表等待唯一新增原生 ID，绝不按标题补绑。"""
-    after, loaded = _load_management_cards(page)
+    try:
+        after, loaded = _load_management_cards(page)
+    except ManagementListRateLimited:
+        logger.warning("Post-submit management list rate limited; keeping accepted submission unbound without retry.")
+        return None
     if not loaded:
         logger.warning("Post-submit management page unavailable; keeping submission unbound.")
         return None
@@ -1189,6 +1232,21 @@ def _load_management_cards(page, *, search_title: str | None = None) -> tuple[di
         return {}, False
     if search_title:
         _search_management_title(page, search_title)
+    payloads = []
+    for response in post_list_responses:
+        try:
+            payloads.append(response.json())
+        except Exception as exc:
+            logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
+            _remove_post_list_listener()
+            return {}, False
+    if any(_post_list_rate_limited(payload) for payload in payloads):
+        _remove_post_list_listener()
+        raise ManagementListRateLimited("WeChat management business code -360; stop immediate retries")
+    if any(not _post_list_payload_usable(payload) for payload in payloads):
+        logger.warning("Native management list business error or malformed response; refusing an empty-baseline claim.")
+        _remove_post_list_listener()
+        return {}, False
     cards = _collect_management_cards(page)
     if post_list_responses:
         try:
@@ -1235,6 +1293,8 @@ def capture_submission_identity_baseline(context, page) -> tuple[dict[str, dict[
         baseline, loaded = _load_management_cards(identity_page)
         if loaded:
             return baseline, True
+    except ManagementListRateLimited:
+        raise
     except Exception as exc:
         logger.warning("Dedicated management baseline page unavailable: %s", exc)
     finally:
@@ -1422,12 +1482,17 @@ def verify_management_publication_by_id(
     nonce = _submission_identity_nonce(identity_receipt, normalized_post_id)
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
         # 标题搜索会过滤正文且可能清空同 ID 的 DOM；先按原生身份查当前页。
-        cards, loaded = _load_management_cards(page)
-        if expected_title and loaded and not any(
-            normalized_post_id in {card.get('platform_post_id'), card.get('platform_export_id')}
-            or (nonce and card.get('platform_object_nonce') == nonce) for card in cards.values()
-        ):
-            cards, loaded = _load_management_cards(page, search_title=expected_title)
+        try:
+            cards, loaded = _load_management_cards(page)
+            if expected_title and loaded and not any(
+                normalized_post_id in {card.get('platform_post_id'), card.get('platform_export_id')}
+                or (nonce and card.get('platform_object_nonce') == nonce) for card in cards.values()
+            ):
+                cards, loaded = _load_management_cards(page, search_title=expected_title)
+        except ManagementListRateLimited:
+            _record_management_rate_limit(evidence_root, phase="READBACK")
+            _capture_wechat_evidence(page, evidence_root, "management_rate_limited")
+            return MANAGEMENT_UNCERTAIN, ""
         matches = [card for card in cards.values() if normalized_post_id in {
             card.get("platform_post_id"), card.get("platform_export_id")
         }] if loaded else []
@@ -2834,7 +2899,14 @@ def run_uploader(
             logger.warning("作品管理页未找到已绑定 ID 或未能判定状态: post_id=%s", platform_post_id)
             return EXIT_MANAGEMENT_UNCERTAIN
 
-        identity_baseline, identity_baseline_ready = capture_submission_identity_baseline(context, page)
+        try:
+            identity_baseline, identity_baseline_ready = capture_submission_identity_baseline(context, page)
+        except ManagementListRateLimited:
+            _record_management_rate_limit(evidence_root, phase="PRE_UPLOAD")
+            _capture_wechat_evidence(page, evidence_root, "management_rate_limited_pre_upload")
+            logger.error("Platform management list rate limited (-360); refusing upload or submission in this run.")
+            browser.close()
+            return 1
         if not identity_baseline_ready:
             logger.warning("Pre-submit platform-ID baseline unavailable; submission may proceed but will remain unbound.")
 

@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.4 | 2026-10-20 | Codex | 关闭会返回空成功的 CLI 内部计时，由宿主超时识别基础设施故障。 |
 | 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
 | 1.4.1 | 2026-09-22 | Codex | 区分本地启动受限与服务鉴权失败，提供无模型调用的启动预检。 |
 | 1.4.0 | 2026-09-22 | Codex | 允许调用方提供最小运行环境，独立 App 文案不继承业务 API 凭据。 |
@@ -59,7 +60,9 @@ def run_agy_structured(
         "--effort", effort,
         "--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
         "--output-format", "json",
-        "--print-timeout", f"{max(1, int(timeout_sec))}s",
+        # CLI 内部超时可能以 exit=0、空 SUCCESS 返回，无法可靠区分无效输出。
+        # 关闭内部计时，只由下方宿主超时产生可识别的基础设施故障。
+        "--print-timeout", "0s",
         f"--print={prompt}",
     ]
     try:

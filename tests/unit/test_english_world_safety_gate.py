@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-10-20 | Codex | 公司副总裁狭义消歧，并验证同篇政治题材和无公司证据的 president 仍拒绝。 |
 | fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.2.0 | 2026-09-17 | Codex | 覆盖研究域来源硬排除词在运行时安全门的二次拒绝。 |
 | 1.1.0 | 2026-09-17 | Codex | 覆盖视觉联系表存在性、目录边界及哈希重验。 |
@@ -23,6 +24,27 @@ from video_processing.english_world import safety_gate
 
 def _pass() -> CensorResult:
     return CensorResult(hit=False)
+
+
+@pytest.mark.parametrize("text", [
+    "Alex Edmison Senior Vice President at CBRE Limited discusses retail rents.",
+    "The vice president of Acme Inc. discusses new stores.",
+])
+def test_corporate_office_with_legal_suffix_is_not_a_political_figure(text):
+    assert not safety_gate._source_policy_result(text)["hit"]
+
+
+@pytest.mark.parametrize("text", [
+    "The president discusses retail rents.",
+    "The vice president of the United States discusses stores.",
+    "The vice president at CBRE discusses stores.",
+    "The president visited the vice president at CBRE Limited.",
+    "The vice president at CBRE Limited discusses the election.",
+    "The vice president at Trump Inc. discusses stores.",
+    "The vice president at CBRE Limited discusses tariff policy.",
+])
+def test_corporate_office_does_not_hide_other_political_context(text):
+    assert safety_gate._source_policy_result(text)["hit"]
 
 
 def _visual_receipt(

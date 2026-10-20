@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| timeout-v1 | 2026-10-20 | Codex | 验证宿主超时分类与空输出失败关闭，保持全文及九帧输入合同。 |
 | fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.0 | 2026-09-17 | Codex | 覆盖 high-effort AGY 参数、风险阻断及复核中产物变更的失败关闭。 |
 """
@@ -153,3 +154,22 @@ def test_codex_fallback_receives_actual_image_and_fulltext(monkeypatch, tmp_path
         model='gemini-3.8-flash-high', timeout_seconds=60, timeline=timeline, allow_fallback=True)
     assert receipt['provider'] == 'codex' and receipt['state'] == expected
     assert receipt['text_review']['input_sha256'] == review.fulltext_safety_input(timeline)['input_sha256']
+
+
+def test_visual_agy_uses_host_timeout_and_rejects_empty_success(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from video_processing.utils.english_world_provider import infrastructure_error
+
+    def timeout(args, **kwargs):
+        assert args[args.index("--print-timeout") + 1] == "0s"
+        assert kwargs["timeout"] == 16
+        raise review.subprocess.TimeoutExpired(args, 16, output="private source text")
+    monkeypatch.setattr(review.subprocess, "run", timeout)
+    with pytest.raises(review.AgyProviderError) as exc:
+        review._run_agy(agy_bin="agy", model="test", work_dir=tmp_path, timeout_seconds=1)
+    assert infrastructure_error(exc.value) and "private" not in str(exc.value)
+    monkeypatch.setattr(review.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=json.dumps({"status": "SUCCESS", "response": ""}), stderr=""))
+    with pytest.raises(review.VisualSafetyReviewError):
+        review._run_agy(agy_bin="agy", model="test", work_dir=tmp_path, timeout_seconds=1)

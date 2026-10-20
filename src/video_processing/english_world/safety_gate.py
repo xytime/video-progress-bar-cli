@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-10-20 | Codex | 仅豁免带法人后缀的公司副总裁职务词位，保留同篇政治词与独立语义审核。 |
 | 1.4.0 | 2026-10-20 | Codex | 允许已验证 Codex high-effort 回执，严格保留全文、九帧与哈希约束。 |
 | 1.3.0 | 2026-09-17 | Antigravity | 排除词典全量定义非展示字段，并按中英语言分流成片待审文本，消除英文子串误触发中文 CIA 及未选中义项误杀。 |
 | 1.2.0 | 2026-09-17 | Codex | 复用研究域来源硬排除词表，在候选安全门双重拒绝政治、冲突与成人等题材。 |
@@ -72,9 +73,20 @@ def _source_policy_result(en_text: str, zh_text: str = "") -> dict[str, Any]:
     normalized = re.sub(r"\bku[\W_]+klux[\W_]+klan\b", "ku klux klan", normalized)
     normalized = re.sub(r"\bk[\W_]*k[\W_]*k\b", "kkk", normalized)
     normalized = re.sub(r"三[\W_]*k[\W_]*党", "三k党", normalized)
+    # 公司副总裁并非政治人物。仅标记带明确法人后缀的职务中 president 的位置；
+    # 不移除整段文本，其他政治词及同篇出现的国家总统仍须独立命中。
+    corporate_presidents = {
+        match.span("office") for match in re.finditer(
+            r"\bvice (?P<office>president) (?:at|of) "
+            r"(?:[a-z0-9&.'-]+ ){0,6}(?:limited|ltd|incorporated|inc|corporation|corp|llc|plc)\b",
+            normalized,
+        )
+    }
     matched = next((term for term in sorted(HARD_BLOCKED_TERMS)
-                    if re.search(re.escape(term) if any("\u4e00" <= c <= "\u9fff" for c in term)
-                                 else rf"\b{re.escape(term)}\b", normalized)), None)
+                    if any(term != "president" or match.span() not in corporate_presidents
+                           for match in re.finditer(
+                               re.escape(term) if any("\u4e00" <= c <= "\u9fff" for c in term)
+                               else rf"\b{re.escape(term)}\b", normalized))), None)
     return {
         "hit": matched is not None,
         "level": "SOURCE_POLICY" if matched is not None else None,
