@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Codex | 冻结后再计划、部分恢复、外置备份、本机定义及他项目 cron 反例。 |
 | 1.0.0 | 2026-10-13 | Codex | KeepAlive、来源冲突、原禁用与 RunAtLoad 恢复 |
 """
 from pathlib import Path
@@ -142,3 +143,54 @@ def test_d09_loaded_wrong_definition_is_not_success(scheduling):
     path.write_bytes(plistlib.dumps(config))
     with pytest.raises(DeploymentDenied, match="RESTORED_DEFINITION_MISMATCH"):
         schedules.restored(plan)
+
+
+def test_frozen_sources_cannot_become_a_new_normal_baseline(scheduling):
+    schedules, commands, plan = scheduling
+    schedules.freeze(plan)
+    commands.disabled[UI] = False
+    before = len(commands.calls)
+    with pytest.raises(DeploymentDenied, match="PRODUCTION_SCHEDULES_SUSPENDED"):
+        schedules.snapshot()
+    assert not any(c[1] in {"disable", "bootout", "-", "bootstrap"} for c in commands.calls[before:])
+
+
+def test_restore_uses_private_home_definitions_and_records_intent(scheduling):
+    schedules, commands, plan = scheduling
+    schedules.freeze(plan)
+    commands.disabled[UI] = False
+    schedules.restore(plan)
+    loaded = Path(commands.services["com.videopipeline.once"]["path"])
+    assert loaded.is_relative_to(Path.home() / "Library/Application Support/VideoProcessing")
+    assert not loaded.is_relative_to(schedules.directory)
+    assert loaded.stat().st_mode & 0o777 == 0o600
+    schedules.require_operational_intent()
+    commands.services.pop("com.videopipeline.once")
+    with pytest.raises(DeploymentDenied, match="PRODUCTION_SCHEDULE_NOT_RESTORED"):
+        schedules.require_operational_intent()
+
+
+def test_intent_detects_missing_project_cron_preserving_other_projects(scheduling):
+    schedules, commands, plan = scheduling
+    schedules.freeze(plan)
+    commands.disabled[UI] = False
+    schedules.restore(plan)
+    commands.crontab += b"new other project\n"
+    schedules.require_operational_intent()
+    commands.crontab = b"keep-other-project\nnew other project\n"
+    with pytest.raises(DeploymentDenied, match="PROJECT_CRON_NOT_OPERATIONAL"):
+        schedules.require_operational_intent()
+
+
+def test_corrupt_intent_and_changed_definition_never_report_running(scheduling):
+    schedules, commands, plan = scheduling
+    schedules.freeze(plan)
+    commands.disabled[UI] = False
+    schedules.restore(plan)
+    loaded = Path(commands.services["com.videopipeline.once"]["path"])
+    loaded.write_bytes(plistlib.dumps({"Label": "com.videopipeline.once", "StartInterval": 1}))
+    with pytest.raises(DeploymentDenied, match="OPERATIONAL_DEFINITION_DRIFT"):
+        schedules.require_operational_intent()
+    (schedules.runtime_directory / "operational-intent.json").write_text("{")
+    with pytest.raises(DeploymentDenied, match="SCHEDULE_INTENT_INVALID"):
+        schedules.require_operational_intent()

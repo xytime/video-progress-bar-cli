@@ -3,9 +3,12 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Codex | 保存已核验运行调度意图，阻止冻结现场成为新基线；恢复定义使用本机私有目录。 |
 | 1.0.0 | 2026-10-13 | Codex | cron/launchd 受控快照与回读、保留原禁用及一次性任务 |
 """
 from pathlib import Path
+import hashlib
+import json
 import os
 import plistlib
 import re
@@ -59,6 +62,7 @@ class Schedules:
         return {line.split()[-1] for line in text.splitlines() if line.split() and line.split()[-1].startswith("com.videopipeline.")}
 
     def snapshot(self):
+        self.require_operational_intent()
         disabled = self.disabled()
         rows = []
         paths = sorted((Path.home() / "Library/LaunchAgents").glob("com.videopipeline.*.plist"))
@@ -93,6 +97,66 @@ class Schedules:
             p.write_bytes(payload)
             p.chmod(0o600)
         return {"launchd": rows, "cron": sha(cron), "frozen_cron": sha(frozen)}
+
+    @property
+    def runtime_directory(self):
+        # launchd 拒绝某些外置卷的所有权语义；私有定义始终放本机 HOME。
+        key = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:20]
+        return Path.home() / "Library/Application Support/VideoProcessing/schedules" / key
+
+    def project_cron_digest(self):
+        return sha(b"".join(line for line in self.cron().splitlines(keepends=True)
+                            if str(self.root).encode() in line))
+
+    def require_operational_intent(self):
+        """只读比对最近一次完整恢复；不得把维护残留当成正常运行基线。"""
+        path = self.runtime_directory / "operational-intent.json"
+        if not path.exists():
+            # 首次接入也不能认可“只恢复了 UI”的冻结现场。
+            recurring = []
+            for source in (Path.home() / "Library/LaunchAgents").glob("com.videopipeline.*.plist"):
+                config = plistlib.loads(source.read_bytes())
+                if config.get("Label") != UI and any(config.get(k) for k in
+                        ("StartInterval", "StartCalendarInterval", "KeepAlive")):
+                    recurring.append(config)
+            if recurring:
+                disabled = self.disabled()
+                require(any(not disabled.get(c["Label"], bool(c.get("Disabled")))
+                            and self.service(c["Label"])["loaded"] for c in recurring),
+                        "PRODUCTION_SCHEDULES_SUSPENDED")
+            return
+        try:
+            intent = json.loads(path.read_text())
+            require(intent["schema"] == 1 and intent["root"] == str(self.root.resolve()),
+                    "SCHEDULE_INTENT_INVALID")
+            require(self.project_cron_digest() == intent["project_cron"], "PROJECT_CRON_NOT_OPERATIONAL")
+            require({p.stem for p in (Path.home() / "Library/LaunchAgents").glob("com.videopipeline.*.plist")}
+                    == {row["label"] for row in intent["launchd"]}, "LAUNCHD_INVENTORY_DRIFT")
+            disabled = self.disabled()
+            for row in intent["launchd"]:
+                observed = self.service(row["label"])
+                require(observed["loaded"] == row["loaded"]
+                        and disabled.get(row["label"], row["disabled"]) == row["disabled"],
+                        "PRODUCTION_SCHEDULE_NOT_RESTORED:" + row["label"])
+                if observed["loaded"]:
+                    require(sha(Path(observed["path"]).read_bytes()) == row["definition_sha256"],
+                            "OPERATIONAL_DEFINITION_DRIFT:" + row["label"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise DeploymentDenied("SCHEDULE_INTENT_INVALID") from exc
+
+    def record_operational_intent(self, plan):
+        """完整回读通过后记录非秘密运行意图；失败不能覆盖上次正常状态。"""
+        self.restored(plan)
+        rows = []
+        for row in plan["launchd"]:
+            observed = self.service(row["label"])
+            rows.append({"label": row["label"], "loaded": row["loaded"], "disabled": row["disabled"],
+                         "definition_sha256": sha(Path(observed["path"]).read_bytes()) if row["loaded"] else None})
+        self.runtime_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = self.runtime_directory / "operational-intent.json"
+        write_json(path, {"schema": 1, "root": str(self.root.resolve()),
+                          "project_cron": self.project_cron_digest(), "launchd": rows})
+        path.chmod(0o600)
 
     def owner_binding(self, definition):
         if definition.get("WorkingDirectory") == str(self.root):
@@ -171,7 +235,9 @@ class Schedules:
                 # 恢复周期/日历，但不把已完成的一次性任务再跑一遍。
                 if config.get("RunAtLoad") and not config.get("KeepAlive"):
                     config["RunAtLoad"] = False
-                path = self.directory / (label + ".restore.plist")
+                folder = self.runtime_directory / sha(str(self.directory.resolve()).encode())[:20]
+                folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                path = folder / (label + ".restore.plist")
                 path.write_bytes(plistlib.dumps(config))
                 path.chmod(0o600)
                 if not row["disabled"]:
@@ -181,6 +247,7 @@ class Schedules:
         require(sha(self.cron()) == plan["frozen_cron"], "CRON_EDIT_CONFLICT")
         self.runner.run(["crontab", "-"], data=(self.directory / "cron.original").read_bytes())
         self.restored(plan)
+        self.record_operational_intent(plan)
 
     def restored(self, plan):
         self.files_check(plan)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Codex | 恢复业务前核对上次已验收的真实调度，阻止只开维护闸门。 |
 | 1.0.0 | 2026-10-12 | Codex | enter/status/resume/stop-ui 与启动归属预检 |
 """
 import argparse
@@ -12,6 +13,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from video_processing.core.maintenance import gate, MaintenanceDenied
 from video_processing.core.maintenance_runtime import inspection, stop_ui
+from video_processing.core.deployment_schedules import Schedules
+from video_processing.core.deployment import DeploymentDenied
+from config.settings import settings
 
 
 def main(argv=None):
@@ -37,6 +41,7 @@ def main(argv=None):
             if args.action == "resume":
                 if args.expected_version is None or not result["safe"]:
                     raise MaintenanceDenied("NOT_VERIFIED_IDLE")
+                Schedules(settings.project_root, settings.default_output_dir).require_operational_intent()
                 result = control.resume(args.expected_version, validated=True)
             elif args.action == "check-ui":
                 owner = result["workers"].get("ui")
@@ -47,7 +52,7 @@ def main(argv=None):
                 return 2
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    except (MaintenanceDenied, OSError, ValueError) as exc:
+    except (MaintenanceDenied, DeploymentDenied, OSError, ValueError) as exc:
         print(json.dumps({"ok": False, "code": getattr(exc, "code", "CONTROL_WRITE_FAILED")}, ensure_ascii=False))
         return 2
 
