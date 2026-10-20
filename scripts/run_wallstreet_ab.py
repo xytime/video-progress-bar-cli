@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-21 | Codex | 有可投递成片时历史回查让路，并在领取浏览器锁后再次核实。 |
 | 1.1.3 | 2026-10-10 | Codex | 抖音普通 A 已受理但尚无 ID 时只读精确正文取 ID，绝不回查未提交队列。 |
 | 1.1.2 | 2026-10-10 | Codex | 明确的上传前登录退出保存尝试证据并冷却重试；未知接受结果不恢复。 |
 | 1.1.1 | 2026-10-10 | Codex | 跨会话回读传入原提交回执 nonce，禁止历史无 nonce 作品弱绑定。 |
@@ -40,7 +41,7 @@ from video_processing.utils.insight_planner import generate_insight_script
 from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.utils.wechat_product_context import video_product_context
 from video_processing.utils.wechat_product_task import freeze_task_product_decision, write_product_task_arguments
-from video_processing.utils.wechat_product_execution import product_artifacts_digest, product_observation_generation, product_task_preflight
+from video_processing.utils.wechat_product_execution import product_artifacts_digest, product_observation_generation, product_task_preflight, blocked_product_task_keys
 
 
 from video_processing.core.maintenance_child import run_admitted
@@ -262,6 +263,22 @@ def apply_readback(db,publication,evidence,code,*,product_decision=None):
     return outcome
 
 
+def _yield_to_ready_wechat_delivery(db, platform):
+    """历史只读任务不抢占当前窗口中已通过队列资格的成片。"""
+    if platform != 'wechat' or settings.wechat_publishing_paused:
+        return False
+    if settings.is_public_publish_window() and db.get_high_score_pending_videos(
+            min_score=75, limit=1, ready_only=True,
+            channel_min_scores=settings.auto_publish_channel_min_scores,
+            excluded_product_tasks=blocked_product_task_keys(settings.default_output_dir,
+                                                            settings.wechat_product_policy_path)):
+        return True
+    return bool(settings.enable_english_world_auto_publish and settings.is_english_world_publish_window()
+                and db.get_next_auto_approved_english_world_submission(
+                    excluded_product_tasks=blocked_product_task_keys(settings.default_output_dir,
+                                                                    settings.wechat_product_policy_path)))
+
+
 def reconcile(db):
     db.recover_unstarted_wallstreet_douyin()
     now = time.time()
@@ -272,6 +289,8 @@ def reconcile(db):
                     db.sync_wallstreet_normal_a(publication['id'])
                 continue
             if publication['next_readback_at']>now:
+                continue
+            if _yield_to_ready_wechat_delivery(db, publication['platform']):
                 continue
             if publication['variant']=='A':
                 legacy = (db.get_wechat_publication(publication['youtube_id'],slice_index=publication['slice_index']) if publication['platform']=='wechat'
@@ -312,6 +331,8 @@ def reconcile(db):
             evidence = settings.default_output_dir/'wallstreet_ab'/str(publication['pair_id'])/'readback'/f"{publication['id']}-{int(now)}"
             try:
                 with TaskLease(settings.default_output_dir/f"{publication['platform']}_publish_priority.lock",stage='A/B只读回查'):
+                    if _yield_to_ready_wechat_delivery(db, publication['platform']):
+                        continue
                     ticket.start()
                     code = run_command(command(publication,package,evidence,verify=True),evidence)
                     apply_readback(db,publication,evidence,code)
