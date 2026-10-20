@@ -4,7 +4,10 @@
 .console-header-status { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:.8rem; color:var(--text2); }
 #header-runtime-state { color:var(--orange); font-weight:600; }
 #header-runtime-state[data-state="RUNNING"] { color:var(--green); }
-.console-layout .console-header-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.console-layout .console-header-actions { display:flex; align-items:flex-start; gap:8px; margin-left:auto; }
+.console-header-login { display:grid; gap:4px; text-align:center; }
+.console-header-login #btn-wechat-login { font-size:.875rem; line-height:1.4; }
+#header-wechat-age { font-size:.75rem; line-height:1.4; color:var(--text2); overflow-wrap:anywhere; }
 .console-header-actions button,.console-header-menu summary,.console-confirm-actions button { min-height:44px; padding:8px 12px; font:inherit; font-size:.875rem; color:var(--text); background:var(--bg2,var(--bg)); border:1px solid var(--border); border-radius:6px; cursor:pointer; }
 .console-header-actions button:disabled,.console-header-popup button:disabled,.console-confirm-actions button:disabled { cursor:not-allowed; opacity:.55; }
 .console-header-menu { position:relative; }
@@ -29,7 +32,7 @@
 @media(max-width:650px) {
   .console-header-heading { width:100%; }
   .console-layout .console-header-actions { width:100%; margin-left:0; flex-wrap:wrap; }
-  .console-header-actions > button,.console-header-actions > details { flex:1 1 calc(50% - 8px); }
+  .console-header-actions > button,.console-header-actions > details,.console-header-login { flex:1 1 calc(50% - 8px); }
   .console-header-menu summary { justify-content:center; }
   .console-header-popup { position:static; width:100%; margin-top:8px; box-shadow:none; }
   .console-header-menu[open] { flex-basis:100%; }

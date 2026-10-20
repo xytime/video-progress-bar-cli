@@ -3909,6 +3909,8 @@ def get_wechat_status():
         "state_exists": state_path.exists(),
         "login_marker_active": login_marker_active,
         "status_label": eval_status.get("status_label"),
+        "authorization_relative_age": eval_status.get("relative_age", "无记录"),
+        "authorization_time_bj": eval_status.get("login_time_bj", "无授权记录"),
         "qr_exists": qr_path.exists(),
         "is_running": is_running,
         "login_flow_active": login_flow_active,

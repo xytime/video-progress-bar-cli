@@ -101,8 +101,8 @@
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js"></script>
 <script defer src="/static/js/dashboard_workspace.js?v=20261020-header"></script>
-<script defer src="/static/js/console_header.js?v=20261020"></script>
-<link rel="stylesheet" href="/static/css/console_header.css?v=20261020_2">
+<script defer src="/static/js/console_header.js?v=20261020-auth-age"></script>
+<link rel="stylesheet" href="/static/css/console_header.css?v=20261020_3">
 </head>
 <body>
 <div class="app">
@@ -120,7 +120,10 @@
           <p>搜索高互动视频并更新素材列表，不启动加工。</p>
         </div>
       </details>
-      <button type="button" id="btn-wechat-login" class="btn-tool-prefs" onclick="wechatLogin()" disabled>微信扫码登录</button>
+      <div class="console-header-login">
+        <button type="button" id="btn-wechat-login" class="btn-tool-prefs" onclick="wechatLogin()" aria-describedby="header-wechat-age" disabled>微信扫码登录</button>
+        <small id="header-wechat-age">授权时间核实中</small>
+      </div>
       <button type="button" id="btn-toggle-preferences" class="btn-tool-prefs" onclick="toggleDisplayPreferences()" title="外观风格与字号设置">外观设置</button>
       <details id="header-more-menu" class="console-header-menu">
         <summary>更多操作</summary>

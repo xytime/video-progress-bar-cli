@@ -16,12 +16,14 @@
     $('header-runtime-state').textContent = running ? '正常运行' : runtime?.state === 'MAINTENANCE' ? '维护中' : '运行状态未核实';
     $('header-runtime-state').dataset.state = runtime?.state || 'UNKNOWN';
     $('header-wechat-state').textContent = !wechat ? '微信状态未核实' : wechat.login_flow_active ? '微信：登录进行中' : `微信：${wechat.status_label || '状态未知'}`;
+    $('header-wechat-age').textContent = wechat?.authorization_relative_age ? `上次授权：${wechat.authorization_relative_age}` : '授权时间未核实';
+    $('header-wechat-age').title = wechat?.authorization_time_bj ? `上次授权：${wechat.authorization_time_bj}（本地记录）` : '尚未读取到授权时间';
     controls.forEach(id => {
       const element = $(id); if (!element) return;
       const scan = id === 'btn-scan-channels' ? scans.channels : ['btn-scan-engagement', 'btn-refresh-high-likes'].includes(id) ? scans.engagement : false;
       element.disabled = !running || pending || Boolean(busy) || scan || (id === 'btn-wechat-login' && (!wechat || wechat.login_flow_active));
       element.title = !running ? '维护或状态未核实，暂不能执行' : scan ? '同类扫描正在进行，请勿重复提交' : id === 'btn-wechat-login' && wechat?.login_flow_active ? '已有登录流程，请勿重复启动' : '';
-      element.setAttribute('aria-describedby', 'header-operation-feedback');
+      element.setAttribute('aria-describedby', id === 'btn-wechat-login' ? 'header-wechat-age header-operation-feedback' : 'header-operation-feedback');
     });
     $('btn-scan-channels').textContent = scans.channels ? '频道扫描中…' : '扫描白名单频道';
     $('btn-scan-engagement').textContent = scans.engagement ? '高互动素材刷新中…' : '刷新高互动素材';

@@ -35,7 +35,9 @@ def header_page(chromium):
                 'channel_scan': {'running': state['scan'], 'outcome': 'idle'}})
         elif path == '/api/wechat/status':
             route.fulfill(json={'login_flow_active': state['login'] == 'active',
-                                'status_label': '授权已过期' if state['login'] == 'expired' else '状态未知'})
+                                'status_label': '授权已过期' if state['login'] == 'expired' else '状态未知',
+                                'authorization_relative_age': '2小时前',
+                                'authorization_time_bj': '2026-10-20 16:00:00 BJ'})
         elif path == '/api/high-likes/status':
             route.fulfill(json={'running': False})
         else:
@@ -59,6 +61,8 @@ def test_maintenance_menus_and_all_workspace_sections(header_page):
         expect(page.locator('#btn-wechat-login')).to_be_visible()
         expect(page.locator('#btn-wechat-login')).to_be_disabled()
         expect(page.locator('#header-wechat-state')).to_contain_text('授权已过期')
+        expect(page.locator('#header-wechat-age')).to_have_text('上次授权：2小时前')
+        expect(page.locator('#header-wechat-age')).to_have_attribute('title', '上次授权：2026-10-20 16:00:00 BJ（本地记录）')
     page.locator('#header-scan-menu summary').click()
     for id in ('btn-scan-channels', 'btn-scan-engagement'):
         expect(page.locator('#' + id)).to_be_visible()

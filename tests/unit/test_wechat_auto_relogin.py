@@ -59,6 +59,8 @@ def test_get_wechat_status_failed_keepalive_not_green_despite_active_marker(tmp_
     assert status["logged_in"] is False
     assert status["login_marker_active"] is False
     assert "❌ 会话已失效" in status["status_label"]
+    assert status["authorization_relative_age"] == "16分钟前"
+    assert status["authorization_time_bj"].endswith(" BJ")
 
     # 2. 模拟保活失败 INVALID_ORIGIN
     record_wechat_keepalive_result(state_file, status="INVALID_ORIGIN", timestamp=now - 5)
