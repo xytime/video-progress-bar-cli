@@ -96,6 +96,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/dashboard.css?v=20261014-filters2" />
+  <link rel="stylesheet" href="/static/css/engagement_rows.css?v=20261020_2" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js"></script>
@@ -314,7 +315,19 @@
           <select id="video-filter-error" onchange="applyVideoFilters()"><option value="all">全部异常</option><option value="channel_policy">频道策略拦截</option><option value="login">Cookie / 登录</option><option value="youtube_403">YouTube 403</option><option value="copy_quality">文案质量门禁</option><option value="censorship_p0">审查 P0</option><option value="other">其他</option></select>
         </span>
         <span class="filter-context" id="filter-engagement-context" hidden>
-          <select id="video-filter-status" onchange="applyVideoFilters()"><option value="all">全部处理阶段</option><option value="PENDING">待处理</option><option value="FAILED">失败</option><option value="SUBMITTED_BOUND">已提交，待确认发布</option><option value="UNDER_REVIEW">审核中</option><option value="UNCERTAIN">待核验</option></select>
+          <select id="video-filter-status" aria-label="按处理状态筛选" onchange="applyVideoFilters()">
+            <option value="all">全部处理状态</option>
+            <option value="ENG_DISCOVERY">仅供选题</option><option value="ENG_UNSCORED">待评分</option>
+            <option value="ENG_LOW_SCORE">未达入队分数</option><option value="ENG_PENDING">待加工</option>
+            <option value="ENG_ACTIVE">加工中</option><option value="ENG_FAILED">处理失败</option>
+            <option value="ENG_POLICY">规则拦截</option><option value="ENG_LOGIN">等待登录</option>
+            <option value="ENG_READY">成片就绪</option><option value="ENG_SUBMITTED">已提交，待确认</option>
+            <option value="ENG_REVIEW">平台审核中</option><option value="ENG_VERIFY">发布记录待核实</option>
+            <option value="ENG_PUBLISHED">已有确认发布记录</option><option value="ENG_SEGMENTED">已拆分加工</option>
+            <option value="ENG_EXCLUDED">已排除</option><option value="ENG_UNKNOWN">状态待核实</option>
+            <option value="PENDING">待处理（原始状态）</option><option value="FAILED">失败（原始状态）</option>
+            <option value="SUBMITTED_BOUND">已提交并绑定</option><option value="UNDER_REVIEW">审核中（原始状态）</option><option value="UNCERTAIN">待核验（原始状态）</option>
+          </select>
           <select id="video-filter-window" onchange="applyVideoFilters()"><option value="1">近 1 天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
         </span>
         <fieldset id="like-rate-filter" aria-describedby="like-rate-help">
@@ -374,10 +387,10 @@
       <!-- 近期高互动专属工具栏：浏览标记由服务端持久化，但不改变投稿状态。 -->
       <div id="high-likes-bar">
         <span style="color:var(--green); font-weight:600;">✨ 近期高互动</span>
-        <span style="color:var(--text3); font-size:0.75rem;">近上传日期窗口、观看数大于 500；浏览标记默认隐藏</span>
+        <span style="color:var(--text3); font-size:0.75rem;">观看数大于 500；浏览标记与加工状态独立</span>
         <label style="margin-left:auto;">
           <input type="checkbox" id="cb-show-processed" onchange="toggleShowProcessed(this.checked)" />
-          显示已处理
+          显示已浏览
         </label>
         <span id="processed-count-badge" style="font-size:0.75rem; color:var(--text3);"></span>
         <!-- [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 手动刷新按钮 -->
@@ -682,6 +695,7 @@
 <script src="/static/js/channel_manager.js?v=20260926_2"></script>
 <script src="/static/js/product_picker.js?v=20261011_1"></script>
 <script src="/static/js/manual_products.js?v=20261011_1"></script>
+<script src="/static/js/engagement_rows.js?v=20261020"></script>
 <script>
   function handleCoverError(img) {
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
@@ -1498,7 +1512,7 @@
         else if (currentTab === 'ready') emptyMsg = '当前没有等待发布的成片';
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
         else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
-        else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已处理”查看历史';
+        else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已浏览”查看历史';
         if (filterState.likeRateMin !== null || filterState.likeRateMax !== null) emptyMsg = '当前点赞率区间没有匹配记录，请调整区间或清除筛选';
         tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
@@ -1617,10 +1631,10 @@
         }
 
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
-        // 近期高互动只提供浏览标记/外链；不因筛选页新增重试、重传或发布入口。
+        // 浏览标记独立于生产动作；高互动的可执行动作由服务端核实后返回。
         const markDoneBtn = isDone
-          ? `<button class="btn-mark-undone" onclick="markProcessed('${v.youtube_id}', false)" title="撤销已处理标记">↩ 撤销</button>`
-          : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="标记为已处理">✓ 已处理</button>`;
+          ? `<button class="btn-mark-undone" onclick="markProcessed('${v.youtube_id}', false)" title="撤销已浏览标记">撤销已浏览</button>`
+          : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="仅标记看过，不改变加工或发布状态">标记已浏览</button>`;
         const ytLinkBtn = `<a href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
              class="btn-score" style="text-decoration:none; padding:3px 8px; font-size:0.75rem;" title="在 YouTube 中查看">▶ 查看</a>`;
         // [Claude_Opus_4.8] 高赞发现专属：一键转 MANUAL 并立即下载/发布
@@ -1631,11 +1645,9 @@
         const bypassBtn = isCensorFail
           ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
           : '';
-        const engagementBrowseBtn = isDone
-          ? markDoneBtn + ytLinkBtn
-          : markDoneBtn + ytLinkBtn;
+        const engagementBrowseBtn = markDoneBtn + ytLinkBtn;
         const retryBtn = currentTab === 'high_likes'
-          ? (isDiscovery ? promoteBtn : '') + engagementBrowseBtn
+          ? window.EngagementRows.actions(v) + `<div class="engagement-browse">${engagementBrowseBtn}</div>`
           : isDiscovery
           ? promoteBtn + markDoneBtn + ytLinkBtn + deleteBtn
           : v.status === 'LOGIN_REQUIRED'
@@ -1897,7 +1909,7 @@
           censorBadge = `<span class="meta-chip censor-badge censor-hit" style="background: ${censorBg}; color: ${censorColor}; border: 1px solid ${censorBorder}; font-weight: 500;">⚠️ ${v.censor_tag}</span>`;
         } else {
           if (currentTab === 'high_likes' || v.source === 'DISCOVERY') {
-            censorBadge = `<span class="meta-chip censor-badge censor-safe" style="background: rgba(16, 185, 129, 0.1); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.15); font-weight: 500;">✅ 未命中敏感词</span>`;
+            censorBadge = `<span class="meta-chip censor-badge" style="color: var(--text2); border: 1px solid var(--border);">审查未核验</span>`;
           }
         }
 
@@ -1923,7 +1935,9 @@
           cp.cover_sha256 && `SHA256：${cp.cover_sha256}`].filter(Boolean);
         const coverSource = `<details class="cover-source" onkeydown="if(event.key==='Escape'){this.open=false;this.querySelector('summary').focus();}"><summary>${escapeHtml(cp.label || '来源未核验')}</summary><div>${coverDetails.map(escapeHtml).join('<br>')}</div></details>`;
         const hasLocalCover = ['PUBLISHING', 'PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND'].includes(v.status);
-        const isPublished = ['PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND'].includes(v.status) || v.display_status === 'PUBLISHED';
+        const isPublished = currentTab === 'high_likes'
+          ? v.engagement?.stage === 'ENG_PUBLISHED'
+          : ['PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND'].includes(v.status) || v.display_status === 'PUBLISHED';
 
         // 状态徽章在移动端直接挂在封面缩略图正下方，垂直居中排布
         const coverCell = `
@@ -1942,7 +1956,7 @@
               `}
               ${coverSource}
               <div class="cover-status-badge mobile-only">
-                ${statusBadge(v.display_status || v.status)}
+                ${currentTab === 'high_likes' ? '' : statusBadge(v.display_status || v.status)}
               </div>
             </div>
           </td>`;
@@ -1963,7 +1977,9 @@
 
         // 移动端专属核心数据卡（打分、评分提取、浏览量、互动率）采用 2x2 紧凑自适应网格
         const scoreValStr = score != null ? `${score}<small>分</small>` : '—';
-        const scoreStateTag = (isPending && score < 75)
+        const scoreStateTag = currentTab === 'high_likes'
+          ? (v.engagement?.stage === 'ENG_LOW_SCORE' ? '<span class="mcm-tag mcm-tag-warn">低于入队线</span>' : '')
+          : (isPending && score < 75)
           ? `<span class="mcm-tag mcm-tag-warn">低于75分暂停</span>`
           : (score >= 75)
           ? `<span class="mcm-tag mcm-tag-pass">${isPublished ? '已发布' : '达标入队'}</span>`
@@ -2003,7 +2019,7 @@
             ${cbCell}
             ${coverCell}
             <td class="info-cell">
-              ${isPublished ? '<div class="published-ribbon-tag mobile-only">✅ 已发布成功</div>' : ''}
+              ${isPublished ? `<div class="published-ribbon-tag mobile-only">${currentTab === 'high_likes' ? '已有确认发布记录' : '✅ 已发布成功'}</div>` : ''}
               ${titleBlock}
               ${channelRow}
               <div class="product-intent-detail">${escapeHtml(window.ManualProducts.taskText(v))}</div>
@@ -2015,8 +2031,7 @@
             <td class="vt-cell ${viewsCls}">${viewsStr}</td>
             <td class="lr-cell ${lrCls}">${lrStr}</td>
             <td class="status-cell">
-              <span class="desktop-only-status">${statusBadge(v.display_status || v.status)}</span>
-              ${readyPublicationDetails(v)}
+              ${currentTab === 'high_likes' ? window.EngagementRows.state(v) : `<span class="desktop-only-status">${statusBadge(v.display_status || v.status)}</span>${readyPublicationDetails(v)}`}
               ${v.status === 'DOWNLOADING' ? `
               <div class="dl-progress" data-dlprog="${v.youtube_id}">
                 <div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div>
@@ -2637,7 +2652,9 @@
   let _bypassSlice = 0;
   let _bypassSeverity = 'low';
   let _bypassRequest = 0;
-  async function openBypassModal(youtubeId, sliceIndex = 0) {
+  let _bypassEngagementVersion = null;
+  async function openBypassModal(youtubeId, sliceIndex = 0, engagementVersion = null) {
+    _bypassEngagementVersion = engagementVersion;
     if (typeof navigator.vibrate === 'function') navigator.vibrate(15);
     _bypassYid = youtubeId;
     _bypassSlice = sliceIndex || 0;
@@ -2766,7 +2783,7 @@
             body: JSON.stringify({ confirm_p0_review: true, confirm_pipeline_resume: true }),
           }
         : { method: 'POST' };
-      const r = await fetch(`/api/videos/${_bypassYid}/bypass-censor?slice_index=${_bypassSlice}`, options);
+      const r = await fetch(`/api/videos/${_bypassYid}/bypass-censor?slice_index=${_bypassSlice}${_bypassEngagementVersion ? '&engagement_version=' + encodeURIComponent(_bypassEngagementVersion) : ''}`, options);
       const d = await r.json();
       if (d.success) {
         showToast('✅ ' + (d.message || '已复核放行'));
@@ -2774,7 +2791,7 @@
         loadVideos();
         fetchStats();
       } else {
-        showToast('❌ 放行失败: ' + (d.error || '未知错误'), 'error');
+        showToast('❌ 放行失败: ' + (d.error || d.detail || '未知错误'), 'error');
         btn.disabled = false; btn.innerHTML = oldText;
       }
     } catch (e) {

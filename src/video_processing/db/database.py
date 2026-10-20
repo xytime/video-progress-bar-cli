@@ -6285,6 +6285,80 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 "children": children
             }
 
+    @staticmethod
+    def _engagement_score_line_sql() -> str:
+        """与普通 75 分线及频道专属入队线一致；配置值严格按 SQL 字面量引用。"""
+        overrides = settings.auto_publish_channel_min_scores
+        clauses = [
+            "WHEN '" + cid.replace("'", "''") + f"' THEN {min(75, int(line))}"
+            for cid, line in overrides.items()
+        ]
+        return "CASE pv.channel_id " + " ".join(clauses) + " ELSE 75 END" if clauses else "75"
+
+    @classmethod
+    def _engagement_stage_sql(cls) -> str:
+        """高互动展示和筛选共用一个阶段；平台记录优先于可重试的本地状态。"""
+        line = cls._engagement_score_line_sql()
+        # 与已确认发布列表共用排除标记，不能把平台排队或审核中称为已发布。
+        markers = cls._PLATFORM_REVIEW_MARKERS + cls._PLATFORM_UNCONFIRMED_MARKERS
+        confirmed = " AND ".join(
+            "COALESCE(w.last_error_message,'') NOT LIKE '%" + marker.replace("'", "''") + "%'"
+            for marker in markers
+        )
+        return f"""CASE
+            WHEN EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=pv.id
+                AND w.state='PUBLISHED' AND w.confirmed_at IS NOT NULL
+                AND COALESCE(w.platform_post_id,'')!='' AND COALESCE(w.evidence_path,'')!='')
+                OR EXISTS (SELECT 1 FROM douyin_publications w WHERE w.video_id=pv.id
+                    AND w.state='PUBLISHED' AND w.published_at IS NOT NULL AND {confirmed})
+                OR EXISTS (SELECT 1 FROM kuaishou_publications w WHERE w.video_id=pv.id
+                    AND w.state='PUBLISHED' AND w.published_at IS NOT NULL AND {confirmed})
+                THEN 'ENG_PUBLISHED'
+            WHEN pv.status='PUBLISHING' THEN 'ENG_ACTIVE'
+            WHEN pv.status IN ('SUBMITTED_BOUND','SUBMITTED_UNBOUND') THEN 'ENG_SUBMITTED'
+            WHEN pv.status='UNDER_REVIEW' THEN 'ENG_REVIEW'
+            WHEN COALESCE(pv.publication_review_required,0)=1
+                OR pv.status IN ('PUBLISHED','COMPLETED','UNCERTAIN','REJECTED','NOT_FOUND',
+                                'HISTORICAL_UNRESOLVED','HISTORICAL_ARCHIVED','WECHAT_DEFERRED')
+                OR EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=pv.id)
+                OR EXISTS (SELECT 1 FROM wechat_publications_historical_archive w WHERE w.video_id=pv.id)
+                OR EXISTS (SELECT 1 FROM douyin_publications w WHERE w.video_id=pv.id)
+                OR EXISTS (SELECT 1 FROM kuaishou_publications w WHERE w.video_id=pv.id)
+                THEN 'ENG_VERIFY'
+            WHEN pv.status='SEGMENTED' THEN 'ENG_SEGMENTED'
+            WHEN pv.status='LOGIN_REQUIRED' THEN 'ENG_LOGIN'
+            WHEN pv.status='FAILED' AND (COALESCE(pv.error_msg,'') LIKE 'Censorship %'
+                OR COALESCE(pv.error_msg,'') LIKE 'Channel Policy Reject:%') THEN 'ENG_POLICY'
+            WHEN pv.status IN ('PROCESSING','PUBLISH_PRECHECK','DOWNLOADING','COPYWRITING',
+                               'TRANSCRIBING','RENDERING','AI_COVER_PENDING') THEN 'ENG_ACTIVE'
+            WHEN pv.status IN ('EXPIRED','IGNORED')
+                OR EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id=pv.youtube_id)
+                OR EXISTS (SELECT 1 FROM recommended_channels c WHERE c.channel_id=pv.channel_id AND c.status='BLACKLISTED')
+                OR NOT keyword_allowed(pv.source,pv.youtube_id) THEN 'ENG_EXCLUDED'
+            WHEN pv.status='FAILED' THEN 'ENG_FAILED'
+            WHEN pv.status='PENDING' AND COALESCE(pv.preparation_ready,0)=1 THEN 'ENG_READY'
+            WHEN pv.status='PENDING' AND pv.source='DISCOVERY' THEN 'ENG_DISCOVERY'
+            WHEN pv.status IN ('PENDING','METADATA_PENDING') AND COALESCE(pv.score,0)=0
+                AND pv.score_computed_at IS NULL AND pv.rescore_checked_at IS NULL THEN 'ENG_UNSCORED'
+            WHEN pv.status='PENDING' AND COALESCE(pv.score,0)<{line} THEN 'ENG_LOW_SCORE'
+            WHEN pv.status='PENDING' THEN 'ENG_PENDING'
+            ELSE 'ENG_UNKNOWN' END"""
+
+    def get_engagement_video(self, youtube_id: str, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """点击前回读同一任务及平台记录；不修改任何业务状态。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                f"""SELECT pv.*, {self._engagement_stage_sql()} AS engagement_stage,
+                    {self._engagement_score_line_sql()} AS engagement_score_line
+                    FROM processed_videos pv WHERE youtube_id=? AND slice_index=?""",
+                (youtube_id, slice_index),
+            ).fetchone()
+        if row is None:
+            return None
+        video = dict(row)
+        video["platforms"] = self.get_video_publications_map([video["id"]]).get(video["id"], {})
+        return video
+
     def _build_video_tab_condition(
         self, tab: str, engagement_window_days: int, include_expired: bool = False
     ) -> tuple[str, List[Any]]:
@@ -6479,7 +6553,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             clauses.append(f"({error_clause})")
             query_params.extend(error_params)
         if status != 'all':
-            clauses.append('pv.status = ?')
+            clauses.append(f'({self._engagement_stage_sql()}) = ?' if status.startswith('ENG_') else 'pv.status = ?')
             query_params.append(status)
         if created_window == '24h':
             clauses.append("pv.created_at >= datetime('now', '-24 hours')")
@@ -6525,13 +6599,18 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
 
         where = ' AND '.join(f'({clause})' for clause in clauses)
         offset = (page - 1) * size
+        engagement_columns = (
+            f"{self._engagement_stage_sql()} AS engagement_stage, "
+            f"{self._engagement_score_line_sql()} AS engagement_score_line,"
+            if tab == 'high_likes' else ""
+        )
         with self.get_connection() as conn:
             total_count = conn.execute(
                 f"SELECT COUNT(*) AS cnt FROM processed_videos pv LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id WHERE {where}",
                 query_params,
             ).fetchone()['cnt']
             rows = conn.execute(
-                f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
+                f"""SELECT pv.*, {engagement_columns} COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
                            EXISTS(SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED') AS browser_processed,
                            (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count,
                            (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) AS completed_slices_count

@@ -147,6 +147,8 @@ from video_processing.core.maintenance_child import run_admitted
 from video_processing.core.maintenance import gate, guarded, entry, running, spawn_admitted, MaintenanceDenied
 from video_processing.core.maintenance_child import child_continuation
 from video_processing.core.maintenance_runtime import registered, role_lease, inspection
+from video_processing.core.engagement_presentation import STAGES as ENGAGEMENT_STAGES, present_engagement
+from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 app.include_router(listening_transcriber_router)
@@ -230,6 +232,15 @@ async def maintenance_admission(request, call_next):
                 pass
         with gate().admit("web-write", key) as ticket:
             ticket.start()
+            if matched and request.url.path.rsplit("/", 1)[-1] in {"process", "promote", "retry", "bypass-censor"}:
+                # 同一视频的人工恢复请求跨线程/进程互斥，先核实版本再执行完整动作。
+                lock_key = hashlib.sha256(matched[1].encode()).hexdigest()
+                try:
+                    with TaskLease(_OUT_DIR / "engagement_action_locks" / f"{lock_key}.lock",
+                                   stage="dashboard-action", video=matched[1]):
+                        return await call_next(request)
+                except TaskLeaseBusy:
+                    return JSONResponse(status_code=409, content={"detail": "该视频已有操作正在提交，请刷新后查看"})
             return await call_next(request)
     except MaintenanceDenied as exc:
         return JSONResponse(status_code=503, content={"detail": {"code": exc.code, "message": str(exc)}})
@@ -1695,7 +1706,7 @@ def _validate_video_list_query(
         raise HTTPException(status_code=422, detail="unknown score band")
     if error_type not in _ERROR_TYPES:
         raise HTTPException(status_code=422, detail="unknown error type")
-    if status != "all" and status not in _VIDEO_STATUSES:
+    if status != "all" and status not in _VIDEO_STATUSES and status not in ENGAGEMENT_STAGES:
         raise HTTPException(status_code=422, detail="unknown status")
     if engagement_window_days not in _ENGAGEMENT_WINDOWS:
         raise HTTPException(status_code=422, detail="unsupported engagement window")
@@ -1793,6 +1804,14 @@ def get_videos(
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
     _attach_publish_display_fields(videos)
     _attach_ready_publication_fields(videos)
+    if tab == "high_likes":
+        for video in videos:
+            video["engagement"] = present_engagement(video)
+            path = _prepared_video_path(video["youtube_id"], video.get("slice_index") or 0)
+            video["prepared_video_url"] = (
+                f"/api/videos/{video['youtube_id']}/prepared-video?slice_index={video.get('slice_index') or 0}"
+                if path and video.get("preparation_ready") else None
+            )
     tab_counts = db.get_tab_counts()
     return {
         "videos": videos,
@@ -1803,6 +1822,24 @@ def get_videos(
         "tab_counts": tab_counts,
         "filter_options": {"channels": db.get_video_filter_channels(tab, engagement_window_days)},
     }
+
+
+def _prepared_video_path(youtube_id: str, slice_index: int) -> Optional[Path]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", youtube_id) or slice_index < 0:
+        return None
+    path = _backfill_asset_paths(youtube_id, slice_index)["video"]
+    return path if path.is_file() and path.resolve().is_relative_to(_OUT_DIR.resolve()) else None
+
+
+@app.get("/api/videos/{youtube_id}/prepared-video")
+def prepared_video(youtube_id: str, slice_index: int = 0):
+    """只读取该任务的成片，不接受任意文件路径，不触发加工或发布。"""
+    if not db.get_video_by_youtube_id(youtube_id, slice_index=slice_index):
+        raise HTTPException(404, "视频不存在")
+    path = _prepared_video_path(youtube_id, slice_index)
+    if path is None:
+        raise HTTPException(404, "成片当前不可用")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.get("/api/published-videos")
@@ -2676,12 +2713,28 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     return {"success": True, "youtube_id": youtube_id, "score": new_score, "triggered": triggered}
 
 
+def _check_engagement_action(youtube_id: str, action: str, version: Optional[str], slice_index: int = 0) -> None:
+    """高互动入口按服务端最新事实重新核实，不信任页面按钮或旧快照。"""
+    if version is None:
+        return  # 保持其他控制台入口的既有契约及各自保护。
+    video = db.get_engagement_video(youtube_id, slice_index)
+    if video is None:
+        raise HTTPException(404, "视频不存在")
+    current = present_engagement(video)
+    if current["version"] != version or current["action"] != action:
+        raise HTTPException(409, "任务状态或操作资格已变化，请刷新列表后重新检查")
+
+
 @app.post("/api/videos/{youtube_id}/process")
-def process_video_now(youtube_id: str):
+def process_video_now(youtube_id: str, engagement_version: Optional[str] = None):
     """立即处理指定视频，忽略分数阈值。"""
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
+    _check_engagement_action(youtube_id, "process", engagement_version)
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": guard_reason}
     # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频仅供浏览，禁止通过 API 直接触发自动处理管线
     if video.get("source") == "DISCOVERY":
         return {"success": False, "error": "DISCOVERY 来源视频不允许自动处理，请手动添加后再执行"}
@@ -2696,7 +2749,7 @@ def process_video_now(youtube_id: str):
 
 
 @app.post("/api/videos/{youtube_id}/promote")
-def promote_video(youtube_id: str):
+def promote_video(youtube_id: str, engagement_version: Optional[str] = None):
     """将高赞发现(DISCOVERY)或待筛选(waitlist)低分视频一键「提权/加入队列」并立即处理。
 
     - DISCOVERY 来源：原子转换 source 为 MANUAL、score=100 并加评分锁，脱离发现防火墙；
@@ -2707,6 +2760,7 @@ def promote_video(youtube_id: str):
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
+    _check_engagement_action(youtube_id, "promote", engagement_version)
 
     guard_reason = _wechat_submission_guard_reason(video)
     if guard_reason:
@@ -2928,6 +2982,7 @@ def bypass_censor(
     youtube_id: str,
     request: Optional[CensorshipBypassRequest] = None,
     slice_index: int = 0,
+    engagement_version: Optional[str] = None,
 ):
     """[Claude_Opus_4.8] 人工复核放行：对审查类失败视频置 bypass 标志，解黑名单、过线、重置并重新触发。
 
@@ -2942,6 +2997,10 @@ def bypass_censor(
     video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if not video:
         return {"success": False, "error": "视频不存在"}
+    _check_engagement_action(youtube_id, "bypass-censor", engagement_version, slice_index)
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": guard_reason}
 
     em = video.get("error_msg") or ""
     is_censor_fail = ("Censorship" in em) or ("Channel Policy" in em) or bool(video.get("censor_tag"))
@@ -3117,7 +3176,7 @@ def republish_video(youtube_id: str):
 
 
 @app.post("/api/videos/{youtube_id}/retry")
-def retry_video(youtube_id: str):
+def retry_video(youtube_id: str, engagement_version: Optional[str] = None):
     """
     重试/强制重置视频状态为 PENDING。
     - FAILED / LOGIN_REQUIRED：正常重试，清除错误信息
@@ -3127,6 +3186,7 @@ def retry_video(youtube_id: str):
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
+    _check_engagement_action(youtube_id, "retry", engagement_version)
 
     submission_guard = _wechat_submission_guard_reason(video)
     if submission_guard:

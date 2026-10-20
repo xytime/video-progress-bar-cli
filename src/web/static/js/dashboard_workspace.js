@@ -54,7 +54,7 @@
       const allowed={sort:['source_published_at_desc','updated_at_desc','score_desc','views_desc','like_rate_desc'],
         size:['20','50','100'],score_band:['all','unscored','below_50','50_74','80_plus'],
         error_type:['all','channel_policy','login','youtube_403','copy_quality','censorship_p0','other'],
-        status:['all','PENDING','FAILED','SUBMITTED_BOUND','UNDER_REVIEW','UNCERTAIN'],
+        status:[...document.querySelectorAll('#video-filter-status option')].map(option=>option.value),
         engagement_window_days:['1','3','7','30'],include_processed:['true','false'],include_expired:['true','false'],
         created_window:['all','24h','today_bj','7d','30d']};
       rememberedKeys.forEach(key=>{
