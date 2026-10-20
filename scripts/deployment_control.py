@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-20 | Codex | 独立安全维护回执可证明精确旧进程，保持原生部署和在途门禁 |
 | 1.2.0 | 2026-10-14 | Codex | 显式保留已完成阶段配置，拒绝配置转换混用 |
 | 1.3.0 | 2026-10-15 | Codex | 可引用已完成部署证明旧 worker 来源，精确身份只用于维护退役 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
@@ -20,6 +21,7 @@ from video_processing.core.deployment import Deployment, DeploymentDenied, read_
 from video_processing.core.deployment_sources import prepare
 from video_processing.core.deployment_schedules import Schedules, UI
 from video_processing.core.deployment_host import HostDeployment, LOADED_IMPLEMENTATION, retirement_snapshot
+from video_processing.core.deployment_retirement import inspection_retirement_snapshot
 from video_processing.core.maintenance_runtime import protection_snapshot
 
 
@@ -30,7 +32,9 @@ def main(argv=None):
     parser.add_argument("--target")
     parser.add_argument("--tested-manifest", type=Path)
     parser.add_argument("--overlay", type=Path)
-    parser.add_argument("--retire-from-deployment", type=Path)
+    retirement = parser.add_mutually_exclusive_group()
+    retirement.add_argument("--retire-from-deployment", type=Path)
+    retirement.add_argument("--retire-from-inspection", type=Path)
     parser.add_argument("--preserve-keyword-profile", action="store_true")
     parser.add_argument("--keyword-stage", choices=["TRIAL", "OFF", "MANUAL", "SCHEDULED", "ADMISSION", "LONG_TERM"])
     parser.add_argument("--keyword-evidence", type=Path)
@@ -51,6 +55,8 @@ def main(argv=None):
                     "schedules": schedules, "protections": protection_snapshot(), "implementation": LOADED_IMPLEMENTATION}
             if args.retire_from_deployment:
                 plan["retirement"] = retirement_snapshot(settings.project_root, args.retire_from_deployment)
+            if args.retire_from_inspection:
+                plan["retirement"] = inspection_retirement_snapshot(settings.project_root, args.retire_from_inspection)
             if args.preserve_keyword_profile:
                 from video_processing.core.keyword_rollout import verify_loaded
                 require(verify_loaded(settings, complete=True), "KEYWORD_PROFILE_REQUIRED")

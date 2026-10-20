@@ -36,3 +36,9 @@ P0 仍优先。新类别写 `censorship_incidents.stage=social_unrest, level=RIS
 最终整合验收包含生产主目录当时已有的未提交代码，并在独立副本加入本次补丁：379 passed（6 条既有弃用警告）。回执：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-n34yhjfa/receipt.json`；源码清单 SHA256：`be623822f3889d3a9de0f3c07d422be45778cf3d7c9aa5498b0fd2978fe13c7d`。生产维护只读检查仍报告在途发布和 `LEGACY_WORKER` / `UNREGISTERED_PROCESS`，因此本次未改写生产 checkout、未重启服务、未恢复或触发历史任务；主干提交与生产采用分开记录。
 
 测试通过只能证明这些样例与调用边界。规则可能漏掉新的隐语、转写错误或依赖画面的风险；不保证视频号接受，不把截图推测当成平台规则事实。常驻进程是否加载新代码需单独取得运行证据。
+
+## 生产采用
+
+经用户另行授权，采用仍走 `deployment_control.py` 的冻结、排空、正常停止、一致性备份、精确源码采用、维护启动、恢复和回读事务。保留生产目录原有 dirty 与 untracked 文件；不回扫或修改历史视频状态。
+
+旧进程如来自独立维护采用，可用 `plan --retire-from-inspection <旧回执目录>`。校验旧的安全维护回读、完整来源文件及其摘要、launchd UI 归属、真实角色锁和启动 birth，计划绑定全部证明文件。文件、来源或进程身份变化即拒绝。该证明仅允许在维护状态下退役指定旧进程，不放行在途任务或未知进程；恢复和其他生产检查沿用原有门禁。

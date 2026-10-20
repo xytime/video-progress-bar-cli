@@ -206,7 +206,7 @@ def test_m15_topic_only_rollback_preserves_backup_and_current_write(tracker, tmp
         assert saved.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
     path = Path(__file__).resolve().parents[2]/'src/video_processing/db/database.py'
     source = path.read_text().replace('from .topic_candidates import TopicCandidateDAL\n','').replace(
-           'class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):','class PipelineDB(WallstreetExperimentDAL):')
+           'TopicCandidateDAL, ', '')
     namespace = {'__name__':'video_processing.db.rollback_baseline','__package__':'video_processing.db'}
     exec(compile(source,str(path),'exec'),namespace)
     with isolated_running_maintenance.admit('video','current-original:0') as ticket:
