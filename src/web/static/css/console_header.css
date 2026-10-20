@@ -1,0 +1,39 @@
+/* 全局 header；颜色、字体与圆角沿用控制台主题。 */
+.console-layout .app > header.console-header { flex-direction:row; align-items:flex-start; position:relative; z-index:15; }
+.console-header-heading { display:grid; gap:8px; }
+.console-header-status { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:.8rem; color:var(--text2); }
+#header-runtime-state { color:var(--orange); font-weight:600; }
+#header-runtime-state[data-state="RUNNING"] { color:var(--green); }
+.console-layout .console-header-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.console-header-actions button,.console-header-menu summary,.console-confirm-actions button { min-height:44px; padding:8px 12px; font:inherit; font-size:.875rem; color:var(--text); background:var(--bg2,var(--bg)); border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+.console-header-actions button:disabled,.console-header-popup button:disabled,.console-confirm-actions button:disabled { cursor:not-allowed; opacity:.55; }
+.console-header-menu { position:relative; }
+.console-header-menu summary { list-style:none; display:flex; align-items:center; gap:10px; }
+.console-header-menu summary::-webkit-details-marker { display:none; }
+.console-header-menu summary::after { content:'⌄'; color:var(--text2); }
+.console-header-menu[open] summary { border-color:var(--blue); }
+.console-header-popup { position:absolute; top:calc(100% + 8px); right:0; width:320px; max-width:calc(100vw - 32px); padding:12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); box-shadow:0 8px 24px color-mix(in srgb,var(--text) 12%,transparent); }
+.console-header-popup button,.console-header-popup a { display:block; width:100%; text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.console-header-popup p { font-size:.8rem; line-height:1.5; color:var(--text2); margin:6px 0 14px; }
+.console-header-popup a { min-height:44px; padding:10px 0; color:var(--blue); font-size:.8rem; }
+.console-header-meta { flex-basis:100%; display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 16px; font-size:.8rem; color:var(--text2); }
+#header-operation-feedback { flex:1; overflow-wrap:anywhere; }
+.console-layout .console-header #last-update { margin-left:auto; font-size:.75rem; }
+#header-status-retry { font:inherit; color:var(--blue); background:transparent; border:0; cursor:pointer; }
+.console-header :is(button,summary,a):focus-visible,#header-pipeline-confirm button:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+#header-pipeline-confirm { margin:auto; max-width:min(540px,calc(100vw - 32px)); max-height:85dvh; overflow:auto; padding:24px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; }
+#header-pipeline-confirm::backdrop { background:rgb(0 0 0 / .6); }
+#header-pipeline-confirm h2 { font-size:1.125rem; margin-bottom:14px; }
+#header-pipeline-confirm p { line-height:1.6; margin:12px 0; }
+.console-confirm-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:12px; margin-top:20px; }
+@media(max-width:650px) {
+  .console-header-heading { width:100%; }
+  .console-layout .console-header-actions { width:100%; margin-left:0; flex-wrap:wrap; }
+  .console-header-actions > button,.console-header-actions > details { flex:1 1 calc(50% - 8px); }
+  .console-header-menu summary { justify-content:center; }
+  .console-header-popup { position:static; width:100%; margin-top:8px; box-shadow:none; }
+  .console-header-menu[open] { flex-basis:100%; }
+  .console-header-meta { display:block; }
+  #header-status-retry,.console-layout .console-header #last-update { display:block; margin-top:8px; }
+  #header-status-retry[hidden] { display:none; }
+}

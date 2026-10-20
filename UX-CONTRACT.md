@@ -74,3 +74,8 @@
 来源由 cover_provenance 契约提供，后台和 Telegram 使用相同来源、退化状态、哈希与版本。
 封面缩略图下原生 details 展示来源并可键盘展开；不依赖颜色和 hover。桌面和移动端共用该组件。详情为原生 details 的非模态浮层，限制视口宽度和高度，Escape 关闭并恢复来源标签焦点。
 投稿展示绑定的冻结文件，后续生成不改写历史；缺证据显示来源未核验。无重发、补通知或发布策略变更。
+
+## 全局操作 header（2026-10-20 用户确认）
+全局入口 owner 为 console_header.js / console_header.css，范围为根工作台五个分区。频道扫描由 web/console_header.py 单独运行 monitor_channels.py --bootstrap（批准频道最近5天），不启动 pipeline_manager；高互动素材沿用原刷新接口。服务器仍以 maintenance_admission 和维护准入为业务事实源；前端只读摘要不可作为解除维护的授权。
+
+维护、运行状态未知时，扫描、扫码登录及完整流水线保持可见但禁用；菜单、外观和审计可查看。微信状态来自原会话状态接口，明确为本地验证记录，不因当前视频分页含 LOGIN_REQUIRED 推断全局会话。已有登录流程或同类扫描时禁止重复发起；请求前重新读取权限。完整流水线在应用原生 dialog 中说明扫描、评分、加工与发布后果，初始焦点在取消，Escape 取消并恢复焦点，不在打开确认时提交。扫描失败与任务结束分别展示，任务结束不证明全部来源采集成功。所有读取均不启动真实扫描、登录或平台验证。验收所有者为 test_console_header.py / test_console_header_browser.py。

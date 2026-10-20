@@ -17,7 +17,7 @@
   const channels=$('channel-list').closest('.panel'); channels.id='workspace-channels';
   const manual=$('video-url-input').closest('.panel'); manual.id='workspace-manual';
   const tools=document.createElement('section'); tools.id='operations-tools'; tools.className='panel'; tools.setAttribute('aria-label','运行与诊断');
-  [$('ai-audit-mini'),$('btn-wechat-login'),$('btn-run-pipeline')].forEach(el=>tools.append(el));
+  // 扫描、登录与完整流水线由共享 header 保持全分区可见。
   const products=document.createElement('a'); products.href='/product-settings';products.textContent='商品挂载';products.className='btn-tool-prefs';tools.prepend(products);app.append(tools);
   const vocabulary=document.createElement('a'); vocabulary.href='/vocabulary-outro-settings';vocabulary.textContent='生词片尾';vocabulary.className='btn-tool-prefs';tools.prepend(vocabulary);
   function paint(tab=legacy.tab()) {

@@ -4128,6 +4128,10 @@ def get_interactive_demo():
     return HTML_CONTENT
 
 
+# 全局 header 的独立扫描入口；沿用维护写请求准入，不触发完整流水线。
+from web.console_header import router as console_header_router
+app.include_router(console_header_router)
+
 if __name__ == "__main__":
     import uvicorn
     # 端口选择规则：见 PORTS.md

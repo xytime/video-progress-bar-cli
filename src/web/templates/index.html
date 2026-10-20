@@ -100,28 +100,45 @@
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js"></script>
-<script defer src="/static/js/dashboard_workspace.js"></script>
+<script defer src="/static/js/dashboard_workspace.js?v=20261020-header"></script>
+<script defer src="/static/js/console_header.js?v=20261020"></script>
+<link rel="stylesheet" href="/static/css/console_header.css?v=20261020_2">
 </head>
 <body>
 <div class="app">
 
-  <!-- Header -->
-  <header>
-    <h1 id="workspace-title">工作总览</h1>
-    <div class="header-right">
-      <a id="ai-audit-mini" href="/api/ai-audit/summary" target="_blank" title="打开 AI 处理审计数据" style="font-size:0.75rem;color:var(--text2);text-decoration:none;padding:5px 9px;border:1px solid var(--border);border-radius:8px;white-space:nowrap;">🤖 AI 审计加载中…</a>
-      <button id="btn-wechat-login" class="btn-wechat" onclick="wechatLogin()" title="微信 Session 过期时点击，弹出浏览器扫码">
-        📱 微信登录
-      </button>
-      <button id="btn-run-pipeline" class="btn-run" onclick="runPipeline()">
-        ⚡ 强制插队运行
-      </button>
-      <button id="btn-toggle-preferences" class="btn-tool-prefs" onclick="toggleDisplayPreferences()" title="外观风格与字号设置">
-        外观偏好
-      </button>
-      <div id="last-update">--:--:--</div>
+  <!-- 全局操作入口：所有工作台分区一致，维护态可查看范围但不可执行。 -->
+  <header class="console-header">
+    <div class="console-header-heading"><h1 id="workspace-title">工作总览</h1><div class="console-header-status" role="status"><span id="header-runtime-state">运行状态核实中</span><span id="header-wechat-state">微信状态核实中</span></div></div>
+    <div class="header-right console-header-actions" aria-label="全局操作">
+      <details id="header-scan-menu" class="console-header-menu">
+        <summary>扫描视频源</summary>
+        <div class="console-header-popup">
+          <button type="button" id="btn-scan-channels" disabled>扫描白名单频道</button>
+          <p>立即检查全部批准频道最近 5 天的视频，仅采集元数据，不启动加工。</p>
+          <button type="button" id="btn-scan-engagement" disabled>刷新高互动素材</button>
+          <p>搜索高互动视频并更新素材列表，不启动加工。</p>
+        </div>
+      </details>
+      <button type="button" id="btn-wechat-login" class="btn-tool-prefs" onclick="wechatLogin()" disabled>微信扫码登录</button>
+      <button type="button" id="btn-toggle-preferences" class="btn-tool-prefs" onclick="toggleDisplayPreferences()" title="外观风格与字号设置">外观设置</button>
+      <details id="header-more-menu" class="console-header-menu">
+        <summary>更多操作</summary>
+        <div class="console-header-popup">
+          <button type="button" id="btn-run-pipeline" onclick="runPipeline()" disabled>运行完整流水线…</button>
+          <p>扫描频道后继续评分、加工及按现有规则发布，执行前须确认。</p>
+          <a id="ai-audit-mini" href="/api/ai-audit/summary" target="_blank" rel="noopener" title="打开 AI 处理审计数据（新窗口）">AI 审计 · 打开处理记录 ↗</a>
+        </div>
+      </details>
     </div>
+    <div class="console-header-meta"><span id="header-operation-feedback" role="status">正在核实操作权限…</span><button type="button" id="header-status-retry" onclick="window.ConsoleHeader?.refresh()" hidden>重新核实状态</button><span id="last-update">数据尚未更新</span></div>
   </header>
+  <dialog id="header-pipeline-confirm" aria-labelledby="header-pipeline-title" aria-describedby="header-pipeline-description">
+    <h2 id="header-pipeline-title">运行完整流水线？</h2>
+    <p id="header-pipeline-description">将扫描白名单频道，再对符合条件的任务评分、加工，并按现有规则发布。此操作可能产生真实视频及平台投稿。</p>
+    <p>如只需发现新视频，请使用“扫描视频源”。</p>
+    <div class="console-confirm-actions"><button type="button" id="header-pipeline-cancel" onclick="document.getElementById('header-pipeline-confirm').close()" autofocus>取消</button><button type="button" id="header-pipeline-submit" disabled>确认运行完整流水线</button></div>
+  </dialog>
 
   <section class="display-preferences" id="display-preferences-panel" style="display:none; margin-bottom:16px;" aria-label="显示设置">
     <span class="display-heading">显示设置</span>
@@ -1262,56 +1279,8 @@
     loadVideos();
   }
 
-  // [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新
-  let _highLikesPollTimer = null;
   async function refreshHighLikes() {
-    const btn = document.getElementById('btn-refresh-high-likes');
-    const statusEl = document.getElementById('high-likes-refresh-status');
-    if (!btn) return;
-
-    // 防重复点击
-    if (btn.disabled) return;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="inline-spinner"></span> 刷新中…';
-    btn.style.opacity = '0.7';
-    if (statusEl) statusEl.textContent = '正在通过 yt-dlp 搜索最新高赞视频，约需 1~3 分钟…';
-
-    try {
-      const r = await fetch('/api/high-likes/refresh', { method: 'POST' });
-      const d = await r.json();
-      if (!d.started) {
-        if (statusEl) statusEl.textContent = d.message || '已有刷新任务在运行，请稍候';
-        btn.disabled = false;
-        btn.innerHTML = '🔄 立即刷新';
-        btn.style.opacity = '1';
-        return;
-      }
-    } catch (e) {
-      if (statusEl) statusEl.textContent = '请求失败，请检查服务连接';
-      btn.disabled = false;
-      btn.innerHTML = '🔄 立即刷新';
-      btn.style.opacity = '1';
-      return;
-    }
-
-    // 每 5 秒轮询状态，完成后恢复按钮并刷新列表
-    if (_highLikesPollTimer) clearInterval(_highLikesPollTimer);
-    _highLikesPollTimer = setInterval(async () => {
-      try {
-        const s = await fetch('/api/high-likes/status');
-        const sd = await s.json();
-        if (!sd.running) {
-          clearInterval(_highLikesPollTimer);
-          _highLikesPollTimer = null;
-          btn.disabled = false;
-          btn.innerHTML = '🔄 立即刷新';
-          btn.style.opacity = '1';
-          if (statusEl) statusEl.textContent = '✅ 刷新完成！';
-          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
-          loadVideos();  // 自动刷新表格
-        }
-      } catch (_) {}
-    }, 5000);
+    return window.ConsoleHeader?.scan('engagement');
   }
 
   function enterEditMode(vibrate = true) {
@@ -1529,9 +1498,8 @@
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       const STUCK     = new Set(['PROCESSING','DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
 
-      const hasLoginRequired = d.videos.some(v => v.status === 'LOGIN_REQUIRED');
-      const wechatBtn = document.getElementById('btn-wechat-login');
-      if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
+      document.getElementById('last-update').textContent = '列表读取 ' + new Date().toLocaleTimeString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false});
+      // 全局微信状态由只读会话接口核实，不从当前分页的视频状态推断。
 
       // 浏览标记已在服务端过滤；总数、页数和当前页始终使用同一份查询结果。
       const videos = d.videos;
@@ -2344,9 +2312,12 @@
   let wechatLoginActive = false;
 
   async function wechatLogin() {
-    navigator.vibrate(15);
+    if (!await window.ConsoleHeader?.allow('login')) return;
+    if (wechatLoginActive) return;
+    wechatLoginActive = true;
+    navigator.vibrate?.(15);
     // Prevent double clicking on any trigger buttons
-    const btn = event?.target;
+    const btn = document.getElementById('btn-wechat-login');
     const oldText = btn ? btn.innerHTML : '';
     if (btn) {
       btn.disabled = true;
@@ -2437,7 +2408,8 @@
     const mainBtn = document.getElementById('btn-wechat-login');
     if (mainBtn) {
       mainBtn.disabled = false;
-      mainBtn.innerHTML = '📱 微信登录';
+      mainBtn.textContent = '微信扫码登录';
+      window.ConsoleHeader?.refresh();
     }
   }
 
@@ -3050,18 +3022,7 @@
 
 
   async function runPipeline() {
-    const btn = document.getElementById('btn-run-pipeline');
-    btn.disabled = true;
-    btn.textContent = '⏳ 触发中…';
-    try {
-      const r = await fetch('/api/pipeline/run', { method: 'POST' });
-      const d = await r.json();
-      showToast(d.success ? '🚀 强制任务已加入后台队列' : `❌ ${d.message}`);
-    } catch(e) {
-      showToast('❌ 请求失败');
-    } finally {
-      setTimeout(() => { btn.disabled = false; btn.textContent = '⚡ 强制插队运行'; }, 3000);
-    }
+    return window.ConsoleHeader?.confirmPipeline();
   }
 
   // [Claude_Opus_4.8] 修复：原实现引用不存在的 #toast 元素导致 showToast 必抛错（页面只有 #toast-container + .toast-item）。

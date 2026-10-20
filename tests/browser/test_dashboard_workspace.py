@@ -133,6 +133,7 @@ def test_configuration_and_manual_form_do_not_share_home(workspace):
     page,client,state,db=workspace
     page.locator('.console-primary[data-section=operations]').click()
     expect(page.locator('#channel-list')).to_be_visible()
+    page.locator('#header-more-menu summary').click()
     expect(page.locator('#btn-run-pipeline')).to_be_visible()
     page.locator('.console-subnav a[href*="tab=manual"]').click()
     expect(page.locator('#video-url-input')).to_be_visible()
