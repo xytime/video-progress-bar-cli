@@ -63,7 +63,7 @@ def _run_agy(*, agy_bin: str, model: str, work_dir: Path, prompt: str, timeout_s
         "--add-dir", str(work_dir),
         "--output-format", "json",
         "--json-schema", str(schema_path),
-        "--print-timeout", f"{timeout_seconds}s",
+        "--print-timeout", "0s",
         "--print", prompt,
     ]
     return subprocess.run(command, cwd=str(work_dir), capture_output=True, text=True, timeout=timeout_seconds + 30, check=False)

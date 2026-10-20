@@ -1275,7 +1275,8 @@ def test_transient_failure_with_accepted_review_receipt_does_not_rerun(tmp_path:
     assert str(receipt) in next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
 
 
-def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path: Path):
+@pytest.mark.parametrize("provider", ["codex", "agy"])
+def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path: Path, provider):
     calls = tmp_path / "calls.log"
     fake_codex = tmp_path / "codex"
     fake_python = tmp_path / "python"
@@ -1290,6 +1291,7 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
         "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "1",
+        "--coordinator-provider", provider, "--agy-bin", str(fake_codex),
         "--skip-source-access-preflight",
     ]
 

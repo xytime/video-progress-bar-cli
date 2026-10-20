@@ -1032,7 +1032,7 @@ def _run_coordinator(
             "--effort", "high",
             "--add-dir", str(paths.project_root),
             "--output-format", "json",
-            "--print-timeout", f"{paths.coordinator_timeout_seconds:g}s",
+            "--print-timeout", "0s",
             "--print", prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
         ]
     elif provider == "programmatic":
