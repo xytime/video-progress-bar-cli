@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-20 | Codex | 允许已验证 Codex high-effort 回执，严格保留全文、九帧与哈希约束。 |
 | 1.3.0 | 2026-09-17 | Antigravity | 排除词典全量定义非展示字段，并按中英语言分流成片待审文本，消除英文子串误触发中文 CIA 及未选中义项误杀。 |
 | 1.2.0 | 2026-09-17 | Codex | 复用研究域来源硬排除词表，在候选安全门双重拒绝政治、冲突与成人等题材。 |
 | 1.1.0 | 2026-09-17 | Codex | 将视觉联系表文件与哈希一并绑定到当前时间线，拒绝伪造或遗留图片回执。 |
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from math import isfinite
 import json
 from pathlib import Path
 import re
@@ -38,6 +40,7 @@ VERSION = "english-world-safety-v1"
 VISUAL_REVIEW_VERSION = "english-world-visual-safety-v1"
 FULLTEXT_SAFETY_POLICY = "english-world-fulltext-safety-v1"
 AGY_HIGH_EFFORT_MODEL = "gemini-3.8-flash-high"
+APPROVED_REVIEW_MODELS = {"agy": {AGY_HIGH_EFFORT_MODEL}, "codex": {"gpt-6-luna", "gpt-5.6-luna"}}
 
 
 class EnglishWorldSafetyGateError(ValueError):
@@ -118,14 +121,18 @@ def _validate_visual_review(value: Mapping[str, Any] | None) -> dict[str, Any]:
         for field in required
     ):
         raise EnglishWorldSafetyGateError("视觉安全审核回执字段不完整")
-    if str(value["state"]) != "PASS" or str(value["provider"]).lower() != "agy":
+    if str(value["state"]) != "PASS":
         raise EnglishWorldSafetyGateError("视觉安全审核未通过")
     if str(value["version"]) != VISUAL_REVIEW_VERSION:
         raise EnglishWorldSafetyGateError("视觉安全审核版本无效")
-    if str(value["model"]) != AGY_HIGH_EFFORT_MODEL:
+    provider = str(value["provider"]).lower()
+    if str(value["model"]) not in APPROVED_REVIEW_MODELS.get(provider, set()):
         raise EnglishWorldSafetyGateError("视觉安全审核模型不符合当前 high-effort 基线")
     if str(value["effort"]).lower() != "high":
-        raise EnglishWorldSafetyGateError("视觉安全审核必须使用 AGY high effort")
+        raise EnglishWorldSafetyGateError("视觉安全审核必须使用 high effort")
+    if provider == "codex" and ("text_review" not in value or not isinstance(value.get("frame_times_seconds"), list)
+                                 or len(value["frame_times_seconds"]) != 9):
+        raise EnglishWorldSafetyGateError("备用审核必须包含完整文本与九帧证据")
     if not isinstance(value["risk_categories"], list) or value["risk_categories"]:
         raise EnglishWorldSafetyGateError("视觉安全审核存在风险分类或格式无效")
     for field, label in (("contact_sheet_sha256", "contact sheet"), ("mp4_sha256", "MP4")):
@@ -136,6 +143,13 @@ def _validate_visual_review(value: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized["contact_sheet_sha256"] = normalized["contact_sheet_sha256"].lower()
     normalized["mp4_sha256"] = normalized["mp4_sha256"].lower()
     normalized["risk_categories"] = []
+    if provider == "codex":
+        times, duration = value["frame_times_seconds"], value.get("duration_seconds")
+        if (not isinstance(duration, (int, float)) or not isfinite(duration) or duration <= 0
+                or any(not isinstance(t, (int, float)) or not isfinite(t) or not 0 <= t < duration for t in times)
+                or any(a >= b for a, b in zip(times, times[1:]))):
+            raise EnglishWorldSafetyGateError("备用审核九帧时间证据无效")
+        normalized.update(frame_times_seconds=list(times), duration_seconds=duration)
     if "text_review" in value:
         text_review = value["text_review"]
         if (not isinstance(text_review, Mapping)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.4 | 2026-10-20 | Codex | 增量审校支持具名 CLI 切换，仍共享正文总预算。 |
 | 1.0.0 | 2026-09-09 | Codex | 增量文案审校不继承正文结论，仍绑定原正文及不可变封装。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标明确绑定展示词形或显式标注的词元。 |
 | 1.0.2 | 2026-09-14 | Codex | 增量审校与正文共享实际内容失败预算，技术输入变化不算修订。 |
@@ -16,6 +17,8 @@ from .language_qa import (VERSION, atomic_json, cache_key, digest, evaluate, fil
                           read_json, review_input, review_schema, validate_language_qa)
 from .language_review_service import locked, check_content_budget, content_failure_keys
 from ..utils.agy_provider import AgyProviderError, run_agy_structured
+from ..utils.codex_text_provider import CodexTextError
+from ..utils.english_world_provider import infrastructure_error
 from .quality_policy import advisory_quality, quality_receipt
 
 PROMPT = """你是独立英语教学编辑。正文已通过独立审校，但新增投稿字段尚未通过。
@@ -55,7 +58,7 @@ def inputs_for(timeline, publication):
 
 
 def review_publication(timeline, publication, *, cache_dir, task_dir, model, command="agy", timeout=180, effort="high",
-                       caller=run_agy_structured):
+                       caller=run_agy_structured, provider=None):
     timeline = Path(timeline).resolve()
     inputs, plan, evidence = inputs_for(timeline, publication)
     key = cache_key(inputs, model, effort)
@@ -91,8 +94,15 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
                     atomic_json(cache, saved)
                     ledger["inflight"] = False
                     break
-                except AgyProviderError as exc:
+                except (AgyProviderError, CodexTextError) as exc:
                     ledger["inflight"] = False
+                    if provider is not None:
+                        ledger["last_error"] = str(exc)
+                        ledger.setdefault("provider_failures", []).append({"provider": provider, "model": model,
+                            "attempt": ledger["attempts"], "input_key": key, "error": str(exc)})
+                        ledger["terminal"] = not infrastructure_error(exc)
+                        atomic_json(ledger_path, ledger)
+                        raise
                     transient = any(s in str(exc) for s in ("timeout", "timed out", "rate limit"))
                     if not transient or ledger["retries"] >= 1:
                         ledger["terminal"] = True
@@ -121,6 +131,8 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
             "usage": saved.get("usage"), "elapsed_seconds": round(time.monotonic() - started, 3)}
         path = timeline.parent / "qa/publication_language_qa.json"
         report.update(quality_receipt(saved["result"], plan))
+        if provider is not None:
+            report["provider"] = provider
         previous = read_json(path) if path.exists() else {}
         if previous.get("input_key") != key or previous.get("state") != state:
             atomic_json(path, report)

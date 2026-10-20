@@ -19,7 +19,7 @@ def backoff_seconds(attempt: int, *, base: float = 300, cap: float = 3600,
 def failure_kind(detail: str) -> str:
     """地区/认证/预算错误不按网络瞬断重试；未知错误需人工查看。"""
     text = detail.lower()
-    if any(s in text for s in ("location ineligible", "unauthorized", "invalid api key", "permission denied")):
+    if any(s in text for s in ("provider_blocked", "location ineligible", "unauthorized", "invalid api key", "permission denied")):
         return "PROVIDER_BLOCKED"
     if any(s in text for s in ("attempt_budget_exhausted", "review_terminal")):
         return "BUDGET_EXHAUSTED"

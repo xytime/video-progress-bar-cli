@@ -372,7 +372,7 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
         return value
 
     monkeypatch.setattr(daily, "_script", script)
-    monkeypatch.setattr(daily, "run_agy_structured", draft)
+    monkeypatch.setattr(daily, "_generate_draft", draft)
     if second_passes:
         result = daily._review_and_revise(timeline, payload, wordlist_dir=wordlist)
         assert result["publication_text"]["cover_payload"]["quote_zh"] != original_cover["quote_zh"]
@@ -542,3 +542,17 @@ import pytest
 def verified_youtube_route(monkeypatch):
     # These tests isolate downstream behavior; test_youtube_route covers rejection.
     monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})
+
+
+def test_visual_provider_failure_remains_provider_blocked(tmp_path):
+    report = tmp_path / 'qa/visual.json'
+    calls = []
+    def action():
+        calls.append(1)
+        daily.atomic_json(report, {'state': 'FAIL_CLOSED', 'failure_kind': 'EnglishWorldProviderError', 'retryable': False})
+        raise daily.ProgrammaticDailyError('child exit=2')
+    with pytest.raises(daily.EnglishWorldProviderError, match='PROVIDER_BLOCKED'):
+        daily._stage_call('visual_safety', tmp_path, action, safety_report=report)
+    assert calls == [1]
+    assert daily._candidate_failure_route(daily.EnglishWorldProviderError('PROVIDER_BLOCKED'),
+        locked_source=False, production_candidates=0) == (False, False)

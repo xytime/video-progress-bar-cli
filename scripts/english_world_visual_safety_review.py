@@ -8,6 +8,7 @@ MP4、联系表及全文输入均绑定指纹；调用失败、覆盖不足或�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-20 | Codex | Codex 新会话直接接收九帧图像与全文，记录实际服务商及文件指纹。 |
 | 1.1.0 | 2026-09-17 | Codex | 回执明确记录本地联系表路径，供最终安全门复核文件与哈希。 |
 | 1.0.0 | 2026-09-17 | Codex | 新增最终 MP4 九帧联系表、AGY high-effort 视觉安全复核及哈希绑定回执。 |
 """
@@ -33,6 +34,9 @@ if str(SRC_ROOT) not in sys.path:
 
 from video_processing.english_world.package_integrity import sha256_file
 from video_processing.english_world.safety_gate import fulltext_safety_input, FULLTEXT_SAFETY_POLICY
+from video_processing.utils.agy_provider import AgyProviderError, _safe_failure_category
+from video_processing.utils.english_world_provider import ProviderRouter, Provider, fingerprint, EnglishWorldProviderError
+from config.settings import settings
 
 
 VERSION = "english-world-visual-safety-v1"
@@ -214,15 +218,15 @@ def _run_agy(*, agy_bin: str, model: str, work_dir: Path, timeout_seconds: int) 
             check=False,
         )
     except FileNotFoundError as exc:
-        raise VisualSafetyReviewError("AGY 不可用") from exc
+        raise AgyProviderError("agy command not found") from exc
     except subprocess.TimeoutExpired as exc:
-        raise TransientVisualSafetyError("AGY 视觉复核超时") from exc
+        raise AgyProviderError("agy visual review timeout") from exc
     if result.returncode != 0:
         output = (result.stderr + "\n" + result.stdout).lower()
         if any(marker in output for marker in ("connection reset", "timed out", "tls handshake eof",
                                                "stream disconnected", "no capacity available")):
-            raise TransientVisualSafetyError("AGY 安全复核短暂传输失败")
-        raise VisualSafetyReviewError("AGY 视觉复核失败")
+            raise AgyProviderError("agy provider error: transient transport")
+        raise AgyProviderError("agy visual review: " + _safe_failure_category(output))
     try:
         envelope = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -259,6 +263,7 @@ def review_video(
     ffprobe_bin: str = "ffprobe",
     ffmpeg_bin: str | None = None,
     timeline: Path | None = None,
+    allow_fallback: bool = False,
 ) -> dict[str, Any]:
     """生成回执但不落盘，方便调用方将失败也原子写为证据。"""
     mp4 = mp4.expanduser().resolve()
@@ -277,7 +282,27 @@ def review_video(
         if text_input is not None:
             _atomic_json(text_copy, text_input)
             text_copy_sha256 = sha256_file(text_copy)
-        decision = _run_agy(agy_bin=agy_bin, model=model, work_dir=work_dir, timeout_seconds=timeout_seconds)
+        provider_identity = {"provider": "agy", "model": model, "effort": "high"}
+        if allow_fallback:
+            router = ProviderRouter(PROJECT_ROOT / "output/english_world_provider", routes=[
+                Provider("agy", model, agy_bin),
+                Provider("codex", settings.english_world_codex_model, settings.codex_text_command)])
+            binding = {"mp4": before_mp4_sha256, "contact_sheet": contact_sheet_sha256, "text": text_input}
+            def review_with(selected):
+                if selected.name == "agy":
+                    return _run_agy(agy_bin=selected.command, model=selected.model,
+                                    work_dir=work_dir, timeout_seconds=timeout_seconds)
+                if text_input is None:
+                    raise VisualSafetyReviewError("备用安全审核必须包含完整文本")
+                prompt = (_contact_sheet_prompt(fulltext=True) +
+                    "\n联系表已作为图像附件提供，safety_text.json 的完整内容在下方；不使用任何工具。\n" +
+                    json.dumps(text_input, ensure_ascii=False))
+                return selected.call(prompt, schema=_result_schema(fulltext=True), state_dir=router.state_dir,
+                    timeout=timeout_seconds, images=(reviewed_copy,))["structured_result"]
+            decision, provider_identity = router.run(review_with,
+                receipt=contact_sheet.parent / f"providers/visual-{fingerprint(binding)}.json", binding=binding)
+        else:
+            decision = _run_agy(agy_bin=agy_bin, model=model, work_dir=work_dir, timeout_seconds=timeout_seconds)
         if sha256_file(reviewed_copy) != contact_sheet_sha256:
             raise VisualSafetyReviewError("AGY 运行期间联系表发生变化")
         if text_input is not None and sha256_file(text_copy) != text_copy_sha256:
@@ -298,9 +323,7 @@ def review_video(
         **text_review,
         "version": VERSION,
         "state": state,
-        "provider": "agy",
-        "model": model,
-        "effort": "high",
+        **provider_identity,
         "mp4_sha256": before_mp4_sha256,
         "contact_sheet": str(contact_sheet),
         "contact_sheet_sha256": contact_sheet_sha256,
@@ -323,6 +346,8 @@ def _failure_receipt(*, mp4: Path, model: str, error: Exception) -> dict[str, An
     }
     if mp4.is_file() and mp4.stat().st_size > 0:
         payload["mp4_sha256"] = sha256_file(mp4)
+    if isinstance(error, EnglishWorldProviderError):
+        payload.update(provider="unavailable", model=None, retryable=False)
     return payload
 
 
@@ -355,6 +380,7 @@ def main() -> int:
             timeout_seconds=args.timeout_seconds,
             ffprobe_bin=args.ffprobe_bin,
             timeline=args.timeline,
+            allow_fallback=settings.english_world_codex_fallback,
         )
     except Exception as exc:  # fail-closed and do not persist untrusted AGY stdout/stderr
         receipt = _failure_receipt(mp4=args.mp4, model=args.model, error=exc)

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """英语世界的程序化日更协调器。
 
-本入口不启动 Codex，也不把工作流交给可委派的代理。候选检索、媒体/字幕
-取得、ASR 来源证据、渲染和所有交付门禁均由宿主程序执行；AGY 仅在无工具、
+候选检索、媒体/字幕取得、ASR 来源证据、渲染和所有交付门禁均由宿主程序执行；
+AGY 与备用 Codex CLI 仅在独立会话、无工具、
 JSON Schema 约束的一次调用中补全中文段译、标题和适量学习点，并在既有
 语言/视觉审校步骤中独立复核。任一外部步骤异常都会留下失败请求，绝不投稿。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-20 | Codex | 初稿与修订加入有界 CLI 备用通道及真实预检，故障分类跨子进程保留。 |
 | 1.5.3 | 2026-09-25 | Codex | 移除 AGY 不支持的整数枚举，在宿主校验词典索引并保留安全的供应商错误分类。 |
 | 1.5.2 | 2026-09-24 | Codex | 初稿与修订按词典可用索引选词；发音失败换词卡，保留生成结果，制作异常不污染来源排除。 |
 | 1.5.1 | 2026-09-23 | Codex | 安全分段无解即停止；重新冻结双语封面，按真实账本预占唯一修订并验证目标变化与来源依据。 |
@@ -56,6 +57,7 @@ from video_processing.study_cards.language_qa import VERSION, atomic_json, read_
 from video_processing.study_cards.quality_policy import ADVISORY_POLICY, advisory_quality
 from video_processing.english_world.safety_gate import FULLTEXT_SAFETY_POLICY, EnglishWorldSafetyGateError
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
+from video_processing.utils.english_world_provider import ProviderRouter, EnglishWorldProviderError
 
 
 MAX_PREFLIGHT_CANDIDATES = 10
@@ -138,6 +140,11 @@ def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | No
             blocked = False
             if safety_report is not None and safety_report.is_file() and safety_report.stat().st_mtime_ns >= started_ns:
                 receipt = read_json(safety_report)
+                if receipt.get("failure_kind") == "EnglishWorldProviderError":
+                    entry.update(state="FAILED", error_class="EnglishWorldProviderError", retryable=False,
+                                 finished_ns=time.time_ns())
+                    atomic_json(journal_path, journal)
+                    raise EnglishWorldProviderError("PROVIDER_BLOCKED: 成片安全审核通道不可用") from exc
                 blocked = receipt.get("state") == "BLOCKED"
                 transient = receipt.get("state") == "FAIL_CLOSED" and receipt.get("retryable") is True
             entry.update(state="BLOCKED" if blocked else "FAILED", error_class=type(exc).__name__,
@@ -181,6 +188,8 @@ def _run(command: list[str], *, cwd: Path, timeout: int = 900):
     if process.returncode != 0:
         # 只保留分类，不把可能含正文/环境的子进程输出写入日志。
         output = (stderr + "\n" + stdout).lower()
+        if "provider_blocked" in output:
+            raise EnglishWorldProviderError("PROVIDER_BLOCKED: 子步骤独立 CLI 通道不可用")
         if any(marker in output for marker in ("connection reset", "tls handshake eof", "stream disconnected",
                                                "temporary failure in name resolution", "no capacity available")):
             raise TransientStageError("子步骤短暂传输故障")
@@ -1008,7 +1017,7 @@ def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
         actionable = reserve_editorial_revision(
             timeline_path, cache_dir=ROOT / "output/english_world_language/cache",
             task_dir=ROOT / "output/english_world_language/tasks" / task_key,
-            model=settings.english_world_language_model, effort=settings.english_world_language_effort,
+            model=report["model"], effort=report["effort"],
             not_before_ns=review_started_ns,
         )
 
@@ -1019,14 +1028,12 @@ def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
         rev_prompt = _revision_draft_prompt(words, ranges, current_timeline=timeline, findings=actionable,
                                           word_options=options)
         try:
-            revised_draft = run_agy_structured(
+            revised_draft = _generate_draft(
                 rev_prompt, schema=schema,
-                model=settings.english_world_language_model, command=settings.agy_command,
-                timeout_sec=settings.english_world_language_timeout_seconds,
-                effort=settings.english_world_language_effort,
+                receipt=workspace / "qa/providers/revision_draft.json",
             )
         except AgyProviderError as exc:
-            raise ProgrammaticDailyError(f"AGY Revision 1 结构化修订不可用：{exc}") from exc
+            raise ProgrammaticDailyError(f"Revision 1 结构化修订通道不可用：{exc}") from exc
 
         # 保留原始修订输出；词典索引由宿主校验，不能只相信供应商遵守提示词。
         atomic_json(workspace / "qa/revision_draft.json", revised_draft)
@@ -1051,6 +1058,14 @@ def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
         _script("prepare", timeline=timeline_path)
         _script("review", timeline=timeline_path, timeout=600)
     return timeline
+
+
+def _generate_draft(prompt, *, schema, receipt):
+    if settings.english_world_codex_fallback:
+        return ProviderRouter(ROOT / "output/english_world_provider").draft(prompt, schema=schema, receipt=receipt)
+    return run_agy_structured(prompt, schema=schema, model=settings.english_world_language_model,
+        command=settings.agy_command, timeout_sec=settings.english_world_language_timeout_seconds,
+        effort=settings.english_world_language_effort)
 
 
 def run(
@@ -1099,6 +1114,10 @@ def run(
                 evidence = read_json(workspace / "qa/source_evidence.json")
             stage = "language_admission"
             _require_new_draft_budget(workspace, evidence)
+            if settings.english_world_codex_fallback:
+                stage = "provider_preflight"
+                atomic_json(workspace / "qa/provider_preflight.json",
+                            ProviderRouter(ROOT / "output/english_world_provider").preflight())
             words = _frozen_words(evidence)
             timeline = read_json(timeline_path)
             timeline["words"] = words
@@ -1127,12 +1146,11 @@ def run(
             options = dictionary_word_options(words, Path.home() / "Downloads/hermes-wordlists")
             draft_schema = _draft_schema(len(ranges), len(words), allowed_indexes=[p["word_index"] for p in options])
             try:
-                draft = _stage_call("agy_draft", workspace, lambda: run_agy_structured(_draft_prompt(words, ranges, word_options=options), schema=draft_schema,
-                                           model=settings.english_world_language_model, command=settings.agy_command,
-                                           timeout_sec=settings.english_world_language_timeout_seconds,
-                                           effort=settings.english_world_language_effort))
+                draft = _stage_call("agy_draft", workspace, lambda: _generate_draft(
+                    _draft_prompt(words, ranges, word_options=options), schema=draft_schema,
+                    receipt=workspace / "qa/providers/initial_draft.json"))
             except AgyProviderError as exc:
-                raise ProgrammaticDailyError(f"AGY 结构化初稿不可用：{exc}") from exc
+                raise ProgrammaticDailyError(f"结构化初稿通道不可用：{exc}") from exc
             atomic_json(workspace / "qa/initial_draft.json", draft)
             import jsonschema
             jsonschema.validate(draft, draft_schema)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.0 | 2026-09-17 | Codex | 覆盖 high-effort AGY 参数、风险阻断及复核中产物变更的失败关闭。 |
 """
 
@@ -127,3 +128,28 @@ def test_fulltext_mutation_during_review_is_rejected(monkeypatch, tmp_path):
     with pytest.raises(review.VisualSafetyReviewError, match="最终文本发生变化"):
         review.review_video(mp4=mp4, contact_sheet=tmp_path / "qa/contact.png", agy_bin="agy",
                             model="gemini-3.8-flash-high", timeout_seconds=60, timeline=timeline)
+
+
+@pytest.mark.parametrize('coverage,expected', [('SUFFICIENT', 'PASS'), ('INSUFFICIENT', 'FAIL_CLOSED')])
+def test_codex_fallback_receives_actual_image_and_fulltext(monkeypatch, tmp_path, coverage, expected):
+    import json
+    timeline = tmp_path / 'timeline.json'
+    timeline.write_text(json.dumps({'english_text': 'Clean energy.', 'translation_zh': '清洁能源。'}))
+    (tmp_path / 'qa').mkdir()
+    (tmp_path / 'qa/source_evidence.json').write_text(json.dumps({'asr_text': 'Clean energy.'}))
+    (tmp_path / 'display_plan.json').write_text('{}')
+    mp4 = tmp_path / 'video.mp4'
+    mp4.write_bytes(b'video')
+    monkeypatch.setattr(review, '_extract_contact_sheet', _fake_contact_sheet)
+    monkeypatch.setattr(review.ProviderRouter, 'ready', lambda self, selected: selected.name == 'codex')
+    def call(selected, prompt, **kwargs):
+        assert selected.name == 'codex' and selected.effort == 'high'
+        assert 'Clean energy.' in prompt and '清洁能源。' in prompt
+        assert len(kwargs['images']) == 1 and kwargs['images'][0].read_bytes() == b'contact-sheet'
+        return {'structured_result': {'state': 'PASS', 'coverage': 'SUFFICIENT',
+                    'risk_categories': [], 'text_coverage': coverage}}
+    monkeypatch.setattr(review.Provider, 'call', call)
+    receipt = review.review_video(mp4=mp4, contact_sheet=tmp_path / 'qa/contact.png', agy_bin='agy',
+        model='gemini-3.8-flash-high', timeout_seconds=60, timeline=timeline, allow_fallback=True)
+    assert receipt['provider'] == 'codex' and receipt['state'] == expected
+    assert receipt['text_review']['input_sha256'] == review.fulltext_safety_input(timeline)['input_sha256']

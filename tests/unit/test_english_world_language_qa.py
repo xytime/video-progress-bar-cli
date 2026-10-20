@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.11 | 2026-09-23 | Codex | 验证修订预占、旧回执拒绝和同任务真实预算两轮审校。 |
 | 1.0.10 | 2026-09-22 | Codex | 被拒绝的正文及增量输入不改账本，原启动失败仍可具名恢复。 |
 | 1.0.9 | 2026-09-22 | Codex | 覆盖显式启动恢复、预检失败不改账本和三次硬上限。 |
@@ -903,4 +904,36 @@ def test_quota_recovery_cannot_override_completed_content_failure(tmp_path):
     before = path.read_bytes()
     with pytest.raises(ValueError, match="恢复条件"):
         review(timeline, recover_rate_limit={"reason": "reset", "not_before": 1}, **kwargs)
+    assert path.read_bytes() == before
+
+
+def test_provider_switch_preserves_total_budget_and_actual_model(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    kwargs = dict(cache_dir=tmp_path / 'cache', task_dir=tmp_path / 'task')
+    def unavailable(*args, **kw):
+        raise AgyProviderError('agy exit 1: location ineligible')
+    with pytest.raises(AgyProviderError):
+        review(timeline, **kwargs, model='gemini-3.8-flash-high', provider='agy', caller=unavailable)
+    ledger = read_json(tmp_path / 'task/language_attempts.json')
+    assert ledger['attempts'] == 1 and not ledger['terminal'] and not ledger['inflight']
+    result = review(timeline, **kwargs, model='gpt-5.6-luna', provider='codex', caller=lambda *a, **kw: good(p))
+    assert result['attempts'] == 2 and result['provider'] == 'codex' and result['model'] == 'gpt-5.6-luna'
+    ledger = read_json(tmp_path / 'task/language_attempts.json')
+    assert len(ledger['provider_failures']) == 1
+    assert len(ledger['keys']) == 2
+    ledger['attempts'] = 3
+    atomic_json(tmp_path / 'task/language_attempts.json', ledger)
+    with pytest.raises(ValueError, match='用尽'):
+        review(timeline, **kwargs, model='other-model', provider='codex', caller=lambda *a, **kw: pytest.fail('budget bypass'))
+
+
+def test_routed_review_cannot_reopen_historical_terminal(tmp_path):
+    timeline, _ = setup_review(tmp_path)
+    path = tmp_path / 'task/language_attempts.json'
+    atomic_json(path, {'attempts': 1, 'retries': 0, 'terminal': True, 'keys': ['a' * 64],
+                       'last_error': 'agy exit 1: location ineligible'})
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='终止'):
+        review(timeline, cache_dir=tmp_path / 'cache', task_dir=tmp_path / 'task',
+               model='gpt-5.6-luna', provider='codex', caller=lambda *a, **kw: pytest.fail('terminal bypass'))
     assert path.read_bytes() == before

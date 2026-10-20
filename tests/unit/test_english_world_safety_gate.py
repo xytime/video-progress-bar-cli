@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.2.0 | 2026-09-17 | Codex | 覆盖研究域来源硬排除词在运行时安全门的二次拒绝。 |
 | 1.1.0 | 2026-09-17 | Codex | 覆盖视觉联系表存在性、目录边界及哈希重验。 |
 | 1.0.0 | 2026-09-17 | Codex | 覆盖双阶段文本/频道阻断、视觉审核绑定、旧回执拒绝和缺证据失败关闭。 |
@@ -234,3 +235,19 @@ def test_new_fulltext_policy_requires_current_semantic_review(tmp_path):
     payload["translation_zh"] = "改过的中文。"
     timeline.write_text(json.dumps(payload))
     assert safety_gate.evaluate_delivery(title="清洁能源", timeline_path=timeline, visual_review=visual)["state"] == "FAIL_CLOSED"
+
+
+def test_codex_safety_evidence_survives_normalization_and_missing_evidence_blocks():
+    receipt = {**_visual_receipt(), 'provider': 'codex', 'model': 'gpt-5.6-luna',
+               'frame_times_seconds': list(range(1, 10)), 'duration_seconds': 10,
+               'text_review': {'version': safety_gate.FULLTEXT_SAFETY_POLICY,
+                               'coverage': 'SUFFICIENT', 'input_sha256': 'b' * 64}}
+    normalized = safety_gate._validate_visual_review(receipt)
+    assert safety_gate._validate_visual_review(normalized) == normalized
+    for key in ('text_review', 'frame_times_seconds', 'duration_seconds'):
+        incomplete = dict(receipt)
+        incomplete.pop(key)
+        with pytest.raises(safety_gate.EnglishWorldSafetyGateError):
+            safety_gate._validate_visual_review(incomplete)
+    with pytest.raises(safety_gate.EnglishWorldSafetyGateError):
+        safety_gate._validate_visual_review({**receipt, 'model': 'unapproved'})

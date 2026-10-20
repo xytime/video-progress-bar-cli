@@ -181,7 +181,7 @@ PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py
 SAFETY_GATE_PROMPT = """
 
 英语世界安全门已启用。音频和语言门禁 PASS 后还必须执行最后的程序化安全交付链：
-1. `PYTHONPATH=src .venv/bin/python scripts/english_world_visual_safety_review.py --mp4 '<绝对MP4路径>' --output '<timeline目录>/qa/visual_safety.json' --contact-sheet-output '<timeline目录>/qa/visual_safety_contact_sheet.png'`；它必须以 AGY high effort 审阅从当前 MP4 固定抽取的九帧联系表。非 PASS、超时或任何不可复核状态均不得交付。
+1. `PYTHONPATH=src .venv/bin/python scripts/english_world_visual_safety_review.py --mp4 '<绝对MP4路径>' --output '<timeline目录>/qa/visual_safety.json' --contact-sheet-output '<timeline目录>/qa/visual_safety_contact_sheet.png'`；它必须以已批准的 AGY/Codex high effort 通道审阅当前 MP4 的九帧联系表与完整文本；由宿主记录实际服务商。非 PASS、超时或任何不可复核状态均不得交付。
 2. `PYTHONPATH=src .venv/bin/python scripts/english_world_safety_gate.py --output '<timeline目录>/qa/safety_gate.json' --title '<实际标题>' --timeline '<绝对timeline路径>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --visual-review-report '<timeline目录>/qa/visual_safety.json'`；该命令会机械扫描来源证据、冻结展示/发布文本和频道策略，并验证视觉回执与当前 MP4 的哈希绑定。只有输出为 PASS 才可继续。
 3. 成功请求命令必须追加 `--safety-report '<timeline目录>/qa/safety_gate.json'`。不得手写、伪造、复用旧回执或用模型文字替代该命令；任一安全门失败时写准确失败请求并结束，不得换题、投稿或弱化规则。
 """
@@ -999,7 +999,7 @@ def _run_coordinator(
     if settings.enable_english_world_language_qa:
         prompt += ("\n\n新英语世界语言协议已启用。本段覆盖上文旧8条密度及仅离线释义规则："
                    "先完整阅读 docs/english-world-language-generation.md 并执行 source/prepare/review。"
-                   "生成器负责初稿，AGY Gemini 3.8 Flash High CLI 独立审校；禁止自写 PASS 或 API 兜底。"
+                   "生成器负责初稿，AGY/Codex CLI 在独立新会话审校；禁止自写 PASS 或付费 API 兜底。"
                    "普通屏3–5个有效学习点，末屏0–3个；最多一次内容修订及一次分屏调整。"
                    "title/copy/cover_payload 在审校前冻结，宿主直接消费。全部门禁通过才可交付。")
     if settings.enable_english_world_safety_gate or require_safety_gate:

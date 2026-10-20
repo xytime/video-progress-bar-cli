@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.7 | 2026-10-20 | Codex | 供应商技术失败单独记录，故障切换继续共享三次总预算。 |
 | 1.0.6 | 2026-09-23 | Codex | 唯一编辑修订前验证本次回执、原缓存和剩余预算，持久预占防重复生成。 |
 | 1.0.5 | 2026-09-22 | Codex | 显式启动故障恢复须新鲜预检、绑定原输入并保留次数和终止证据。 |
 | 1.0.0 | 2026-09-09 | Codex | 跨重启三次尝试、一次修订和同键合并。 |
@@ -22,6 +23,8 @@ import jsonschema
 from .language_qa import (VERSION, atomic_json, cache_key, digest, evaluate,
                           file_digest, read_json, review_input, review_schema)
 from ..utils.agy_provider import AgyProviderError, probe_agy_startup, run_agy_structured
+from ..utils.codex_text_provider import CodexTextError
+from ..utils.english_world_provider import infrastructure_error
 from .quality_policy import advisory_quality, quality_receipt
 
 PROMPT = """你是独立英语教学编辑，面向 A2-B1 家庭学习者。
@@ -217,7 +220,7 @@ def _recover_rate_limit(ledger, *, key, cache_dir, reason, not_before):
 
 
 def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, effort="high",
-           caller=run_agy_structured, recover_startup_reason=None, recover_rate_limit=None):
+           caller=run_agy_structured, recover_startup_reason=None, recover_rate_limit=None, provider=None):
     timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
     root = timeline.parent
     plan, evidence, editorial = (read_json(root / p) for p in
@@ -280,8 +283,15 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, 
                     ledger["inflight"] = False
                     atomic_json(ledger_path, ledger)
                     break
-                except AgyProviderError as exc:
+                except (AgyProviderError, CodexTextError) as exc:
                     ledger["inflight"] = False
+                    if provider is not None:
+                        ledger["last_error"] = str(exc)
+                        ledger.setdefault("provider_failures", []).append({"provider": provider, "model": model,
+                            "attempt": ledger["attempts"], "input_key": key, "error": str(exc)})
+                        ledger["terminal"] = not infrastructure_error(exc)
+                        atomic_json(ledger_path, ledger)
+                        raise
                     transient = _is_transient_provider_error(exc)
                     ledger["last_error"] = str(exc)
                     if not transient or ledger["retries"] >= 1:
@@ -308,6 +318,8 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, 
                   "revision": len([k for k in failures if k != key]), "elapsed_seconds": round(time.monotonic() - started, 3),
                   "usage": read_json(cache).get("usage"), "usage_incurred_this_call": not hit}
         report.update(quality_receipt(result, plan))
+        if provider is not None:
+            report["provider"] = provider
         report_path = root / "qa/language_qa.json"
         previous = read_json(report_path) if report_path.exists() else {}
         same_binding = all(previous.get(k) == report[k] for k in

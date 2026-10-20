@@ -152,7 +152,8 @@ These encode hard-won failures — violating them silently corrupts subtitles:
 ### English World language contract
 
 New `english-world-language-v1` timelines must follow `docs/english-world-language-generation.md`:
-Codex contextual drafts, local dictionary/Whisper evidence, independent bounded AGY CLI review,
+Contextual drafts, local dictionary/Whisper evidence, independent bounded AGY/Codex CLI review
+(2026-10-20 approved fallback; fresh sessions, actual provider identity, shared attempt budget),
 and host-computed fail-closed gates before render/package/submission. No paid API fallback.
 For this contract ordinary screens require 3–5 learning points and terminal screens 0–3,
 overriding legacy eight-note rules. Do not rewrite old QA or retry historical publication.

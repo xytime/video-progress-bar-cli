@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-20 | Codex | 按实际服务商隔离审校与缓存身份，保留历史预算和缓存重放检查。 |
 | 1.0.8 | 2026-09-23 | Codex | 保存一次 medium 复核及原始证据，跨目录复用已通过模型，区分内容失败与运行失败回执。 |
 | 1.0.7 | 2026-09-23 | Antigravity | Whisper ASR 原始证据先落盘至 source_asr_raw.json 再校验修复。 |
 | 1.0.6 | 2026-09-22 | Codex | 提供显式启动故障恢复理由入口，不清除次数或绕过语言检查。 |
@@ -398,11 +399,28 @@ def main():
                     raise ValueError("publication 阶段需要 --publication-file")
                 review = review_publication
                 kwargs["publication"] = read_json(args.publication_file)
-            report = review(timeline, **kwargs, cache_dir=ROOT / "output/english_world_language/cache",
+            review_kwargs = dict(**kwargs, cache_dir=ROOT / "output/english_world_language/cache",
                             task_dir=ROOT / "output/english_world_language/tasks" / task_key,
-                            model=settings.english_world_language_model, command=settings.agy_command,
-                            timeout=settings.english_world_language_timeout_seconds,
-                            effort=settings.english_world_language_effort)
+                            timeout=settings.english_world_language_timeout_seconds)
+            if settings.english_world_codex_fallback and not (args.recover_startup_failure or args.recover_rate_limit):
+                from video_processing.utils.english_world_provider import ProviderRouter, fingerprint
+                router = ProviderRouter(ROOT / "output/english_world_provider")
+                binding = {"stage": args.stage, "timeline": read_json(timeline),
+                           "plan": read_json(timeline.parent / "display_plan.json"), "evidence": evidence,
+                           "editorial": read_json(timeline.parent / "editorial_changes.json"),
+                           "publication": kwargs.get("publication")}
+                def cached_only(*args, **kwargs):
+                    raise ValueError("既有审校缓存缺失；不得借路由重放重新调用模型")
+                def routed_review(selected, cached=False):
+                    return review(timeline, **review_kwargs, model=selected.model, command=selected.command,
+                        effort=selected.effort, provider=selected.name,
+                        caller=cached_only if cached else selected.language_caller(router.state_dir))
+                report, _ = router.run(routed_review,
+                    receipt=timeline.parent / f"qa/providers/{args.stage}-{fingerprint(binding)}.json", binding=binding,
+                    replay=lambda selected: routed_review(selected, cached=True))
+            else:
+                report = review(timeline, **review_kwargs, model=settings.english_world_language_model,
+                                command=settings.agy_command, effort=settings.english_world_language_effort)
             if args.stage == "review":
                 atomic_json(timeline.parent / "qa/review_execution.json",
                             {**review_execution, "status": "COMPLETED", "report_sha256": digest(read_json(timeline.parent / "qa/language_qa.json"))})

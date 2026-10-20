@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-20 | Codex | 英语世界安全审核可显式附图，图片指纹纳入缓存身份；仍禁用工具。 |
 | 1.0.0 | 2026-10-03 | Codex | 独立 Luna 文字入口：最小环境、进程组期限、严格结构、单并发与用量回执。 |
 """
 
@@ -124,13 +125,15 @@ def _run_codex_structured(
     model: str = "gpt-5.6-luna", effort: str = "medium", timeout_sec: float = 120,
     validate: Callable[[dict], dict] | None = None,
     cache_prompt: str | None = None,
+    images: tuple[Path, ...] = (),
 ) -> CodexTextResult:
     """一次有界请求；只缓存经调用方质量合同接受的结果，不自动升级模型。"""
     if model not in ECONOMY_MODELS or effort not in {"low", "medium", "high"} or timeout_sec <= 0:
         raise CodexTextError("configuration")
     schema = strict_schema(schema)
     state_dir.mkdir(parents=True, exist_ok=True)
-    identity = json.dumps(["codex-text-v1", model, effort, cache_prompt or prompt, schema], ensure_ascii=False, sort_keys=True)
+    image_hashes = [hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in images]
+    identity = json.dumps(["codex-text-v1", model, effort, cache_prompt or prompt, schema, image_hashes], ensure_ascii=False, sort_keys=True)
     key = hashlib.sha256(identity.encode()).hexdigest()
     cached_path = state_dir / f"{key}.json"
     with (state_dir / "provider.lock").open("a+") as lock:
@@ -173,6 +176,8 @@ def _run_codex_structured(
             for feature in ("shell_tool", "plugins", "apps", "browser_use", "browser_use_external",
                             "computer_use", "image_generation", "view_image", "multi_agent", "code_mode"):
                 args.extend(["--disable", feature])
+            for path in images:
+                args.extend(["--image", str(Path(path).resolve())])
             args.append("-")
             result = _execute(args, prompt, directory, timeout_sec)
             if result.returncode:

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.0 | 2026-10-03 | Codex | 覆盖真实故障路径、质量缓存和经济模型限制。 |
 """
 
@@ -161,3 +162,17 @@ def test_accepted_repair_reuses_original_request_cache(tmp_path, monkeypatch):
     provider.run_codex_structured("原始来源加一次修正提示", **kwargs)
     cached = provider.run_codex_structured("原始来源", **kwargs)
     assert cached.cached and len(calls) == 1
+
+
+def test_images_pass_as_attachment_and_change_cache_identity(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(provider, '_execute', _executor(calls=calls))
+    picture = tmp_path / 'contact.png'
+    picture.write_bytes(b'first-picture')
+    first = _call(tmp_path, images=(picture,), validate=lambda x: x)
+    picture.write_bytes(b'new-picture')
+    second = _call(tmp_path, images=(picture,), validate=lambda x: x)
+    assert not first.cached and not second.cached and len(calls) == 2
+    args = calls[0][0]
+    assert args[args.index('--image') + 1] == str(picture.resolve())
+    assert args[args.index('view_image') - 1] == '--disable'

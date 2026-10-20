@@ -322,6 +322,9 @@ class Settings(BaseSettings):
     english_world_language_model: str = "gemini-3.8-flash-high"
     english_world_language_effort: str = Field(default="high", pattern=r"^(low|medium|high)$")
     english_world_language_timeout_seconds: int = Field(default=180, ge=30, le=300)
+    # 已授权的独立 CLI 备用通道；不用 API，不改变旧任务预算。
+    english_world_codex_fallback: bool = True
+    english_world_codex_model: Literal["gpt-6-luna", "gpt-5.6-luna"] = "gpt-5.6-luna"
     # 英语世界安全回执在影子期由命令显式生成；启用后交付记录器不接受无回执成片。
     enable_english_world_safety_gate: bool = False
     agy_timeout_sec: int = 90
