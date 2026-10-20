@@ -39,6 +39,10 @@ from video_processing.english_world.package_integrity import sha256_file
 VERSION = "english-world-safety-v1"
 VISUAL_REVIEW_VERSION = "english-world-visual-safety-v1"
 FULLTEXT_SAFETY_POLICY = "english-world-fulltext-safety-v1"
+CONTENT_SAFETY_POLICY = (
+    "面向儿童与家庭学习者：政治人物/选举/强时政，战争或武器，暴力、伤害、犯罪，"
+    "令人不适的灾难现场，以及成人或性内容，一律 BLOCKED。"
+)
 AGY_HIGH_EFFORT_MODEL = "gemini-3.8-flash-high"
 APPROVED_REVIEW_MODELS = {"agy": {AGY_HIGH_EFFORT_MODEL}, "codex": {"gpt-6-luna", "gpt-5.6-luna"}}
 

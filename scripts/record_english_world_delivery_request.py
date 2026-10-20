@@ -25,6 +25,7 @@ from pathlib import Path
 
 
 from video_processing.study_cards.qa_integrity import validate_audio_qa
+from video_processing.english_world.candidate_admission import MAX_PREFLIGHT_CANDIDATES
 
 
 YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -43,7 +44,7 @@ def _parser() -> argparse.ArgumentParser:
         "--rejected-youtube-id",
         action="append",
         default=[],
-        help="本轮来源预检已淘汰的 YouTube ID；可重复，最多八个",
+        help=f"本轮来源预检已淘汰的 YouTube ID；可重复，最多 {MAX_PREFLIGHT_CANDIDATES} 个",
     )
     parser.add_argument("--failure-kind", choices=("source_quality", "internal_error", "transport"), default="internal_error")
     return parser
@@ -86,8 +87,8 @@ def main() -> int:
             validate_delivery_receipt(safety_report, mp4=args.mp4, manifest=args.manifest, timeline=timeline)
 
     rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
-    if len(rejected_youtube_ids) > 8:
-        raise ValueError("at most eight --rejected-youtube-id values are allowed")
+    if len(rejected_youtube_ids) > MAX_PREFLIGHT_CANDIDATES:
+        raise ValueError(f"at most {MAX_PREFLIGHT_CANDIDATES} --rejected-youtube-id values are allowed")
     if any(not YOUTUBE_ID_PATTERN.fullmatch(value) for value in rejected_youtube_ids):
         raise ValueError("every --rejected-youtube-id must be an 11-character YouTube ID")
 

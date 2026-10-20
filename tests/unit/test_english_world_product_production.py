@@ -206,7 +206,7 @@ def test_shadow_cli_and_prompt_do_not_occupy_formal_production(tmp_path, monkeyp
     (False, False, 'AUTO'), (True, False, 'AUTO'), (False, True, 'AUTO'),
     (False, False, 'NONE'), (False, False, 'PRODUCT'),
 ])
-def test_programmatic_formal_registration_precedes_provider_and_never_counts_preview(
+def test_programmatic_formal_registration_follows_safety_and_precedes_draft_without_counting_preview(
     tmp_path, monkeypatch, shadow, reject_preflight, intent,
 ):
     from video_processing.study_cards import learning_dictionary
@@ -221,7 +221,9 @@ def test_programmatic_formal_registration_precedes_provider_and_never_counts_pre
         programmatic.atomic_json(timeline.parent / 'qa/source_evidence.json', {})
 
     monkeypatch.setattr(programmatic, '_source_evidence', source_evidence)
-    monkeypatch.setattr(programmatic, '_require_new_draft_budget', lambda *_args: None)
+    monkeypatch.setattr(programmatic, '_require_new_draft_budget', lambda *_args, **_kwargs: None)
+    # 本测试验证首次登记时序；CLI 故障切换由 provider 专项测试覆盖。
+    monkeypatch.setattr(programmatic.settings, 'english_world_codex_fallback', False)
     monkeypatch.setattr(programmatic, '_frozen_words', lambda _evidence: [{'text': 'source', 'start': 0, 'end': 40}])
 
     def safety(*_args, **_kwargs):
@@ -238,6 +240,9 @@ def test_programmatic_formal_registration_precedes_provider_and_never_counts_pre
         timeline = programmatic.read_json(next((tmp_path / 'out').glob('*/timeline.json')))
         db = PipelineDB(str(tmp_path / 'output/pipeline.db'))
         record = db.get_product_production(production_task_id(timeline))
+        if _args[0].startswith("你是英语世界的独立候选安全审核员"):
+            assert record is None
+            return {"state": "PASS", "coverage": "SUFFICIENT", "risk_categories": []}
         assert bool(record) is (not shadow and intent == 'AUTO')
         assert ('product_context' in timeline) is (not shadow)
         if record:

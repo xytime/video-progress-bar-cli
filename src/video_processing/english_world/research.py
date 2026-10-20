@@ -51,6 +51,8 @@ HARD_BLOCKED_TERMS = frozenset({
     "war", "military", "missile", "battle", "politic", "election", "president",
     "crime", "murder", "shooting", "terror", "adult", "sex", "drug", "weapon",
     "trump", "iran", "tariff", "sanction", "border",
+    # 既有政治/暴力/犯罪禁区的明确线索，避免等成片审核才淘汰。
+    "referendum", "secession", "riots", "looting",
     "ku klux klan", "kkk", "三k党",
 })
 # 兼容既有研究服务私有名称；运行时安全门只使用公开常量。
@@ -200,6 +202,7 @@ def _youtube_inspect(source_url: str) -> dict[str, Any]:
 def _rank_candidates(items: Iterable[dict[str, Any]], *, limit: int = 5) -> list[dict[str, Any]]:
     """用透明的关键词与时长规则预筛；不将预筛误称为内容审查。"""
     candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
     now = datetime.now(timezone.utc).date()
     for item in items:
         if not isinstance(item, dict):
@@ -223,6 +226,10 @@ def _rank_candidates(items: Iterable[dict[str, Any]], *, limit: int = 5) -> list
             url = f"https://www.youtube.com/watch?v={video_id}"
         if not url:
             continue
+        identity = video_id or url
+        if identity in seen:
+            continue
+        seen.add(identity)
         topic = _topic_for(blob)
         needs_visual_review = any(term in blob for term in _VISUAL_REVIEW_TERMS)
         upload_date = str(item.get("upload_date") or "") or None
@@ -248,7 +255,9 @@ def _rank_candidates(items: Iterable[dict[str, Any]], *, limit: int = 5) -> list
             "caption_status": "待制作前核验",
             "recommendation_score": score,
         })
-    candidates.sort(key=lambda item: (-int(item["recommendation_score"]), str(item["source_title"]).lower()))
+    candidates.sort(key=lambda item: (
+        -int(item["recommendation_score"]), -(_as_int(item["upload_date"]) or 0),
+        str(item["source_title"]).lower()))
     return candidates[:max(0, limit)]
 
 

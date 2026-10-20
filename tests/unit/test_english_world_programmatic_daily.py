@@ -556,3 +556,124 @@ def test_visual_provider_failure_remains_provider_blocked(tmp_path):
     assert calls == [1]
     assert daily._candidate_failure_route(daily.EnglishWorldProviderError('PROVIDER_BLOCKED'),
         locked_source=False, production_candidates=0) == (False, False)
+
+
+def _search_item(number, *, date="20261019", title="Clean energy technology"):
+    return {"id": f"{number:011d}", "title": title, "upload_date": date, "duration": 40,
+            "channel_id": "UC5aNPmKYwbudeNngDMTY3lw"}
+
+
+@pytest.mark.parametrize("catalog_only", [False, True])
+def test_exclusion_and_dedup_happen_before_candidate_limit(monkeypatch, catalog_only):
+    from video_processing.english_world import research
+    raw = [_search_item(i) for i in range(30)]
+    monkeypatch.setattr(daily, "_youtube_search", lambda _: [] if catalog_only else raw * 2)
+    monkeypatch.setattr(research, "_catalog_fallback_candidates", lambda: raw * 2)
+    excluded = {f"{i:011d}" for i in range(20)}
+    candidates = daily._discover_candidates(excluded=excluded)
+    assert {item["youtube_id"] for item in candidates} == {f"{i:011d}" for i in range(20, 30)}
+    assert len(candidates) == 10
+
+
+def test_same_priority_prefers_newer_news_over_old_alphabetical_title():
+    items = [_search_item(1, date="20241107", title="AAA clean energy"),
+             _search_item(2, date="20261019", title="ZZZ clean energy")]
+    assert daily._rank_candidates(items, limit=1)[0]["youtube_id"] == "00000000002"
+
+
+def test_success_preserves_earlier_source_rejections_for_next_run(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(daily, "_run", lambda command, **_: commands.append(command))
+    daily._make_delivery_request(
+        request=tmp_path / "request.json", title="ok", mp4=tmp_path / "video.mp4",
+        manifest=tmp_path / "manifest.json", audio_qa=tmp_path / "audio.json",
+        safety=tmp_path / "safety.json", rejected=["8H0dTo_9CFU", "VhCGzz_87-k"])
+    assert [arg for arg in commands[0] if arg.startswith("--rejected-youtube-id=")] == [
+        "--rejected-youtube-id=8H0dTo_9CFU", "--rejected-youtube-id=VhCGzz_87-k"]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_next_run_defers_terminal_default_before_discovery_but_keeps_named_admission(tmp_path, monkeypatch, explicit):
+    from video_processing.english_world.candidate_admission import remember_default_task
+    from video_processing.study_cards.language_protocol import task_identity
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    language_root = tmp_path / "output/english_world_language"
+    evidence = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 0, "source_end": 40}
+    remember_default_task(language_root, youtube_id="8H0dTo_9CFU", evidence=evidence)
+    ledger = language_root / "tasks" / task_identity(evidence) / "language_attempts.json"
+    daily.atomic_json(ledger, {"attempts": 2, "keys": [], "content_terminal": True})
+    before = ledger.read_bytes()
+    excluded_sets = []
+    def discover(**kwargs):
+        excluded_sets.append(kwargs["excluded"])
+        return []
+    monkeypatch.setattr(daily, "_discover_candidates", discover)
+    monkeypatch.setattr(daily, "_run", lambda *_args, **_kwargs: None)
+    with pytest.raises(daily.ProgrammaticDailyError, match="没有取得"):
+        daily.run(request=tmp_path / "request.json", output_root=tmp_path / "out", shadow_only=True,
+                  only_youtube_id="8H0dTo_9CFU" if explicit else None)
+    assert ("8H0dTo_9CFU" in excluded_sets[0]) is not explicit
+    assert not list((tmp_path / "out").glob("*/source/*"))
+    with pytest.raises(daily.CandidateReviewUnavailable):
+        daily._require_new_draft_budget(tmp_path / "named", evidence, remember_default=False)
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), PermissionError("denied"),
+                                 daily.StageExecutionError("child exit=2")])
+def test_unknown_execution_failure_never_poisons_source_exclusion(error):
+    assert daily._candidate_failure_route(error, locked_source=False, production_candidates=0) == (False, False)
+
+
+def test_startup_failure_has_durable_receipt_without_source_penalty(tmp_path, monkeypatch):
+    def startup(**_):
+        raise ValueError("默认片段资格索引无效")
+    monkeypatch.setattr(daily, "run", startup)
+    request = tmp_path / "request.json"
+    assert daily.main(["--request", str(request), "--shadow-only"]) == 2
+    payload = daily.read_json(request)
+    assert payload["kind"] == "failure"
+    assert payload["failure_kind"] == "internal_error"
+    assert payload["rejected_youtube_ids"] == []
+
+
+@pytest.mark.parametrize("title", [
+    "Alberta referendum explained", "Economic impacts of secession",
+    "Partial curfew announced in French cities amid riots and looting",
+])
+def test_existing_political_and_crime_policy_rejects_before_production(tmp_path, title):
+    candidate = _search_item(1, title=title)
+    assert daily._rank_candidates([candidate]) == []
+    with pytest.raises(daily.CandidateSafetyRejected):
+        daily._candidate_safety_preflight(
+            {"source_title": title}, timeline={"english_text": "The report explains the situation."},
+            receipt_path=tmp_path / "candidate_safety.json")
+
+
+@pytest.mark.parametrize("state,coverage,categories,expected_error", [
+    ("PASS", "SUFFICIENT", [], None),
+    ("BLOCKED", "SUFFICIENT", ["politics_or_public_figures"], daily.CandidateSafetyRejected),
+    ("BLOCKED", "INSUFFICIENT", ["politics_or_public_figures"], RuntimeError),
+    ("PASS", "SUFFICIENT", ["politics_or_public_figures"], RuntimeError),
+    ("BLOCKED", "SUFFICIENT", [], RuntimeError),
+])
+def test_semantic_candidate_review_distinguishes_content_rejection_from_uncertainty(
+    tmp_path, monkeypatch, state, coverage, categories, expected_error,
+):
+    def review(prompt, **kwargs):
+        assert "source_title" in prompt and "frozen full text" in prompt
+        assert kwargs["receipt"] == tmp_path / "qa/providers/candidate_safety.json"
+        return {"state": state, "coverage": coverage, "risk_categories": categories}
+    monkeypatch.setattr(daily, "_generate_draft", review)
+    action = lambda: daily._candidate_semantic_preflight(
+        {"source_title": "A report"}, timeline={"english_text": "frozen full text"}, workspace=tmp_path)
+    if expected_error:
+        with pytest.raises(expected_error) as error:
+            action()
+        assert daily._candidate_failure_route(error.value, locked_source=False, production_candidates=0) == (
+            (True, True) if expected_error is daily.CandidateSafetyRejected else (False, False))
+    else:
+        action()
+    report = daily.read_json(tmp_path / "qa/candidate_semantic_safety.json")
+    assert report["scope"] == "candidate_text_only"
+    assert report["coverage"] == coverage

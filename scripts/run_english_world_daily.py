@@ -516,8 +516,9 @@ def _read_delivery_request(
     if kind not in {"production", "failure"} or not title:
         raise ValueError("交付请求缺少合法 kind 或 title")
     rejected_youtube_ids = payload.get("rejected_youtube_ids", [])
-    if not isinstance(rejected_youtube_ids, list) or len(rejected_youtube_ids) > 8:
-        raise ValueError("交付请求 rejected_youtube_ids 必须是最多八项的列表")
+    from video_processing.english_world.candidate_admission import MAX_PREFLIGHT_CANDIDATES
+    if not isinstance(rejected_youtube_ids, list) or len(rejected_youtube_ids) > MAX_PREFLIGHT_CANDIDATES:
+        raise ValueError(f"交付请求 rejected_youtube_ids 必须是最多 {MAX_PREFLIGHT_CANDIDATES} 项的列表")
     if any(not isinstance(value, str) or not YOUTUBE_ID_PATTERN.fullmatch(value) for value in rejected_youtube_ids):
         raise ValueError("交付请求包含非法 rejected_youtube_ids")
     rejected_youtube_ids = list(dict.fromkeys(rejected_youtube_ids))

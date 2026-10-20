@@ -1083,6 +1083,24 @@ def test_delivery_request_recorder_persists_deduplicated_rejected_ids(tmp_path: 
     assert payload["rejected_youtube_ids"] == ["EJ5Sqku_fYc", "xewivZQgBMQ"]
 
 
+def test_all_ten_candidate_rejections_roundtrip_to_next_daily_run(tmp_path: Path):
+    request = tmp_path / "run.delivery-request.json"
+    source_ids = [f"{i:011d}" for i in range(10)]
+    command = [sys.executable, str(PROJECT_ROOT / "scripts/record_english_world_delivery_request.py"),
+               "--request", str(request), "--title", "fixture", "--failure", "no eligible source",
+               "--failure-kind", "source_quality"]
+    result = subprocess.run(
+        command + [f"--rejected-youtube-id={value}" for value in source_ids],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert runner._read_delivery_request(request, tmp_path)["rejected_youtube_ids"] == source_ids
+    assert runner._recent_rejected_youtube_ids(tmp_path) == tuple(source_ids)
+    rejected = subprocess.run(
+        command + [f"--rejected-youtube-id={i:011d}" for i in range(11)],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+    assert rejected.returncode != 0
+
+
 def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path: Path):
     request_path = tmp_path / "request.json"
     mp4 = tmp_path / "video.mp4"
