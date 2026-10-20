@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.0 | 2026-10-20 | Codex | 自动投稿验证真实在途子凭据、命令摘要及已打开的继承 FD，阻断原样继承陈旧凭据回归。 |
 | 1.8.0 | 2026-09-09 | Codex | 新语言契约必须消费 manifest 绑定的精确时间线路径。 |
 | 1.0.0 | 2026-08-24 | Codex | 固化英语世界未交付通知必须取得 API 回执，否则保留失败退出码。 |
 | 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
@@ -28,6 +29,8 @@ import pytest
 
 from scripts import notify_english_world_review as notifier
 from video_processing.telegram_delivery import TelegramDeliveryResult
+from video_processing.core.maintenance import gate
+from video_processing.core.maintenance_child import argv_hash
 
 
 def test_language_manifest_uses_exact_timeline_not_filename_guess(tmp_path):
@@ -237,11 +240,23 @@ def test_auto_publish_submits_only_a_new_review_item(monkeypatch):
     monkeypatch.setattr(notifier.settings, "enable_english_world_auto_publish", True)
     monkeypatch.setattr(notifier.settings, "wechat_publishing_paused", False)
     monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
-    monkeypatch.setattr(
-        notifier.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
-    )
+    def run_child(command, **kwargs):
+        import os
+        from pathlib import Path
+        receipt = kwargs["env"]["MAINTENANCE_CHILD_RECEIPT"]
+        fd = int(kwargs["env"]["MAINTENANCE_CHILD_FD"])
+        assert fd in kwargs["pass_fds"]
+        row_path = ticket.gate.directory / (receipt + ".json")
+        row = json.loads(row_path.read_text())
+        assert row["parent"] == ticket.row["id"]
+        assert row["argv"] == argv_hash(command[1:])
+        assert os.fstat(fd).st_ino == Path(row_path).stat().st_ino
+        return type("Result", (), {"returncode": 0})()
 
-    result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True, "delivery_policy": "AUTO_POLICY"})
+    monkeypatch.setattr(notifier.subprocess, "run", run_child)
+    with gate().admit("test-notifier", "new-review") as ticket:
+        ticket.start()
+        result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True, "delivery_policy": "AUTO_POLICY"})
 
     assert result == "submission_worker_exit=0; state=UNDER_REVIEW"
     assert not notifier._auto_submission_is_deferred(result)

@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.17.0 | 2026-10-20 | Codex | 通知宿主验证在途凭据，自动投稿为子命令签发独立准入及继承 FD，避免陈旧凭据异常退出。 |
 | 1.16.0 | 2026-09-18 | Antigravity | 解除 language_v2 对 AGY 首选封面的跳过限制，透传 approved_cover_payload 生成高质量封面。 |
 | 1.15.0 | 2026-09-18 | Antigravity | 自动审批延后项在通知中附带撤回/暂不发布按钮，并提示排入专属窗口。 |
 | language-v1 | 2026-09-09 | Codex | 新契约封装直接消费已审校投稿文本和封面载荷。 |
@@ -40,6 +41,7 @@ import sys
 
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.core.maintenance_child import run_admitted, single_script
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.package_integrity import calculate_package_hashes, sha256_file, verify_package_hashes
 from video_processing.english_world.delivery_progress import ReviewDelivery
@@ -386,7 +388,7 @@ def _auto_submit_new_review_item(review_item: dict) -> str:
         db.approve_english_world_submission(review_id, authorization="AUTO_POLICY")
     # 投稿器自身有 25 分钟上传超时并持久化 UNDER_REVIEW / UNCERTAIN 等终态；
     # 此处不另设父超时，以免杀死已领取任务后遗留 SUBMITTING 状态。
-    result = subprocess.run(
+    result = run_admitted(
         [str(_PROJECT_ROOT / ".venv" / "bin" / "python"), str(_AUTO_SUBMIT_SCRIPT), "--review-id", review_id],
         cwd=str(_PROJECT_ROOT), text=True, capture_output=True, check=False,
     )
@@ -417,6 +419,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+@single_script
 def main() -> int:
     args = _parser().parse_args()
     safe_title = html.escape(args.title.strip())
