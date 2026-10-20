@@ -9,6 +9,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| preupload-rate-limit-v1 | 2026-10-20 | Codex | 具名一次性恢复单次上传前 -360，核验原包和负面提交证据并保留不可变尝试。 |
 | 3.99.0 | 2026-10-17 | Antigravity | M3.5: 新增 wechat_comment_scan_state 扫描水位表、二级回复对账指数退避字段与审批消息 ID 字段，新增认领释放、到期对账查询与扫描水位推进 DAL 方法。 |
 | 3.98.0 | 2026-10-17 | Antigravity | 收回二级回复观众评论查询与任务物理删除至 PipelineDB 具名方法，并在审批绑定/消费/提交意图事务内拒绝 local_operator 与 local-cli 伪身份。 |
 | 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
@@ -8198,6 +8199,60 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             if cursor.rowcount != 1:
                 raise ValueError("Prelaunch recovery requires active named authority")
             return dict(conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone())
+
+    def authorize_english_world_preupload_rate_limit_recovery(
+        self, review_id: str, *, attempt_id: str, audit_path: str,
+    ) -> Dict[str, Any]:
+        """一次性具名恢复被原生限流明确挡在上传前的成片；不改写旧尝试。
+
+        不由日常调度调用。只接受单次失败、精确原包、无提交意图及 PRE_UPLOAD
+        原生回执；任何已受理、结果不明、绑定或第二次失败均不得经此入口重开。
+        """
+        import hashlib
+        audit_file = Path(audit_path)
+        audit_raw = audit_file.read_bytes()
+        audit = json.loads(audit_raw)
+        if (audit.get("state") != "PLATFORM_PRE_UPLOAD_RATE_LIMIT_CONFIRMED"
+                or audit.get("review_id") != review_id or audit.get("attempt_id") != attempt_id
+                or not audit.get("operator") or not audit.get("reason")):
+            raise ValueError("Pre-upload rate-limit recovery requires a named audit")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id=?", (review_id,)).fetchone()
+            attempts = conn.execute("SELECT * FROM english_world_submission_attempts WHERE review_id=?", (review_id,)).fetchall()
+            if (not row or row["state"] != "FAILED" or row["platform_post_id"] or row["platform_url"]
+                    or row["platform_state"] or len(attempts) != 1):
+                raise ValueError("Only a single unbound failed item can receive pre-upload recovery")
+            prior = attempts[0]
+            if (prior["attempt_id"] != attempt_id or prior["state"] != "FAILED"
+                    or prior["uploader_exit_code"] != 1 or prior["platform_post_id"] or prior["platform_url"]):
+                raise ValueError("Prior attempt cannot be proved pre-upload")
+            evidence = Path(prior["evidence_dir"])
+            rate_raw = (evidence / "management_rate_limit.json").read_bytes()
+            progress_raw = (evidence / "submission_progress.json").read_bytes()
+            rate, progress = json.loads(rate_raw), json.loads(progress_raw)
+            allowed = {"management_rate_limit.json", "submission_progress.json", "cover_binding.json",
+                       "submitted_cover.jpg", "management_rate_limited_pre_upload.png",
+                       "management_rate_limited_initial.png"}
+            if (any(p.name not in allowed for p in evidence.iterdir())
+                    or rate.get("reason") != "PLATFORM_RATE_LIMITED" or rate.get("business_code") != -360
+                    or rate.get("phase") != "PRE_UPLOAD" or progress.get("submit_intent") is not False
+                    or progress.get("version") != 1 or progress.get("video") != str(Path(row["mp4_path"]).resolve())
+                    or audit.get("rate_receipt_sha256") != hashlib.sha256(rate_raw).hexdigest()
+                    or audit.get("progress_sha256") != hashlib.sha256(progress_raw).hexdigest()
+                    or audit.get("artifact_sha256") != row["artifact_sha256"]):
+                raise ValueError("Rate-limit evidence does not prove an untouched pre-upload boundary")
+            for field, digest in (("mp4_path", "artifact_sha256"), ("manifest_path", "manifest_sha256"),
+                                  ("title_path", "title_sha256"), ("copy_path", "copy_sha256"),
+                                  ("cover_path", "cover_sha256"), ("cover_provenance_path", "cover_provenance_sha256")):
+                if hashlib.sha256(Path(row[field]).read_bytes()).hexdigest() != row[digest] or prior[digest] != row[digest]:
+                    raise ValueError("Pre-upload recovery requires the exact immutable prior package")
+            conn.execute("""UPDATE english_world_review_items SET state='SUBMISSION_APPROVED',
+                approval_source='OPERATOR_RECOVERY',authorization_expires_at=datetime('now','+120 minutes'),
+                submission_started_at=NULL,submission_finished_at=NULL,uploader_exit_code=NULL,
+                error_message=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='FAILED'""",
+                (f"具名恢复上传前限流；旧尝试保留。audit={audit_file.resolve()} sha256={hashlib.sha256(audit_raw).hexdigest()}", review_id))
+            return dict(conn.execute("SELECT * FROM english_world_review_items WHERE id=?", (review_id,)).fetchone())
 
     def authorize_english_world_operator_recovery(
         self, review_id: str, *, reason: str,

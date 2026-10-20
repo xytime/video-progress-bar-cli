@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-20 | Codex | 会话入口遵守账户共享冷却；上下文首个请求前登记会话并捕获所有原生限流响应。 |
 | 1.2.0 | 2026-10-12 | Codex | 浏览器资源等待登记与拿锁后的维护重检，保留已运行同项续接。 |
 | 1.1.0 | 2026-09-23 | Codex | 所有上传入口强制会话互斥，公开占用归属并让待发布优先。 |
 | 1.0.0 | 2026-09-19 | Codex | 新增 state-path 派生的有界非阻塞跨进程会话锁与脚本装饰器。 |
@@ -19,10 +20,12 @@ import inspect
 import time
 import json
 import os
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from .task_lease import read_lease_owner
 from .maintenance import gate, current
+from .wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
 from pathlib import Path
 from typing import Callable, ParamSpec, TypeVar
 
@@ -30,6 +33,31 @@ from typing import Callable, ParamSpec, TypeVar
 P = ParamSpec("P")
 R = TypeVar("R")
 EXIT_WECHAT_SESSION_BUSY = 11  # 未进入被保护函数，更未启动浏览器或发表。
+_SESSION: ContextVar = ContextVar("wechat_request_session", default=None)
+
+
+def guard_wechat_context(context):
+    """在任何页面导航前挂监听；临时复用上下文沿用当前同一账户的请求预算。"""
+    session = _SESSION.get()
+    if session is None:
+        return
+    if session._request_limited:
+        raise WeChatSessionLockBusy("当前视频号会话已收到限流，禁止创建后续上下文")
+    if not session._request_started:
+        try:
+            session.request_guard.start_session(session.purpose)
+        except WeChatRequestDeferred as exc:
+            raise WeChatSessionLockBusy(str(exc)) from exc
+        session._request_started = True
+    context._wechat_rate_limit_seen = False
+
+    def response_received(response):
+        if session.request_guard.observe_response(response):
+            session._request_limited = True
+            context._wechat_rate_limit_seen = True
+            context._wechat_rate_limit_code = session.request_guard.snapshot()["business_code"]
+
+    context.on("response", response_received)
 
 
 class WeChatSessionLockBusy(RuntimeError):
@@ -61,6 +89,10 @@ class WeChatSessionLock:
         self._handle = None
         self.purpose = purpose
         self.video = video
+        self.request_guard = WeChatRequestGuard(self.state_path)
+        self._request_started = False
+        self._request_limited = False
+        self._context_token = None
 
     def acquire(self) -> "WeChatSessionLock":
         """在截止时间内尝试获取锁，超时即抛出可识别的 busy 异常。"""
@@ -72,12 +104,19 @@ class WeChatSessionLock:
         while True:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    self.request_guard.check()
+                except WeChatRequestDeferred as exc:
+                    raise WeChatSessionLockBusy(str(exc)) from exc
                 self._handle = handle
+                self._request_started = False
+                self._request_limited = False
                 handle.seek(0)
                 handle.truncate()
                 json.dump({"pid": os.getpid(), "stage": self.purpose, "video": self.video,
                            "started_at": datetime.now(timezone.utc).isoformat()}, handle, ensure_ascii=False)
                 handle.flush()
+                self._context_token = _SESSION.set(self)
                 return self
             except BlockingIOError:
                 if time.monotonic() >= deadline:
@@ -96,6 +135,9 @@ class WeChatSessionLock:
         if handle is None:
             return
         try:
+            if self._context_token is not None:
+                _SESSION.reset(self._context_token)
+                self._context_token = None
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()

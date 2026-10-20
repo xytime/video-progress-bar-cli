@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.2.0 | 2026-10-20 | Codex | 页面导航前接入当前锁归属账户的共享限流观察，覆盖首次管理页及内部复用页。 |
 | 1.1.0   | 2026-10-13 | Antigravity | 新增：create_wechat_context 支持自定义 viewport 参数。 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始版本：统一创建微信视频号浏览器上下文，收拢 UA、Viewport 与 init_script 反检测指纹。 |
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from .wechat_session_lock import guard_wechat_context
 
 # 统一微信视频号视口规格（1280x800）
 WECHAT_VIEWPORT: dict[str, int] = {"width": 1280, "height": 800}
@@ -79,5 +81,6 @@ def create_wechat_context(
         context_opts["storage_state"] = str(storage_state) if isinstance(storage_state, Path) else storage_state
 
     context = browser.new_context(**context_opts)
+    guard_wechat_context(context)
     context.add_init_script(WECHAT_INIT_SCRIPT)
     return context

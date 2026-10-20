@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| wechat-backoff-v1 | 2026-10-20 | Codex | 视频号账户共享退避与会话最小间隔，防止多作品独立轮询持续触发限流。 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | maintenance-v1 | 2026-10-12 | Codex | 声明维护状态及仅继承 FD 可验证的单项子进程归属。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
@@ -221,6 +222,8 @@ class Settings(BaseSettings):
     wechat_keepalive_enabled: bool = False          # 默认关闭，需在 .env 中显式设置 WECHAT_KEEPALIVE_ENABLED=true
     wechat_keepalive_min_interval: int = 50         # 最短触发间隔（分钟）
     wechat_keepalive_max_interval: int = 65         # 最长触发间隔（分钟）
+    wechat_rate_limit_cooldown_seconds: int = Field(default=1800, ge=300, le=21600)
+    wechat_request_min_interval_seconds: int = Field(default=60, ge=1, le=3600)
     wechat_keepalive_dwell: int = 15                # 停留时长（秒），供微信记录活跃请求
     # [Claude_Opus_4.8] 微信会话临期预警阈值（小时）：会话龄超过此值，看门狗推 Telegram「该重扫了」，
     # 在 ~24h 服务端硬上限造成发布断档前主动提醒（见 docs/wechat_login_expiry_rca.html 候选②坐实）。

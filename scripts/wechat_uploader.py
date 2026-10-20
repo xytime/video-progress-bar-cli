@@ -4,6 +4,7 @@
 | Version | Date       | Author                              | Description                                              |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| shared-backoff-v1 | 2026-10-20 | Codex | 首次导航即识别共享上下文捕获的原生限流，页面未就绪也保留限流证据并停止请求。 |
 | readback-v1 | 2026-10-20 | Codex | 校验原生作品列表内层业务码，限流与畸形响应不得声明有效空基线。 |
 | 5.25.0 | 2026-10-12 | Antigravity | 修复 P1/P2 残留缺陷：_write_submission_receipt 补全 NONE 分支的商品未绑与 identity_source 回读；优化无参数 target_type 检测与多回执优先级；_finalize_submission_attachments 保留强制商品退出码 14；cli_article 补充完整版本摘要字段。 |
 | 5.24.0 | 2026-10-12 | Antigravity | 修复 P1/P2: 上传器执行边界严格落实 enable_wechat_article_link 开关，关闭时拒绝显式文章参数并保留既有流程；NONE 分支传入本次任务；_write_submission_receipt 限定读取本次提交回执，防御回执覆盖。 |
@@ -829,11 +830,11 @@ def _post_list_rate_limited(payload: object) -> bool:
                for key in ("errCode", "errcode", "ret"))
 
 
-def _record_management_rate_limit(evidence_root: Path, *, phase: str) -> None:
+def _record_management_rate_limit(evidence_root: Path, *, phase: str, business_code: int = -360) -> None:
     evidence_root.mkdir(parents=True, exist_ok=True)
     (evidence_root / "management_rate_limit.json").write_text(json.dumps({
         "state": MANAGEMENT_UNCERTAIN, "reason": "PLATFORM_RATE_LIMITED",
-        "business_code": -360, "phase": phase,
+        "business_code": business_code, "phase": phase,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -2556,6 +2557,9 @@ def run_uploader(
     if not evidence_dir and not login_only and not verify_only:
         from uuid import uuid4
         evidence_root = evidence_root / uuid4().hex
+    if evidence_dir and video_path and not (login_only or verify_only):
+        from video_processing.utils.submission_progress import write_progress
+        write_progress(evidence_root, video_path)
     task_product = None
     product_artifacts = None
     task_article = None
@@ -2714,6 +2718,15 @@ def run_uploader(
         except Exception:
             pass
         page.wait_for_timeout(5000)
+
+        # 首次管理页也可能已被限流，不能等到第二次导航才识别业务响应。
+        if getattr(context, "_wechat_rate_limit_seen", False) is True:
+            _record_management_rate_limit(evidence_root, phase="INITIAL_READBACK" if verify_only else "PRE_UPLOAD",
+                                         business_code=context._wechat_rate_limit_code)
+            _capture_wechat_evidence(page, evidence_root, "management_rate_limited_initial")
+            logger.error("Native response rate limited on initial navigation; shared account cooldown active.")
+            browser.close()
+            return 1
 
         # 调试截图：永远保存，方便排查 headless 登录状态
         dbg_pre = state_file.parent / "debug_pre_login_check.png"
@@ -4198,10 +4211,8 @@ def main():
         sys.exit(0 if result.ready else 2)
 
     from video_processing.utils.submission_progress import (
-        write_progress, proven_pre_submit, PRE_SUBMIT_BROWSER_CLOSED,
+        proven_pre_submit, PRE_SUBMIT_BROWSER_CLOSED,
     )
-    if args.evidence_dir and args.video and not (args.login_only or args.verify_only):
-        write_progress(Path(args.evidence_dir), args.video)
     try:
         code = run_uploader(
             video_path    = args.video,

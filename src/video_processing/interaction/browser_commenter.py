@@ -369,6 +369,8 @@ class BrowserCommenter:
                     viewport={"width": 1920, "height": 1080},
                     storage_state=str(self.state_path),
                 )
+                from video_processing.core.wechat_session_lock import guard_wechat_context
+                guard_wechat_context(context)
                 page = context.new_page()
                 captured_post_ids: list[str] = []
                 captured_post_descs: dict[str, str] = {}

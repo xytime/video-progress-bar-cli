@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| shared-backoff-v1 | 2026-10-20 | Codex | 所有投稿在领取前遵守账户共用退避，评论开关不再影响限流保护。 |
 | 1.20.0 | 2026-10-11 | Codex | 商品可选，接受同任务同版本的无商品清空回执，不把缺商品判为提交不明。 |
 | 1.19.0 | 2026-09-25 | Codex | 接受投稿器基于同次唯一新增 ID 与精确短标题或完整文案的绑定回执。 |
 | 1.18.0 | 2026-09-23 | Codex | 专属投稿改用微信发布互斥，不等待全局加工锁。 |
@@ -366,13 +367,13 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         start_current()
         if pending["state"] != "SUBMISSION_APPROVED":
             return 0
-        if settings.enable_wechat_comment_interaction:
-            try:
-                with WeChatSessionLock(_PROJECT_ROOT / "output/wechat_state.json", purpose="发布"):
-                    pass
-            except WeChatSessionLockBusy:
-                logger.info("English World deferred before claim: browser session is busy")
-                return EXIT_DEFERRED
+        # 账户级退避适用于所有投稿，不能依赖评论功能开关。
+        try:
+            with WeChatSessionLock(_PROJECT_ROOT / "output/wechat_state.json", purpose="发布"):
+                pass
+        except WeChatSessionLockBusy:
+            logger.info("English World deferred before claim: browser session busy or account cooldown active")
+            return EXIT_DEFERRED
         try:
             _require_publish_package(pending)
             product_decision = _product_task_decision(db, pending)
