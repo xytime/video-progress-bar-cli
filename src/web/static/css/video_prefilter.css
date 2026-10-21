@@ -27,7 +27,7 @@
 .prefilter-workbench .actions select { width: auto; max-width: 300px; }
 .prefilter-config-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.3fr); gap: 24px; }
 .prefilter-numbers { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 16px; }
-.prefilter-workbench textarea { width: 100%; min-height: 116px; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+.prefilter-workbench textarea { width: 100%; min-height: 116px; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .prefilter-config-actions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
 .prefilter-config-actions p { margin: 0; }
 .prefilter-capability { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 24px; }
