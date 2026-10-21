@@ -28,7 +28,7 @@
     $('fields').disabled=!healthy||pending;
     $('rule').disabled=!healthy||pending;
     $('copy').disabled=!healthy||pending;
-    $('save').disabled=!healthy||pending||!dirty();
+    $('save').disabled=!healthy||pending||Boolean(selected&&!dirty());
     $('search').disabled=!healthy||pending||!selected||dirty()||!model?.can_search||model.jobs.some(j=>j.state==='RUNNING');
     say('dirty',dirty()?'有未保存的修改，请先保存配置':selected?'配置已保存 · 版本 '+selected.version:'新规则，请先保存配置');
   }

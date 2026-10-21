@@ -1,0 +1,17 @@
+{
+  "main": "48d4d4d",
+  "same_failure_set": true,
+  "failures": [
+    "tests/browser/test_product_settings_browser.py::test_all_product_dropdowns_use_catalog_and_new_selection_persists",
+    "tests/browser/test_product_settings_browser.py::test_catalog_file_preview_import_and_error_keeps_current",
+    "tests/browser/test_product_settings_browser.py::test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit",
+    "tests/browser/test_product_settings_browser.py::test_impact_cancel_and_history_restore_as_draft",
+    "tests/browser/test_product_settings_browser.py::test_impact_distinguishes_candidate_change_from_unchanged_frozen_tasks",
+    "tests/browser/test_product_settings_browser.py::test_library_pagination_filters_and_url_restore",
+    "tests/browser/test_product_settings_browser.py::test_library_pending_then_verified_and_selected",
+    "tests/browser/test_product_settings_browser.py::test_real_save_preview_persist_and_version",
+    "tests/browser/test_product_settings_browser.py::test_saved_config_simulation_stays_separate_from_actual_frozen_decision[first]",
+    "tests/browser/test_product_settings_browser.py::test_saved_config_simulation_stays_separate_from_actual_frozen_decision[later]",
+    "tests/browser/test_product_settings_browser.py::test_search_picker_keyboard_cancel_and_main_viewport"
+  ]
+}

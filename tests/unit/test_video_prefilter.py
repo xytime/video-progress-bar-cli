@@ -185,4 +185,4 @@ def test_closed_during_fetch_does_not_store_or_publish(tracker):
     tracker.adapter.prefilter_details=details
     data=execute(tracker,rule)
     assert data['job']['state']=='INTERRUPTED' and data['results']==[]
-    assert data['job']['counts']['unprocessed']==0  # 已分类但未获门禁许可写入结果。
+    assert data['job']['counts']['unprocessed']==1  # 未获门禁许可写入结果，不能计为已完成分类。

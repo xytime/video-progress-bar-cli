@@ -135,7 +135,7 @@ class VideoPrefilter:
     def _run(self, job, lock, ticket):
         tracker = self.tracker
         counts = dict(returned=0, detailed=0, **{k: 0 for k in CATEGORIES})
-        results, has_more = [], False
+        results, has_more, stored = [], False, False
         try:
             started = datetime.fromisoformat(job['started_at'])
             rule, deadline = job['snapshot'], time.monotonic()+60
@@ -160,6 +160,7 @@ class VideoPrefilter:
                     counts['FAILED'] = len(ids)
                     self._timeout(job['id'], deadline)
                     self.db.prefilter_store(job['id'], results, tracker.clock())
+                    stored = True
                     self.db.prefilter_finish(job['id'], 'FAILED', exc.code, counts, tracker.clock(), has_more)
                     return
                 by_id = {item.get('id'): item for item in details if item.get('id') in ids}
@@ -170,20 +171,24 @@ class VideoPrefilter:
                     counts[result['category']] += 1
             self._timeout(job['id'], deadline)
             self.db.prefilter_store(job['id'], results, tracker.clock())
+            stored = True
             self.db.prefilter_finish(job['id'], 'PARTIAL' if counts['detailed'] < len(ids) else 'COMPLETE',
                                      'MISSING_DETAILS' if counts['detailed'] < len(ids) else 'OK', counts, tracker.clock(), has_more)
         except TopicError as exc:
             interrupted = exc.code in ('STOPPED', 'SEARCH_CLOSED', 'MARKET_GUARD', 'GUARD_DISABLED', 'GUARD_UNKNOWN', 'DEADLINE')
-            self._finish(job['id'], 'INTERRUPTED' if interrupted else 'FAILED', exc.code, counts)
+            self._finish(job['id'], 'INTERRUPTED' if interrupted else 'FAILED', exc.code, counts, stored=stored)
         except Exception:
-            self._finish(job['id'], 'FAILED', 'INTERNAL_ERROR', counts)
+            self._finish(job['id'], 'FAILED', 'INTERNAL_ERROR', counts, stored=stored)
         finally:
             lock.close()
             ticket.close()
             with tracker._mutex:
                 tracker._threads.discard(threading.current_thread())
 
-    def _finish(self, job_id, state, code, counts):
+    def _finish(self, job_id, state, code, counts, *, stored):
+        if not stored:
+            for category in CATEGORIES:
+                counts[category] = 0
         counts['unprocessed'] = counts['returned'] - sum(counts[k] for k in CATEGORIES)
         for _ in range(2):
             try:

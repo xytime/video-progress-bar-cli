@@ -17,9 +17,9 @@ from tests.unit.test_video_prefilter import prepare
 
 
 @pytest.fixture
-def ui(chromium,topic_client):
+def ui(chromium,topic_client,request):
     client,tracker=topic_client
-    prepare(tracker)
+    if getattr(request,'param',True):prepare(tracker)
     page=chromium.new_page(viewport=dict(width=1440,height=1000))
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     flags=dict(offline=False,conflict=False)
@@ -57,6 +57,7 @@ def test_manual_only_complete_flow_and_refresh(ui):
     expect(page.locator('#prefilter-results')).to_contain_text('指标合格')
     page.locator('#prefilter-results').get_by_role('button',name='收藏',exact=True).click()
     expect(page.locator('#prefilter-results')).to_contain_text('已收藏')
+    page.locator('#prefilter-reload').focus();page.evaluate('scrollTo(0,0)')
     evidence(page,'desktop')
     count=len(tracker.adapter.calls);page.reload()
     expect(page.locator('#prefilter-results')).to_contain_text('已收藏')
@@ -85,6 +86,7 @@ def test_draft_conflict_keyboard_narrow_and_failure(ui,theme):
     page.locator('#prefilter-search').click()
     expect(page.locator('#prefilter-job-status')).to_contain_text('完成')
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    page.locator('#prefilter-reload').focus()
     evidence(page,'mobile-'+theme)
     flags['offline']=True;page.locator('#prefilter-result-retry').click()
     expect(page.locator('#prefilter-result-feedback')).to_contain_text('读取失败')
@@ -124,3 +126,38 @@ def test_empty_partial_and_official_request_failure_are_distinct(ui):
     page.locator('#prefilter-categories').get_by_role('button',name='请求失败 1',exact=True).click()
     expect(page.locator('#prefilter-results')).to_contain_text('官方请求失败')
     expect(page.locator('#prefilter-results').get_by_role('button',name='收藏',exact=True)).to_be_disabled()
+
+
+@pytest.mark.parametrize('theme', ['dark', 'light', 'contrast'])
+def test_primary_action_hover_contrast(ui, theme):
+    page, tracker, flags = ui
+    page.evaluate('(theme)=>localStorage.setItem("vp-display-preferences",JSON.stringify({theme,size:"standard"}))', theme)
+    page.reload()
+    expect(page.locator('#prefilter-search')).to_be_enabled()
+    for selector in ('#prefilter-search',):
+        page.locator(selector).hover()
+        ratio = page.locator(selector).evaluate('''el => {
+          const rgb = c => (c.match(/[\\d.]+/g) || []).map(Number);
+          function bg(e) {
+            if (!e) return [255,255,255];
+            const c = rgb(getComputedStyle(e).backgroundColor), p = bg(e.parentElement), a = c[3] ?? 1;
+            return c.slice(0,3).map((v,i) => v*a+p[i]*(1-a));
+          }
+          const l = c => c.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+            .reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+          const a = l(rgb(getComputedStyle(el).color)), b = l(bg(el));
+          return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+        }''')
+        assert ratio >= 4.5, (theme, selector, ratio)
+    evidence(page, 'primary-hover-'+theme)
+
+
+@pytest.mark.parametrize('ui',[False],indirect=True)
+def test_initial_defaults_can_be_saved_without_edits(ui):
+    page,tracker,flags=ui
+    expect(page.locator('#prefilter-save')).to_be_enabled()
+    expect(page.locator('#prefilter-search')).to_be_disabled()
+    page.locator('#prefilter-save').click()
+    expect(page.locator('#prefilter-form-feedback')).to_contain_text('配置已保存')
+    assert len(tracker.db.prefilter_rules())==1
+    assert not tracker.adapter.calls

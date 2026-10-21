@@ -1,0 +1,34 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/3d32/Video-precessing",
+  "started_at": "2026-10-21T07:47:18.290366+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r_z97e5y",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r_z97e5y/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.076
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_video_prefilter.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_runtime_failures.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "40fa03dfccc70eb1214ddffedb172cc4e3bf0a33e98f67f59b045ded813ca193",
+  "profile_sha256": "6f626ad8e87e4597624ef63e22be3985c02fa865f2807aaa043ce27e606ec221",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 28.476
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-r_z97e5y/sandbox"
+  },
+  "finished_at": "2026-10-21T07:47:47.588799+00:00"
+}

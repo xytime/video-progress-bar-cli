@@ -1,0 +1,44 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/3d32/Video-precessing",
+  "started_at": "2026-10-21T07:42:46.622170+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-7rbm0l54",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-7rbm0l54/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.084
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_video_prefilter.py",
+    "tests/unit/test_topic_candidates_api.py",
+    "tests/unit/test_topic_candidates.py",
+    "tests/unit/test_topic_candidates_edges.py",
+    "tests/unit/test_topic_runtime_failures.py",
+    "tests/unit/test_topic_search_adapter.py",
+    "tests/unit/test_topic_trial_budget.py",
+    "tests/unit/test_keyword_collection.py",
+    "tests/unit/test_keyword_long_term.py",
+    "tests/unit/test_keyword_rollout_runtime.py",
+    "tests/unit/test_keyword_job_proof.py",
+    "tests/unit/test_keyword_long_term_rollout.py",
+    "tests/unit/test_keyword_rollout_contract.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "3180f196e3b7a09f4660c3107963a4a55b9b1cca35ad73d7461f7c032b12dc4d",
+  "profile_sha256": "30b6a0375c8ee2def415be4210af0e4771fbf50ca808c1dd4d694b0bf4cf5fda",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 74.437
+  },
+  "exit_code": 0,
+  "cleanup": {
+    "status": "removed",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-7rbm0l54/sandbox"
+  },
+  "finished_at": "2026-10-21T07:44:02.082286+00:00"
+}

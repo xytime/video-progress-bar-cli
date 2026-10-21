@@ -43,3 +43,5 @@
   .prefilter-config-grid { gap: 8px; }
   .prefilter-numbers { gap: 0 10px; }
 }
+.prefilter-workbench button.primary:hover { background: var(--product-action); color: var(--bg); }
+.prefilter-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }

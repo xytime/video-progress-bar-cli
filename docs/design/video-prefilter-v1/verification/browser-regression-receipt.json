@@ -1,0 +1,42 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/3d32/Video-precessing",
+  "started_at": "2026-10-21T07:42:45.495189+00:00",
+  "evidence": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-w0p_2pnu",
+  "storage_policy": "external-auto-cleanup",
+  "snapshot": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-w0p_2pnu/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.256
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/browser/test_dashboard_workspace.py",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/browser/test_manual_product_selection_browser.py",
+    "tests/unit/test_dashboard_interactions.py",
+    "tests/browser/test_vocabulary_outro_settings_browser.py",
+    "tests/browser/test_video_prefilter_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "3180f196e3b7a09f4660c3107963a4a55b9b1cca35ad73d7461f7c032b12dc4d",
+  "profile_sha256": "7c32863e9303deaea21a1a9b7b565d7ac16288fe0ee35fa1d0b6a9408b677a2b",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-w0p_2pnu/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "617d0466493e66fa03fa292b3dde811093a770c934bc0479b2bb1b6d8d673018",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 1,
+    "seconds": 174.306
+  },
+  "exit_code": 1,
+  "cleanup": {
+    "status": "retained",
+    "path": "/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-w0p_2pnu/sandbox"
+  },
+  "finished_at": "2026-10-21T07:45:41.141144+00:00"
+}
