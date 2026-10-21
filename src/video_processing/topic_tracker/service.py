@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-21 | Codex | 独立预筛选复用本机会话、官方请求与共享门禁预算 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 0.4.1 | 2026-10-14 | Codex | 试运行累计预算入账及错误配置关闭，提供非秘密用量回读 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
@@ -32,6 +33,8 @@ class TopicTracker(KeywordCollection):
         self._threads = set()
         self._mutex = threading.Lock()
         self.db.topic_initialize()
+        from .prefilter import VideoPrefilter
+        self.prefilter = VideoPrefilter(self)
         lock = self._lock()
         try:
             self.db.topic_maintenance(self.clock(), recover=lock is not None)
@@ -159,6 +162,10 @@ class TopicTracker(KeywordCollection):
         current_job = self.db.topic_check_job(job_id, self.clock())
         if current_job["kind"] != "MANUAL" and not getattr(self.config,"topic_scheduler_enabled",False):
             raise TopicError("STOPPED", "定时采集已关闭")
+        return self._guard_timeout(deadline)
+
+    def _guard_timeout(self, deadline):
+        """既有关键词与预筛选共用宿主窗口和每请求超时。"""
         remaining = min(20, deadline - time.monotonic())
         # 在保护窗口边界之前结束请求，不另建时间窗定义。
         from datetime import timedelta

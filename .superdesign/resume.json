@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "video-prefilter": {
+      "targetKind": "new-ui",
+      "projectId": "e8d90721-5f1c-4490-b3ba-3b93bd4dfc2e",
+      "activeDraftId": "1dd5b571-279e-474d-a7f3-267540a61489",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "src/web/static/js/console_navigation.js",
+        "src/web/static/css/console_workspace.css",
+        "src/web/templates/topic_candidates.html",
+        "docs/specs/video-prefilter-v1.md"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "59bf98deb89867144f8be8f594eef2a0bb50b156a6491043274b5610ab0fb3a1",
+        "src/web/static/js/console_navigation.js": "fd368ee7b2fa342ca2b61739e655bed5de89cd64748abfe391ecc811077a97d7",
+        "src/web/static/css/console_workspace.css": "614e9a145de0324a4fac830e0ada0910c5fff8422387cac9bd0846ace94a094c",
+        "src/web/templates/topic_candidates.html": "bc428a09e806ae89557df28965f9bada9c8094ea04211bb3d8721fb5efdd4304",
+        "docs/specs/video-prefilter-v1.md": "209e3eaeae5bbebc22fd13b79158c92a69827594d577e815810568195d286b70"
+      },
+      "referenceIds": [],
+      "components": [],
+      "drafts": {
+        "1dd5b571-279e-474d-a7f3-267540a61489": {
+          "title": "视频预筛选",
+          "visualDirection": "沿用现有深蓝后台，上方配置、下方结果；静态示例",
+          "currentVersion": 2
+        }
+      },
+      "updatedAt": "2026-10-21T07:08:52.445195+00:00"
+    }
+  }
+}

@@ -1,0 +1,160 @@
+# 共享导航与布局
+
+### src/web/static/js/console_navigation.js
+```javascript
+/** 共享工作台导航。2026-10-12 Codex：v0.3 五区导航、原生抽屉与草稿离开保护。 */
+(() => {
+  const sections = [
+    ['overview', '总览', '/?view=overview', []],
+    ['topics', '选题中心', '/?view=topics&tab=waitlist', [
+      ['素材待筛选', '/?view=topics&tab=waitlist'], ['近期高互动', '/?view=topics&tab=high_likes'],
+      ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
+      ['手动加入生产队列', '/?view=topics&tab=manual']]],
+    ['production', '生产队列', '/?view=production&tab=queue', []],
+    ['publications', '发布记录', '/?view=publications&tab=review', []],
+    ['operations', '配置与运维', '/?view=operations', [['生词片尾', '/vocabulary-outro-settings']]],
+  ];
+  const root = location.pathname === '/';
+  const rail = document.createElement('aside'); rail.className = 'console-rail';
+  const nav = document.createElement('nav'); nav.setAttribute('aria-label', '工作台导航');
+  nav.innerHTML = '<a class="console-brand" href="/?view=overview">视频运营工作台</a>' + sections.map(([key,label,href,children]) =>
+    `<div class="console-nav-group"><a class="console-primary" data-section="${key}" href="${href}">${label}</a>` +
+    (children.length ? `<div class="console-subnav">${children.map(([name,url])=>`<a href="${url}">${name}</a>`).join('')}</div>` : '') + '</div>').join('');
+  rail.append(nav); document.body.prepend(rail); document.body.classList.add('console-layout');
+  const toggle = document.createElement('button'); toggle.type='button'; toggle.className='console-menu';
+  toggle.textContent='导航'; toggle.setAttribute('aria-haspopup','dialog'); toggle.setAttribute('aria-expanded','false');
+  document.body.prepend(toggle);
+  const drawer=document.createElement('dialog'); drawer.className='console-drawer'; drawer.setAttribute('aria-label','工作台导航');
+  const close=document.createElement('button'); close.type='button'; close.textContent='关闭导航';
+  drawer.append(close); document.body.append(drawer);
+  toggle.onclick=()=>{drawer.append(nav);drawer.showModal();toggle.setAttribute('aria-expanded','true');close.focus();};
+  close.onclick=()=>drawer.close();
+  drawer.addEventListener('close',()=>{rail.append(nav);toggle.setAttribute('aria-expanded','false');toggle.focus();});
+  const wide=matchMedia('(min-width: 1025px)'); wide.addEventListener('change',()=>{if(wide.matches&&drawer.open)drawer.close();});
+  function select(view) {
+    nav.querySelectorAll('a').forEach(a=>a.removeAttribute('aria-current'));
+    const active=nav.querySelector(`[data-section="${view}"]`); if(active)active.setAttribute('aria-current','page');
+    nav.querySelectorAll('.console-subnav a').forEach(a=>{
+      const url=new URL(a.href);
+      if(root ? url.pathname==='/' && url.searchParams.get('tab')===new URL(location.href).searchParams.get('tab') && view==='topics' : url.pathname===location.pathname) a.setAttribute('aria-current','page');
+    });
+  }
+  document.addEventListener('click',event=>{
+    const link=event.target.closest('a[href]'); if(!link||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target)return;
+    const url=new URL(link.href); if(url.origin!==location.origin)return;
+    if(root&&url.pathname==='/'&&window.DashboardWorkspace){
+      event.preventDefault(); if(drawer.open)drawer.close(); window.DashboardWorkspace.navigate(url);
+    } else if(window.consoleNavigationGuard && link.closest('.console-rail,.console-drawer')) {
+      event.preventDefault(); if(drawer.open)drawer.close(); window.consoleNavigationGuard(()=>location.assign(url.href));
+    }
+  });
+  window.ConsoleNavigation={select};
+  select(root ? 'overview' : location.pathname==='/topic-candidates'?'topics':'operations');
+})();
+
+```
+
+### src/web/static/css/console_workspace.css
+```css
+/* 2026-10-12 Codex：v0.3 导航与总览；颜色只引用 dashboard.css 语义变量。 */
+.console-layout { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; padding:0; }
+.console-layout::before,.console-layout::after { display:none; }
+.console-layout [hidden] { display:none!important; }
+.console-layout > .app,.console-layout > .product-settings { margin:0 0 0 236px; padding:24px; width:auto; max-width:1700px; min-width:0; }
+.console-rail { position:fixed; inset:0 auto 0 0; width:236px; padding:20px 14px; box-sizing:border-box; border-right:1px solid var(--border); background:var(--bg2,var(--bg)); overflow:auto; z-index:40; }
+.console-brand { font-size:1.125rem; font-weight:700; margin-bottom:24px; }
+.console-rail a,.console-drawer a { display:flex; align-items:center; min-height:44px; padding:8px 12px; box-sizing:border-box; text-decoration:none; color:var(--text2); border-radius:6px; }
+.console-primary { font-weight:600; margin-top:6px; }
+.console-subnav { margin:2px 0 12px 14px; border-left:1px solid var(--border); font-size:.875rem; }
+.console-rail a[aria-current],.console-drawer a[aria-current] { color:var(--accent); background:var(--glass); box-shadow:inset 3px 0 var(--accent); }
+.console-layout a:hover { color:var(--blue); background:var(--glass); }
+.console-layout :is(a,button,input,select,summary):focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+.console-menu { display:none; }
+.console-layout button,.console-layout select { cursor:pointer; }
+.console-layout button:disabled { cursor:not-allowed; }
+.console-layout .console-menu,.console-drawer > button { min-height:44px; border:1px solid var(--border); border-radius:6px; background:var(--glass); color:var(--text); padding:8px 16px; font:inherit; }
+.console-drawer { color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; width:min(340px,90vw); max-height:90dvh; padding:16px; overflow:auto; }
+.console-drawer::backdrop { background:rgba(0,0,0,.65); }
+.console-layout .app > header { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:0 0 18px; margin-bottom:0; border:0; flex-wrap:wrap; }
+.console-layout h1 { font-size:1.5rem; margin:0; line-height:1.3; }
+.console-layout .header-right { gap:12px; flex-wrap:wrap; }
+.console-layout #last-update { color:var(--text2); font-size:.875rem; }
+.console-layout .main-grid { display:block; }
+.console-layout .panel,.console-panel { background:var(--glass); border:1px solid var(--border); border-radius:8px; box-shadow:none; margin-bottom:18px; }
+.console-layout .tabs-header { overflow:auto; flex-wrap:wrap; }
+.console-layout .tab-btn { min-height:44px; font-size:.875rem; }
+.console-layout .freshness-line { background:transparent; border:0; padding:0; color:var(--text2); font-size:.875rem; }
+.console-layout .freshness-line-age { color:var(--text2); font-weight:400; }
+.console-layout .card-active-pulsing,.console-layout .tab-btn-pulsing { animation:none!important; box-shadow:none!important; }
+.console-layout .video-zh-title { font-size:1rem; }
+.console-layout .panel-title { font-size:1rem; }
+.console-layout .app button { min-height:44px; }
+.console-notice { border:1px solid var(--border); border-left:3px solid var(--blue); border-radius:6px; padding:12px 16px; margin:0 0 18px; display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+.console-notice p { margin:0; }
+.console-notice a,.console-shortcuts a { color:var(--blue); min-height:44px; display:flex; align-items:center; text-decoration:none; }
+.console-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:18px; }
+.console-metric { padding:14px 18px; border:1px solid var(--border); border-radius:8px; background:var(--glass); text-decoration:none; color:var(--text); }
+.console-metric span { display:block; font-size:.875rem; color:var(--text2); }
+.console-metric strong { display:block; font-size:1.75rem; line-height:1.5; font-variant-numeric:tabular-nums; }
+.console-overview-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(250px,1fr); gap:18px; }
+.console-panel { padding:18px; min-width:0; }
+.console-panel h2 { font-size:1.125rem; margin:0 0 12px; }
+.console-panel p { color:var(--text2); font-size:.875rem; }
+.console-attention a { display:flex; justify-content:space-between; align-items:center; min-height:48px; gap:12px; color:var(--text); border-bottom:1px solid var(--border); text-decoration:none; font-size:.875rem; }
+.console-attention a span:last-child { color:var(--blue); white-space:nowrap; }
+.console-tasks { margin-top:18px; }
+.console-task { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:12px; padding:12px 0; border-top:1px solid var(--border); align-items:center; }
+.console-task > div { min-width:0; overflow-wrap:anywhere; }
+.console-task small { display:block; color:var(--text2); font-size:.875rem; margin-top:4px; }
+.console-task a { display:flex; align-items:center; min-height:44px; color:var(--blue); }
+.console-task .console-stage { font-size:.875rem; color:var(--text2); }
+.console-shortcuts a { border-bottom:1px solid var(--border); padding:8px 0; justify-content:space-between; }
+.console-error { color:var(--red)!important; }
+.console-layout .global-funnel-panel { margin-top:0; box-shadow:none; border-radius:8px; }
+.console-layout .global-funnel-body { gap:8px; padding:12px; }
+.console-layout .gf-stage-card { background:transparent; box-shadow:none; padding:8px; border-radius:6px; }
+.console-layout .gf-stage-num { font-size:1.5rem; }
+.console-layout .gf-stage-title { font-size:.875rem; }
+.console-layout .gf-stage-sub { font-size:.875rem; }
+.console-layout .gf-diag-card { display:none; }
+.console-layout #operations-tools { display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding:18px; }
+@media(max-width:1200px) { .console-overview-grid { grid-template-columns:minmax(0,3fr) minmax(220px,2fr); } }
+@media(max-width:1024px) {
+  .console-rail { display:none; }
+  .console-menu { display:block; margin:14px 18px 0; }
+  .console-layout > .app,.console-layout > .product-settings { margin:0; padding:18px; }
+}
+@media(max-width:650px) {
+  .console-overview-grid { grid-template-columns:minmax(0,1fr); }
+  .console-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .console-layout > .app,.console-layout > .product-settings { padding:14px; }
+  .console-task { grid-template-columns:minmax(0,1fr) auto; }
+  .console-task .console-stage { grid-column:1; }
+  .console-task a { grid-column:2; grid-row:1 / 3; }
+  .console-layout .global-funnel-panel .panel-header { flex-wrap:wrap; gap:10px; }
+  .console-layout .funnel-tabs { flex-wrap:wrap; }
+  .console-layout .global-funnel-body { display:grid; grid-template-columns:1fr 1fr; }
+}
+@media(prefers-reduced-motion:reduce) { .console-layout * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+
+/* v0.3.1：关注事项使用业务分类，零项收于辅助区；窄屏任务先于总量。 */
+.console-attention small,.console-observation small { display:block; color:var(--text2); font-size:.75rem; }
+.console-observation { margin-top:14px; }
+.console-observation a { display:flex; justify-content:space-between; gap:12px; padding:8px 0; color:var(--text2); }
+.console-zero { opacity:.7; }
+.cohort-help { padding:8px 20px; color:var(--text2); font-size:.875rem; }
+.console-layout .gf-stage-sub { white-space:normal; overflow-wrap:anywhere; }
+.read-feedback { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.read-feedback p { flex:1 1 240px; overflow-wrap:anywhere; }
+@media(max-width:650px) {
+  #workspace-overview { display:flex; flex-direction:column; }
+  .console-notice { order:0; }
+  .console-overview-grid { order:1; }
+  .console-metrics { order:2; }
+  .console-attention a { align-items:flex-start; }
+  .console-attention a span:last-child { white-space:normal; }
+}
+
+.console-notice[hidden] { display:none; }
+
+```

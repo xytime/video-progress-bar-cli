@@ -81,3 +81,11 @@
 维护、运行状态未知时，扫描、扫码登录及完整流水线保持可见但禁用；菜单、外观和审计可查看。微信状态来自原会话状态接口，明确为本地验证记录，不因当前视频分页含 LOGIN_REQUIRED 推断全局会话。已有登录流程或同类扫描时禁止重复发起；请求前重新读取权限。完整流水线在应用原生 dialog 中说明扫描、评分、加工与发布后果，初始焦点在取消，Escape 取消并恢复焦点，不在打开确认时提交。扫描失败与任务结束分别展示，任务结束不证明全部来源采集成功。所有读取均不启动真实扫描、登录或平台验证。验收所有者为 test_console_header.py / test_console_header_browser.py。
 
 微信登录入口的授权年龄与完整时间复用会话领域逻辑 relative_age / login_time_bj，经原只读状态接口返回；不以凭证文件修改时间或最近保活时间替代授权时间。缺记录、读取失败和未来时间异常保持明确，不推断授权有效。
+
+## 视频预筛选（2026-10-21 页面已确认）
+
+- 路由 `/video-prefilter` 与 `/api/video-prefilter`；导航 owner 为 console_navigation.js / dashboard_workspace.js，独立工作台 owner 为 video_prefilter.js / video_prefilter.css。
+- 规则原生 select；字段使用原生 input/textarea，错误由 aria-describedby 关联。保存和检索分开，未保存草稿禁用检索；切换/离开使用原生 dialog，初始焦点继续编辑，Escape 保留草稿。失败或 CAS 冲突保留输入。
+- 结果分类互斥，默认合格，播放量排序后每页25条；独立显示请求失败、历史快照与获取时间。查询和页面刷新无外部搜索副作用。运行中显示真实阶段及已获取数量，不伪造百分比。中断且未分类的数量单独显示，不冒充零结果。
+- 页面、规则和决定均受既有本机会话、Origin、CSRF、维护状态及共享搜索锁/预算约束；不改变既有调度与准入。收藏、排除、撤销整理只写独立预筛选 DAL。资料30天到期清除，决定跨规则保留；历史过期不能收藏。
+- 验证 owner：tests/unit/test_video_prefilter.py、tests/browser/test_video_prefilter_browser.py。复用控件与窗口滚动，不增加自定义列表组件或通知组件。

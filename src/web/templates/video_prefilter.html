@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- Modification History: 1.0.0 | 2026-10-21 | Codex | 已确认的手动预筛选页面；无生产入口。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="topic-csrf" content="__TOPIC_CSRF__"><title>视频预筛选 · 视频控制台</title>
+<script src="/static/js/topic_display_preferences.js?v=1"></script>
+<link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
+<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261013-04"><link rel="stylesheet" href="/static/css/video_prefilter.css?v=1">
+<script defer src="/static/js/console_navigation.js"></script><script defer src="/static/js/video_prefilter.js?v=1"></script>
+</head><body><main class="product-settings prefilter-workbench">
+<nav class="breadcrumbs" aria-label="当前位置"><a href="/?view=topics">选题中心</a><span aria-hidden="true"> / </span><span aria-current="page">视频预筛选</span></nav>
+<header class="page-header"><div><h1>视频预筛选</h1><p class="hint">手动查找候选，收藏仅保存选题意向；不会进入自动生产或发布。</p></div><button id="prefilter-reload" type="button" disabled>重新载入</button></header>
+<nav class="prefilter-tabs" aria-label="选题中心分区"><a href="/?view=topics&amp;tab=waitlist">素材待筛选</a><a href="/?view=topics&amp;tab=high_likes">近期高互动</a><a href="/video-prefilter" aria-current="page">视频预筛选</a><a href="/topic-candidates">YouTube 关键词采集</a><a href="/?view=topics&amp;tab=hotwords">热词线索</a></nav>
+<p id="prefilter-state-feedback" role="status" aria-live="polite">正在读取配置与搜索能力…</p>
+<section aria-labelledby="prefilter-config-title"><div class="section-head"><h2 id="prefilter-config-title">筛选配置</h2><div class="actions"><label for="prefilter-rule" class="sr-only">已保存规则</label><select id="prefilter-rule" disabled><option value="">新规则</option></select><button id="prefilter-copy" type="button" disabled>另存为新规则</button></div></div>
+<form id="prefilter-form" novalidate><fieldset id="prefilter-fields" disabled>
+<div class="prefilter-config-grid"><div><label for="prefilter-name">规则名称</label><input id="prefilter-name" name="name" maxlength="40" aria-describedby="prefilter-name-error"><p id="prefilter-name-error" class="field-error"></p>
+<label for="prefilter-keywords">关键词 <span class="hint">每行一个短语，匹配任一关键词</span></label><textarea class="resize-none" id="prefilter-keywords" name="keywords" rows="4" aria-describedby="prefilter-keywords-error"></textarea><p id="prefilter-keywords-error" class="field-error"></p></div>
+<div class="prefilter-numbers">
+<div><label for="prefilter-lookback_hours">回溯时间（小时）</label><input id="prefilter-lookback_hours" name="lookback_hours" type="number" min="1" max="720" step="1" aria-describedby="prefilter-lookback_hours-error"><p id="prefilter-lookback_hours-error" class="field-error"></p></div>
+<div><label for="prefilter-max_duration">最长时长（秒）</label><input id="prefilter-max_duration" name="max_duration" type="number" min="1" max="1800" step="1" aria-describedby="prefilter-max_duration-error"><p id="prefilter-max_duration-error" class="field-error"></p></div>
+<div><label for="prefilter-min_views">最低播放量</label><input id="prefilter-min_views" name="min_views" type="number" min="0" max="1000000000000" step="1" aria-describedby="prefilter-min_views-error"><p id="prefilter-min_views-error" class="field-error"></p></div>
+<div><label for="prefilter-min_like_ratio">最低点赞率（%）</label><input id="prefilter-min_like_ratio" name="min_like_ratio" type="number" min="0" max="100" step="0.01" aria-describedby="prefilter-min_like_ratio-error"><p id="prefilter-min_like_ratio-error" class="field-error"></p></div>
+<div><label for="prefilter-candidate_count">候选数量</label><input id="prefilter-candidate_count" name="candidate_count" type="number" min="1" max="50" step="1" aria-describedby="prefilter-candidate_count-error"><p id="prefilter-candidate_count-error" class="field-error"></p></div>
+<p class="hint">不设最低时长；0 秒、直播及状态未核实的视频不合格。</p></div></div></fieldset>
+<div class="prefilter-config-actions"><div><p id="prefilter-dirty" role="status">配置尚未读取</p><p class="hint">最多 50 个近期候选，不代表全站覆盖；统计仅反映获取时刻。</p><p id="prefilter-gate" class="hint"></p><p id="prefilter-budget" class="hint"></p></div><div class="actions"><button id="prefilter-save" type="submit" disabled>保存配置</button><button id="prefilter-search" class="primary" type="button" disabled>开始检索</button></div></div>
+<p id="prefilter-form-feedback" role="status" aria-live="polite"></p></form></section>
+<section aria-labelledby="prefilter-results-title"><div class="section-head"><h2 id="prefilter-results-title">本轮结果</h2><button id="prefilter-result-retry" type="button" disabled>重新读取结果</button></div>
+<p id="prefilter-job-status" role="status" aria-live="polite">尚未检索。请保存配置后手动开始。</p><p id="prefilter-snapshot" class="hint"></p>
+<div class="prefilter-result-bar"><div id="prefilter-categories" class="actions" role="group" aria-label="结果分类"></div><span class="hint">播放量从高到低</span></div>
+<p id="prefilter-result-feedback" role="status" aria-live="polite"></p><div id="prefilter-results" aria-busy="false"></div>
+<div class="prefilter-pagination"><p id="prefilter-page" class="hint"></p><div class="actions"><button id="prefilter-previous" type="button" disabled>上一页</button><button id="prefilter-next" type="button" disabled>下一页</button></div></div>
+<p class="hint">未达标：时间、时长、播放、点赞率或内容策略受限。资料不足：缺少精确时间、统计或来源状态。请求失败单独记录，不当作零结果。</p></section>
+<section aria-labelledby="prefilter-history-title"><h2 id="prefilter-history-title">历史检索</h2><p class="hint">历史结果按当时规则与时间窗口保存；源资料最多保留 30 天。收藏、排除决定跨规则保留。</p><div id="prefilter-history"></div></section>
+<dialog id="prefilter-discard" aria-labelledby="prefilter-discard-title"><h2 id="prefilter-discard-title">有尚未保存的修改</h2><p>继续将丢弃当前配置草稿。</p><div class="dialog-foot"><button id="prefilter-keep" type="button" disabled autofocus>继续编辑</button><button id="prefilter-discard-confirm" type="button" disabled>丢弃修改并继续</button></div></dialog>
+</main></body></html>

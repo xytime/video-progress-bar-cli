@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-21 | Codex | 独立预筛选复用本机会话、官方请求与共享门禁预算 |
 | 0.4.2 | 2026-10-14 | Codex | 规则恢复与每次自动调用验证首轮一条上限 |
 | 0.5.0 | 2026-10-15 | Codex | 显式续期恢复、暂停保持、忙碌拒绝与审计 |
 | 0.4.1 | 2026-10-14 | Codex | 试运行使用原子累计预算，跨日、重启和项目切换不重置 |
@@ -23,9 +24,10 @@ from ..core.topic_candidates import (TopicError, TERMINAL, REASONS, source_key,
 
 
 from .keyword_collection import KeywordCollectionDAL
+from .video_prefilter import VideoPrefilterDAL
 
 
-class TopicCandidateDAL(KeywordCollectionDAL):
+class TopicCandidateDAL(KeywordCollectionDAL, VideoPrefilterDAL):
     """PipelineDB 的专题方法；不从应用层暴露 SQL 或连接。"""
 
     @contextmanager
@@ -72,6 +74,7 @@ class TopicCandidateDAL(KeywordCollectionDAL):
                 c.execute(ddl)
             c.execute("INSERT OR IGNORE INTO topic_control VALUES(1,'OFF',1)")
             self._keyword_schema(c)
+            self._prefilter_schema(c)
 
     @staticmethod
     def _topic_audit(c, actor, action, key, version, now, reason=None):
@@ -84,6 +87,7 @@ class TopicCandidateDAL(KeywordCollectionDAL):
 
     def topic_maintenance(self, now, *, recover=False):
         with self._topic_connection(write=True) as c:
+            self._prefilter_maintenance(c, now, recover)
             self._topic_expire(c, now)
             c.execute("DELETE FROM topic_sessions WHERE expires_at<=?", (stamp(now),))
             c.execute("UPDATE topic_candidates SET youtube_id=NULL,metadata=NULL,fetched_at=NULL,expires_at=NULL,content_version=NULL,rule_version=NULL,score=NULL,score_policy=NULL,score_inputs=NULL,next_refresh=NULL,eligibility='INCOMPLETE',reason='资料已到期，需再次手动搜索',revision=revision+1 WHERE expires_at<=?", (stamp(now),))
@@ -287,31 +291,29 @@ class TopicCandidateDAL(KeywordCollectionDAL):
                 if job["kind"] != "MANUAL":
                     raise TopicError("TRIAL_CONFIG", "试运行仅允许手动搜索")
                 # 计入所有历史预留（包括失败和重试），不通过换项目或日期释放。
-                total = c.execute("SELECT COALESCE(SUM(units),0) FROM topic_budget WHERE bucket=?", (bucket,)).fetchone()[0]
+                total = self._shared_budget_used(c, bucket)
                 if total >= (3 if bucket == "search" else 6):
                     raise TopicError("TRIAL_BUDGET", "试运行累计额度已用完；不会随跨日或重启恢复")
             if bucket == "search" and job["kind"] == "SCHEDULED":
                 auto_used = c.execute("SELECT COUNT(*) FROM topic_budget b JOIN topic_jobs j ON j.id=b.job_id WHERE b.project=? AND b.bucket='search' AND b.day=? AND j.kind='SCHEDULED'", (project, quota_day(now))).fetchone()[0]
                 if auto_used >= min(18, max(0, limit - 2)):
                     raise TopicError("BUDGET", "定时搜索额度已用完；保留手动搜索额度")
-            used = c.execute("SELECT COALESCE(SUM(units),0) FROM topic_budget WHERE project=? AND bucket=? AND day=?", (project, bucket, quota_day(now))).fetchone()[0]
+            used = self._shared_budget_used(c, bucket, project=project, day=quota_day(now))
             if used >= limit:
                 raise TopicError("BUDGET", "本模块今日预算不足；请等待太平洋时间次日")
             c.execute("INSERT INTO topic_budget VALUES(?,?,?,?,?,?,?)", (uuid.uuid4().hex, project, bucket, quota_day(now), 1, job_id, stamp(now)))
 
     def topic_trial_budget(self):
         with self._topic_connection() as c:
-            rows = c.execute("SELECT bucket,SUM(units) n FROM topic_budget GROUP BY bucket").fetchall()
-            used = {r["bucket"]: r["n"] for r in rows}
+            used = {bucket: self._shared_budget_used(c, bucket) for bucket in ('search', 'general')}
             return {bucket: dict(used=used.get(bucket, 0), limit=limit,
                                 remaining=max(0, limit - used.get(bucket, 0)))
                     for bucket, limit in (("search", 3), ("general", 6))}
 
     def topic_budget(self, project, now):
         with self._topic_connection() as c:
-            rows = c.execute("SELECT bucket,SUM(units) n FROM topic_budget WHERE project=? AND day=? GROUP BY bucket", (project, quota_day(now))).fetchall()
-            return dict(day=quota_day(now), search=next((r["n"] for r in rows if r["bucket"] == "search"), 0),
-                        general=next((r["n"] for r in rows if r["bucket"] == "general"), 0))
+            return dict(day=quota_day(now), **{bucket: self._shared_budget_used(c, bucket, project=project, day=quota_day(now))
+                                             for bucket in ('search', 'general')})
 
     def topic_store_results(self, job_id, candidates, now):
         with self._topic_connection(write=True) as c:

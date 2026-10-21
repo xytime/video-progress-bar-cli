@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-21 | Codex | 独立预筛选复用本机会话、官方请求与共享门禁预算 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.1 | 2026-10-12 | Codex | 单飞恢复、清理与退出隔离，提供本机脱敏健康状态 |
 | 1.0.0 | 2026-10-11 | Codex | v0.2 管理/候选/审计入口；默认拒绝生产搜索，无加工入口 |
@@ -162,6 +163,7 @@ def create_topic_candidates_router(service_factory, *, port):
         return dict(runtime.health)
 
     @router.get("/topic-candidates", response_class=HTMLResponse, dependencies=[Depends(boundary)])
+    @router.get("/video-prefilter", response_class=HTMLResponse, dependencies=[Depends(boundary)])
     def page(request: Request):
         tracker = call(service)
         call(runtime.clean)
@@ -169,7 +171,8 @@ def create_topic_candidates_router(service_factory, *, port):
         if len(token) != 64 or not call(tracker.db.topic_session, token_key(token), tracker.clock()):
             token = secrets.token_hex(32)
             call(tracker.db.topic_session, token_key(token), tracker.clock(), issue=True)
-        html = (Path(__file__).parent / "templates/topic_candidates.html").read_text().replace("__TOPIC_CSRF__", csrf(token))
+        template = 'video_prefilter.html' if request.url.path == '/video-prefilter' else 'topic_candidates.html'
+        html = (Path(__file__).parent / 'templates' / template).read_text().replace("__TOPIC_CSRF__", csrf(token))
         response = HTMLResponse(html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict", max_age=8 * 3600, path="/", secure=request.url.scheme == "https")
         return response
@@ -225,4 +228,6 @@ def create_topic_candidates_router(service_factory, *, port):
     def audit(actor=Depends(authorized)):
         return call(service().db.topic_audit_records)
 
+    from .video_prefilter import create_prefilter_router
+    router.include_router(create_prefilter_router(service, authorized, call))
     return router

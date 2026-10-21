@@ -1,10 +1,11 @@
+/* Modification History: 1.0.1 | 2026-10-21 | Codex | 独立预筛选入口与选题分区定位。 */
 /** 共享工作台导航。2026-10-12 Codex：v0.3 五区导航、原生抽屉与草稿离开保护。 */
 (() => {
   const sections = [
     ['overview', '总览', '/?view=overview', []],
     ['topics', '选题中心', '/?view=topics&tab=waitlist', [
       ['素材待筛选', '/?view=topics&tab=waitlist'], ['近期高互动', '/?view=topics&tab=high_likes'],
-      ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
+      ['视频预筛选', '/video-prefilter'], ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
       ['手动加入生产队列', '/?view=topics&tab=manual']]],
     ['production', '生产队列', '/?view=production&tab=queue', []],
     ['publications', '发布记录', '/?view=publications&tab=review', []],
@@ -45,5 +46,5 @@
     }
   });
   window.ConsoleNavigation={select};
-  select(root ? 'overview' : location.pathname==='/topic-candidates'?'topics':'operations');
+  select(root ? 'overview' : ['/topic-candidates','/video-prefilter'].includes(location.pathname)?'topics':'operations');
 })();

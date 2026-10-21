@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-21 | Codex | 独立预筛选复用本机会话、官方请求与共享门禁预算 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 1.0.0 | 2026-10-11 | Codex | 官方搜索/详情总超时、脱敏错误；仅显式请求读取 API 配置 |
 """
@@ -81,6 +82,17 @@ class YouTubeTopicSearch:
 
     def details(self, ids, timeout):
         return asyncio.run(self._get("videos", dict(part="snippet,contentDetails,statistics,status", id=",".join(ids)), timeout))
+
+    def prefilter_search(self, rule, now, timeout):
+        """单页最多 50；不用 short 排除 4–5 分钟视频，也不自动补页。"""
+        return asyncio.run(self._get("search", dict(part="snippet", type="video", order="date",
+            safeSearch="strict", maxResults=rule['candidate_count'], q=rule['query'],
+            publishedAfter=stamp(now-timedelta(hours=rule['lookback_hours'])),
+            publishedBefore=stamp(now)), timeout))
+
+    def prefilter_details(self, ids, timeout):
+        return asyncio.run(self._get("videos", dict(part="snippet,contentDetails,statistics,status,liveStreamingDetails",
+                                                     id=",".join(ids)), timeout))
 
 
 class ExistingTopicRules:

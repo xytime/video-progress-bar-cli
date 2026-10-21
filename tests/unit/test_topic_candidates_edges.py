@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-21 | Codex | 回退测试移除候选 mixin 时保留当前交付恢复 DAL |
 | 1.0.0 | 2026-10-11 | Codex | 补齐缺资料、保护失败、跨进程活作业、原子故障与清理边界 |
 """
 import ast
@@ -169,7 +170,7 @@ def test_a21_exact_baseline_dal_operates_with_candidate_tables(tracker):
     path=Path(__file__).resolve().parents[2]/'src/video_processing/db/database.py'
     # 仅回退候选接入，保留最新生产基线和已验证维护闸门；不回灌数据库。
     source=path.read_text().replace('from .topic_candidates import TopicCandidateDAL\n','').replace(
-        'class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):','class PipelineDB(WallstreetExperimentDAL):')
+        'TopicCandidateDAL, ','')
     assert 'def get_connection' in source and 'core.maintenance' in source
     namespace={'__name__':'video_processing.db.rollback_baseline','__package__':'video_processing.db'}
     exec(compile(source,str(path),'exec'),namespace)

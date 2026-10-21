@@ -1,3 +1,4 @@
+/* Modification History: 1.0.1 | 2026-10-21 | Codex | 选题中心增加独立预筛选入口并复用本机能力状态。 */
 /** 2026-10-12 Codex：v0.3 总览只读数据、分区与列表 URL 恢复。业务操作仍归旧模块。 */
 (() => {
   const $=id=>document.getElementById(id);
@@ -27,8 +28,11 @@
     channels.hidden=view!=='operations';manual.hidden=!(view==='topics'&&tab==='manual');
     tools.hidden=view!=='operations';$('backfill-panel').hidden=view!=='operations';
     document.querySelectorAll('.tab-btn').forEach(el=>el.hidden=groups[el.id.slice(4)]!==view);
+    prefilterEntry.hidden=view!=='topics';
     window.ConsoleNavigation.select(view);
   }
+  const prefilterEntry=document.createElement('a');prefilterEntry.href='/video-prefilter';prefilterEntry.className='btn-tool-prefs';prefilterEntry.textContent='视频预筛选';
+  $('tab-high_likes').after(prefilterEntry);
   const legacy=window.DashboardLegacy;
   // 每个列表独立记忆普通筛选；显式 URL 条件和历史导航始终优先。
   const savedFilterKey='video_pipeline_filters_v1';
@@ -68,6 +72,7 @@
     rememberFilters(legacy.tab());
     const params=new URLSearchParams(legacy.query());params.set('view',view);
     const url='/?'+params.toString();if(location.pathname+location.search!==url)history.pushState(null,'',url);
+    prefilterEntry.hidden=view!=='topics';
     window.ConsoleNavigation.select(view);
   }
   function selectTab(tab) { view=groups[tab]||'topics';paint(tab); }
@@ -83,11 +88,11 @@
       if(generation!==capabilityGeneration)return;
       if(typeof d.topic_available!=='boolean'||typeof d.search_enabled!=='boolean')throw new Error('状态格式不完整');
       $('console-search-state').textContent=!d.topic_available?'关键词工作台仅限本机访问；请在本机打开后台。':d.search_enabled?'搜索配置已开放；是否可搜索以工作台门禁为准。':'生产搜索关闭；进入YouTube 关键词采集查看专题。';
-      document.querySelectorAll('a[href="/topic-candidates"]').forEach(a=>{a.removeAttribute('aria-disabled');if(!d.topic_available){a.setAttribute('aria-disabled','true');a.dataset.unavailable='true';}else delete a.dataset.unavailable;});
+      document.querySelectorAll('a[href="/topic-candidates"],a[href="/video-prefilter"]').forEach(a=>{a.removeAttribute('aria-disabled');if(!d.topic_available){a.setAttribute('aria-disabled','true');a.dataset.unavailable='true';}else delete a.dataset.unavailable;});
     } catch(error) {
       if(generation!==capabilityGeneration)return;
       $('console-search-state').textContent=error.message==='HTTP 404'?'关键词工作台尚未采用，入口暂不可用。':'关键词工作台状态未核实，请重新读取；搜索开放状态未知。';
-      document.querySelectorAll('a[href="/topic-candidates"]').forEach(a=>{a.setAttribute('aria-disabled','true');a.dataset.unavailable='true';});
+      document.querySelectorAll('a[href="/topic-candidates"],a[href="/video-prefilter"]').forEach(a=>{a.setAttribute('aria-disabled','true');a.dataset.unavailable='true';});
     }
   }
   document.addEventListener('click',event=>{if(event.target.closest('a[data-unavailable]'))event.preventDefault();},true);
