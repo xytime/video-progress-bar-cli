@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Codex | 修订稿折叠编辑、首屏结果、三主题和 200% 重排 |
 | 1.0.0 | 2026-10-21 | Codex | 保存、手动搜索、整理、失败、键盘与窄屏 |
 """
 from pathlib import Path
@@ -35,6 +36,7 @@ def ui(chromium,topic_client,request):
         route.fulfill(status=response.status_code,body=response.content,headers=dict(response.headers))
     page.route('**/*',handler);page.goto(ORIGIN+'/video-prefilter')
     expect(page.locator('#prefilter-name')).to_be_enabled()
+    page.locator('#prefilter-editor').evaluate('el=>el.open=true')
     yield page,tracker,flags
     page.close();assert not errors
 
@@ -98,6 +100,7 @@ def test_closed_search_configuration_still_available(ui):
     page,tracker,flags=ui;tracker.config.topic_search_enabled=False
     page.reload();expect(page.locator('#prefilter-search')).to_be_disabled()
     expect(page.locator('#prefilter-gate')).to_contain_text('搜索')
+    page.locator('#prefilter-editor > summary').click()
     page.locator('#prefilter-name').fill('离线规则')
     page.locator('#prefilter-save').click()
     expect(page.locator('#prefilter-form-feedback')).to_contain_text('配置已保存')
@@ -161,3 +164,37 @@ def test_initial_defaults_can_be_saved_without_edits(ui):
     expect(page.locator('#prefilter-form-feedback')).to_contain_text('配置已保存')
     assert len(tracker.db.prefilter_rules())==1
     assert not tracker.adapter.calls
+
+
+def test_results_first_editor_keyboard_and_draft_summary(ui):
+    page,tracker,flags=ui
+    page.locator('#prefilter-editor > summary').click()
+    expect(page.locator('#prefilter-name')).not_to_be_visible()
+    expect(page.locator('#prefilter-keyword-summary')).to_contain_text('Elon Musk')
+    assert not tracker.adapter.calls
+    page.locator('#prefilter-editor > summary').focus();page.keyboard.press('Enter')
+    expect(page.locator('#prefilter-name')).to_be_visible()
+    page.locator('#prefilter-min_views').fill('9000')
+    page.locator('#prefilter-editor > summary').click()
+    expect(page.locator('#prefilter-dirty')).to_contain_text('未保存')
+    expect(page.locator('#prefilter-search')).to_be_disabled()
+    page.locator('#prefilter-editor > summary').click()
+    page.locator('#prefilter-save').click()
+    expect(page.locator('#prefilter-name')).not_to_be_visible()
+    expect(page.locator('#prefilter-rule-summary')).to_contain_text('9,000')
+    page.locator('#prefilter-search').click()
+    expect(page.locator('#prefilter-job-status')).to_contain_text('完成')
+    page.set_viewport_size(dict(width=1280,height=900))
+    page.evaluate('scrollTo(0,0)')
+    assert page.locator('.prefilter-table tbody tr').first.bounding_box()['y']<800
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    evidence(page,'revised-desktop-1280')
+    page.locator('#prefilter-results details > summary').first.click()
+    expect(page.locator('#prefilter-results')).to_contain_text('不代表内容或发布批准')
+    count=len(tracker.adapter.calls);page.reload()
+    expect(page.locator('#prefilter-results')).to_contain_text('指标合格')
+    expect(page.locator('#prefilter-name')).not_to_be_visible()
+    assert len(tracker.adapter.calls)==count
+    page.set_viewport_size(dict(width=640,height=900))
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    evidence(page,'revised-reflow-200')
