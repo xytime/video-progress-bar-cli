@@ -1,131 +1,388 @@
 {
-  "version": "1.2.0",
-  "updated_at": "2026-09-20T02:30:00+00:00",
+  "version": "2.0.0",
+  "updated_at": "2026-10-21T06:00:00+00:00",
   "categories": {
     "AI/Tech": [
       {
-        "id": "tech_poll_future",
+        "id": "tech_poll_horizon_1",
         "interaction_type": "POLL_STAND",
-        "topic_template": "面对这项变化，你更认同哪种看法？",
+        "topic_template": "十年后回看这条视频，大概率是？",
         "poll_options": [
-          "会很快普及",
-          "落地仍有难度",
-          "先继续观察"
+          "预言太早了",
+          "节奏刚刚好",
+          "还是说保守了"
         ],
-        "share_hook": "说说你的理由。",
+        "share_hook": "如果给五年后的自己留句话，你会写什么？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "tech_warning_safety",
+        "id": "tech_poll_wave_2",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "这波技术浪潮，你现在的身位是？",
+        "poll_options": [
+          "早已深度用上",
+          "岸边泡茶看戏",
+          "等风浪定型再动"
+        ],
+        "share_hook": "上一次让你觉得“时代真变了”的瞬间是什么？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_poll_replace_3",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "如果新工具接管琐事，你会拿时间干嘛？",
+        "poll_options": [
+          "琢磨更大的生意",
+          "安心喝茶陪家人",
+          "恐怕只会更忙"
+        ],
+        "share_hook": "技术进步这么多年，你是变得更闲还是更忙了？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_warning_pitfall_1",
         "interaction_type": "WARNING_SHARE",
-        "topic_template": "视频里的风险提示，你怎么看？",
+        "topic_template": "视频提的技术暗礁，你怎么应对？",
         "poll_options": [
-          "已经遇到过",
-          "需要及时防范"
+          "提前筑好护城河",
+          "先小步试错探路",
+          "让子弹再飞一会"
         ],
-        "share_hook": "你遇到过吗？",
+        "share_hook": "你在用新工具时，踩过最意外的一个坑是什么？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "tech_memo_guide",
-        "interaction_type": "MEMO_COLLECTION",
-        "topic_template": "视频里的哪个要点最值得记下？",
+        "id": "tech_group_debate_1",
+        "interaction_type": "GROUP_DISCUSSION",
+        "topic_template": "跟同行聊起这波趋势，大家分歧在哪？",
         "poll_options": [
-          "核心逻辑",
-          "实践方法"
+          "商业落地有多快",
+          "护城河能守多久",
+          "谁才是最后赢家"
         ],
-        "share_hook": "你会先看哪一点？",
+        "share_hook": "你身边乐观派多，还是冷静派多？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_memo_takeaway_1",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "这期科技拆解，最值得备忘的是？",
+        "poll_options": [
+          "底层的演化逻辑",
+          "产业洗牌的信号",
+          "普通人的破局点"
+        ],
+        "share_hook": "看完这条，你脑海里冒出的第一个念头是什么？",
         "weight": 0.9,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_voice_moat_1",
+        "interaction_type": "VOICE_RESONANCE",
+        "topic_template": "算法越聪明，人最贵的能力还剩什么？",
+        "poll_options": [
+          "扛事的决断力",
+          "跨界的洞察力",
+          "读懂人心的温度"
+        ],
+        "share_hook": "你觉得哪项手艺或阅历，是机器永远学不会的？",
+        "weight": 0.95,
         "learned_count": 0
       }
     ],
     "Finance": [
       {
-        "id": "finance_warning_risk",
-        "interaction_type": "WARNING_SHARE",
-        "topic_template": "这个风险信号，你怎么看？",
+        "id": "finance_poll_table_1",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "如果周期是一场牌局，你现在的动作是？",
         "poll_options": [
-          "主动防御",
-          "逆向布局",
-          "继续观察"
+          "桌上静静看戏",
+          "顺势悄悄布局",
+          "早已落袋离席"
         ],
-        "share_hook": "说说依据。",
+        "share_hook": "经历过几轮周期后，你现在最看重哪条安全指标？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "finance_poll_trend",
+        "id": "finance_poll_signal_2",
         "interaction_type": "POLL_STAND",
-        "topic_template": "面对这个市场信号，你会怎么判断？",
+        "topic_template": "面对视频里的宏观信号，你的直觉是？",
         "poll_options": [
-          "短期承压",
-          "趋势转弱"
+          "风浪越大越要稳",
+          "暗流里有新机会",
+          "守好现金等天晴"
         ],
-        "share_hook": "说说依据。",
+        "share_hook": "在充满不确定的时候，什么最能给你踏实感？",
         "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_warning_risk_1",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "这种风险暗礁，你是躲过还是踩过？",
+        "poll_options": [
+          "踩过，交足了学费",
+          "躲过，全靠直觉",
+          "始终离险境远点"
+        ],
+        "share_hook": "回头看，哪次“交学费”反而帮了你大忙？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_warning_risk_2",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "当市场都在热议风险时，老手通常会？",
+        "poll_options": [
+          "先护住本金底线",
+          "反向看谁在裸泳",
+          "关掉噪音睡好觉"
+        ],
+        "share_hook": "你见过最清醒的一次避险操作是什么样的？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_group_tea_1",
+        "interaction_type": "GROUP_DISCUSSION",
+        "topic_template": "老友茶局聊起这波行情，你站哪边？",
+        "poll_options": [
+          "防守反击的稳健派",
+          "逆势布局的进取派",
+          "只看长线的周期派"
+        ],
+        "share_hook": "最近和朋友喝茶，大家聊得最多的隐忧是什么？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_memo_rule_1",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "这段复盘若只带走一条铁律，你会选？",
+        "poll_options": [
+          "看清大周期位置",
+          "关键时刻管住手",
+          "永远留足安全垫"
+        ],
+        "share_hook": "哪条财富原则，是你走过弯路才真正读懂的？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_voice_cycle_1",
+        "interaction_type": "VOICE_RESONANCE",
+        "topic_template": "财富下半场，拼到最后其实拼的是？",
+        "poll_options": [
+          "少犯大错的定力",
+          "认知变现的眼界",
+          "身体硬朗的本钱"
+        ],
+        "share_hook": "如果只能给年轻时的自己一句忠告，你会说什么？",
+        "weight": 0.95,
+        "learned_count": 0
+      }
+    ],
+    "Health": [
+      {
+        "id": "health_poll_habit_1",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "这条健康建议，放你身上能撑几天？",
+        "poll_options": [
+          "三天打鱼算我输",
+          "早已雷打不动",
+          "先转给家里那位"
+        ],
+        "share_hook": "你坚持最久的一个好习惯，当初是怎么养成的？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "health_memo_longevity_1",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "人过四十，哪个长寿法宝最划算？",
+        "poll_options": [
+          "每天睡够好觉",
+          "管住嘴迈开腿",
+          "心宽不生闷气"
+        ],
+        "share_hook": "这几年你在健康上最划算的一笔投入是什么？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "health_warning_body_1",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "身体发出的哪个信号，最让你收起熬夜？",
+        "poll_options": [
+          "熬夜后几天缓不来",
+          "体检单上的小箭头",
+          "身边同龄人的警钟"
+        ],
+        "share_hook": "从哪一刻起，你开始真正把养生当回事了？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "health_voice_mind_1",
+        "interaction_type": "VOICE_RESONANCE",
+        "topic_template": "养身先养心，你平时靠什么给大脑充电？",
+        "poll_options": [
+          "独处泡茶发会儿呆",
+          "出门流汗走一走",
+          "读点闲书换个脑子"
+        ],
+        "share_hook": "忙完一整天，什么小事最能让你瞬间卸下疲惫？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "health_group_family_1",
+        "interaction_type": "GROUP_DISCUSSION",
+        "topic_template": "家里聊起养生话题，通常谁说了算？",
+        "poll_options": [
+          "听科学数据和医生",
+          "听家里掌柜的安排",
+          "各养各的互不勉强"
+        ],
+        "share_hook": "为了劝家人改掉一个坏习惯，你用过最管用的招是什么？",
+        "weight": 0.9,
         "learned_count": 0
       }
     ],
     "General": [
       {
-        "id": "general_poll_stand",
+        "id": "general_poll_stand_1",
         "interaction_type": "POLL_STAND",
-        "topic_template": "你认同视频里的判断吗？",
+        "topic_template": "五年后回看这条判断，大概率是？",
         "poll_options": [
-          "认同",
-          "保留意见"
+          "预言太早了",
+          "节奏刚刚好",
+          "还是说保守了"
         ],
-        "share_hook": "说说你的理由。",
+        "share_hook": "如果给五年后的自己留句话，你会写什么？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "general_warning_share",
+        "id": "general_poll_stand_2",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "面对视频里的局势，你更倾向哪种活法？",
+        "poll_options": [
+          "顺势而为早做准备",
+          "深挖护城河守好本分",
+          "跳出牌桌换个活法"
+        ],
+        "share_hook": "这些年做重大决定时，你更信数据还是信直觉？",
+        "weight": 0.98,
+        "learned_count": 0
+      },
+      {
+        "id": "general_warning_share_1",
         "interaction_type": "WARNING_SHARE",
-        "topic_template": "视频里的风险提示，你怎么看？",
+        "topic_template": "视频提的这个坑，你躲过还是踩过？",
         "poll_options": [
-          "需要重视",
-          "继续观察"
+          "踩过，交了学费",
+          "躲过，全靠直觉",
+          "正在岸边看戏"
         ],
-        "share_hook": "说说你的判断。",
+        "share_hook": "回头看，哪次“交学费”反而帮了你大忙？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "general_group_discussion",
+        "id": "general_warning_share_2",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "越是热闹的局，老手往往越先看什么？",
+        "poll_options": [
+          "退路和底线在哪",
+          "谁在背后真正获益",
+          "代价由谁来买单"
+        ],
+        "share_hook": "你听过最受用的一句避坑忠告是什么？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "general_group_discussion_1",
         "interaction_type": "GROUP_DISCUSSION",
-        "topic_template": "视频里的观点，你认同吗？",
+        "topic_template": "老友茶局聊起这事，你站哪边？",
         "poll_options": [
-          "比较认同",
-          "仍有保留"
+          "顺势提前布局",
+          "按兵不动看戏",
+          "反向寻找机会"
         ],
-        "share_hook": "说说看法。",
+        "share_hook": "身边朋友聊起这事，分歧最大的是哪点？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
-        "id": "general_memo_collection",
-        "interaction_type": "MEMO_COLLECTION",
-        "topic_template": "视频里的哪个要点最值得记下？",
+        "id": "general_group_discussion_2",
+        "interaction_type": "GROUP_DISCUSSION",
+        "topic_template": "如果把这问题抛给十年前的自己，会怎么选？",
         "poll_options": [
-          "核心逻辑",
-          "实践方法"
+          "年轻气盛肯定猛冲",
+          "换到现在会更从容",
+          "无论何时选法一样"
         ],
-        "share_hook": "说说答案。",
+        "share_hook": "时间改变了你的哪个核心判断？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "general_memo_collection_1",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "这段话若只带走一句，你会选？",
+        "poll_options": [
+          "看清周期位置",
+          "关键时刻管住手",
+          "永远留足底牌"
+        ],
+        "share_hook": "哪条原则是你走过弯路后才真正读懂的？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "general_memo_collection_2",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "真正拉开人与人差距的，往往是？",
+        "poll_options": [
+          "看透底层的认知",
+          "日复一日的执行",
+          "关键节点的取舍"
+        ],
+        "share_hook": "你人生中最关键的一次“做减法”是什么时候？",
         "weight": 0.9,
         "learned_count": 0
       },
       {
-        "id": "general_voice_resonance",
+        "id": "general_voice_resonance_1",
         "interaction_type": "VOICE_RESONANCE",
-        "topic_template": "视频里哪一点最打动你？",
+        "topic_template": "视频里哪处细节最戳中你的经历？",
         "poll_options": [
-          "很有共鸣",
-          "带来启发"
+          "似曾相识的处境",
+          "看透不说破的规律",
+          "逆流而上的清醒"
         ],
-        "share_hook": "说说你的理由。",
+        "share_hook": "如果用一句话总结你当时的体会，会是什么？",
+        "weight": 0.95,
+        "learned_count": 0
+      },
+      {
+        "id": "general_voice_resonance_2",
+        "interaction_type": "VOICE_RESONANCE",
+        "topic_template": "走过半生才发现，最难得的能力是？",
+        "poll_options": [
+          "在喧嚣里保持清醒",
+          "对复杂事情做减法",
+          "允许一切顺其自然"
+        ],
+        "share_hook": "哪件小事曾让你突然对生活释怀了？",
         "weight": 0.9,
         "learned_count": 0
       }

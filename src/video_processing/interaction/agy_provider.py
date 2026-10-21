@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-21 | Antigravity | 接入 check_bland_interaction_copy 趣味度门禁，拦截干巴泛词并触发重试。 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：封装 AGY 结构化交互生成与受限重试 |
 | 1.1.0 | 2026-09-19 | Codex | 拒绝字段强制转换及额外字段，宿主确定性生成实际待审评论 |
 """
@@ -19,8 +20,14 @@ from typing import Optional
 from config.settings import settings
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
 
-from .contract import (InteractionContractError, InteractionDraft, InteractionType,
-                       render_interaction_comment, validate_interaction_draft)
+from .contract import (
+    InteractionContractError,
+    InteractionDraft,
+    InteractionType,
+    check_bland_interaction_copy,
+    render_interaction_comment,
+    validate_interaction_draft,
+)
 from .prompt import INTERACTION_JSON_SCHEMA, build_interaction_prompt
 
 logger = logging.getLogger(__name__)
@@ -76,7 +83,7 @@ class AgyInteractionProvider:
                     topic=payload["topic"], interaction_type=kind,
                     poll_options=payload["poll_options"], share_hook=payload["share_hook"],
                 )
-                return validate_interaction_draft(
+                draft = validate_interaction_draft(
                     topic=payload["topic"],
                     interaction_type=kind,
                     poll_options=payload["poll_options"],
@@ -85,6 +92,12 @@ class AgyInteractionProvider:
                     provider=f"agy:{self.model}",
                     category=category,
                 )
+                check_bland_interaction_copy(
+                    topic=draft.topic,
+                    poll_options=draft.poll_options,
+                    share_hook=draft.share_hook,
+                )
+                return draft
             except (AgyProviderError, KeyError, TypeError, ValueError, InteractionContractError) as exc:
                 last_error = exc
                 logger.warning(
