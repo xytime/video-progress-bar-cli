@@ -7,13 +7,102 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Antigravity | 引入零算力真实摄影美学轮换预设，消除单一插画风格同质化。 |
 | 1.0.0 | 2026-07-29 | Codex | 新增内容到视觉策划的纯规则契约与输入质量校验 |
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 from typing import Any, Iterable, Mapping
+
+
+@dataclass(frozen=True)
+class PhotographicStylePreset:
+    """真实摄影光学与光影预设；用于打破同质化插画风格，零本地算力消耗。"""
+
+    preset_id: str
+    label_zh: str
+    lens_and_aperture: str
+    lighting_and_color: str
+    composition_and_bokeh: str
+
+    def to_prompt_directive(self) -> str:
+        return (
+            f"Photographic style ({self.preset_id}): {self.lens_and_aperture}; "
+            f"{self.lighting_and_color}; {self.composition_and_bokeh}."
+        )
+
+
+PHOTOGRAPHIC_STYLE_PRESETS: tuple[PhotographicStylePreset, ...] = (
+    PhotographicStylePreset(
+        "macro_rim_light",
+        "微距逆光浅景深",
+        "100mm f/2.8 macro lens, extreme shallow depth of field, razor-sharp micro-texture on the single foreground subject",
+        "low-angle golden-hour rim light with warm amber highlights and deep natural shadow falloff",
+        "creamy optical bokeh background, calm out-of-focus upper zone for typography",
+    ),
+    PhotographicStylePreset(
+        "telephoto_street_compression",
+        "长焦空间压缩纪实",
+        "135mm f/2.0 telephoto lens, strong spatial compression, crisp tactile material detail on the foreground anchor",
+        "late-afternoon side light with rich contrast, natural film-like highlight roll-off",
+        "layered street or architectural depth melting into soft bokeh in the upper-left area",
+    ),
+    PhotographicStylePreset(
+        "cleanroom_macro_optics",
+        "精密工业微距冷暖对比",
+        "90mm f/2.8 tilt-shift macro, specular surface reflections and precision physical details",
+        "cool cyan ambient light contrasted with warm amber key reflection, authentic optical flare",
+        "single dominant physical object in lower-right foreground, dark smoothly defocused upper background",
+    ),
+    PhotographicStylePreset(
+        "cinematic_nocturne_35mm",
+        "雨夜人文纪实35mm",
+        "35mm f/1.4 prime lens, environmental close-up, wet surface specular reflections and natural film grain",
+        "moody nocturnal teal-and-amber lighting, single glowing practical light source",
+        "clear focal subject against softly blurred city or interior bokeh, uncluttered upper-left negative space",
+    ),
+    PhotographicStylePreset(
+        "architectural_daylight_50mm",
+        "建筑自然光影50mm",
+        "50mm f/1.8 standard prime, authentic perspective, tangible stone/metal/wood/glass textures",
+        "crisp directional morning sunlight casting clean geometric shadows, neutral editorial color grade",
+        "grounded foreground subject with calm, softly shadowed or sky-toned upper area for headline placement",
+    ),
+    PhotographicStylePreset(
+        "studio_chiaroscuro_85mm",
+        "静物明暗对照85mm",
+        "85mm f/1.8 portrait/still-life lens, tack-sharp focal plane with rapid depth falloff",
+        "Caravaggio-inspired directional window light, warm highlights emerging from deep matte shadows",
+        "iconic physical object isolated on a textured surface, quiet dark upper-left negative space",
+    ),
+)
+
+
+def select_photographic_style(seed_text: str, *, variant_offset: int = 0) -> PhotographicStylePreset:
+    """根据主题文本哈希确定性轮换摄影风格；同一视频的多候选 variant 自动错开。"""
+    normalized = " ".join(str(seed_text or "").split()).encode("utf-8")
+    digest = hashlib.sha256(normalized).digest()
+    base_index = int.from_bytes(digest[:4], "big")
+    index = (base_index + int(variant_offset)) % len(PHOTOGRAPHIC_STYLE_PRESETS)
+    return PHOTOGRAPHIC_STYLE_PRESETS[index]
+
+
+def resolve_photographic_style(
+    keywords: Iterable[str], seed_text: str, *, variant_offset: int = 0,
+) -> PhotographicStylePreset:
+    """优先沿用策划已选定的预设（keywords 中的 preset_id），重试时在其基础上轮换；否则回退哈希选择。
+
+    保证同一封面 prompt 只出现一个摄影风格指令，避免策划与生成器各选一套互相冲突。
+    """
+    ids = [preset.preset_id for preset in PHOTOGRAPHIC_STYLE_PRESETS]
+    for keyword in keywords:
+        if str(keyword) in ids:
+            index = (ids.index(str(keyword)) + int(variant_offset)) % len(ids)
+            return PHOTOGRAPHIC_STYLE_PRESETS[index]
+    return select_photographic_style(seed_text, variant_offset=variant_offset)
 
 
 @dataclass(frozen=True)
@@ -64,34 +153,34 @@ class _StyleRule:
 _STYLE_RULES: tuple[_StyleRule, ...] = (
     _StyleRule(
         "market_shock", "市场警报", "#17191E", "#E5484D", "#F8FAFC", "#FF7A7A", "#8D1018", 46,
-        "真实交易屏、芯片或公司主体为主画面；以红色下行趋势和高对比新闻感强调冲击。",
+        "真实摄影级编辑画面：选取与主题直接相关的单一具象金融或工业实体作为焦点，配合强烈明暗对比、浅景深与冷峻纪实光影。",
         ("crash", "selloff", "plunge", "collapse", "crisis", "崩盘", "暴跌", "抛售", "下跌", "巨震"),
     ),
     _StyleRule(
         "market_watch", "资本观察", "#151617", "#D5A63D", "#FAFAF5", "#F0C85A", "#594319", 30,
-        "保留市场、企业或产品实景，使用克制的金色财经标识和清晰数据感。",
+        "真实摄影级编辑画面：聚焦与资本、地产或企业主题直接对应的真实物质主体（如建筑局部、黄铜门锁、交易终端细节），暖金侧逆光与浅景深虚化。",
         ("market", "stock", "ipo", "finance", "capital", "股价", "上市", "资本", "财报", "投资", "估值"),
     ),
     _StyleRule(
         "tech_frontier", "前沿科技", "#071B27", "#38BDF8", "#F8FAFC", "#7DD3FC", "#053B58", 34,
-        "突出芯片、设备、代码或实验现场，采用冷青色技术新闻调性。",
+        "真实摄影级微距/工业纪实：突出硅晶圆、精密光学元件、服务器或实验装置的真实物理质感，采用冷青与琥珀高光对比及光学浅景深。",
         ("ai", "chip", "hardware", "robot", "software", "芯片", "人工智能", "大模型", "机器人", "算法", "硬件"),
     ),
     _StyleRule(
         "global_affairs", "全球局势", "#21191B", "#E05D5D", "#FFF8F2", "#F5A3A3", "#671F28", 38,
-        "保留人物、地图或现场画面，以深红色新闻标识传达地缘与政策张力。",
+        "真实摄影级人文/建筑纪实：选取具象的现场物件、港口集装箱、能源设施或建筑地标局部，长焦空间压缩与庄重自然光影。",
         ("policy", "geopolitics", "sanction", "war", "election", "政策", "制裁", "战争", "地缘", "选举", "总统"),
     ),
     _StyleRule(
         "science_explainer", "知识解析", "#183220", "#72B889", "#F7FFF8", "#B9E4C5", "#245C38", 28,
-        "突出讲者、实验或解释对象，保持清爽、可信、易阅读的知识内容质感。",
+        "真实摄影级自然/科学特写：聚焦视频核心讨论的具象自然生物、实验器皿或物理现象，微距逆光、细腻纹理与柔和散景。",
         ("science", "education", "lecture", "health", "tutorial", "科学", "讲座", "教程", "科普", "健康", "医疗"),
     ),
 )
 
 _DEFAULT_RULE = _StyleRule(
     "editorial", "深度解读", "#17212B", "#7BA5C9", "#F7FAFC", "#BBD7EE", "#16344B", 26,
-    "保留最具信息量的原始画面，以冷静的编辑新闻风格组织标题和视觉层级。",
+    "真实摄影级编辑画面：从主题中提炼单一具体可拍的真实物体或场景特写，真实镜头景深与自然光影，避免插画或抽象图标。",
     (),
 )
 
@@ -111,7 +200,8 @@ def build_cover_creative_brief(payload: Mapping[str, Any]) -> CoverCreativeBrief
     matched = next((rule for rule in _STYLE_RULES if _matches(rule, corpus)), _DEFAULT_RULE)
     keyword_hits = tuple(keyword for keyword in matched.keywords if keyword.casefold() in corpus)
     confidence = 0.9 if keyword_hits else 0.55
-    visual_keywords = _unique((*keyword_hits[:3], *hints[:3]))
+    photo_style = select_photographic_style(searchable or matched.style_id)
+    visual_keywords = _unique((*keyword_hits[:3], *hints[:3], photo_style.preset_id))
     return CoverCreativeBrief(
         style_id=matched.style_id,
         badge=matched.badge,
@@ -121,6 +211,7 @@ def build_cover_creative_brief(payload: Mapping[str, Any]) -> CoverCreativeBrief
         secondary_title_color=matched.secondary_title_color,
         frame_tint=matched.frame_tint,
         frame_tint_opacity=matched.frame_tint_opacity,
+        # 摄影预设只经 visual_keywords 里的 preset_id 传递，由生成器展开为唯一一条技法指令。
         visual_direction=matched.visual_direction,
         visual_keywords=visual_keywords,
         confidence=confidence,

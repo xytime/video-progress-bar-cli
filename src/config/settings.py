@@ -7,6 +7,8 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | wechat-backoff-v1 | 2026-10-20 | Codex | 视频号账户共享退避与会话最小间隔，防止多作品独立轮询持续触发限流。 |
+| 3.77.0 | 2026-10-18 | Antigravity | 视频号二级回复默认全天开放提交窗口 (00:00-24:00)、最小间隔默认调整为 3600 秒 (1小时)，并新增 wechat_reply_policy_path 支持后台管理界面热加载配置。 |
+| 3.76.0 | 2026-10-17 | Antigravity | 将 wechat_session_warn_hours 默认阈值从 22.0 小时下调至 10.0 小时，提前触发自动授权续期。 |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | maintenance-v1 | 2026-10-12 | Codex | 声明维护状态及仅继承 FD 可验证的单项子进程归属。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
@@ -132,6 +134,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 用于 env_file 绝对路径，避免 cwd 不同时 .env 加载失败的根因
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# agy 文本模型的唯一默认值；模型换代只改这里（及 agy_provider 的退役别名表）。
+AGY_DEFAULT_MODEL = "gemini-3.8-flash-high"
+
 
 def _default_codex_text_command() -> str:
     try:
@@ -225,9 +230,10 @@ class Settings(BaseSettings):
     wechat_rate_limit_cooldown_seconds: int = Field(default=1800, ge=300, le=21600)
     wechat_request_min_interval_seconds: int = Field(default=60, ge=1, le=3600)
     wechat_keepalive_dwell: int = 15                # 停留时长（秒），供微信记录活跃请求
-    # [Claude_Opus_4.8] 微信会话临期预警阈值（小时）：会话龄超过此值，看门狗推 Telegram「该重扫了」，
-    # 在 ~24h 服务端硬上限造成发布断档前主动提醒（见 docs/wechat_login_expiry_rca.html 候选②坐实）。
-    wechat_session_warn_hours: float = 22.0
+    wechat_keepalive_initial_delay_seconds: int = Field(default=60, ge=5, le=600)  # 看门狗启动首次探测延迟（秒）
+    # [Claude_Opus_4.8] 微信会话临期预警与自动续期阈值（小时）：会话龄超过此值（默认 10 小时），
+    # 看门狗提前触发无感自动重登或提醒，避免接近 ~24h 服务端硬上限造成发布断档。
+    wechat_session_warn_hours: float = 10.0
     # 临期时自动启动 --login-only --relogin 并把二维码推送到 Telegram。
     # 旧 state 在扫码成功前不覆盖；该开关不能绕过微信扫码，只把人工动作前移。
     wechat_auto_relogin_enabled: bool = False
@@ -249,15 +255,16 @@ class Settings(BaseSettings):
     wechat_reply_account_key: Optional[str] = None  # 业务账号键（隔离防重/配额/对账），真实入口必填
     wechat_reply_author_finder_id: Optional[str] = None  # 当前登录作者的原生标识；发送守卫要求请求 _log_finder_id 与之一致
     wechat_reply_hourly_quota: int = Field(default=10, ge=1, le=100)
-    wechat_reply_max_per_video: int = Field(default=3, ge=1, le=10)
-    wechat_reply_min_interval_seconds: int = Field(default=15, ge=5, le=300)
-    wechat_reply_window_start_shanghai: str = "08:30"
-    wechat_reply_window_end_shanghai: str = "23:00"
+    wechat_reply_max_per_video: int = Field(default=3, ge=1, le=20)
+    wechat_reply_min_interval_seconds: int = Field(default=3600, ge=0, le=86400)
+    wechat_reply_window_start_shanghai: str = "00:00"
+    wechat_reply_window_end_shanghai: str = "24:00"
     wechat_reply_approval_mode: Literal["manual", "hybrid_auto"] = "manual"
+    wechat_reply_policy_path: Path = _PROJECT_ROOT / "config" / "secondary_reply_policy.json"
     wechat_reply_scan_posts_per_tick: int = Field(default=2, ge=1, le=10)
     wechat_reply_max_drafts_per_tick: int = Field(default=3, ge=1, le=20)
     wechat_reply_max_reconcile_attempts: int = Field(default=4, ge=1, le=10)
-    wechat_reply_agy_model: str = "gemini-3.7-flash-high"
+    wechat_reply_agy_model: str = AGY_DEFAULT_MODEL
     wechat_reply_agy_timeout_seconds: int = Field(default=60, ge=10, le=180)
 
     # 常规视频号发布默认尝试挂载图书商品；失败且清空就绪时允许无商品继续。
@@ -284,7 +291,7 @@ class Settings(BaseSettings):
     # 仅改变标题字段，正文仍由现有文案器生成；未知 provider 会被忽略。
     copywriter_title_provider_order: str = "agy,gemini"
     copywriter_agy_bin: str = "agy"
-    copywriter_agy_model: str = "gemini-3.7-flash-high"
+    copywriter_agy_model: str = AGY_DEFAULT_MODEL
     copywriter_agy_timeout_seconds: int = 45
     copywriter_gemini_max_attempts: int = 2
     # 完整文案和字幕的最后一层经济型 CLI 兜底；真实样本验收后显式启用。
@@ -331,7 +338,7 @@ class Settings(BaseSettings):
     # 英语世界安全回执在影子期由命令显式生成；启用后交付记录器不接受无回执成片。
     enable_english_world_safety_gate: bool = False
     agy_timeout_sec: int = 90
-    agy_subtitle_model: str = "gemini-3.7-flash-high"
+    agy_subtitle_model: str = AGY_DEFAULT_MODEL
     agy_dubbing_model: str = "claude-sonnet-4-6"
     # AGY 影子评估只读取已有双语 ASS 并输出不含字幕正文的比较报告。
     enable_agy_subtitle_shadow_review: bool = False
@@ -641,7 +648,7 @@ class Settings(BaseSettings):
     # 仅旧 Codex 任务在截止时间后启用 AGY 备用；新 AGY 首选任务不受此开关影响。
     enable_antigravity_cover_fallback: bool = True
     antigravity_runtime_dir: str = "~/.local/share/videopipeline-antigravity313"
-    antigravity_model: str = "gemini-3.7-flash-high"
+    antigravity_model: str = AGY_DEFAULT_MODEL
     antigravity_image_model: str = "gemini-3.1-flash-image-preview"
     antigravity_timeout_seconds: int = 120
     ai_cover_quality_timeout_seconds: int = 90
@@ -654,7 +661,7 @@ class Settings(BaseSettings):
 
     # 英语世界审核包的首选无字主视觉。失败时回退确定性报刊封面。
     enable_english_world_antigravity_primary: bool = True
-    english_world_antigravity_model: str = "gemini-3.7-flash-high"
+    english_world_antigravity_model: str = AGY_DEFAULT_MODEL
     english_world_antigravity_variants: int = 3
     english_world_antigravity_timeout_seconds: int = 180
     # OCR 对插画纹理可能误报；开启后允许作为“待人审”候选并合成封面。

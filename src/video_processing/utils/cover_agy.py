@@ -12,7 +12,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from video_processing.utils.subprocess_env import build_subprocess_env
+from video_processing.utils.agy_provider import _normalize_agy_model
 
 QUALITY_VERSION = "agy-cover-quality-v1"
 QUALITY_FLAGS = ("image_inspected", "subject_relevant", "composition_complete", "adequate_detail", "no_severe_artifacts")
@@ -91,6 +91,12 @@ def cli_failure_detail(stdout: str, stderr: str) -> str:
     return f"category={category}" + (f"; status={status[1]}" if status else "")
 
 
+def build_subprocess_env(*, include_gemini: bool = True, include_telegram: bool = True) -> dict:
+    from video_processing.utils.subprocess_env import build_subprocess_env as _build
+
+    return _build(include_gemini=include_gemini, include_telegram=include_telegram)
+
+
 def run_cli(command: list[str], *, cwd: Path, timeout: float) -> dict:
     """不记录包含提示词的 TimeoutExpired，也不继承业务 API 凭据。"""
     env = build_subprocess_env(include_gemini=False, include_telegram=False)
@@ -112,6 +118,7 @@ def run_cli(command: list[str], *, cwd: Path, timeout: float) -> dict:
 
 def review_image(path: Path, *, subject: dict, agy_bin: str, model: str, timeout: int) -> dict:
     """独立会话实际看图，不沿用生成器的自评。OCR 和字符数量均不是门禁。"""
+    model = _normalize_agy_model(model)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     prompt = (
         f"Open and visually inspect the actual image file {path.name} in this directory using your image viewing tool. "

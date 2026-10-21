@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-21 | Antigravity | 移除写死的报刊水彩插画指令，切换为内容主体锚定与摄影光学预设轮换。 |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy 主视觉 brief、OCR 门禁与标准化工具。 |
 | 1.1.0 | 2026-08-24 | Codex | 允许把 OCR 疑似纹理标记为 Telegram 人审待决，不自动视为无字通过。 |
 """
@@ -19,6 +20,8 @@ import subprocess
 from typing import Any, Mapping
 
 from PIL import Image, ImageOps
+
+from .creative_brief import select_photographic_style
 
 
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
@@ -41,36 +44,59 @@ def build_visual_brief(timeline: Mapping[str, Any], payload: Mapping[str, Any]) 
     """只把已验证的来源事实交给 Gemini，不传视频帧或未审材料。"""
     source = timeline.get("source_provenance")
     source = source if isinstance(source, Mapping) else {}
+    title = str(payload["title"])
+    source_title = str(source.get("source_title") or "").strip()
+    quote_en = str(payload["quote_en"])
+    photo_style = select_photographic_style(f"{title} {source_title} {quote_en}")
     return {
         "schema_version": 1,
         "content_type": "ENGLISH_WORLD_SHORT",
-        "title": str(payload["title"]),
-        "source_title": str(source.get("source_title") or "").strip(),
+        "title": title,
+        "source_title": source_title,
         "publisher": str(source.get("publisher") or source.get("source_channel") or "").strip(),
-        "quote_en": str(payload["quote_en"]),
-        "visual_direction": "温暖克制的报刊编辑插画；以本期英语新闻主题为核心，适合儿童与家庭学习者。",
+        "quote_en": quote_en,
+        "photographic_style": {
+            "preset_id": photo_style.preset_id,
+            "label_zh": photo_style.label_zh,
+            "lens_and_aperture": photo_style.lens_and_aperture,
+            "lighting_and_color": photo_style.lighting_and_color,
+            "composition_and_bokeh": photo_style.composition_and_bokeh,
+        },
+        "visual_direction": (
+            f"真实摄影级编辑画面（非水彩/非扁平插画）：提炼本期主题中最核心的单一具象物理实体作为前景主角，"
+            f"构建富有高级摄影光影与浅景深层次的环境；技法采用「{photo_style.label_zh}」"
+            f"（{photo_style.to_prompt_directive()}）。"
+        ),
         "composition": {
             "ratio": "6:7 portrait",
-            "subject_placement": "lower half or right side",
-            "safe_zone": "upper and left areas remain bright, calm, and free of focal detail",
-            "template_slot": "bottom editorial illustration window; no text may appear in the image",
+            "subject_placement": "lower half or right side, single clear physical focal anchor",
+            "safe_zone": "upper and left areas softly defocused with natural light falloff, free of clutter",
+            "template_slot": "bottom editorial photography window; no text may appear in the image",
         },
         "prohibitions": [
             "text", "letters", "numbers", "logo", "watermark", "UI", "screenshot",
             "video frame", "thumbnail", "readable symbol", "celebrity likeness",
+            "flat vector illustration", "watercolor cartoon",
         ],
     }
 
 
-def build_agy_prompt(brief: Mapping[str, Any], target: Path) -> str:
-    """生成单次无字主视觉任务；输出路径必须位于本次隔离工作目录。"""
+def build_agy_prompt(brief: Mapping[str, Any], target: Path, *, variant_index: int = 0) -> str:
+    """生成单次无字摄影级主视觉任务；输出路径必须位于本次隔离工作目录。"""
+    seed = f"{brief.get('title', '')} {brief.get('source_title', '')} {brief.get('quote_en', '')}"
+    style = select_photographic_style(seed, variant_offset=variant_index)
     return (
-        "You are the image-generation worker for an English news learning-card cover. "
+        "You are the editorial photography generator for an English news learning-card cover. "
         "Read cover_brief.json in the current directory and use only its stated facts. "
         "Call the generate_image tool exactly once. Create one original, text-free, 6:7 portrait "
-        "editorial illustration. Keep the upper and left areas bright and quiet for local typography; "
-        "place the focal subject in the lower half or right side. Do not use any video frame, screenshot, "
-        "thumbnail, real logo, watermark, UI, text, letters, numbers, readable symbol, or title card. "
+        "photorealistic editorial photograph (NOT a flat illustration, watercolor, or CGI icon). "
+        "Identify ONE concrete, physically photographable main subject or tangible object from the video topic "
+        "as the sharp focal anchor, and place it in a rich, atmospheric environment with authentic camera physics. "
+        "Synthetic editorial image: no identifiable real people or faces, no staged photo of a real event, "
+        "never presented as documentary evidence; prefer objects, places and materials. "
+        f"{style.to_prompt_directive()} "
+        "Keep the upper and left areas calmly defocused for local typography; place the focal subject in the lower half or right side. "
+        "Do not use any video frame, screenshot, thumbnail, real logo, watermark, UI, text, letters, numbers, readable symbol, or title card. "
         "Absolutely no text of any kind may appear in the image. "
         f"Save the actual image as {target.name} in the current directory. "
         "After saving it, return JSON only with status, asset_path, and a one-sentence visual description."

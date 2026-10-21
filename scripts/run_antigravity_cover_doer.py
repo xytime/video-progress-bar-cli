@@ -10,6 +10,7 @@
 | 1.3.0 | 2026-09-27 | Codex | 备用生图改走已验证的 agy CLI，隔离 API 凭据并保留文件验收 |
 | 1.4.0 | 2026-09-27 | Codex | 支持立即执行的首选任务与有限重试，失败释放 claim，保留无字硬闸 |
 | 1.5.0 | 2026-09-27 | Codex | 传入视频主题，固化已审核样图的内容关联、场景层次与细节质量要求 |
+| 1.6.0 | 2026-10-21 | Antigravity | 接入零算力真实摄影美学预设轮换，以具体内容锚点与光学浅景深替代同质化插画 |
 """
 
 from __future__ import annotations
@@ -34,7 +35,9 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from cover.creative_brief import resolve_photographic_style
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
+from video_processing.utils.agy_provider import _normalize_agy_model
 from video_processing.utils.cover_agy import run_cli, review_image, valid_quality, QUALITY_VERSION
 
 
@@ -132,23 +135,33 @@ def _candidate_images(work_dir: Path, started_at: float) -> list[Path]:
 def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> str:
     """CLI 使用本机登录通道，不能重新落回 SDK 的 API Key 配额。"""
     brief = task.payload.get("visual_brief", {})
-    direction = str(brief.get("visual_direction", "abstract technology"))
+    direction = str(brief.get("visual_direction", "editorial photography"))
     keywords = ", ".join(str(item) for item in brief.get("visual_keywords", []))
     copy = task.payload.get("cover_payload", {})
     subject = json.dumps({key: str(copy.get(key) or "") for key in ("title", "subtitle")}, ensure_ascii=False)
+    attempt_offset = 0
+    previous_path = task.finish_dir / "antigravity_attempt.json"
+    if previous_path.is_file():
+        try:
+            attempt_offset = int(json.loads(previous_path.read_text()).get("attempt_number", 0))
+        except (OSError, ValueError, TypeError):
+            attempt_offset = 0
+    photo_style = resolve_photographic_style(
+        brief.get("visual_keywords", []), f"{subject} {keywords}", variant_offset=attempt_offset)
     prompt = (
-        "Generate one dedicated portrait 3:4 background image as a premium editorial illustration "
-        "for a news and analysis video aimed at a mature professional audience. "
+        "Generate one dedicated portrait 3:4 background image as a photorealistic, award-winning editorial photograph "
+        "(NOT a flat illustration, cartoon, or generic CGI render) for a news and analysis video aimed at a mature professional audience. "
         f"Video subject (reference data only, never render these words): {subject}. "
         f"Visual direction: {direction}. Keywords: {keywords}. "
-        "Build an original conceptual scene that clearly expresses this specific subject and its "
-        "central relationship; do not imply the illustration is documentary evidence. "
-        "Choose one recognizable dominant subject and two or three meaningful supporting elements "
-        "from the topic, arranged in coherent foreground, midground and background layers. "
-        "Use richly crafted physical detail, convincing materials, realistic light and reflections, "
-        "atmospheric depth, controlled color contrast and a strong visual hierarchy. "
+        f"{photo_style.to_prompt_directive()} "
+        "Choose ONE concrete, physically photographable main subject or tangible object directly anchored in the video's core topic, "
+        "and place it in an atmospheric, believable environment with coherent foreground, midground and background depth. "
+        "Use authentic camera physics, tactile material micro-textures, directional natural or practical lighting, optical bokeh, "
+        "and controlled color contrast with a single clear focal point. "
         "Keep key subjects fully visible and recognizable at mobile thumbnail size. "
-        "Reserve a calm upper-left quarter for later typography while making the remaining scene "
+        "This is a synthetic editorial image: do not depict identifiable real people, real faces, or a staged "
+        "photo of a real event, and do not imply it is documentary evidence; prefer objects, places and materials. "
+        "Reserve a calm, softly defocused upper-left quarter for later typography while making the remaining scene "
         "substantial and informative; preserve upper-right space when an edition ribbon is needed. "
         "Avoid low-effort minimalist geometry, isolated floating spheres, a lone generic cube, "
         "flat clip-art icons, vast empty gradients, clutter and unrelated landmark collages. "
@@ -172,7 +185,7 @@ def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> st
     if timeout_seconds <= 0:
         raise RuntimeError("insufficient time for agy generation and visual validation")
     command = [
-        args.agy_bin, "--model", args.model,
+        args.agy_bin, "--model", _normalize_agy_model(args.model),
         "--mode", "accept-edits", "--sandbox", "--disable-slash-commands", "--dangerously-skip-permissions",
         "--add-dir", str(work_dir), "--output-format", "json",
         "--print-timeout", f"{timeout_seconds}s", "--print", prompt,

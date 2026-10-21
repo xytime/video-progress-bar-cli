@@ -5,6 +5,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
+| 1.11.0 | 2026-10-21 | Antigravity | 对齐真实摄影美学预设轮换，避免兜底接力退回同质化插画风格 |
 | 1.0.0 | 2026-10-01 | Codex | AGY 耗尽后的 Luna 最低档文件协议生成与质量回执 |
 """
 
@@ -28,6 +29,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from cover.creative_brief import resolve_photographic_style
 from video_processing.ai_cover_queue import AICoverQueue, LUNA_FALLBACK_CONTRACT, LUNA_QUALITY_VERSION
 from video_processing.utils.cover_agy import QUALITY_SCHEMA, run_process, valid_quality
 from video_processing.utils.subprocess_env import build_subprocess_env
@@ -124,14 +126,19 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
         copy = dict(task.payload.get("cover_payload", {}))
         brief = dict(task.payload.get("visual_brief", {}))
         generated_dir = _generated_images_dir()
+        subject_json = json.dumps({k: str(copy.get(k) or '') for k in ('title', 'subtitle')}, ensure_ascii=False)
+        photo_style = resolve_photographic_style(
+            brief.get("visual_keywords", []), f"{subject_json} {brief.get('visual_keywords', [])}")
         prompt = (
             "Use the built-in image generation tool exactly once to make one original portrait 3:4 "
-            "premium editorial illustration for a mature professional audience. "
-            f"Subject data, never print as a title: {json.dumps({k: str(copy.get(k) or '') for k in ('title', 'subtitle')}, ensure_ascii=False)}. "
+            "photorealistic editorial photograph (not a flat illustration or cartoon) for a mature professional audience. "
+            f"Subject data, never print as a title: {subject_json}. "
             f"Visual direction: {str(brief.get('visual_direction', ''))}. "
             f"Keywords: {json.dumps(brief.get('visual_keywords', []), ensure_ascii=False)}. "
-            "Make the subject recognizable with a coherent foreground, middle ground and background, "
-            "rich physical detail, realistic light, useful contrast, and a calm upper-left title area. "
+            f"{photo_style.to_prompt_directive()} "
+            "Choose ONE concrete, physically photographable main subject anchored in the video topic, with coherent foreground, "
+            "middle ground and softly defocused background, tactile physical detail, authentic lighting, and a calm upper-left title area. "
+            "Synthetic editorial image: no identifiable real people or faces, no staged photo of a real event, never documentary evidence. "
             "No title card, Chinese characters, watermark, screenshot, video frame, stock image, "
             "generic gradient or placeholder geometry. The publisher adds text later. "
             "Copy the actual generated bitmap to candidate.png in the current directory. "

@@ -10,18 +10,11 @@ from .file_utils import (
     find_video_files,
     safe_remove,
 )
-from .video_metadata import (
-    get_video_info,
-    get_video_resolution,
-    get_video_duration,
-    get_video_duration_ffprobe,
-)
 from .time_utils import (
     time_string_to_seconds,
     seconds_to_time_string,
 )
 from .progress_parser import FFmpegProgressParser
-from .subprocess_env import build_subprocess_env
 
 __all__ = [
     "ensure_directory",
@@ -38,4 +31,21 @@ __all__ = [
     "FFmpegProgressParser",
     "build_subprocess_env",
 ]
+
+
+def __getattr__(name: str):
+    if name in {
+        "get_video_info",
+        "get_video_resolution",
+        "get_video_duration",
+        "get_video_duration_ffprobe",
+    }:
+        from . import video_metadata
+
+        return getattr(video_metadata, name)
+    if name == "build_subprocess_env":
+        from .subprocess_env import build_subprocess_env
+
+        return build_subprocess_env
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

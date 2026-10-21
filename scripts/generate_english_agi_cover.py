@@ -30,6 +30,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from cover import accept_and_normalize, build_agy_prompt, build_english_world_cover_payload, build_visual_brief
 from cover.antigravity import generated_images, write_json
+from video_processing.utils.agy_provider import _normalize_agy_model
 
 
 def _iso_now() -> str:
@@ -55,7 +56,7 @@ def _run_agy(*, agy_bin: str, model: str, work_dir: Path, prompt: str, timeout_s
     write_json(schema_path, _result_schema())
     command = [
         agy_bin,
-        "--model", model,
+        "--model", _normalize_agy_model(model),
         "--effort", "high",
         "--mode", "accept-edits",
         "--sandbox",
@@ -74,7 +75,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--timeline", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--variants", type=int, default=3)
-    parser.add_argument("--model", default="gemini-3.7-flash-high")
+    parser.add_argument("--model", default="gemini-3.8-flash-high")
     parser.add_argument("--agy-bin", default=shutil.which("agy") or "agy")
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--allow-ocr-suspect", action="store_true", help="仅允许标记为待 Telegram 人审，不视为机器无字通过")
@@ -109,7 +110,9 @@ def main() -> int:
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "provider": "agy",
-        "model": args.model,
+        "model": _normalize_agy_model(args.model),
+        "requested_model": args.model,
+        "resolved_model": _normalize_agy_model(args.model),
         "started_at": _iso_now(),
         "brief_path": str((run_dir / "cover_brief.json").resolve()),
         "candidates": [],
@@ -121,7 +124,7 @@ def main() -> int:
         variant_dir = run_dir / f"variant-{label}"
         variant_dir.mkdir()
         (variant_dir / "cover_brief.json").write_text((run_dir / "cover_brief.json").read_text(encoding="utf-8"), encoding="utf-8")
-        prompt = build_agy_prompt(brief, variant_dir / "candidate.png")
+        prompt = build_agy_prompt(brief, variant_dir / "candidate.png", variant_index=index)
         (variant_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
         try:
             result = _run_agy(

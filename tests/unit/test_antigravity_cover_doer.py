@@ -49,6 +49,10 @@ def test_generation_prompt_allows_english_and_never_calls_codex(tmp_path, monkey
     assert command[0] == 'agy'
     assert 'Avoid non-English text' in command[-1]
     assert 'English lettering or numbers may appear' in command[-1]
+    assert 'photorealistic, award-winning editorial photograph' in command[-1]
+    assert 'Photographic style (' in command[-1]
+    assert command[-1].count('Photographic style (') == 1
+    assert 'do not imply it is documentary evidence' in command[-1]
     assert 'Absolutely no text' not in command[-1]
     assert '国债回购' in command[-1]
     assert captured['timeout'] <= args.timeout_seconds + 5

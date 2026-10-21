@@ -289,7 +289,7 @@ def test_generate_english_cover_isolates_visual_asset_from_payload_output(tmp_pa
 
 
 def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
-    """Gemini 只能获得已有事实，候选必须通过 OCR 无字门禁后才可合成。"""
+    """Gemini 只能获得已有事实，采用真实摄影预设轮换，候选必须通过 OCR 无字门禁后才可合成。"""
     timeline = {
         "source_provenance": {"source_title": "What are data centres?", "publisher": "CBC Kids News"},
     }
@@ -298,9 +298,14 @@ def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
         "quote_en": "They are houses for computing power.",
     }
     brief = build_visual_brief(timeline, payload)
-    prompt = build_agy_prompt(brief, tmp_path / "candidate.png")
+    prompt_a = build_agy_prompt(brief, tmp_path / "candidate.png", variant_index=0)
+    prompt_b = build_agy_prompt(brief, tmp_path / "candidate.png", variant_index=1)
     assert brief["source_title"] == "What are data centres?"
-    assert "no text" in prompt.lower()
+    assert "photographic_style" in brief
+    assert "报刊编辑插画" not in brief["visual_direction"]
+    assert "photorealistic editorial photograph" in prompt_a
+    assert prompt_a != prompt_b
+    assert "no text" in prompt_a.lower()
     source = tmp_path / "source.png"
     Image.new("RGB", (900, 1050), "#1F2937").save(source)
     evidence = accept_and_normalize(source, tmp_path / "visual.png")

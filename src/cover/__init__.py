@@ -10,14 +10,24 @@
 """
 
 from .engine import CoverEngine
-from .creative_brief import CoverCreativeBrief, build_cover_creative_brief, validate_cover_brief_input
+from .creative_brief import (
+    CoverCreativeBrief,
+    PHOTOGRAPHIC_STYLE_PRESETS,
+    PhotographicStylePreset,
+    build_cover_creative_brief,
+    select_photographic_style,
+    validate_cover_brief_input,
+)
 from .english_world import build_english_world_cover_payload, validate_english_world_cover_payload
 from .antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
 
 __all__ = [
     "CoverEngine",
     "CoverCreativeBrief",
+    "PHOTOGRAPHIC_STYLE_PRESETS",
+    "PhotographicStylePreset",
     "build_cover_creative_brief",
+    "select_photographic_style",
     "validate_cover_brief_input",
     "build_english_world_cover_payload",
     "validate_english_world_cover_payload",

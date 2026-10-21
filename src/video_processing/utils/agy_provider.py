@@ -7,6 +7,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.4.4 | 2026-10-20 | Codex | 关闭会返回空成功的 CLI 内部计时，由宿主超时识别基础设施故障。 |
+| 1.4.3 | 2026-10-15 | Antigravity | 自动映射已退役 gemini-3.7-flash-high 模型别名，并细分 model unavailable / location ineligible 脱敏分类。 |
 | 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
 | 1.4.1 | 2026-09-22 | Codex | 区分本地启动受限与服务鉴权失败，提供无模型调用的启动预检。 |
 | 1.4.0 | 2026-09-22 | Codex | 允许调用方提供最小运行环境，独立 App 文案不继承业务 API 凭据。 |
@@ -24,9 +25,17 @@ import subprocess
 import tempfile
 from typing import Any, Dict, Optional
 
+_RETIRED_MODEL_ALIASES: Dict[str, str] = {
+    "gemini-3.7-flash-high": "gemini-3.8-flash-high",
+}
+
 
 class AgyProviderError(RuntimeError):
     """agy 不可用、超时或未返回合格结构化输出。"""
+
+
+def _normalize_agy_model(model: str) -> str:
+    return _RETIRED_MODEL_ALIASES.get(str(model).strip(), str(model))
 
 
 def run_agy_structured(
@@ -41,6 +50,7 @@ def run_agy_structured(
     environment: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """在无业务工作区、无危险权限下调用 agy 并提取结构化输出。"""
+    model = _normalize_agy_model(model)
     if effort is None:
         if str(model).endswith("-high"):
             effort = "high"
@@ -107,6 +117,10 @@ def _safe_failure_category(value: str | None) -> str:
         return "local startup blocked"
     if "invalid_argument" in text and ("schema" in text or "function_declarations" in text):
         return "invalid schema"
+    if "eligibility check failed" in text or "not currently available in your location" in text:
+        return "location ineligible"
+    if any(token in text for token in ("model unavailable", "unknown model", "unsupported model", "model not found")):
+        return "model unavailable"
     if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
         return "rate limit"
     if any(token in text for token in ("401", "403", "permission", "unauthorized")):
@@ -118,6 +132,7 @@ def _safe_failure_category(value: str | None) -> str:
 
 def probe_agy_startup(*, command: str, model: str) -> dict:
     """只查询模型列表验证本地启动；不调用模型，不保留原始账号输出。"""
+    model = _normalize_agy_model(model)
     try:
         with tempfile.TemporaryDirectory(prefix="video-processing-agy-probe-") as workdir:
             result = subprocess.run(

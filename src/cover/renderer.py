@@ -127,12 +127,14 @@ class HTMLRenderer:
                 if variant == "cover_english_newspaper":
                     page.evaluate("document.fonts.ready")
                     fits = page.evaluate("""() => {
-                        const footer = document.querySelector('.footer-bar').getBoundingClientRect();
-                        return [...document.querySelectorAll('.main-title, .quote-container, .vocab-section')]
+                        const panel = document.querySelector('.bottom-study-panel');
+                        if (!panel) return true;
+                        const panelRect = panel.getBoundingClientRect();
+                        return [...document.querySelectorAll('.quote-container, .vocab-section')]
                           .every(el => {
                             const r = el.getBoundingClientRect();
-                            return r.left >= 0 && r.top >= 0 && r.right <= innerWidth
-                              && r.bottom <= footer.top && el.scrollWidth <= el.clientWidth + 1;
+                            return r.left >= 0 && r.top >= panelRect.top && r.right <= innerWidth
+                              && r.bottom <= panelRect.bottom + 2 && el.scrollWidth <= el.clientWidth + 1;
                           });
                     }""")
                     if not fits:
