@@ -75,6 +75,7 @@ def create_wechat_context(
     context_opts: dict[str, Any] = {
         "viewport": dict(viewport or WECHAT_VIEWPORT),
         "user_agent": WECHAT_USER_AGENT,
+        "service_workers": "block",  # 所有请求必须经过账户路由守卫。
     }
 
     if storage_state is not None:

@@ -7,6 +7,10 @@
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
 """
 
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
+
 import os
 import sys
 import argparse

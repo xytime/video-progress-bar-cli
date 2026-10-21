@@ -7,6 +7,10 @@ diagnose_cover_dialog.py — 封面弹窗与原创声明区 DOM 诊断工具
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-24 | Claude_Sonnet_4.6_Thinking | 初建，用于精确捕获弹窗DOM与原创声明DOM，定位根因 |
 """
+
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
 import sys
 import json
 import time

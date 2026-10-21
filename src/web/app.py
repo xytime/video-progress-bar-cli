@@ -485,6 +485,14 @@ def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
 @guarded("wechat-login")
 def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
+    # 固定时钟重登与账户统一调度互斥；在删标记/建线程之前退出。
+    if settings.wechat_account_scheduler_enabled and reason != "manual":
+        return {"success": False, "deferred": True, "message": "账户统一调度已停用自动保活及预热重登"}
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        WeChatRequestGuard(Path(__file__).parent.parent.parent / "output/wechat_state.json").check()
+    except WeChatRequestDeferred as exc:
+        return {"success": False, "deferred": True, "message": str(exc)}
     prj_root = Path(__file__).parent.parent.parent
     python = str(prj_root / ".venv" / "bin" / "python")
     script = str(prj_root / "scripts" / "wechat_uploader.py")
@@ -558,7 +566,8 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
 
 def _wechat_session_needs_auto_relogin() -> bool:
     """判断是否已接近服务端绝对会话上限，且当前没有进行中的自动重登。"""
-    if not settings.wechat_auto_relogin_enabled or not settings.wechat_keepalive_enabled:
+    if (settings.wechat_account_scheduler_enabled or not settings.wechat_auto_relogin_enabled
+            or not settings.wechat_keepalive_enabled):
         return False
     prj_root = Path(__file__).parent.parent.parent
     login_at = prj_root / "output" / "wechat_login_at.txt"

@@ -313,7 +313,8 @@ class BrowserCommenter:
 
         attempt_dir = self._new_attempt_dir(evidence_dir)
         try:
-            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):
+            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                                   purpose="评论", video=post_id):
                 return self._run_browser(
                     comment_text=comment_text,
                     platform_post_id=post_id,
@@ -368,6 +369,7 @@ class BrowserCommenter:
                 context = browser.new_context(
                     viewport={"width": 1920, "height": 1080},
                     storage_state=str(self.state_path),
+                    service_workers="block",
                 )
                 from video_processing.core.wechat_session_lock import guard_wechat_context
                 guard_wechat_context(context)

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| scheduler-v1 | 2026-10-21 | Codex | 全账号恢复期/稳定期频率上限和增强版优先身份。 |
 | wechat-backoff-v1 | 2026-10-20 | Codex | 视频号账户共享退避与会话最小间隔，防止多作品独立轮询持续触发限流。 |
 | 3.77.0 | 2026-10-18 | Antigravity | 视频号二级回复默认全天开放提交窗口 (00:00-24:00)、最小间隔默认调整为 3600 秒 (1小时)，并新增 wechat_reply_policy_path 支持后台管理界面热加载配置。 |
 | 3.76.0 | 2026-10-17 | Antigravity | 将 wechat_session_warn_hours 默认阈值从 22.0 小时下调至 10.0 小时，提前触发自动授权续期。 |
@@ -228,6 +229,12 @@ class Settings(BaseSettings):
     wechat_keepalive_min_interval: int = 50         # 最短触发间隔（分钟）
     wechat_keepalive_max_interval: int = 65         # 最长触发间隔（分钟）
     wechat_rate_limit_cooldown_seconds: int = Field(default=1800, ge=300, le=21600)
+    wechat_account_scheduler_enabled: bool = True
+    wechat_scheduler_priority_video: str = ""
+    wechat_scheduler_stable_interval_seconds: int = Field(default=900, ge=900)
+    wechat_scheduler_recovery_interval_seconds: int = Field(default=3600, ge=3600)
+    wechat_scheduler_daily_limit: int = Field(default=20, ge=1, le=20)
+    wechat_scheduler_recovery_limit: int = Field(default=1, ge=1, le=6)
     wechat_request_min_interval_seconds: int = Field(default=60, ge=1, le=3600)
     wechat_keepalive_dwell: int = 15                # 停留时长（秒），供微信记录活跃请求
     wechat_keepalive_initial_delay_seconds: int = Field(default=60, ge=5, le=600)  # 看门狗启动首次探测延迟（秒）

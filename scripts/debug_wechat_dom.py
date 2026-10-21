@@ -1,3 +1,7 @@
+
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
 import time
 from playwright.sync_api import sync_playwright
 

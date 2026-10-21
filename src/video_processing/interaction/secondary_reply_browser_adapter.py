@@ -477,7 +477,8 @@ class SecondaryReplyBrowserAdapter:
         )
 
         try:
-            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):
+            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                                   purpose="回复", video=post_id):
                 return self._run_playwright_flow(
                     task_id=task_id,
                     platform_post_id=post_id,
@@ -537,7 +538,7 @@ class SecondaryReplyBrowserAdapter:
                     logger.critical("[SecondaryReplyBrowser] 拦截到违规或错帖请求，中止请求！")
                     route.abort()
                     return
-                route.continue_()
+                route.fallback()
 
             page.route("**/comment/create_comment*", route_interceptor)
 
@@ -764,7 +765,10 @@ class SecondaryReplyBrowserAdapter:
         """会话锁 + 全新 Chromium 上下文 + 发送路由守卫，yield 已打开评论页的 page。"""
         if not self.state_path.exists():
             raise FileNotFoundError(f"登录态文件不存在: {self.state_path}")
-        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):
+        if guard is None:
+            raise WeChatSessionLockBusy("无已绑定回复待办，停止自动扫描评论")
+        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                               purpose="回复", video=guard.expected_export_id):
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=self.headless, args=["--window-size=1920,1080", "--no-proxy-server"],
@@ -783,7 +787,7 @@ class SecondaryReplyBrowserAdapter:
                                 logger.critical("[SecondaryReplyBrowser] 拦截到违规或错帖请求，中止请求！")
                                 route.abort()
                                 return
-                            route.continue_()
+                            route.fallback()
 
                         page.route("**/comment/create_comment*", route_interceptor)
                     else:

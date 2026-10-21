@@ -67,7 +67,11 @@ def test_notify_wechat_login_success_scan_qr():
         assert "手机扫码登录" in kwargs["text"]
 
 
-def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path):
+def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path, monkeypatch):
+    from config.settings import settings
+    from video_processing.core.wechat_session_lock import WeChatSessionLock
+    monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
+
     page = MagicMock()
     page.url = "https://channels.weixin.qq.com/platform/post/create"
 
@@ -93,7 +97,8 @@ def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path):
     qr_file = tmp_path / "login_qr.png"
     qr_file.write_text("dummy qr")
 
-    with patch("scripts.wechat_uploader._stamp_login_success") as mock_stamp, \
+    with WeChatSessionLock(state_file, purpose="登录", video="notification-unit-test"), \
+         patch("scripts.wechat_uploader._stamp_login_success") as mock_stamp, \
          patch("scripts.wechat_uploader._notify_wechat_login_success") as mock_notify, \
          patch("video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard", return_value=(True, None)):
         _wait_and_save_login(page, context, state_file, qr_path=qr_file, method="desktop_quick")

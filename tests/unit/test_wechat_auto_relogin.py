@@ -18,6 +18,7 @@ def _prepare_project(tmp_path, monkeypatch):
     output.mkdir()
     (output / "wechat_state.json").write_text("{}")
     monkeypatch.setattr(web_app, "__file__", str(fake_app))
+    monkeypatch.setattr(web_app.settings, "wechat_account_scheduler_enabled", False)
     monkeypatch.setattr(web_app.settings, "wechat_auto_relogin_enabled", True)
     monkeypatch.setattr(web_app.settings, "wechat_keepalive_enabled", True)
     return output

@@ -5,6 +5,10 @@
   - 相邻的提示文字 (字数限制说明、错误提示)
   - 搜索页面 bundle JS 中所有 /title|短标题|shortTitle/ 相关验证逻辑
 """
+
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
 from playwright.sync_api import sync_playwright
 from pathlib import Path
 import json, re

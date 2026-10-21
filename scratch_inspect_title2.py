@@ -1,6 +1,10 @@
 """
 扩大范围：dump 所有 input/textarea + 所有 JS bundle，写入文件供分析
 """
+
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
 from playwright.sync_api import sync_playwright
 import re, json
 from pathlib import Path

@@ -8,6 +8,10 @@ diagnose_original_rights_dialog.py — 自动化诊断“原创权益”弹窗 D
 | 1.1.0 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 升级为完全自动化运行版本 |
 """
 
+# 2026-10-21: 旧诊断入口绕过账户调度，停用以保护账号。
+raise SystemExit("旧视频号诊断入口已停用；请使用受账户调度保护的正式入口，禁止冷却探测。")
+
+
 import sys
 import json
 from pathlib import Path

@@ -156,3 +156,11 @@ def test_real_cli_session_deferral_creates_no_false_browser_evidence(tmp_path):
             "--evidence-dir", str(evidence)], text=True, capture_output=True, timeout=15)
     assert result.returncode == 11, result.stderr
     assert not evidence.exists()
+
+
+@pytest.fixture(autouse=True)
+def legacy_guard_mode(monkeypatch):
+    """旧退避/人工凭据契约单独验证；新默认调度由 account_schedule 测试覆盖。"""
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setenv("WECHAT_ACCOUNT_SCHEDULER_ENABLED", "false")
