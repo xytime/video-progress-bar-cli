@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-21 | Codex | 常驻 Bot 身份、维护排空、子进程及漂移反例。 |
 | 1.2.0 | 2026-10-21 | Codex | 外置日志迁入本机但不改 Python 参数；周期不立即重放、KeepAlive 维持运行。 |
 | 1.1.0 | 2026-10-21 | Codex | 冻结后再计划、部分恢复、外置备份、本机定义及他项目 cron 反例。 |
 | 1.0.0 | 2026-10-13 | Codex | KeepAlive、来源冲突、原禁用与 RunAtLoad 恢复 |
@@ -23,11 +24,17 @@ class Commands:
         self.disabled = {}
         self.calls = []
         self.bootstraps = []
+        self.daemon_command = ''
+        self.processes = ''
 
     def run(self, args, *, data=None, allowed=(0,)):
         self.calls.append(args)
         result = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-        if args[:2] == ["crontab", "-l"]:
+        if args[0] == 'ps':
+            result.stdout = (self.processes if '-axo' in args else self.daemon_command).encode()
+        elif args[0] == '/usr/sbin/lsof':
+            result.stdout = ('n' + str(self.root) + '\n').encode()
+        elif args[:2] == ["crontab", "-l"]:
             result.stdout = self.crontab
         elif args[:2] == ["crontab", "-"]:
             self.crontab = data
@@ -97,6 +104,50 @@ def test_d09_restore_preserves_disabled_unloaded_and_suppresses_oneoff(schedulin
     assert commands.bootstraps[0]["RunAtLoad"] is False
     assert commands.bootstraps[0]["StartInterval"] == 180
     schedules.restored(plan)
+
+
+@pytest.fixture
+def bot_scheduling(scheduling, monkeypatch):
+    from video_processing.core import maintenance_runtime, maintenance
+    schedules, commands, _ = scheduling
+    label = 'com.videopipeline.bot'
+    args = [str(schedules.root/'.venv/bin/python'), str(schedules.root/'src/bot/telegram_bot.py')]
+    path = Path.home()/'Library/LaunchAgents'/f'{label}.plist'
+    path.write_bytes(plistlib.dumps(dict(Label=label, WorkingDirectory=str(schedules.root),
+                                        ProgramArguments=args, KeepAlive=True, RunAtLoad=True)))
+    commands.services[label] = dict(path=path, pid=789)
+    commands.disabled[label] = False
+    commands.daemon_command = ' '.join(args)
+    monkeypatch.setattr(maintenance_runtime, 'process_birth', lambda pid: 'known-birth')
+    state = dict(state='MAINTENANCE', active=[])
+    monkeypatch.setattr(maintenance, 'gate', lambda: SimpleNamespace(status=lambda: state))
+    return schedules, commands, state
+
+
+def test_exact_idle_bot_freezes_and_restores_keepalive(bot_scheduling):
+    schedules, commands, _ = bot_scheduling
+    plan = schedules.snapshot()
+    assert next(r for r in plan['launchd'] if r['label'].endswith('.bot'))['daemon']['pid'] == 789
+    schedules.freeze(plan)
+    assert 'com.videopipeline.bot' not in commands.services
+    commands.disabled[UI] = False
+    schedules.restore(plan)
+    restored = next(c for c in commands.bootstraps if c['Label'].endswith('.bot'))
+    assert restored['KeepAlive'] is True and restored['RunAtLoad'] is True
+
+
+@pytest.mark.parametrize('fault', ['running', 'active', 'children', 'pid', 'command'])
+def test_busy_or_changed_bot_blocks_before_schedule_mutation(bot_scheduling, fault):
+    schedules, commands, state = bot_scheduling
+    plan = schedules.snapshot()
+    if fault == 'running': state['state'] = 'RUNNING'
+    if fault == 'active': state['active'] = [dict(pid=789)]
+    if fault == 'children': commands.processes = '790 789\n'
+    if fault == 'pid': commands.services['com.videopipeline.bot']['pid'] = 999
+    if fault == 'command': commands.daemon_command += ' unexpected-argument'
+    start = len(commands.calls)
+    with pytest.raises(DeploymentDenied): schedules.freeze(plan)
+    assert not any(c[1] in {'disable','bootout','-'} for c in commands.calls[start:])
 
 
 @pytest.mark.parametrize("keepalive", [False, True])

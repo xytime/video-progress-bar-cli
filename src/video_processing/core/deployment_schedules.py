@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-21 | Codex | 常驻 Bot 绑定精确进程与入口；维护无在途及子进程后正常卸载，保留原调度意图。 |
 | 1.2.0 | 2026-10-21 | Codex | launchd 输出日志放本机 HOME，避免启动阶段打开外置卷日志被系统拒绝；保留原虚拟环境。 |
 | 1.1.0 | 2026-10-21 | Codex | 保存已核验运行调度意图，阻止冻结现场成为新基线；恢复定义使用本机私有目录。 |
 | 1.0.0 | 2026-10-13 | Codex | cron/launchd 受控快照与回读、保留原禁用及一次性任务 |
@@ -13,6 +14,7 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import subprocess
 import time
 
@@ -20,6 +22,7 @@ from .deployment import require, write_json, DeploymentDenied
 from .deployment_sources import sha
 
 UI = "com.videopipeline.ui"
+BOT = "com.videopipeline.bot"
 
 
 class MacCommands:
@@ -62,6 +65,33 @@ class Schedules:
         text = self.runner.run(["launchctl", "list"]).stdout.decode()
         return {line.split()[-1] for line in text.splitlines() if line.split() and line.split()[-1].startswith("com.videopipeline.")}
 
+    def daemon_identity(self, label, state, definition):
+        """仅支持具名常驻 Bot；普通周期任务仍不能在执行中纳入计划。"""
+        from .maintenance_runtime import process_birth
+        expected = [str(self.root / '.venv/bin/python'), str(self.root / 'src/bot/telegram_bot.py')]
+        require(label == BOT and definition.get('KeepAlive') is True
+                and definition.get('ProgramArguments') == expected and state.get('cwd') == str(self.root),
+                'SCHEDULE_JOB_ACTIVE')
+        pid = state['pid']
+        birth = process_birth(pid)
+        command = self.runner.run(['ps', '-p', str(pid), '-o', 'command=']).stdout.decode().strip()
+        cwd = self.runner.run(['/usr/sbin/lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn']).stdout.decode()
+        require(shlex.split(command) == expected and [v[1:] for v in cwd.splitlines() if v.startswith('n')] == [str(self.root)]
+                and process_birth(pid) == birth, 'SCHEDULE_DAEMON_IDENTITY_CHANGED')
+        return {'pid': pid, 'birth': birth, 'cwd': str(self.root), 'arguments': expected}
+
+    def idle_daemons(self, plan):
+        """正常卸载前闸门必须已关闭，且不能带走任何在途或 Bot 派生业务。"""
+        daemons = [r['daemon'] for r in plan['launchd'] if r.get('daemon')]
+        if not daemons:
+            return
+        from .maintenance import gate
+        state = gate().status()
+        require(state['state'] == 'MAINTENANCE' and not state['active'], 'SCHEDULE_DAEMON_NOT_DRAINED')
+        rows = self.runner.run(['ps', '-axo', 'pid=,ppid=']).stdout.decode().splitlines()
+        parents = {int(parts[1]) for line in rows if len(parts := line.split()) == 2}
+        require(not any(d['pid'] in parents for d in daemons), 'SCHEDULE_DAEMON_HAS_CHILDREN')
+
     def snapshot(self):
         self.require_operational_intent()
         disabled = self.disabled()
@@ -78,7 +108,7 @@ class Schedules:
             payload = loaded_path.read_bytes()
             current = plistlib.loads(payload)
             require(current.get("Label") == label and self.owner_binding(current) == bindings, "LOADED_SOURCE_UNKNOWN")
-            require(label == UI or not state["pid"], "SCHEDULE_JOB_ACTIVE")
+            daemon = self.daemon_identity(label, state, current) if label != UI and state['pid'] else None
             # 非秘密摘要；原 plist 私有保存仅用于恢复，不能提交到仓库。
             copied = self.directory / "plists" / path.name
             copied.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -87,6 +117,7 @@ class Schedules:
             rows.append({"label": label, "path": str(path), "sha256": sha(path.read_bytes()),
                          "loaded_path": str(loaded_path), "loaded_sha256": sha(payload),
                          "loaded": state["loaded"], "disabled": disabled.get(label, bool(current.get("Disabled", False))),
+                         "daemon": daemon,
                          "run_at_load": bool(current.get("RunAtLoad")), "keepalive": bool(current.get("KeepAlive")),
                          "bindings": bindings})
         require(UI in {r["label"] for r in rows}, "UI_SOURCE_MISSING")
@@ -192,17 +223,25 @@ class Schedules:
         for row in plan["launchd"]:
             state = self.service(row["label"])
             require(state["loaded"] == row["loaded"] and disabled.get(row["label"], row["disabled"]) == row["disabled"], "SCHEDULE_BASELINE_DRIFT")
-            require(row["label"] == UI or not state["pid"], "SCHEDULE_JOB_ACTIVE")
+            if row['label'] != UI and (state['pid'] or row.get('daemon')):
+                require(state['pid'] and row.get('daemon'), 'SCHEDULE_JOB_ACTIVE')
+                definition = plistlib.loads(Path(row['loaded_path']).read_bytes())
+                require(self.daemon_identity(row['label'], state, definition) == row['daemon'], 'SCHEDULE_DAEMON_IDENTITY_CHANGED')
 
     def freeze(self, plan):
         self.baseline(plan)
+        self.idle_daemons(plan)
         self.runner.run(["crontab", "-"], data=(self.directory / "cron.frozen").read_bytes())
         for row in plan["launchd"]:
             label = row["label"]
             self.files_check(plan)
             self.runner.run(["launchctl", "disable", self.domain + "/" + label])
             if label != UI and row["loaded"]:
-                require(not self.service(label)["pid"], "SCHEDULE_JOB_ACTIVE")
+                state = self.service(label)
+                if state['pid']:
+                    definition = plistlib.loads(Path(row['loaded_path']).read_bytes())
+                    require(row.get('daemon') and self.daemon_identity(label, state, definition) == row['daemon'],
+                            'SCHEDULE_DAEMON_IDENTITY_CHANGED')
                 self.runner.run(["launchctl", "bootout", self.domain + "/" + label])
                 self.wait_unloaded(label)
         self.frozen(plan)
