@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-21 | Antigravity | 新增机械泛词与考试式尾巴校验门禁（check_bland_interaction_copy），拦截干巴模板。 |
 | 1.4.0 | 2026-09-20 | Antigravity | 放宽 share_hook 上限至 30 字，支持启发式开放反问句，优化评论区真实互动。 |
 | 1.3.0 | 2026-09-20 | Codex | 将短评论长度上限收口到宿主合同，模型超长输出自动降级为规则草稿。 |
 | 1.2.0 | 2026-09-20 | Codex | 评论采用问题、选项与单句收束的短格式，移除重复栏目标题和多重号召。 |
@@ -42,6 +43,78 @@ MAX_OPTION_LENGTH = 14
 MIN_OPTIONS = 2
 MAX_OPTIONS = 3
 MAX_FORMATTED_COMMENT_LENGTH = 140
+
+# 禁止出现的干巴泛化话题、立场标签选项与考试命令式收束语
+BLAND_TOPICS = frozenset({
+    "你认同视频里的判断吗",
+    "你认同视频里的判断吗？",
+    "你认同视频里的判断吗?",
+    "视频里的观点，你认同吗",
+    "视频里的观点，你认同吗？",
+    "视频里的观点,你认同吗?",
+    "视频里的风险提示，你怎么看",
+    "视频里的风险提示，你怎么看？",
+    "视频里的哪个要点最值得记下",
+    "视频里的哪个要点最值得记下？",
+    "视频里哪一点最打动你",
+    "视频里哪一点最打动你？",
+})
+
+BLAND_OPTIONS = frozenset({
+    "认同",
+    "不认同",
+    "比较认同",
+    "保留意见",
+    "持保留意见",
+    "仍有保留",
+    "支持",
+    "反对",
+    "赞成",
+    "不赞成",
+    "需要重视",
+    "继续观察",
+})
+
+BLAND_HOOKS = frozenset({
+    "说说你的理由",
+    "说说你的理由。",
+    "说说理由",
+    "说说理由。",
+    "说说你的看法",
+    "说说你的看法。",
+    "说说看法",
+    "说说看法。",
+    "说说你的判断",
+    "说说你的判断。",
+    "说说你的答案",
+    "说说你的答案。",
+    "说说答案",
+    "说说答案。",
+    "说说依据",
+    "说说依据。",
+    "说说你为什么这样选",
+    "说说你为什么这样选。",
+})
+
+
+def check_bland_interaction_copy(
+    *,
+    topic: str,
+    poll_options: Sequence[str],
+    share_hook: str,
+) -> None:
+    """检查互动文案是否落入干巴、泛化的机器套路；若命中则抛出 InteractionContractError。"""
+    clean_topic = topic.strip()
+    if clean_topic in BLAND_TOPICS:
+        raise InteractionContractError(f"互动话题过于泛化干巴: {clean_topic}")
+
+    clean_opts = [opt.strip() for opt in poll_options]
+    if all(opt in BLAND_OPTIONS for opt in clean_opts):
+        raise InteractionContractError(f"投票选项缺乏场景与态度画面感: {clean_opts}")
+
+    clean_hook = share_hook.strip()
+    if clean_hook in BLAND_HOOKS:
+        raise InteractionContractError(f"收束互动语过于生硬机械: {clean_hook}")
 
 
 @dataclass(frozen=True)

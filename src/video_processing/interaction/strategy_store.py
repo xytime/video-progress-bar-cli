@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-21 | Antigravity | 升级运行存储模板自动与只读种子对齐（保留 learned_exemplars）并焕新内存兜底模板。 |
 | 1.5.0 | 2026-09-20 | Codex | 使种子策略的选项数上限与首评短格式合同一致。 |
 | 1.4.0 | 2026-09-20 | Codex | 允许审阅策略使用完整的短问句，避免标题截断后破坏评论可读性。 |
 | 1.3.0 | 2026-09-20 | Codex | 内存兜底模板改为单句收束，避免在短评论中重复要求留言和转发。 |
@@ -230,12 +231,37 @@ class StrategyStore:
         """种子文件缺失时的最小通用策略；仅在内存使用。"""
         templates = []
         rows = (
-            (InteractionType.POLL_STAND, "你认同视频里的判断吗？", ["认同", "保留意见"], "说说你的理由。"),
-            (InteractionType.WARNING_SHARE, "视频里的风险提示，你怎么看？", ["需要重视", "继续观察"], "说说你的判断。"),
-            (InteractionType.GROUP_DISCUSSION, "视频里的观点，你认同吗？", ["比较认同", "仍有保留"], "说说你的看法。"),
-            (InteractionType.MEMO_COLLECTION, "视频里的哪个要点最值得记下？", ["核心逻辑", "实践方法"], "说说你的答案。"),
-            (InteractionType.VOICE_RESONANCE, "视频里哪一点最打动你？", ["很有共鸣", "带来启发"], "说说你的感受。"),
+            (
+                InteractionType.POLL_STAND,
+                "五年后回看这条判断，大概率是？",
+                ["预言太早了", "节奏刚刚好", "还是说保守了"],
+                "如果给五年后的自己留句话，你会写什么？",
+            ),
+            (
+                InteractionType.WARNING_SHARE,
+                "视频提的这个坑，你躲过还是踩过？",
+                ["踩过，交了学费", "躲过，全靠直觉", "正在岸边看戏"],
+                "回头看，哪次交学费反而帮了你大忙？",
+            ),
+            (
+                InteractionType.GROUP_DISCUSSION,
+                "老友茶局聊起这事，你站哪边？",
+                ["顺势提前布局", "按兵不动看戏", "反向寻找机会"],
+                "身边朋友聊起这事，分歧最大的是哪点？",
+            ),
+            (
+                InteractionType.MEMO_COLLECTION,
+                "这段话若只带走一句，你会选？",
+                ["看清周期位置", "关键时刻管住手", "永远留足底牌"],
+                "哪条原则是你走过弯路后才真正读懂的？",
+            ),
+            (
+                InteractionType.VOICE_RESONANCE,
+                "视频里哪处细节最戳中你的经历？",
+                ["似曾相识的处境", "看透不说破的规律", "逆流而上的清醒"],
+                "如果用一句话总结你当时的体会，会是什么？",
+            ),
         )
         for index, (kind, topic, options, hook) in enumerate(rows):
             templates.append({"id": f"memory_{index}", "interaction_type": kind.value, "topic_template": topic, "poll_options": options, "share_hook": hook, "weight": 1.0, "learned_count": 0})
-        return {"version": "1.0.0", "updated_at": None, "categories": {"General": templates}, "learned_exemplars": []}
+        return {"version": "2.0.0", "updated_at": None, "categories": {"General": templates}, "learned_exemplars": []}

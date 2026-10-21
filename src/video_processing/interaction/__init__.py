@@ -19,6 +19,7 @@ from .contract import (
     InteractionDraft,
     InteractionResult,
     InteractionType,
+    check_bland_interaction_copy,
     validate_interaction_draft,
 )
 
@@ -28,6 +29,7 @@ __all__ = [
     "InteractionDraft",
     "InteractionResult",
     "InteractionType",
+    "check_bland_interaction_copy",
     "validate_interaction_draft",
     "InteractionService",
     "BrowserCommenter",

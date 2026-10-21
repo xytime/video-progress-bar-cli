@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-21 | Antigravity | 覆盖题材动态路由、哈希模板轮换与反干巴泛词质量门禁（check_bland_interaction_copy）。 |
 | 1.4.0 | 2026-09-20 | Codex | 以实际待提交评论为审查对象，覆盖短模板下兜底草稿仍会被 Fail-Closed 拦截。 |
 | 1.3.0 | 2026-09-20 | Codex | 覆盖短评论受控排版，移除栏目 Emoji 与重复行动号召。 |
 | 1.2.0 | 2026-09-19 | Codex | 区分严格发布确认与可评论已绑定原生 ID 候选，防止互动放宽污染发布事实。 |
@@ -27,6 +28,7 @@ from video_processing.interaction.contract import (
     InteractionContractError,
     InteractionDraft,
     InteractionType,
+    check_bland_interaction_copy,
     render_interaction_comment,
     validate_interaction_draft,
 )
@@ -133,6 +135,26 @@ class TestInteractionContract:
         assert "🗳️" not in comment
         assert "📢" not in comment
 
+    def test_bland_interaction_copy_is_rejected(self):
+        with pytest.raises(InteractionContractError, match="过于泛化干巴"):
+            check_bland_interaction_copy(
+                topic="你认同视频里的判断吗？",
+                poll_options=["顺势提前布局", "按兵不动看戏"],
+                share_hook="如果给五年后的自己留句话，你会写什么？",
+            )
+        with pytest.raises(InteractionContractError, match="缺乏场景与态度画面感"):
+            check_bland_interaction_copy(
+                topic="五年后回看这条判断，大概率是？",
+                poll_options=["认同", "保留意见"],
+                share_hook="如果给五年后的自己留句话，你会写什么？",
+            )
+        with pytest.raises(InteractionContractError, match="过于生硬机械"):
+            check_bland_interaction_copy(
+                topic="五年后回看这条判断，大概率是？",
+                poll_options=["预言太早了", "节奏刚刚好"],
+                share_hook="说说你的理由。",
+            )
+
 
 class TestStrategyStore:
     """测试自生长策略库、槽位抽象与文件锁。"""
@@ -213,8 +235,9 @@ class TestRuleProvider:
         )
         assert draft.interaction_type == InteractionType.WARNING_SHARE
         assert "⚠️" not in draft.formatted_comment
-        assert "避险" in draft.formatted_comment or "风险" in draft.formatted_comment
+        assert draft.category == "Finance"
         assert draft.provider == "self_growing_rule"
+        assert "说说你的理由" not in draft.formatted_comment
 
     def test_rule_generation_poll_type(self):
         provider = RuleInteractionProvider()
@@ -225,7 +248,52 @@ class TestRuleProvider:
         )
         assert "A " in draft.formatted_comment
         assert "【" not in draft.formatted_comment
+        assert draft.category == "AI/Tech"
         assert len(draft.poll_options) >= 2
+
+    def test_rule_generation_infers_health_and_rotates_templates(self):
+        provider = RuleInteractionProvider()
+        draft_health = provider.generate(
+            title="Before You Use AI, Regulate Your Brain",
+            description="大脑抗衰老与睡眠代谢科学指南",
+            category="General",
+        )
+        assert draft_health.category == "Health"
+        assert draft_health.interaction_type == InteractionType.MEMO_COLLECTION
+
+        # 验证英文单词边界匹配：防止 "said" 误命中 "ai" 归入 AI/Tech
+        draft_cake = provider.generate(
+            title="Who said birthdays need cake? | Max Stéfani",
+            description="A warm talk about family traditions",
+            category="General",
+        )
+        assert draft_cake.category == "General"
+
+        # 验证所有种子模板均符合合同、无干巴词且能通过安全审查
+        service = InteractionService()
+        for cat, templates in provider.store._data["categories"].items():
+            for tpl in templates:
+                rendered = render_interaction_comment(
+                    topic=tpl["topic_template"],
+                    interaction_type=InteractionType(tpl["interaction_type"]),
+                    poll_options=tpl["poll_options"],
+                    share_hook=tpl["share_hook"],
+                )
+                validate_interaction_draft(
+                    topic=tpl["topic_template"],
+                    interaction_type=tpl["interaction_type"],
+                    poll_options=tpl["poll_options"],
+                    share_hook=tpl["share_hook"],
+                    formatted_comment=rendered,
+                    provider="self_growing_rule",
+                    category=cat,
+                )
+                check_bland_interaction_copy(
+                    topic=tpl["topic_template"],
+                    poll_options=tpl["poll_options"],
+                    share_hook=tpl["share_hook"],
+                )
+                assert service._check_censorship(rendered) is True
 
 
 class TestInteractionService:
