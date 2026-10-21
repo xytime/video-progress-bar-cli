@@ -1,11 +1,12 @@
 """竖屏硬字幕的逐帧定位、字形修补与原位排版凭证。
 
-自动处理居中、有转录匹配及可分离白色字形的英文原字幕；其它情况停止，不能退回叠字。
+A 优先局部修补；可靠定位但外观或质量不合格时，整片从原片评估 B，无法安全排版则停止。
 Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被遮挡的真实背景。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-10-21 | Codex | A/B 全片决策、原片回退、逐帧人脸避让及有来源摘要的 OCR 缓存。 |
 | 1.0.0 | 2026-10-21 | Codex | A 方案接入：逐帧识别与保守修补、完整画面、来源及成片摘要门禁。 |
 """
 from __future__ import annotations
@@ -29,7 +30,9 @@ import numpy as np
 
 from ..utils.render_source_binding import digest
 
-VERSION = "in-place-captions-v1"
+VERSION = "source-captions-ab-v2"
+FALLBACK = Path(__file__).with_name("source_caption_fallback.py")
+from .source_caption_fallback import RepairUnsuitable, appearance, repair_quality, fallback_geometry
 VISION = Path(__file__).parents[1] / "utils/caption_vision.js"
 LOG = logging.getLogger(__name__)
 
@@ -41,6 +44,8 @@ class PreparedCaptions:
     source_hash: str
     plan: Path
     anchors: tuple = ()
+    mode: str = "A"
+    fallback: dict | None = None
 
 
 def _write(path, value):
@@ -83,7 +88,7 @@ def _vision():
             worker.stdout.close()
 
 
-def _recognize(worker, frame):
+def _observe(worker, frame):
     ok, png = cv2.imencode(".png", frame)
     if not ok:
         raise ValueError("原字幕定位帧编码失败")
@@ -94,7 +99,13 @@ def _recognize(worker, frame):
     result = json.loads(worker.stdout.readline())
     if "rows" not in result:
         raise ValueError("本地 Vision 无法定位原字幕，停止出片")
-    return result["rows"]
+    if "faces" not in result:
+        raise ValueError("人脸避让检测失败，停止出片")
+    return result
+
+
+def _recognize(worker, frame):
+    return _observe(worker, frame)["rows"]
 
 
 def _words(text):
@@ -102,15 +113,26 @@ def _words(text):
 
 
 def _locate(source, segments, directory, fps, progress):
+    cache, scan_identity = _scan_file(source, fps)
+    if cache.is_file():
+        data = json.loads(cache.read_text())
+        if (data['identity'] == scan_identity and data['observations_sha256'] ==
+                hashlib.sha256(json.dumps(data['observations'], sort_keys=True).encode()).hexdigest()):
+            observations = data['observations']
+            _write(directory / 'ocr.json', data)
+            selected, center = _classify([x['rows'] for x in observations], segments, fps)
+            return selected, center, observations
     capture = cv2.VideoCapture(str(source))
-    frames = []
+    frames, observations = [], []
     try:
         with _vision() as worker:
             while True:
                 ok, frame = capture.read()
                 if not ok:
                     break
-                rows = _recognize(worker, frame)
+                observation = _observe(worker, frame)
+                rows = observation["rows"]
+                observations.append(observation)
                 # 所有识别结果保留审计；下半画面是此次原位字幕处理范围。
                 frames.append(rows)
                 if len(frames) % max(1, round(fps * 5)) == 0:
@@ -121,13 +143,33 @@ def _locate(source, segments, directory, fps, progress):
         capture.release()
     if not frames:
         raise ValueError("无法完整解码原片")
-    _write(directory / "ocr.json", {"version": VERSION, "frames": frames})
-    return _classify(frames, segments, fps)
+    data = {'identity': scan_identity, 'observations': observations,
+            'observations_sha256': hashlib.sha256(json.dumps(observations, sort_keys=True).encode()).hexdigest()}
+    if digest(source) != scan_identity['source_sha256']:
+        raise ValueError('扫描期间源片变化，不能缓存识别结果')
+    _write(cache, data)
+    _write(directory / 'ocr.json', data)
+    selected, center = _classify(frames, segments, fps)
+    return selected, center, observations
+
+
+def _scan_file(source, fps):
+    identity = dict(version='vision-text-faces-v1', source_sha256=digest(source),
+                    vision_sha256=digest(VISION), fps=fps)
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    return source.parent / '.caption-repair' / ('scan-'+key+'.json'), identity
 
 
 def _classify(frames, segments, fps):
     # 画面中央的疑似字幕必须有临近转录证据；不能仅凭整段文字没变就当台标放过。
     selected, boxes = [], []
+    # ASR 会漏掉短促应答。只接受前后 1 秒内有直接转录证据、同左缘同基线的连续字幕轨迹。
+    evidence = []
+    for index, rows in enumerate(frames):
+        local = set().union(*(_words(s.get('text', '')) for s in segments
+            if s['start']-5 <= index/fps <= s['end']+5))
+        evidence.append([r['box'] for r in rows if r['confidence'] >= .9 and len(_words(r['text'])) >= 2
+                         and len(_words(r['text']) & local)/len(_words(r['text'])) >= .5])
     for index, rows in enumerate(frames):
         now = index / fps
         local_words = set().union(*(_words(s.get("text", "")) for s in segments
@@ -138,8 +180,10 @@ def _classify(frames, segments, fps):
         for row in rows:
             text, box = row["text"], row["box"]
             # 只处理画面中央的原字幕，保留边缘台标、姓名条和顶部标题。
-            if not (.38 <= box[1] < box[3] <= .94 and .4 <= (box[0]+box[2])/2 <= .6):
+            if not (.38 <= box[1] < box[3] <= .94 and .22 <= (box[0]+box[2])/2 <= .78):
                 continue
+            if row['confidence'] < .5 and box[3]-box[1] < .018 and box[2]-box[0] < .08:
+                continue  # 拉链等纹理偶发的微小低置信 OCR 不认作原字幕；不改动这些像素。
             tokens = _words(text)
             if not any(c.isalnum() for c in text):
                 continue
@@ -147,8 +191,29 @@ def _classify(frames, segments, fps):
             compact = ''.join(re.findall('[a-z]+', text.lower()))
             if len(compact) >= 5:
                 matches = matches or SequenceMatcher(None, compact, local_text, autojunk=False).find_longest_match().size / len(compact) >= .8
+            if not matches:
+                # 分行硬字幕可能把短词单列；必须由同帧、相邻且同列的完整词组提供证据。
+                for buddy in rows:
+                    other = buddy['box']
+                    if (buddy is row or buddy['confidence'] < .75 or
+                            max(box[3], other[3])-min(box[1], other[1]) > .18 or
+                            min(box[2], other[2]) <= max(box[0], other[0])):
+                        continue
+                    combined = tokens | _words(buddy['text'])
+                    buddy_tokens = _words(buddy['text'])
+                    grouped = (abs(box[0]-other[0]) <= .03 and
+                               max(box[1],other[1])-min(box[3],other[3]) <= .035 and
+                               buddy_tokens and len(buddy_tokens & local_words)/len(buddy_tokens) >= .5)
+                    if tokens and combined and (len(combined & local_words)/len(combined) >= .6 or grouped):
+                        matches = True
+                        break
+            if not matches and row['confidence'] >= .9:
+                nearby = range(max(0,index-round(fps)), min(len(frames),index+round(fps)+1))
+                matches = any(abs(box[0]-b[0]) < .025 and abs(box[1]-b[1]) < .02
+                              and abs((box[3]-box[1])-(b[3]-b[1])) < .015
+                              for j in nearby for b in evidence[j])
             if row["confidence"] < .75 or not matches:
-                raise ValueError(f"原字幕位置或文字不确定，停止出片：{text[:60]}")
+                raise ValueError(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}")
             if box[3] - box[1] > .08 or box[2] - box[0] > .94:
                 raise ValueError("原字幕字形范围超出可安全修补边界")
             chosen.append(box)
@@ -205,7 +270,7 @@ def _mask(frame, boxes):
                 selected[labels == i] = 255
         ratio = np.count_nonzero(selected) / selected.size
         if not .015 <= ratio <= .45:
-            raise ValueError("原字幕白色字形无法与背景可靠分离，停止出片")
+            raise RepairUnsuitable("原字幕白色字形无法与背景可靠分离")
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad*2+1, pad*2+1))
         mask[y0:y1, x0:x1] |= cv2.dilate(selected, kernel)
     return mask
@@ -224,26 +289,75 @@ def _residual_text(rows, boxes):
     return False
 
 
+def _repair_video(source, rows, directory, fps, w, h, progress):
+    silent, pending = directory / "silent.mp4", directory / "clean.pending.mp4"
+    encoder = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "pipe:0",
+        "-an", "-c:v", "libx264", "-crf", "12", "-preset", "fast", "-pix_fmt", "yuv420p", str(silent)], stdin=subprocess.PIPE)
+    capture = cv2.VideoCapture(str(source))
+    try:
+        with _vision() as verifier:
+            for index, boxes in enumerate(rows):
+                ok, frame = capture.read()
+                if not ok:
+                    raise ValueError("修补时源片提前结束")
+                appearance(frame, boxes)
+                mask = _mask(frame, boxes)
+                fixed = cv2.inpaint(frame, mask, max(2, round(w/90)), cv2.INPAINT_TELEA) if boxes else frame
+                repair_quality(frame, fixed, mask)
+                if boxes:
+                    remaining = _recognize(verifier, fixed)
+                    if _residual_text(remaining, boxes):
+                        raise RepairUnsuitable(f"第 {index} 帧修补后仍可识别出原字幕")
+                encoder.stdin.write(fixed.tobytes())
+                if (index+1) % max(1, round(fps*5)) == 0:
+                    LOG.info('[SourceCaptionRepair] 已修补并复核 %s 帧', index+1)
+                    if progress:
+                        progress('VIDEO_RENDERING')
+        encoder.stdin.close()
+        if encoder.wait(timeout=120) != 0:
+            raise ValueError("原字幕修补编码失败")
+    finally:
+        capture.release()
+        if not encoder.stdin.closed:
+            encoder.stdin.close()
+        if encoder.poll() is None:
+            encoder.terminate()
+            try:
+                encoder.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                encoder.kill()
+                encoder.wait(timeout=5)
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-y", "-i", str(silent),
+        "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-c", "copy", "-movflags", "+faststart", str(pending)], check=True, timeout=120)
+    cleaned = directory / "clean.mp4"
+    pending.replace(cleaned)
+    silent.unlink()
+    return cleaned
+
+
 def prepare_source(source: Path, segments: list[dict], progress=None) -> PreparedCaptions:
     """逐帧扫描全片；中途失败不返回原片，避免调用者静默叠加两套字幕。"""
     source = Path(source)
     w, h, fps, duration = _probe(source)
+    if w < h and h/w > 1920/1080 + .001:
+        raise ValueError("源片比 9:16 更窄，现有布局会裁切，需先人工规范化")
     source_hash = digest(source)
     identity = {"version": VERSION, "source_sha256": source_hash, "vision_sha256": digest(VISION),
-                "implementation_sha256": digest(Path(__file__)),
+                "implementation_sha256": digest(Path(__file__)), "fallback_sha256": digest(FALLBACK),
                 "segments_sha256": hashlib.sha256(json.dumps(segments, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
     directory = source.parent / ".caption-repair" / hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
     plan = directory / "plan.json"
     if plan.is_file():
         data = json.loads(plan.read_text())
-        cleaned = directory / "clean.mp4" if data["center_y"] is not None else source
+        cleaned = directory / "clean.mp4" if data["mode"] == "A" else source
         if data["identity"] == identity and digest(cleaned) == data["clean_sha256"]:
-            return PreparedCaptions(cleaned, data["center_y"], source_hash, plan, tuple(map(tuple, data.get('anchors', []))))
+            return PreparedCaptions(cleaned, data["center_y"], source_hash, plan, tuple(map(tuple, data.get('anchors', []))), data['mode'], data.get('fallback'))
     # 横屏既有布局不在本次 A 方案范围；不改变英语精读卡片模板。
     if w >= h:
         return PreparedCaptions(source, None, source_hash, plan)
-    rows, center = _locate(source, segments, directory, fps, progress)
+    rows, center, observations = _locate(source, segments, directory, fps, progress)
     if digest(source) != source_hash:
         raise ValueError("扫描期间源片发生变更")
     expected = round(duration * fps)
@@ -251,53 +365,37 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
         raise ValueError("原字幕扫描未覆盖完整时长")
     cleaned = source
     if center is not None:
-        silent, pending = directory / "silent.mp4", directory / "clean.pending.mp4"
-        encoder = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-y",
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "pipe:0",
-            "-an", "-c:v", "libx264", "-crf", "12", "-preset", "fast", "-pix_fmt", "yuv420p", str(silent)], stdin=subprocess.PIPE)
-        capture = cv2.VideoCapture(str(source))
+        mode, fallback, reason = "A", None, ""
         try:
-            with _vision() as verifier:
-                for index, boxes in enumerate(rows):
-                    ok, frame = capture.read()
-                    if not ok:
-                        raise ValueError("修补时源片提前结束")
-                    mask = _mask(frame, boxes)
-                    fixed = cv2.inpaint(frame, mask, max(2, round(w/90)), cv2.INPAINT_TELEA) if boxes else frame
-                    if boxes:
-                        remaining = _recognize(verifier, fixed)
-                        if _residual_text(remaining, boxes):
-                            raise ValueError(f"第 {index} 帧修补后原字幕位置仍可识别出文字，停止出片")
-                    encoder.stdin.write(fixed.tobytes())
-                    if (index+1) % max(1, round(fps*5)) == 0:
-                        LOG.info('[SourceCaptionRepair] 已修补并复核 %s 帧', index+1)
-                        if progress:
-                            progress('VIDEO_RENDERING')
-            encoder.stdin.close()
-            if encoder.wait(timeout=120) != 0:
-                raise ValueError("原字幕修补编码失败")
-        finally:
-            capture.release()
-            if not encoder.stdin.closed:
-                encoder.stdin.close()
-            if encoder.poll() is None:
-                encoder.terminate()
-                try:
-                    encoder.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    encoder.kill()
-                    encoder.wait(timeout=5)
-        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-y", "-i", str(silent),
-            "-i", str(source), "-map", "0:v:0", "-map", "1:a?", "-c", "copy", "-movflags", "+faststart", str(pending)], check=True, timeout=120)
-        cleaned = directory / "clean.mp4"
-        pending.replace(cleaned)
-        silent.unlink()
-    if identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION):
+            cleaned = _repair_video(source, rows, directory, fps, w, h, progress)
+        except RepairUnsuitable as exc:
+            # 仅可靠定位后的外观/质量失败可评估 B；I/O、OCR、编码异常继续阻断。
+            LOG.info("[SourceCaptionFallback] A 不适用，整片从原片评估 B：%s", exc)
+            cleaned, mode, reason = source, "B", str(exc)
+            fallback = fallback_geometry(rows, observations, h, fps)
+    else:
+        mode, fallback, reason = "NONE", None, "未检测到中央硬字幕"
+    if identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION) or identity['fallback_sha256'] != digest(FALLBACK):
         raise ValueError('处理期间字幕实现发生变化，不能签发处理计划')
     anchors = _anchors(rows, fps)
     _write(plan, {"identity": identity, "center_y": center, "anchors": anchors, "frames": len(rows), "fps": fps,
-                  "canvas": [w, h], "crop": False, "extra_subtitle_panel": False, "clean_sha256": digest(cleaned)})
-    return PreparedCaptions(cleaned, center, source_hash, plan, anchors)
+                  "canvas": [w, h], "crop": False, "extra_subtitle_panel": False, "clean_sha256": digest(cleaned),
+                  "mode": mode, "reason": reason, "fallback": fallback, "selected": rows})
+    return PreparedCaptions(cleaned, center, source_hash, plan, anchors, mode, fallback)
+
+
+def fallback_source(source, prepared, reason):
+    """A 排版不合格时整片回到原片；保留 A 的证据，不覆盖旧计划。"""
+    if prepared.mode != 'A' or digest(source) != prepared.source_hash:
+        raise ValueError('不能从未知状态退化到 B')
+    data = json.loads(prepared.plan.read_text())
+    observations = json.loads((prepared.plan.parent/'ocr.json').read_text())['observations']
+    geometry = fallback_geometry(data['selected'], observations, data['canvas'][1], data['fps'])
+    data.update(mode='B', reason=str(reason), fallback=geometry, clean_sha256=digest(source))
+    plan = prepared.plan.with_name('fallback-plan.json')
+    _write(plan, data)
+    return PreparedCaptions(Path(source), prepared.center_y, prepared.source_hash, plan,
+                            prepared.anchors, 'B', geometry)
 
 
 def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaptions):
@@ -306,7 +404,8 @@ def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaption
     _write(output.with_suffix(".captions.json"), {"version": VERSION, "source_sha256": digest(source),
         "output_sha256": digest(output), "ass_sha256": digest(ass), "plan": str(prepared.plan.resolve()),
         "plan_sha256": digest(prepared.plan), "implementation_sha256": digest(Path(__file__)),
-        "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "vision_sha256": digest(VISION)})
+        "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "vision_sha256": digest(VISION),
+        "fallback_sha256": digest(FALLBACK), "mode": prepared.mode})
 
 
 def render_receipt_matches(output: Path, source: Path) -> bool:
@@ -319,6 +418,7 @@ def render_receipt_matches(output: Path, source: Path) -> bool:
             and data["output_sha256"] == digest(output) and data["ass_sha256"] == digest(source.with_suffix(".ass"))
             and data["plan_sha256"] == digest(Path(data["plan"]))
             and data['renderer_sha256'] == digest(Path(__file__).with_name('vertical_processor.py'))
+            and data["fallback_sha256"] == digest(FALLBACK)
             and data["implementation_sha256"] == digest(Path(__file__)) and data["vision_sha256"] == digest(VISION))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return False

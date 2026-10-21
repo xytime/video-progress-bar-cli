@@ -32,6 +32,7 @@
 | 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
 | 2.6.0   | 2026-07-29 | Codex | 优化竖版头部标题：Noto/思源系字体优先、动态两行排版、强调色与 drawtext expansion 防护 |
 | 2.6.1   | 2026-07-29 | Codex | 竖版渲染固定单线程 H.264 输入解码，避免部分 60fps 源在多线程解码时偶发丢宏块 |
+| 2.8.0   | 2026-10-21 | Codex | 全片 A/B 分流；B 从原片按同期边界排版并全片统一方向，字号及实际字体宽度门禁。 |
 | 2.7.0   | 2026-10-21 | Codex | 接入 A 方案逐帧硬字幕修补、原位双语与成片凭证；不新增字幕区。 |
 | 2.6.2   | 2026-08-27 | Codex | 透传字幕阶段心跳回调至通用字幕处理器 |
 """
@@ -433,8 +434,17 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         """Override to adjust subtitle vertical position (MarginV) and font size"""
         # Store segments for TTS generation later
         self.segments = segments
-        from .burned_caption_repair import prepare_source, caption_spans
+        from .burned_caption_repair import prepare_source, fallback_source, RepairUnsuitable
         self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
+        try:
+            return self._build_ass_file(segments)
+        except RepairUnsuitable as exc:
+            self._prepared_captions = fallback_source(self.input_path, self._prepared_captions, exc)
+            return self._build_ass_file(segments)
+
+    def _build_ass_file(self, segments):
+        from .burned_caption_repair import caption_spans, RepairUnsuitable
+        from .source_caption_fallback import place_fallback, caption_width
         in_place = self._prepared_captions.center_y is not None
         
         # Initialize ASS file
@@ -442,14 +452,14 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         subs.info['PlayResX'] = VerticalLayout.CANVAS_WIDTH
         subs.info['PlayResY'] = VerticalLayout.CANVAS_HEIGHT
 
-        font_size = self.font_size
+        font_size = min(self.font_size, 64) if self._prepared_captions.mode == "B" else self.font_size
         
         # [Gemini_3.5_Flash_planning] 英文实际渲染字号缩水至 0.71，中文设为 0.81 以获得最佳比例
         en_size = int(font_size * 0.71)
         zh_size = int(font_size * 0.81)
         
         # Calculate dynamic wrap width
-        safe_width = int(VerticalLayout.CANVAS_WIDTH * 0.96)
+        safe_width = 940 if in_place else int(VerticalLayout.CANVAS_WIDTH * 0.96)
         
         # [Gemini_3.5_Flash_planning] 计算折行限制：中文等宽，英文 Georgia 比例字体宽度因子设为 0.54 以防溢出
         wrap_width_zh = max(10, int(safe_width / zh_size))
@@ -516,10 +526,12 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         layout = SubtitleLayout(
             en_size=en_size,
             zh_size=zh_size,
-            safe_width=safe_width,
+            safe_width=750 if self._prepared_captions.mode == "B" else safe_width,
             max_height=subtitle_max_height,
             outline=outline,
         )
+        if in_place:
+            layout.spacer_px = 30  # 实际 ASS 的 24pt 透明行也按 1.25 行高计入。
         stylist = SubtitleStylist(layout)
 
         # [Gemini_3.5_Flash_planning] Re-add Default and GlossaryCard styles to subs.styles
@@ -527,7 +539,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             fontsize=font_size,
             primarycolor=pysubs2.Color(255, 210, 63),
             backcolor=bg_color,
-            outlinecolor=bg_color,
+            outlinecolor=pysubs2.Color(0, 0, 0, 0) if in_place else bg_color,
             borderstyle=border_style,
             outline=outline,
             shadow=shadow,
@@ -563,39 +575,66 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         )
         subs.styles["GlossaryCard"] = style_glossary
 
-        for seg in segments:
+        rendered_segments = [stylist.render(en_text=seg.get('text', '').strip().replace('\n', ' '),
+            zh_text=seg.get('zh_text', '').strip().replace('\n', ' '), vocab_items=seg.get('vocab') or {},
+            bilingual=self.bilingual) for seg in segments]
+        def caption_height(rendered):
+            size, heights = rendered.en_size, []
+            for line in rendered.ass_text.split(r"\N"):
+                sizes = re.findall(r"\\fs([0-9.]+)", line)
+                if sizes:
+                    size = float(sizes[-1])
+                heights.append(size*1.25)
+            return sum(heights) + outline*2
+        fallback_positions = None
+        if self._prepared_captions.mode == 'B':
+            # 全片同一方向；每句按同期原字幕包围框定位，避免少数高字幕把全片挤向人脸。
+            heights = [caption_height(r) for r in rendered_segments]
+            if not heights or max(heights) > subtitle_max_height+1:
+                raise VideoProcessingError('B 双语字幕过长，停止出片')
+            widths = [caption_width(r, outline) for r in rendered_segments]
+            if max(widths) > safe_width:
+                raise VideoProcessingError('B 字幕实际字体宽度越界，停止出片')
+            for side in ('above', 'below'):
+                try:
+                    fallback_positions = [place_fallback(self._prepared_captions.fallback, height,
+                        canvas_height=layout_params.new_height, video_y=layout_params.video_y,
+                        start=seg['start'], end=seg['end'], side=side, width=width)[1]
+                        for seg,height,width in zip(segments,heights,widths,strict=True)]
+                    break
+                except ValueError:
+                    fallback_positions = None
+            if fallback_positions is None:
+                raise VideoProcessingError('整片 B 上下均无安全位置，需人工处理')
+            from .burned_caption_repair import _write
+            import json
+            plan = json.loads(self._prepared_captions.plan.read_text())
+            plan['placement'] = dict(side=side, top=min(fallback_positions), height=max(heights),
+                                    center_x=540, width=940, widths=widths, positions=fallback_positions)
+            _write(self._prepared_captions.plan, plan)
+        for segment_index, (seg, rendered) in enumerate(zip(segments, rendered_segments, strict=True)):
             start_ms = int(seg['start'] * 1000)
             end_ms = int(seg['end'] * 1000)
             en_text = seg.get('text', '').strip().replace('\n', ' ')
             zh_text = seg.get('zh_text', '').strip().replace('\n', ' ')
             vocab_items = seg.get('vocab', {})
 
-            # 委托字幕样式和折行给 SubtitleStylist
-            rendered = stylist.render(
-                en_text=en_text,
-                zh_text=zh_text,
-                vocab_items=vocab_items or {},
-                bilingual=self.bilingual,
-            )
-
             event_text = rendered.ass_text
             if in_place:
                 # 依照实际折行及字号计算整组高度，将中英整体置于原字幕中心。
-                heights = []
-                current_size = rendered.en_size
-                for line in event_text.split(r"\N"):
-                    sizes = re.findall(r"\\fs([0-9.]+)", line)
-                    if sizes:
-                        current_size = float(sizes[-1])
-                    heights.append(current_size * 1.25)
-                actual_height = sum(heights)
+                actual_height = caption_height(rendered)
                 if actual_height > subtitle_max_height + 1:
-                    raise VideoProcessingError("原位双语字幕过长，停止出片以避免溢出")
+                    raise RepairUnsuitable("原位双语字幕过长，评估整片 B")
+                if fallback_positions is not None:
+                    top = fallback_positions[segment_index]
+                    subs.events.append(pysubs2.SSAEvent(start=start_ms, end=end_ms,
+                        text=rf"{{\pos(540,{top:.1f})}}" + event_text))
+                    continue
                 for begin, finish, center_y in caption_spans(self._prepared_captions, start_ms/1000, end_ms/1000):
                     center = center_y * layout_params.new_height + layout_params.video_y
                     top = center - actual_height / 2
                     if top < 350 or top + actual_height > 1700:
-                        raise VideoProcessingError("原位字幕超出安全画面范围，停止出片")
+                        raise RepairUnsuitable("原位字幕超出安全画面范围，评估整片 B")
                     subs.events.append(pysubs2.SSAEvent(start=round(begin*1000), end=round(finish*1000),
                         text=rf"{{\pos(540,{top:.1f})}}" + event_text))
             else:

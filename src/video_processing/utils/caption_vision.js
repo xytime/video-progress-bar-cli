@@ -18,11 +18,12 @@ function run() {
             try {
                 const image = $.NSData.alloc.initWithBase64EncodedStringOptions($(line), 0);
                 const request = $.VNRecognizeTextRequest.alloc.init;
+                const faces = $.VNDetectFaceRectanglesRequest.alloc.init;
                 request.recognitionLevel = 0;
                 request.recognitionLanguages = $(['en-US', 'zh-Hans']);
                 request.usesLanguageCorrection = false;
                 const handler = $.VNImageRequestHandler.alloc.initWithDataOptions(image, $({}));
-                if (!handler.performRequestsError($([request]), Ref())) throw Error('VISION_FAILED');
+                if (!handler.performRequestsError($([request, faces]), Ref())) throw Error('VISION_FAILED');
                 const rows = [];
                 for (let i = 0; i < request.results.count; i++) {
                     const observation = request.results.objectAtIndex(i);
@@ -32,7 +33,13 @@ function run() {
                         box: [b.origin.x, 1-b.origin.y-b.size.height,
                               b.origin.x+b.size.width, 1-b.origin.y]});
                 }
-                result = {rows: rows};
+                const faceBoxes = [];
+                for (let i = 0; i < faces.results.count; i++) {
+                    const b = faces.results.objectAtIndex(i).boundingBox;
+                    faceBoxes.push([b.origin.x, 1-b.origin.y-b.size.height,
+                                    b.origin.x+b.size.width, 1-b.origin.y]);
+                }
+                result = {rows: rows, faces: faceBoxes};
             } catch (error) { result = {error: 'VISION_FAILED'}; }
             output.writeData($(JSON.stringify(result) + '\n').dataUsingEncoding($.NSUTF8StringEncoding));
         }
