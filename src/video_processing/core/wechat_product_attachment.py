@@ -1,4 +1,10 @@
-"""商品挂载资格纯规则；候选/预览不占英语世界制作名额。"""
+"""商品挂载资格纯规则；英语世界每条强制挂载，制作顺序仅保留审计。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| english-all-v1 | 2026-10-21 | Codex | 英语世界所有任务必须挂载，覆盖首条、旧包及人工跳过意图。 |
+"""
 from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import math
@@ -6,6 +12,11 @@ import math
 ATTACHMENT_VERSION = 'wechat-product-attachment-v2'
 INTENTS = {'AUTO', 'NONE', 'PRODUCT'}
 STOP_STATES = {'PUBLISHED', 'UNDER_REVIEW', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'UNCERTAIN', 'PUBLISHING'}
+
+
+def requires_bound_product(payload: dict) -> bool:
+    """英语世界绑定要求由可信任务上下文确定，不能用可选标志降级。"""
+    return payload.get('context', {}).get('content_type') == 'ENGLISH_WORLD_SHORT'
 
 
 def validate_intent(intent, product_id=None, product_title=None):
@@ -40,21 +51,13 @@ def attachment_decision(context: dict, production: dict | None = None, *, previe
     intent = context.get('product_intent') or 'AUTO'
     validate_intent(intent, context.get('product_id'), context.get('product_title'))
     source = metrics(context.get('view_count'), context.get('like_count'))
-    if intent == 'NONE':
+    english_world = context.get('content_type') == 'ENGLISH_WORLD_SHORT'
+    if english_world:
+        required, reason = True, 'ATTACH_ENGLISH_ALL'
+    elif intent == 'NONE':
         required, reason = False, 'SKIP_MANUAL_NONE'
     elif intent == 'PRODUCT':
         required, reason = True, 'ATTACH_MANUAL'
-    elif context.get('content_type') == 'ENGLISH_WORLD_SHORT':
-        if production is None:
-            if context.get('legacy_pre_cutover') is True:
-                required, reason = False, 'SKIP_LEGACY_PRE_CUTOVER'
-            elif not preview:
-                raise ValueError('英语世界任务没有正式制作登记，不能在发布时补占首条')
-            else:
-                required, reason = None, 'ENGLISH_FIRST_NOT_REGISTERED'
-        else:
-            required = production['is_first']
-            reason = 'ATTACH_ENGLISH_FIRST' if required else 'SKIP_ENGLISH_LATER'
     elif not context.get('youtube_id'):
         required, reason = False, 'SKIP_METRICS_UNKNOWN'
     elif source['status'] != 'VALID':
@@ -62,6 +65,6 @@ def attachment_decision(context: dict, production: dict | None = None, *, previe
     else:
         required = source['meets_threshold']
         reason = 'ATTACH_THRESHOLD' if required else 'SKIP_BELOW_THRESHOLD'
-    return {'attachment_version': ATTACHMENT_VERSION, 'product_intent': intent,
+    return {'attachment_version': 'wechat-english-all-v1' if english_world else ATTACHMENT_VERSION, 'product_intent': intent,
             'require_product': required, 'reason': reason, 'threshold_percent': 10,
             'metrics': source, 'production': production, 'preview_only': preview}

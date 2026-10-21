@@ -1,4 +1,10 @@
-"""共享任务商品契约：DAL 冻结一次；上传器只消费冻结快照。"""
+"""共享任务商品契约：DAL 冻结一次；上传器只消费冻结快照。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| english-all-v1 | 2026-10-21 | Codex | 英语世界拒绝旧冻结规则，人工商品意图不能覆盖专属快捷英语候选。 |
+"""
 from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -6,7 +12,7 @@ import json
 import hashlib
 import math
 from pathlib import Path
-from video_processing.core.wechat_product_attachment import attachment_decision, STOP_STATES
+from video_processing.core.wechat_product_attachment import attachment_decision, STOP_STATES, requires_bound_product
 from video_processing.core.wechat_product_policy import ProductIdentity, parse_product_policy
 from video_processing.utils.wechat_product_config import load_policy, decision_payload, atomic_json
 from video_processing.utils.wechat_product_catalog import catalog_view
@@ -91,7 +97,7 @@ def selection_from_task(payload: dict):
     context = payload['context']
     keys = ('category', 'source_channel_id', 'content_type', 'product_topic')
     decision = policy.decide(**{k: context.get(k) for k in keys})
-    if payload['product_intent'] == 'PRODUCT':
+    if payload['product_intent'] == 'PRODUCT' and not requires_bound_product(payload):
         identity = ProductIdentity(context['product_id'], context['product_title'])
         decision = replace(decision, reason='MANUAL_EXACT', candidates=(identity,))
     if decision_payload(decision) != payload['product_decision']:
@@ -102,6 +108,8 @@ def selection_from_task(payload: dict):
 def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: Path, *, now=None) -> dict:
     old = db.get_product_task_decision(task_id)
     if old:
+        if requires_bound_product(old) and old.get('attachment_version') != 'wechat-english-all-v1':
+            raise ValueError('英语世界旧冻结决定不符合每条绑定快捷英语的新规则，须重新审核，禁止直接投稿')
         return old
     if context.get('status') in STOP_STATES:
         raise ValueError('已上传/受理或结果不明任务禁止为商品规则重传')
@@ -120,7 +128,7 @@ def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: P
         payload.update(policy_snapshot=json.loads(policy.serialized), config_version=policy.version, config_digest=policy.digest)
         keys = ('category', 'source_channel_id', 'content_type', 'product_topic')
         decision = policy.decide(**{k: context.get(k) for k in keys})
-        if outcome['product_intent'] == 'PRODUCT':
+        if outcome['product_intent'] == 'PRODUCT' and not requires_bound_product(payload):
             # 入队已验证身份；发布时再次验证有效性，不允许默认回退另一商品。
             choices = manual_product_options(policy_path)['products']
             matches = [r for r in choices if r['product_id'] == context['product_id'] and r['title'] == context['product_title']]

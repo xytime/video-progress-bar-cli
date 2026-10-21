@@ -1,6 +1,11 @@
 """商品策略的文件加载、原子激活与运行采用记录。
 
 依赖：CLI/uploader → 本模块 → core.wechat_product_policy；不访问浏览器或数据库。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| english-all-v1 | 2026-10-21 | Codex | 运行采用回执准确记录英语世界的强制绑定要求。 |
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import fcntl
 from datetime import datetime, timezone
 
 from video_processing.core.wechat_product_policy import ProductPolicy, parse_product_policy
+from video_processing.core.wechat_product_attachment import requires_bound_product
 
 
 def _unique_object(pairs):
@@ -94,7 +100,8 @@ def record_adoption(policy: ProductPolicy, decision, evidence_dir: Path, status_
                        publisher_capability=task_decision['publisher_capability'])
     if result is not None:
         payload.update(binding_confirmed=result.binding_confirmed, reason=result.reason,
-                       unbound_confirmed=result.state == 'UNBOUND', binding_required=False)
+                       unbound_confirmed=result.state == 'UNBOUND',
+                       binding_required=bool(task_decision and requires_bound_product(task_decision)))
     atomic_json(evidence_dir / 'product_policy_adoption.json', payload)
     atomic_json(status_path, payload)
 

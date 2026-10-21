@@ -262,11 +262,11 @@ def create_product_settings_router(*, active: Path, status: Path, output: Path,
                 if not source_context.get('production_task_id'):
                     source_context.update(legacy_pre_cutover=True, legacy_review_id=video['review_id'],
                         legacy_manifest_sha256=video['manifest_sha256'], production_task_id='legacy-review:'+video['review_id'])
-            if body.product_alias:
+            if body.product_alias and source_context.get('content_type') != 'ENGLISH_WORLD_SHORT':
                 chosen = parse_product_policy(body.config).products[body.product_alias].identity
                 source_context.update(product_intent='PRODUCT', product_id=chosen.product_id, product_title=chosen.title)
                 decision = replace(decision, candidates=(chosen,), reason='MANUAL_EXACT')
-            elif source_context.get('product_intent') == 'PRODUCT':
+            elif source_context.get('product_intent') == 'PRODUCT' and source_context.get('content_type') != 'ENGLISH_WORLD_SHORT':
                 chosen = ProductIdentity(source_context['product_id'], source_context['product_title'])
                 decision = replace(decision, candidates=(chosen,), reason='MANUAL_EXACT')
             task_id = source_context.get('task_id') or source_context.get('production_task_id') or f"pipeline:{source_context.get('youtube_id')}:{source_context.get('slice_index') or 0}"

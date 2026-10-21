@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-all-v1 | 2026-10-21 | Codex | 英语世界固定单一快捷英语候选，不受人工覆盖或全局默认回退影响。 |
 | 1.1.0 | 2026-10-10 | Antigravity | 从真实账号清单核实并固化三本书的商品 ID 与完整名称，提供统一 get_verified_product_catalog。 |
 | 1.0.0 | 2026-10-10 | Codex | 财经/新闻/默认选品，按商品 ID 与完整名称核对，指定商品缺失时回退默认。 |
 """
@@ -189,6 +190,16 @@ class ProductPolicy:
         group, group_reason = "other", "未命中特定类型"
         if self.profiles:
             group, group_reason = classify_video(dict(context), {k: p.channel_ids for k, p in self.profiles.items()})
+        if content_type == 'ENGLISH_WORLD_SHORT':
+            profile = self.profiles.get('english_world')
+            if profile is None or profile.candidates != ('kuaijie_english',):
+                raise ValueError('英语世界必须配置唯一快捷英语商品，不允许其他候选或默认回退')
+            entry = self.products.get('kuaijie_english')
+            if entry is None or not entry.enabled:
+                raise ValueError('英语世界快捷英语商品不存在或已停用')
+            return ProductDecision(ProductRole.DEFAULT, 'ENGLISH_WORLD_REQUIRED', self.version, self.digest,
+                                   (entry.identity,), self.max_attempts, self.timeout_seconds,
+                                   context, 'english_world', group_reason)
         role, rule_id, aliases = ProductRole.DEFAULT, "DEFAULT", ()
         if product_alias is not None:
             rule_id, aliases = "MANUAL", (product_alias,)

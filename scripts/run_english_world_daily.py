@@ -971,7 +971,7 @@ def _product_production_prompt(*, product_intent='AUTO', product_id=None, produc
                      ensure_ascii=False, sort_keys=True)
         + '。该命令会原子写入 product_context/product_production；后续时间线版本必须保留这些字段。'
         '登记失败立即写失败交付请求并停止，不能先完成翻译再补登记，也不能自己编写首条记录。'
-        'AUTO 使用北京时间当天正式开始制作的首条记录，人工 NONE/PRODUCT 不占该名额；'
+        '正式制作顺序仅作审计；每条英语世界在投稿时必须绑定快捷英语，NONE/PRODUCT 不得跳过或换书；'
         '渲染仅传播已有记录到 manifest，投稿器复核数据库，不在投稿时补占名额。'
     )
 

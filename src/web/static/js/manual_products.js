@@ -92,6 +92,7 @@
     const title = task.product_title || decision?.product_title;
     const id = task.product_id || decision?.product_id;
     const labels = {
+      ATTACH_ENGLISH_ALL:'每条英语世界必须绑定快捷英语',
       ATTACH_ENGLISH_FIRST:'英语世界当天首条要求挂载',SKIP_ENGLISH_LATER:'英语世界当天后续不挂载',
       ATTACH_THRESHOLD:'源点赞率达标，要求挂载',SKIP_BELOW_THRESHOLD:'源点赞率低于10%，不挂载',
       SKIP_METRICS_UNKNOWN:'源指标无法证实达标，不挂载',ATTACH_MANUAL:'手动指定商品，要求挂载',

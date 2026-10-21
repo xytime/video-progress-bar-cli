@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-all-v1 | 2026-10-21 | Codex | 英语世界商品失败不得无商品继续，发表前再次强制绑定核验。 |
 | 1.4.0 | 2026-10-12 | Antigravity | 最终核验时清理竞争的旧文章与无挂接回读，防止证据目录复用时相互污染。 |
 | 1.3.0 | 2026-10-12 | Codex | 最终实读回执保留平台选中行的挂载 ID，拒绝前后身份变化。 |
 | 1.2.0 | 2026-10-12 | Codex | 保留逐次选品结果；允许正式挂商品验收显式要求最终绑定，日常降级规则不变。 |
@@ -10,6 +11,7 @@
 """
 from __future__ import annotations
 from pathlib import Path
+from dataclasses import replace
 from time import monotonic
 import time
 import hashlib
@@ -17,6 +19,7 @@ from video_processing.utils.wechat_product_config import atomic_json, record_ado
 from video_processing.utils.wechat_product_task import selection_from_task
 from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline
 from video_processing.utils.wechat_product_waits import ProductWaitStore
+from video_processing.core.wechat_product_attachment import requires_bound_product
 
 
 def _wait_row_ready(row: dict, now: float, generation: str | None) -> bool:
@@ -113,6 +116,7 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
     (evidence_dir / "article_pre_submit_readback.json").unlink(missing_ok=True)
     (evidence_dir / "none_pre_submit_readback.json").unlink(missing_ok=True)
     try:
+        require_bound = require_bound or (payload is not None and requires_bound_product(payload))
         receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text())
         if payload is not None:
             if any(receipt.get(key) != payload.get(key) for key in ('task_id', 'config_version', 'config_digest')):
@@ -175,8 +179,10 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
         result = select_optional_product(decision=decision, picker=picker,
                                          timeout_seconds=decision.timeout_seconds, clock=clock,
                                          selection_block_reason=payload.get('selection_block_reason'))
-        # required 沿用冻结任务的挂接意图；binding_required 明确本次无强制绑定门槛。
-        receipt = dict(required=True, binding_required=False, binding_confirmed=result.binding_confirmed,
+        binding_required = requires_bound_product(payload)
+        if binding_required and result.state == 'UNBOUND':
+            result = replace(result, state='BLOCKED', reason='ENGLISH_WORLD_PRODUCT_REQUIRED')
+        receipt = dict(required=True, binding_required=binding_required, binding_confirmed=result.binding_confirmed,
                        unbound_confirmed=result.state == 'UNBOUND', state=result.state,
                        reason=result.reason, actual_product_id=result.actual.product_id if result.actual else None,
                        actual_platform_product_id=getattr(picker, 'binding_platform_product_id', None) if result.actual else None,
@@ -192,6 +198,8 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
             if not result.submission_allowed:
                 _record_product_wait(payload, result, evidence_dir, wait_output, artifacts_digest, generation)
         return result.submission_allowed
+    if requires_bound_product(payload):
+        raise ValueError('英语世界任务不允许无商品提交')
     if payload['require_product'] is not False:
         raise ValueError('未知商品决定不能默认跳过')
     budget = _Deadline(10, clock)

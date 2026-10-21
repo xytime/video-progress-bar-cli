@@ -18,6 +18,7 @@
   const note = (message, error = false) => { $('feedback').textContent = message; $('feedback').dataset.error = String(error); };
   const element = (tag, text) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; return el; };
   const attachmentReasons = {
+    ATTACH_ENGLISH_ALL:'每条英语世界必须绑定快捷英语',
     ATTACH_ENGLISH_FIRST:'英语世界当天首条要求挂载',SKIP_ENGLISH_LATER:'英语世界当天后续不挂载',
     ENGLISH_FIRST_NOT_REGISTERED:'尚未登记正式制作顺序',ATTACH_THRESHOLD:'源点赞率达到10%，要求挂载',
     SKIP_BELOW_THRESHOLD:'源点赞率低于10%，不挂载',SKIP_METRICS_UNKNOWN:'源指标未知，无法证实达标',
@@ -35,7 +36,7 @@
     const metrics = attachment.metrics || {};
     const rate = metrics.like_rate_percent === null || metrics.like_rate_percent === undefined ? '未知' : `${metrics.like_rate_percent}%`;
     fragment.append(element('p',`源播放数：${knownValue(metrics.view_count)} · 源点赞数：${knownValue(metrics.like_count)} · 源点赞率：${rate}`),
-      element('p',`指标状态：${{VALID:'有效',UNKNOWN:'缺失',INVALID:'无效'}[metrics.status] || '未确认'}。${attachment.product_intent === 'NONE' || attachment.product_intent === 'PRODUCT' ? '人工意图优先，不受自动首条和点赞率规则影响。' : String(attachment.reason || '').includes('ENGLISH') ? '英语世界按当天正式制作首条，不使用点赞率筛选。' : '其他自动 YouTube 视频按未四舍五入的比例判断，阈值10%。'}`));
+      element('p',`指标状态：${{VALID:'有效',UNKNOWN:'缺失',INVALID:'无效'}[metrics.status] || '未确认'}。${attachment.reason === 'ATTACH_ENGLISH_ALL' ? '英语世界每条绑定快捷英语，人工跳过、指定其他书及全局默认均不能覆盖。' : attachment.product_intent === 'NONE' || attachment.product_intent === 'PRODUCT' ? '普通视频的人工意图优先。' : '其他自动 YouTube 视频按未四舍五入的比例判断，阈值10%。'}`));
     const production = attachment.production;
     if (production) {
       const first = production.first_task_id || (production.is_first === true ? production.task_id : null);
