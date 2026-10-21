@@ -13,11 +13,18 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
+from types import SimpleNamespace
 
 # Adjust path to import correctly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../src')))
 
 from video_processing.processors.vertical_processor import VerticalCaptionProcessor
+
+@pytest.fixture(autouse=True)
+def prepared_caption_input(monkeypatch):
+    # 本组只验证烧录后的 TTS 分支；定位/修补在专门的字幕测试中验证。
+    monkeypatch.setattr(VerticalCaptionProcessor, '_prepared_captions', SimpleNamespace(video=Path('test_video.mp4')), raising=False)
+
 
 class TestVerticalProcessorTTSAutoActivation:
     """[Gemini_3.5_Flash_planning] 测试 VerticalCaptionProcessor 的 TTS 自动激活与引擎降级逻辑"""

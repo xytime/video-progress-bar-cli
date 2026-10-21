@@ -32,6 +32,7 @@
 | 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
 | 2.6.0   | 2026-07-29 | Codex | 优化竖版头部标题：Noto/思源系字体优先、动态两行排版、强调色与 drawtext expansion 防护 |
 | 2.6.1   | 2026-07-29 | Codex | 竖版渲染固定单线程 H.264 输入解码，避免部分 60fps 源在多线程解码时偶发丢宏块 |
+| 2.7.0   | 2026-10-21 | Codex | 接入 A 方案逐帧硬字幕修补、原位双语与成片凭证；不新增字幕区。 |
 | 2.6.2   | 2026-08-27 | Codex | 透传字幕阶段心跳回调至通用字幕处理器 |
 """
 import logging
@@ -432,6 +433,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         """Override to adjust subtitle vertical position (MarginV) and font size"""
         # Store segments for TTS generation later
         self.segments = segments
+        from .burned_caption_repair import prepare_source, caption_spans
+        self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
+        in_place = self._prepared_captions.center_y is not None
         
         # Initialize ASS file
         subs = pysubs2.SSAFile()
@@ -488,6 +492,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             outline = max(outline, 10)
             
         shadow = config.get("shadow", 0)
+        if in_place:
+            border_style, outline, shadow = 1, 3.5, 1
+            bg_color = pysubs2.Color(0, 0, 0, 255)
 
         # [Claude_Sonnet_4.6_Thinking_planning] 字幕区顶部位置和最大可用高度（在 outline 确定后计算）：
         # 竖屏输入：Y=1200，GlossaryCard 顶部约 Y=1532，留 32px 安全边 → max_height=300px
@@ -504,6 +511,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             subtitle_max_height = max(200, GLOSSARY_EXPECTED_TOP - 32 - subtitle_top_y)
         else:
             subtitle_max_height = max(200, int(font_size * 3.5) + outline * 2 - 20)  # [Gemini_3.5_Flash_planning] Fixed syntax error by adding closing parenthesis
+        if in_place:
+            subtitle_max_height = 300
         layout = SubtitleLayout(
             en_size=en_size,
             zh_size=zh_size,
@@ -569,11 +578,31 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 bilingual=self.bilingual,
             )
 
-            evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=rendered.ass_text)
-            subs.events.append(evt)
+            event_text = rendered.ass_text
+            if in_place:
+                # 依照实际折行及字号计算整组高度，将中英整体置于原字幕中心。
+                heights = []
+                current_size = rendered.en_size
+                for line in event_text.split(r"\N"):
+                    sizes = re.findall(r"\\fs([0-9.]+)", line)
+                    if sizes:
+                        current_size = float(sizes[-1])
+                    heights.append(current_size * 1.25)
+                actual_height = sum(heights)
+                if actual_height > subtitle_max_height + 1:
+                    raise VideoProcessingError("原位双语字幕过长，停止出片以避免溢出")
+                for begin, finish, center_y in caption_spans(self._prepared_captions, start_ms/1000, end_ms/1000):
+                    center = center_y * layout_params.new_height + layout_params.video_y
+                    top = center - actual_height / 2
+                    if top < 350 or top + actual_height > 1700:
+                        raise VideoProcessingError("原位字幕超出安全画面范围，停止出片")
+                    subs.events.append(pysubs2.SSAEvent(start=round(begin*1000), end=round(finish*1000),
+                        text=rf"{{\pos(540,{top:.1f})}}" + event_text))
+            else:
+                subs.events.append(pysubs2.SSAEvent(start=start_ms, end=end_ms, text=event_text))
 
             # GlossaryCard 词汇释义区
-            if vocab_items and self.bilingual:
+            if vocab_items and self.bilingual and not in_place:
                 # [Claude_Opus_4.6_Thinking_planning] 传入 default_gloss_size 和 en_size，
                 # build_glossary_text 内部取 min() 确保释义字号始终 ≤ 样式默认值 ≤ 英文字幕字号
                 _default_gloss_size = int(self.font_size * 0.42)
@@ -591,6 +620,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
     def _burn_subtitles(self, ass_path: Path) -> Path:
         """Compose 3-section layout using FFmpeg filter_complex"""
+        if not hasattr(self, "_prepared_captions"):
+            raise ValueError("必须先定位原字幕并生成原位 ASS，再烧录成片")
         
         output_path = self.output_path or self.input_path.parent / f"{self.input_path.stem}_vertical{self.input_path.suffix}"
         self.output_path = output_path
@@ -741,7 +772,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # 部分 60fps H.264 输入在当前 FFmpeg 构建的帧级多线程解码下会偶发丢失宏块；
             # 丢失会被后续缩放/字幕烧录永久写进成片，故在统一渲染入口保守固定为单线程。
             "-threads", "1",
-            "-i", str(self.input_path),
+            "-i", str(self._prepared_captions.video),
         ]
         
         # [Gemini_3.5_Flash_planning] 检测输入视频是否含有音频流
@@ -846,4 +877,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 import shutil
                 shutil.rmtree(_stamp_tmpdir, ignore_errors=True)
 
+        if w < h:
+            from .burned_caption_repair import seal_render
+            seal_render(output_path, self.input_path, ass_path, self._prepared_captions)
         return output_path

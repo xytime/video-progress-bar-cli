@@ -20,7 +20,7 @@ def data():
     return json.loads(SEED.read_text())
 
 @pytest.mark.parametrize('context,group,alias', [
-    ({'content_type':'ENGLISH_WORLD_SHORT','source_channel_id':WALL,'product_topic':'AI'},'english_world','default'),
+    ({'content_type':'ENGLISH_WORLD_SHORT','source_channel_id':WALL,'product_topic':'AI'},'english_world','kuaijie_english'),
     ({'source_channel_id':WALL,'product_topic':'AI'},'wallstreet','finance'),
     ({'source_channel_id':TED,'product_topic':'AI'},'ted','default'),
     ({'product_topic':'AI'},'ai_news','news'),
@@ -33,8 +33,13 @@ def test_group_priority(data, context, group, alias):
     p=parse_product_policy(data); d=p.decide(**context)
     assert d.video_group==group and d.candidates[0]==p.products[alias].identity
     manual=p.decide(**context,product_alias='news')
-    assert manual.video_group==group and manual.reason=='MANUAL'
-    assert manual.candidates[0]==p.products['news'].identity
+    assert manual.video_group==group
+    if group == 'english_world':
+        assert manual.reason=='ENGLISH_WORLD_REQUIRED'
+        assert manual.candidates[0]==p.products['kuaijie_english'].identity
+    else:
+        assert manual.reason=='MANUAL'
+        assert manual.candidates[0]==p.products['news'].identity
 
 
 def test_configured_channels_and_fallback(data):
@@ -45,8 +50,8 @@ def test_configured_channels_and_fallback(data):
     assert p.decide(source_channel_id=WALL).video_group=='wallstreet'
     assert p.decide(source_channel_id=TED).video_group=='ted'
     assert p.decide(source_channel_id='ai-channel').video_group=='ai_news'
-    d=p.decide(content_type='ENGLISH_WORLD_SHORT')
-    assert [x.product_id for x in d.candidates]==[p.products[k].identity.product_id for k in ('finance','news','default')]
+    with pytest.raises(ValueError, match='快捷英语'):
+        p.decide(content_type='ENGLISH_WORLD_SHORT')
     data['max_attempts']=2
     with pytest.raises(ValueError,match='不可达'): parse_product_policy(data)
 
@@ -78,15 +83,15 @@ def api_setup(tmp_path, data):
 def test_save_preview_conflict_and_snapshot(api_setup):
     client,active,status,_=api_setup
     old=load_policy(active); initial=client.get('/api/product-settings').json()
-    draft=deepcopy(initial['config']);draft['profiles']['english_world']['candidates']=['finance']
+    draft=deepcopy(initial['config']);draft['profiles']['ted']['candidates']=['finance']
     preview=client.post('/api/product-settings/preview',json={'config':draft,'video_key':'english:1'}).json()
-    assert preview['video_group']=='english_world' and preview['candidates'][0]['product_id']==old.products['finance'].identity.product_id
+    assert preview['video_group']=='english_world' and preview['candidates'][0]['product_id']==old.products['kuaijie_english'].identity.product_id
     assert not status.exists() and load_policy(active).digest==old.digest
     saved=client.put('/api/product-settings',json={'config':draft,'expected_digest':old.digest})
     assert saved.status_code==200
     assert not saved.json()['status']['adopted_by_last_selection']
-    assert old.decide(content_type='ENGLISH_WORLD_SHORT').candidates[0]==old.products['default'].identity
-    assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0]==old.products['finance'].identity
+    assert old.decide(content_type='ENGLISH_WORLD_SHORT').candidates[0]==old.products['kuaijie_english'].identity
+    assert load_policy(active).decide(source_channel_id=TED).candidates[0]==old.products['finance'].identity
     assert client.put('/api/product-settings',json={'config':draft,'expected_digest':old.digest}).status_code==409
     with pytest.raises(PolicyConflict): save_policy(initial['config'],active,expected_digest=old.digest)
     assert client.post('/api/product-settings/preview',json={'config':draft,'video_key':'gone'}).status_code==404

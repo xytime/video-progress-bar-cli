@@ -111,7 +111,7 @@ def test_stable_final_form_is_only_source_of_submission_product_receipt(tmp_path
     assert product_submission_matches(receipt,task)
     # English validator reads the selection receipt; restore the original final snapshot.
     (evidence/'product_selection_receipt.json').write_text((evidence/'product_pre_submit_readback.json').read_text())
-    assert _product_receipt_is_confirmed(evidence,task)
+    assert not _product_receipt_is_confirmed(evidence,task)  # GENERAL 的可选商品回执不满足英语世界契约。
 
 
 @pytest.mark.parametrize('mutation', ['missing','task_id','config_digest','config_version','required','wrong_id','wrong_title','unstable','not_ready','unknown'])

@@ -117,6 +117,11 @@ VERIFIED_DEFAULT_PRODUCT = ProductIdentity(
     title="思考快与慢 丹尼尔卡尼曼 噪声作者行为经济学诺贝尔经济学奖 快思考慢思考 社会科学经济学心理学",
 )
 
+VERIFIED_KUAIJIE_ENGLISH_PRODUCT = ProductIdentity(
+    "10000006971274",
+    "快捷英语 时文阅读理解24-28期 涵盖小升初-高考 提高阅读题型成绩专项训练书",
+)
+
 
 def get_verified_product_catalog() -> ProductCatalog:
     """返回基于账号实测真实上架商品的不可变目录。"""
@@ -197,6 +202,8 @@ class ProductPolicy:
             entry = self.products.get('kuaijie_english')
             if entry is None or not entry.enabled:
                 raise ValueError('英语世界快捷英语商品不存在或已停用')
+            if entry.identity != VERIFIED_KUAIJIE_ENGLISH_PRODUCT:
+                raise ValueError('快捷英语商品 ID 或完整名称与已核实身份不一致')
             return ProductDecision(ProductRole.DEFAULT, 'ENGLISH_WORLD_REQUIRED', self.version, self.digest,
                                    (entry.identity,), self.max_attempts, self.timeout_seconds,
                                    context, 'english_world', group_reason)

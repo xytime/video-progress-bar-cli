@@ -115,7 +115,7 @@ def test_first_and_later_publishers_receive_frozen_decision_independent_of_like_
     db = PipelineDB(str(tmp_path / 'pipeline.db'))
     monkeypatch.setattr(submitter.settings, 'wechat_product_policy_path', policy(tmp_path / 'products.json'))
     now = datetime(2026, 10, 11, 2, tzinfo=timezone.utc)
-    for index, expected in enumerate(('ATTACH_ENGLISH_FIRST', 'SKIP_ENGLISH_LATER')):
+    for index, expected in enumerate(('ATTACH_ENGLISH_ALL', 'ATTACH_ENGLISH_ALL')):
         timeline = source(index * 40, (index + 1) * 40)
         if index:
             timeline['source_provenance']['like_count'] = 200
@@ -128,7 +128,7 @@ def test_first_and_later_publishers_receive_frozen_decision_independent_of_like_
                 'cover_path': 'cover.jpg', 'cover_provenance_path': 'cover.json'}
         decision = submitter._product_task_decision(db, item)
         assert decision['reason'] == expected
-        assert decision['require_product'] is (index == 0)
+        assert decision['require_product'] is True
         command = submitter._english_world_uploader_command(item, tmp_path / f'evidence{index}',
                                                             product_decision=decision)
         frozen = read_product_task_decision(Path(command[command.index('--product-task-decision') + 1]))
@@ -153,13 +153,14 @@ def test_legacy_whitelist_is_exact_review_and_manifest_without_retroactive_slot(
     db = PipelineDB(str(tmp_path / 'pipeline.db'))
     manifest = tmp_path / 'historical.manifest.json'
     manifest.write_text(json.dumps(source()), encoding='utf-8')
+    monkeypatch.setattr(submitter.settings, 'wechat_product_policy_path', policy(tmp_path / 'products.json'))
     raw = manifest.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     monkeypatch.setattr(db, 'is_legacy_product_review',
                         lambda review_id, sha: (review_id, sha) == ('legacy-item', digest), raising=False)
     item = {'id': 'legacy-item', 'manifest_path': str(manifest), 'manifest_sha256': digest}
     decision = submitter._product_task_decision(db, item)
-    assert decision['require_product'] is False and decision['reason'] == 'SKIP_LEGACY_PRE_CUTOVER'
+    assert decision['require_product'] is True and decision['reason'] == 'ATTACH_ENGLISH_ALL'
     assert decision['task_id'] == 'legacy-review:legacy-item'
     assert manifest.read_bytes() == raw and db.get_product_production(production_task_id(source())) is None
     # 只有清单缺 context 才允许白名单；已存在但登记缺失的上下文不可降级。
@@ -346,7 +347,7 @@ def test_ambiguous_product_wait_cannot_restore_approval(tmp_path, mutation):
 
 
 @pytest.mark.parametrize('required,mutation,expected', [
-    (True, None, 'UNDER_REVIEW'), (False, None, 'UNDER_REVIEW'),
+    (True, None, 'UNDER_REVIEW'), (False, None, 'UNCERTAIN'),
     (True, 'missing', 'UNCERTAIN'), (False, 'missing', 'UNCERTAIN'),
     (True, 'actual_product_id', 'UNCERTAIN'), (True, 'actual_title', 'UNCERTAIN'),
     (True, 'task_id', 'UNCERTAIN'), (False, 'task_id', 'UNCERTAIN'),
@@ -373,9 +374,9 @@ def test_product_receipt_conflicts_preserve_native_id_and_stop_reupload(tmp_path
     (evidence / 'original_declaration_receipt.json').write_text(json.dumps({
         'required': False, 'requested': False, 'applied_in_ui': False, 'ui_state': 'NOT_DECLARED',
     }), encoding='utf-8')
-    decision = {'require_product': required, 'task_id': 'english-world:current-task', 'config_digest': 'frozen-digest',
+    decision = {'attachment_version': 'wechat-english-all-v1', 'require_product': required, 'task_id': 'english-world:current-task', 'config_digest': 'frozen-digest',
                 'product_decision': {'candidates': [{'product_id': '12345', 'title': '完整书名'}]}}
-    receipt = {'required': required, 'task_id': decision['task_id'], 'config_digest': decision['config_digest'],
+    receipt = {'binding_required': True, 'required': required, 'task_id': decision['task_id'], 'config_digest': decision['config_digest'],
                'binding_confirmed': required, 'unbound_confirmed': not required}
     if required:
         receipt.update(actual_product_id='12345', actual_title='完整书名')

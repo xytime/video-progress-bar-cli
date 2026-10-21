@@ -1,10 +1,16 @@
-"""商品目录合并及异常隔离；夹具不依赖运营配置或真实库存。"""
+"""商品目录合并及异常隔离；夹具不依赖运营配置或真实库存。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-21 | Codex | 目录数量随夹具计算，任意候选编辑以 TED 验证，英语世界固定快捷英语 |
+"""
 from copy import deepcopy
 import json
 import pytest
 
 from video_processing.utils.wechat_product_catalog import catalog_view
-from tests.unit.test_wechat_product_groups import api_setup, data
+from tests.unit.test_wechat_product_groups import api_setup, data, TED
 
 
 def snapshot(products):
@@ -21,24 +27,26 @@ def install_catalog(active, products):
 
 
 def test_catalog_not_limited_to_three_and_read_does_not_write(api_setup):
-    client, active, _, _ = api_setup
+    client, active, _, records = api_setup
+    records.append(dict(preview_key='video:ted', youtube_id='ted', channel_id=TED,
+                        content_type='GENERAL', state='PENDING'))
     original = active.read_bytes()
     old = json.loads(original)
     products = list(old['products'].values()) + [dict(product_id=str(80000000000000+i), title=f'新增书籍 {i}') for i in range(120)]
     install_catalog(active, products)
     result = client.get('/api/product-settings').json()
-    assert len(result['catalog']['products']) == 123
+    assert len(result['catalog']['products']) == len(products)
     assert result['catalog']['live_verified'] is False
     assert result['catalog']['completeness'] == 'unverified'
     assert result['config'] == old and active.read_bytes() == original
     draft = deepcopy(result['config']); draft['products'] = result['catalog']['products']
-    draft['profiles']['english_world']['candidates'] = ['product_80000000000119']
+    draft['profiles']['ted']['candidates'] = ['product_80000000000119']
     response = client.put('/api/product-settings', json={'config':draft,'expected_digest':result['status']['saved_digest']})
     assert response.status_code == 200
     reloaded = client.get('/api/product-settings').json()['config']
-    preview = client.post('/api/product-settings/preview', json={'config':reloaded,'video_key':'english:1'}).json()
+    preview = client.post('/api/product-settings/preview', json={'config':reloaded,'video_key':'video:ted'}).json()
     assert preview['candidates'][0]['product_id'] == '80000000000119'
-    assert reloaded['profiles']['ted'] == old['profiles']['ted']
+    assert reloaded['profiles']['english_world'] == old['profiles']['english_world']
     assert reloaded['default_candidates'] == old['default_candidates']
 
 
@@ -49,7 +57,7 @@ def test_partial_keeps_missing_disabled_and_same_title_distinct_ids(tmp_path, da
     catalog=json.loads(path.read_text());catalog['completeness']='partial';catalog['items'][0]['stock']=0
     path.write_text(json.dumps(catalog))
     result=catalog_view(path,data['products'])
-    assert not result['error'] and len(result['products'])==5
+    assert not result['error'] and len(result['products'])==len(data['products']) + len(rows)
     assert result['products']['news']['enabled'] is False
     assert result['items'][0]['stock']==0 and result['items'][1]['stock'] is None
 

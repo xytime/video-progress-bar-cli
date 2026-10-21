@@ -18,10 +18,12 @@ def record(**values):
 
 
 def test_history_restore_new_version_preserves_old_snapshot(api_setup):
-    client, active, status, _ = api_setup
+    client, active, status, records = api_setup
+    records.append(dict(preview_key='video:ted', youtube_id='ted', view_count=100, like_count=50,
+                        channel_id='UCAuUUnT6oDeKwE6v1NGQxug', title='TED', content_type='GENERAL', state='PENDING'))
     old = load_policy(active)
     draft = json.loads(old.serialized)
-    draft['profiles']['english_world']['candidates'] = ['finance']
+    draft['profiles']['ted']['candidates'] = ['finance']
     report = client.post('/api/product-settings/impact',json=dict(config=draft,expected_digest=old.digest)).json()
     assert report['changed'] and report['preview_only']
     assert load_policy(active).digest == old.digest and not status.exists()
@@ -34,7 +36,7 @@ def test_history_restore_new_version_preserves_old_snapshot(api_setup):
     assert result.status_code==200
     latest=load_policy(active)
     assert latest.version not in {old.version,new.version}
-    assert latest.decide(content_type='ENGLISH_WORLD_SHORT').candidates==old.decide(content_type='ENGLISH_WORLD_SHORT').candidates
+    assert latest.decide(source_channel_id='UCAuUUnT6oDeKwE6v1NGQxug').candidates==old.decide(source_channel_id='UCAuUUnT6oDeKwE6v1NGQxug').candidates
     assert read_revision(active,old.digest).serialized==old.serialized
     assert len(list_revisions(active))==3
 
@@ -71,13 +73,13 @@ def verified(data):
 
 
 def test_verified_identity_and_same_save_disable_reference(data, api_setup):
-    row=verified(data);data['profiles']['english_world']['candidates']=['new']
-    assert parse_product_policy(data).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0].product_id=='700007'
+    row=verified(data);data['profiles']['ted']['candidates']=['new']
+    assert parse_product_policy(data).decide(source_channel_id='UCAuUUnT6oDeKwE6v1NGQxug').candidates[0].product_id=='700007'
     client,active,_,_=api_setup;digest=load_policy(active).digest
     row['enabled']=False;data['products']['new']['enabled']=False
     res=client.put('/api/product-settings',json=dict(config=data,expected_digest=digest))
     assert res.status_code==422 and '引用' in res.json()['detail']
-    data['profiles']['english_world']['candidates']=['news']
+    data['profiles']['ted']['candidates']=['news']
     assert client.put('/api/product-settings',json=dict(config=data,expected_digest=digest)).status_code==200
 
 

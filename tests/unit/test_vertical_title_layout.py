@@ -78,6 +78,8 @@ def test_vertical_render_uses_single_thread_input_decode(_ffmpeg, mock_run, _val
         Path("source.mp4"), output_path=tmp_path / "output.mp4", title="466%暴涨引爆全球芯片抛售潮",
     )
 
+    from types import SimpleNamespace
+    processor._prepared_captions = SimpleNamespace(video=processor.input_path)
     processor._burn_subtitles(tmp_path / "source.ass")
 
     render_command = mock_run.call_args_list[-1].args[0]

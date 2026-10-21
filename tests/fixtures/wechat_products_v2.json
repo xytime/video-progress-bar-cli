@@ -24,6 +24,13 @@
       "title": "维特根斯坦说逻辑与语言 (英)维特根斯坦著",
       "verified_at": "2026-10-10",
       "verified_source": "docs/handoffs/2026-10-10-wechat-product-link/STATUS.md"
+    },
+    "kuaijie_english": {
+      "enabled": true,
+      "product_id": "10000006971274",
+      "title": "快捷英语 时文阅读理解24-28期 涵盖小升初-高考 提高阅读题型成绩专项训练书",
+      "verified_at": "2026-10-21",
+      "verified_source": "docs/verification/2026-10-21-kuaijie-product-and-caption-findings.md"
     }
   },
   "profiles": {
@@ -35,7 +42,7 @@
     },
     "english_world": {
       "candidates": [
-        "default"
+        "kuaijie_english"
       ],
       "channel_ids": []
     },

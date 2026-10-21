@@ -39,9 +39,9 @@ def test_daily_atomic_scope_retry_and_cross_day(tmp_path):
     low=dict(content_type='ENGLISH_WORLD_SHORT',youtube_id='youtube1234',view_count=100,like_count=1)
     assert attachment_decision(low,first)['require_product']
     second=next(r for r in rows if not r['is_first'])
-    assert not attachment_decision(dict(low,like_count=99),second)['require_product']
-    assert not attachment_decision(dict(low,product_intent='NONE'))['require_product']
-    assert attachment_decision(dict(low,product_intent='PRODUCT',product_id='123',product_title='指定商品'))['reason']=='ATTACH_MANUAL'
+    assert attachment_decision(dict(low,like_count=99),second)['require_product']
+    assert attachment_decision(dict(low,product_intent='NONE'))['require_product']
+    assert attachment_decision(dict(low,product_intent='PRODUCT',product_id='123',product_title='指定商品'))['reason']=='ATTACH_ENGLISH_ALL'
 
 
 def test_migration_auto_and_new_manual_none_slices(tmp_path):
@@ -57,7 +57,7 @@ def test_migration_auto_and_new_manual_none_slices(tmp_path):
 
 def test_none_freezes_without_catalog_dependency_and_stops_submitted(tmp_path):
     db=PipelineDB(str(tmp_path/'db.sqlite'))
-    context=dict(product_intent='NONE',content_type='ENGLISH_WORLD_SHORT',youtube_id='youtube1234',view_count=100,like_count=99)
+    context=dict(product_intent='NONE',content_type='GENERAL',youtube_id='youtube1234',view_count=100,like_count=99)
     value=freeze_task_product_decision(db,'manual:1',context,tmp_path/'missing.json')
     args=write_product_task_arguments(value,tmp_path/'evidence')
     assert read_product_task_decision(Path(args[1]))==value
@@ -65,8 +65,8 @@ def test_none_freezes_without_catalog_dependency_and_stops_submitted(tmp_path):
     assert db.get_product_production('manual:1') is None
     with pytest.raises(ValueError,match='禁止'):
         freeze_task_product_decision(db,'submitted',dict(context,status='UNDER_REVIEW'),tmp_path/'missing.json')
-    with pytest.raises(ValueError,match='制作登记'):
-        freeze_task_product_decision(db,'english:old',dict(context,product_intent='AUTO'),tmp_path/'missing.json')
+    with pytest.raises((ValueError,FileNotFoundError)):
+        freeze_task_product_decision(db,'english:old',dict(context,content_type='ENGLISH_WORLD_SHORT',product_intent='AUTO'),tmp_path/'missing.json')
 
 class EmptyPicker:
     def __init__(self, binding=None): self.binding=binding;self.clears=0
@@ -98,7 +98,7 @@ def product_fixture(tmp_path):
     return active
 
 
-def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_path):
+def test_general_unbound_receipt_rejected_by_english_submission(tmp_path):
     from scripts.submit_english_world_review import _product_receipt_is_confirmed
     from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
     from video_processing.utils.wechat_product_execution import finalize_product_before_submit
@@ -119,7 +119,7 @@ def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_pa
     assert receipt['fallback_reason'] == 'DEFAULT_PRODUCT_NOT_BOUND'
     assert receipt['state'] == 'UNBOUND' and receipt['actual_product_id'] is None
     assert finalize_product_before_submit(task,picker,evidence)
-    assert _product_receipt_is_confirmed(evidence,task)
+    assert not _product_receipt_is_confirmed(evidence,task)
     assert not finalize_product_before_submit(task,picker,evidence,require_bound=True)
     assert not (evidence/'product_pre_submit_readback.json').exists()
     picker.binding=ProductIdentity('wrong','残留商品')
@@ -139,12 +139,12 @@ def test_full_catalog_exact_manual_no_fallback_and_frozen_versions(tmp_path):
     options=manual_product_options(active)
     selected=validate_manual_product(active,'product_700007')
     assert selected['selectable'] and selected['product_id']=='700007'
-    assert len(options['products'])==4
+    assert len(options['products'])==5
     # 旧无账号资料仍显示，但不能把清单中另一件的账号冒充其已核实账号。
     assert not next(r for r in options['products'] if r['alias']=='finance')['selectable']
     db=PipelineDB(str(tmp_path/'db.sqlite'))
     context=dict(product_intent='PRODUCT',product_id=selected['product_id'],product_title=selected['title'],
-                 youtube_id='youtube1234',content_type='ENGLISH_WORLD_SHORT',view_count=100,like_count=1)
+                 youtube_id='youtube1234',content_type='GENERAL',view_count=100,like_count=1)
     task=freeze_task_product_decision(db,'manual',context,active)
     assert task['reason']=='ATTACH_MANUAL' and len(task['product_decision']['candidates'])==1
     assert db.get_product_production('manual') is None
@@ -215,7 +215,7 @@ def test_unknown_account_full_catalog_explicit_reason(tmp_path):
     old=dict(schema_version=1,captured_at=data['captured_at'],source=data['source'],source_sha256='a'*64,completeness='unverified',items=data['pages'][0]['items'])
     path.write_text(json.dumps(old))
     options=manual_product_options(active)
-    assert len(options['products'])==4 and options['account_id'] is None
+    assert len(options['products'])==5 and options['account_id'] is None
     assert next(r for r in options['products'] if r['product_id']=='700007')['selectable']
     assert next(r for r in options['products'] if r['product_id']=='700007')['identity_status']=='HISTORICAL_PENDING_SESSION_CHECK'
     assert not next(r for r in options['products'] if r['alias']=='finance')['selectable']
@@ -438,11 +438,12 @@ def test_legacy_cutover_once_concurrent_restart_hash_bound_and_no_daily_slot(tmp
     again=PipelineDB(str(path))
     assert not again.is_legacy_product_review(new['id'],'a'*64)
     context=dict(content_type='ENGLISH_WORLD_SHORT',legacy_pre_cutover=True,legacy_review_id=old['id'],legacy_manifest_sha256='a'*64)
-    decision=freeze_task_product_decision(again,'legacy-review:'+old['id'],context,tmp_path/'missing')
-    assert decision['reason']=='SKIP_LEGACY_PRE_CUTOVER' and not decision['require_product']
+    active=product_fixture(tmp_path)
+    decision=freeze_task_product_decision(again,'legacy-review:'+old['id'],context,active)
+    assert decision['reason']=='ATTACH_ENGLISH_ALL' and decision['require_product']
     assert again.get_product_production(decision['task_id']) is None
     with pytest.raises(ValueError,match='首次迁移'):
-        freeze_task_product_decision(again,'legacy-review:'+new['id'],dict(context,legacy_review_id=new['id']),tmp_path/'missing')
+        freeze_task_product_decision(again,'legacy-review:'+new['id'],dict(context,legacy_review_id=new['id']),active)
 
 
 def test_concurrent_freeze_one_snapshot_survives_restart(tmp_path):

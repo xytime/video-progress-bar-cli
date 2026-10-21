@@ -118,6 +118,7 @@
 | 3.13.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] _find_downloaded_video 提取为 utils.file_utils.find_downloaded_video 单一真相源（bot 与管线共用），消除 bot 侧分叉实现 |
 | 3.14.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1] _check_censorship 新增并透传 slice_index 到全部 db.* 调用与三处调用点，修复切片审查污染父行/卡死/漏发 |
 | 3.15.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 上传器返回 3(UNCONFIRMED) 时不置 PUBLISHED、不 GC，转 FAILED 并告警人工核验，杜绝「假成功」误删源 |
+| caption-in-place-v1 | 2026-10-21 | Codex | 竖屏 checkpoint 必须绑定源字幕处理凭证，拒绝复用旧叠字成片。 |
 | 3.16.0  | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] 下载格式优先 H.264(avc) 而非 AV1(av01)：imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时间歇性 SIGSEGV，导致 _burn_subtitles 渲染崩溃；新增 vcodec^=avc 选择器分支 + -S vcodec:h264 排序，无 avc 时回退原行为 |
 | 3.17.0  | 2026-06-18 | Claude_Opus_4.8                     | [假成片防护] 渲染 checkpoint 增加 ffprobe 完整性校验：渲染中途崩溃会留下 >1MB 但缺 moov 的截断 _vertical.mp4，旧校验仅看体积 → 误判有效 → 跳过重渲并发布损坏视频；现用 get_video_duration_ffprobe 验证可解析 |
 | 3.17.1  | 2026-09-04 | Codex                                | [缺尾自愈] 缓存校验增加相对源片时长下限；渲染看门狗为正常慢速编码保留 40 分钟，并将未提交的瞬态字幕超时限次回队 |
@@ -4774,6 +4775,10 @@ class PipelineManager:
                             _cache_valid = False
 
                 from .utils.render_source_binding import render_source_matches, bind_render_source, binding_path
+                from .processors.burned_caption_repair import render_receipt_matches
+                if _cache_valid and not render_receipt_matches(vertical, Path(target_file)):
+                    logger.info("[CacheInvalid] %s 缺少有效的原字幕处理凭证，不能复用旧叠字成片。", prefix)
+                    _cache_valid = False
                 if _cache_valid and not render_source_matches(vertical, Path(target_file)):
                     logger.info("[CacheInvalid] %s 加工素材与基础竖版绑定不匹配。", prefix)
                     _cache_valid = False
