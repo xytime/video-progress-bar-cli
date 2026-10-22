@@ -1,5 +1,6 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
+| recovery-v1 | 2026-10-22 | Codex | 人工等待持久登记、统一调度认领及异常防重回读。 |
 # Modification History
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
@@ -4186,7 +4187,7 @@ class PipelineManager:
         return
 
     @guarded("video", lambda self, video, **kw: f"{video['youtube_id']}:{video.get('slice_index', 0)}", waiting=True)
-    def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False, claim=False):
+    def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False, claim=False, recovery_request=None):
         """同视频互斥；就绪提交与重型加工使用不同资源锁。"""
         from .core.task_lease import TaskLease, TaskLeaseBusy
         from .utils.youtube_route import YoutubeRouteError
@@ -4200,44 +4201,65 @@ class PipelineManager:
             with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
                 if not self.db.keyword_processing_allowed(yid, index):
                     return False
-                start_current()
-                if claim and not self.db.claim_video_for_processing(yid, slice_index=index):
+                if recovery_request:
+                    if not self.db.claim_execution_recovery(recovery_request, yid, index, os.getpid()):
+                        return False
+                elif self.db.execution_recovery(yid, index):
                     return False
+                unstarted_wait = False
                 try:
-                    self.db.record_processing_trigger(
-                        yid, getattr(self, "_trigger_source", None), slice_index=index,
-                    )
-                except Exception:
-                    logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)
-                if submission_only or (video.get("preparation_ready") and not preparation_only):
+                    start_current()
+                    if claim and not self.db.claim_video_for_processing(yid, slice_index=index):
+                        return False
                     try:
-                        with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
-                            self._submit_ready_video(video)
-                    except TaskLeaseBusy:
-                        evidence_root = self._OUT_DIR / "wechat_evidence" / prefix
-                        if self._wechat_submission_evidence_paths(prefix) or list(evidence_root.glob("*/submission_receipt.json")):
-                            logger.warning("[%s] 发布资源占用且已有投稿证据，保留状态，禁止回队重发。", prefix)
-                        else:
-                            self.db.release_unstarted_ready_publication_claim(
-                                yid, owner_pid=os.getpid(), slice_index=index,
-                                reason="同账号发布执行者占用，等待释放后自动重试",
-                            )
-                            logger.info("[%s] 发布资源占用；未开始的就绪任务保留缓存等待。", prefix)
-                else:
-                    self.db.update_process_pid(yid, os.getpid(), slice_index=index)
-                    try:
-                        self._prepare_single_video(video, preparation_only=preparation_only)
-                    except YoutubeRouteError as exc:
-                        # 这是本机通路阻断，不是视频质量失败；释放认领并沿用来源冷却。
-                        reason = f"YouTube 自建出口检查未通过；保留缓存并冷却：{exc}"
-                        self.db.set_source_subtitle_preflight(
-                            yid, "UNAVAILABLE", error_msg=reason, slice_index=index,
+                        self.db.record_processing_trigger(
+                            yid, getattr(self, "_trigger_source", None), slice_index=index,
                         )
-                        self.db.update_video_status(yid, "PENDING", error_msg=reason, slice_index=index)
-                        logger.warning("[%s] %s", prefix, reason)
-                    finally:
-                        self.db.update_process_pid(yid, None, slice_index=index)
-                return True
+                    except Exception:
+                        logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)
+                    if submission_only or (video.get("preparation_ready") and not preparation_only):
+                        try:
+                            with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
+                                self._submit_ready_video(video)
+                        except TaskLeaseBusy:
+                            evidence_root = self._OUT_DIR / "wechat_evidence" / prefix
+                            if self._wechat_submission_evidence_paths(prefix) or list(evidence_root.glob("*/submission_receipt.json")):
+                                logger.warning("[%s] 发布资源占用且已有投稿证据，保留状态，禁止回队重发。", prefix)
+                            else:
+                                unstarted_wait = self.db.release_unstarted_ready_publication_claim(
+                                    yid, owner_pid=os.getpid(), slice_index=index,
+                                    reason="同账号发布执行者占用，等待释放后自动重试",
+                                )
+                                logger.info("[%s] 发布资源占用；未开始的就绪任务保留缓存等待。", prefix)
+                    else:
+                        self.db.update_process_pid(yid, os.getpid(), slice_index=index)
+                        try:
+                            self._prepare_single_video(video, preparation_only=preparation_only)
+                        except YoutubeRouteError as exc:
+                            # 这是本机通路阻断，不是视频质量失败；释放认领并沿用来源冷却。
+                            reason = f"YouTube 自建出口检查未通过；保留缓存并冷却：{exc}"
+                            self.db.set_source_subtitle_preflight(
+                                yid, "UNAVAILABLE", error_msg=reason, slice_index=index,
+                            )
+                            self.db.update_video_status(yid, "PENDING", error_msg=reason, slice_index=index)
+                            logger.warning("[%s] %s", prefix, reason)
+                        finally:
+                            self.db.update_process_pid(yid, None, slice_index=index)
+                    return True
+                finally:
+                    if recovery_request:
+                        current_video = self.db.get_video_by_youtube_id(yid, slice_index=index) or {}
+                        status = current_video.get('status', 'UNKNOWN')
+                        if unstarted_wait:
+                            state, message = 'WAITING', '同账号发布资源占用，释放后继续等待调度'
+                        elif preparation_only and current_video.get('preparation_ready') and status == 'PENDING':
+                            state, message = 'WAITING', '成片已就绪，等待统一发布调度'
+                        elif status in ('PUBLISHED', 'UNDER_REVIEW', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'COMPLETED', 'SEGMENTED'):
+                            state, message = 'FINISHED', '管线状态：' + status + '；平台结果以发布账本为准'
+                        else:
+                            state, message = 'ATTENTION', '管线状态：' + status + '；需核验执行结果，不自动重做'
+                        self.db.update_execution_recovery(recovery_request, state, message)
+
         except TaskLeaseBusy:
             logger.info("[%s] 该视频已有执行者，保留原任务归属。", prefix)
             return False

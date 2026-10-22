@@ -68,10 +68,19 @@ window.EngagementRows = (() => {
         ? '恢复为待筛选；当前低于 75 分，本次不会立即启动。'
         : '将启动处理并沿用有效的已有产物。';
     if (!confirm(`${e.action_label}：${v.display_title || v.title || yid}\n\n${consequences}\n后续沿用现有审核与发布流程，符合条件后可能自动发布。`)) return;
+    const originalText = button.textContent;
+    let cancelled = false;
     pending.add(yid); button.disabled = true;
     button.textContent = '正在提交…';
     try {
-      const response = await fetch(`/api/videos/${encodeURIComponent(yid)}/${action}?engagement_version=${encodeURIComponent(e.version)}`,
+      const url = `/api/videos/${encodeURIComponent(yid)}/${action}?engagement_version=${encodeURIComponent(e.version)}`;
+      if (action === 'process') {
+        const result = await window.ManualVideoExecution.execute(url);
+        if (result.cancelled) { cancelled = true; return; }
+        showToast(result.message || '操作已受理，请查看最新状态');
+        return;
+      }
+      const response = await fetch(url,
         {method:'POST'});
       const result = await response.json();
       if (!response.ok || !result.success) {
@@ -83,6 +92,10 @@ window.EngagementRows = (() => {
       showToast(error.message || '请求未确认，请刷新查看；不要重复提交', 'error');
     } finally {
       pending.delete(yid);
+      if (cancelled) {
+        button.disabled = false; button.textContent = originalText; button.focus();
+        return;
+      }
       // 列表读取失败时也不能把旧按钮重新启用。
       button.textContent = '请刷新确认状态';
       await loadVideos();

@@ -99,6 +99,7 @@
   <script src="/static/js/source_publication.js?v=20261022-1"></script>
   <link rel="stylesheet" href="/static/css/dashboard.css?v=20261022-source-age" />
   <link rel="stylesheet" href="/static/css/engagement_rows.css?v=20261020_2" />
+  <link rel="stylesheet" href="/static/css/manual_video_execution.css?v=20261022-recovery" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js"></script>
@@ -145,6 +146,11 @@
     <div class="console-confirm-actions"><button type="button" id="header-pipeline-cancel" onclick="document.getElementById('header-pipeline-confirm').close()" autofocus>取消</button><button type="button" id="header-pipeline-submit" disabled>确认运行完整流水线</button></div>
   </dialog>
 
+  <details id="execution-recovery-panel" class="execution-recovery-panel">
+    <summary>执行与恢复状态</summary>
+    <button type="button" class="console-recovery-refresh" data-recovery-refresh>刷新状态</button>
+    <div data-recovery-content role="status">正在读取执行状态…</div>
+  </details>
   <section class="display-preferences" id="display-preferences-panel" style="display:none; margin-bottom:16px;" aria-label="显示设置">
     <span class="display-heading">显示设置</span>
     <label for="display-theme">外观
@@ -717,7 +723,8 @@
 <script src="/static/js/channel_manager.js?v=20260926_2"></script>
 <script src="/static/js/product_picker.js?v=20261011_1"></script>
 <script src="/static/js/manual_products.js?v=20261011_1"></script>
-<script src="/static/js/engagement_rows.js?v=20261020"></script>
+<script src="/static/js/manual_video_execution.js?v=20261022-recovery"></script>
+<script src="/static/js/engagement_rows.js?v=20261021_cooldown"></script>
 <script>
   function handleCoverError(img) {
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
@@ -740,6 +747,7 @@
     NOT_QUEUED: ['未入队', 'PENDING', '尚未加入该平台发布队列'],
     QUEUED: ['排队中', 'PENDING', '已入队，尚未开始上传'],
     READY_TO_PUBLISH: ['待发布', 'PENDING'],
+    READY_COOLDOWN: ['加工完成 · 等待冷却', 'PENDING'],
     PROCESSING: ['加工准备中', 'COPYWRITING'],
     PUBLISH_PRECHECK: ['发布前校验', 'PENDING'],
     DOWNLOADING: ['下载中', 'DOWNLOADING'],
@@ -784,11 +792,13 @@
   }
 
   function readyPublicationDetails(v) {
-    if (v.display_status !== 'READY_TO_PUBLISH') return '';
+    if (!['READY_TO_PUBLISH', 'READY_COOLDOWN'].includes(v.display_status)) return '';
     const parseUtc = text => new Date(text.includes('T') ? text : text.replace(' ', 'T') + 'Z');
     const ready = v.publication_ready_at ? parseUtc(v.publication_ready_at) : null;
     const minutes = ready && !isNaN(ready) ? Math.max(0, Math.floor((Date.now() - ready.getTime()) / 60000)) : null;
-    const times = [ready ? `就绪：${ready.toLocaleString('zh-CN')}` : '就绪时间待确认',
+    const cooldown = v.wechat_cooldown;
+    const times = [cooldown?.active && cooldown.until ? `冷却至：${new Date(cooldown.until * 1000).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false})}（北京时间），剩余 ${ManualVideoExecution.remaining(cooldown.until - Date.now()/1000)}` : '',
+      ready ? `就绪：${ready.toLocaleString('zh-CN')}` : '就绪时间待确认',
       minutes !== null ? `已等待 ${minutes} 分钟` : '',
       v.publication_last_attempt_at ? `最近尝试：${parseUtc(v.publication_last_attempt_at).toLocaleString('zh-CN')}` : '',
       v.publication_next_attempt_at ? `下次重试：${parseUtc(v.publication_next_attempt_at).toLocaleString('zh-CN')}` : ''].filter(Boolean);
@@ -1955,7 +1965,7 @@
             <td class="info-cell">
               ${isPublished ? `<div class="published-ribbon-tag mobile-only">${currentTab === 'high_likes' ? '已有确认发布记录' : '✅ 已发布成功'}</div>` : ''}
               ${titleBlock}
-              ${channelRow}
+              ${channelRow}${ManualVideoExecution.requestHtml(v.execution_recovery)}
               <div class="product-intent-detail">${escapeHtml(window.ManualProducts.taskText(v))}</div>
               ${platformBadgesHtml}
               ${trimTimelineHtml}
@@ -2480,6 +2490,7 @@
                     parentPublication?.dataset.sourceDate || s.upload_date, '原视频发布')}
                   <span>分段区间: ⏱ <strong>${formatTrimTime(s.trim_start)} - ${formatTrimTime(s.trim_end)}</strong></span> · ${durationChip}
                 </div>
+                ${ManualVideoExecution.requestHtml(s.execution_recovery)}
                 ${errorToggle}
               </td>
               <td class="vt-cell" style="color:var(--text3);">—</td>
@@ -2550,8 +2561,11 @@
       btn.innerHTML = '<span class="inline-spinner"></span>';
     }
     try {
-      const r = await fetch(`/api/videos/${youtubeId}/process`, { method: 'POST' });
-      const res = await readProcessResponse(r);
+      const res = await ManualVideoExecution.execute(`/api/videos/${encodeURIComponent(youtubeId)}/process`);
+      if (res.cancelled) {
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; btn.focus(); }
+        return;
+      }
       showToast('✅ ' + (res.message || '管线已手动启动'));
       loadVideos();
       fetchStats();
@@ -2780,8 +2794,11 @@
       btn.innerHTML = '<span class="inline-spinner"></span>';
     }
     try {
-      const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`, { method: 'POST' });
-      const res = await readProcessResponse(r);
+      const res = await ManualVideoExecution.execute(`/api/videos/${encodeURIComponent(youtubeId)}/slices/${sliceIndex}/process`);
+      if (res.cancelled) {
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; btn.focus(); }
+        return;
+      }
       showToast('✅ ' + (res.message || '分集任务已启动'));
       loadVideos();
       fetchStats();

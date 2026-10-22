@@ -1,5 +1,6 @@
 """数据库访问层 - 管理自动化视频管线的状态与发现列表
 
+| recovery-v1 | 2026-10-22 | Codex | 人工等待持久登记、统一调度认领及异常防重回读。 |
 所有 SQL 操作必须封装在 PipelineDB 方法内。
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
@@ -223,9 +224,10 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
 from .delivery_recovery import DeliveryRecoveryDAL
+from .execution_recovery import ExecutionRecoveryDAL
 
 
-class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(ExecutionRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -295,6 +297,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
             self.initialize_delivery_recovery()
+            self.initialize_execution_recovery()
         self._initializing_schema = False
         from ..core.maintenance import running
         if not self._read_only and running():
@@ -330,6 +333,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
 
             def authorize(action, _arg1, _arg2, _database, _trigger):
                 if action not in mutating:
+                    return sqlite3.SQLITE_OK
+                # 维护期间仅允许登记执行意图；领取/更新任务仍必须通过维护准入。
+                if action == sqlite3.SQLITE_INSERT and _arg1 == 'execution_recovery':
                     return sqlite3.SQLITE_OK
                 if "failure" in admission:
                     return sqlite3.SQLITE_DENY
@@ -4136,6 +4142,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' AND keyword_allowed(source,youtube_id) "
+                "AND NOT EXISTS (SELECT 1 FROM execution_recovery er WHERE er.video_id=processed_videos.id) "
                 "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
                 "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
@@ -5591,7 +5598,8 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
         query = f"""
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
-            WHERE pv.status = 'PENDING' AND ({threshold_sql}) {readiness}
+            WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM execution_recovery er WHERE er.video_id=pv.id) AND ({threshold_sql}) {readiness}
               AND 'pipeline:' || pv.youtube_id || ':' || pv.slice_index NOT IN (SELECT value FROM json_each(?))
               AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
               AND {rate_sql}
@@ -5653,6 +5661,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM execution_recovery er WHERE er.video_id=pv.id)
               AND pv.source IN ('AUTO','KEYWORD') AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)

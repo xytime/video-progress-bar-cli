@@ -1,5 +1,6 @@
 """独立成片发布执行者；不持加工锁，不受发布时间或重负载避让限制。
 
+| recovery-v1 | 2026-10-22 | Codex | 人工等待持久登记、统一调度认领及异常防重回读。 |
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -160,6 +161,8 @@ def main(argv=None) -> int:
                         ensure_wallstreet_worker()
                         from video_processing.utils.delivery_recovery_worker import ensure_delivery_recovery_worker
                         ensure_delivery_recovery_worker(manager.db, ROOT)
+                        from video_processing.utils.execution_recovery_worker import ensure_execution_recovery_worker
+                        ensure_execution_recovery_worker(manager.db, ROOT)
                         attempted = dispatch_once(manager)
                         attempted += dispatch_english_world_once(manager)
                         report({"stage": "IDLE", "current_video": None})

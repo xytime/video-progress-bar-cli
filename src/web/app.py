@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| recovery-v1 | 2026-10-22 | Codex | 人工等待持久登记、统一调度认领及异常防重回读。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
 
 | evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
@@ -221,7 +222,7 @@ app.include_router(create_topic_candidates_router(_create_topic_tracker, port=se
 @app.middleware("http")
 async def maintenance_admission(request, call_next):
     """旧业务写请求共用准入；候选本地操作仍走自己的来源/会话检查。"""
-    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path.startswith("/api/topic-candidates/"):
+    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path.startswith("/api/topic-candidates/") or (request.method == "POST" and re.fullmatch(r"/api/execution-recovery/[A-Za-z0-9_-]+", request.url.path)):
         return await call_next(request)
     try:
         matched = re.fullmatch(r"/api/videos/([^/]+)(?:/slices/(\d+))?/[^/]+", request.url.path)
@@ -245,6 +246,13 @@ async def maintenance_admission(request, call_next):
                     return JSONResponse(status_code=409, content={"detail": "该视频已有操作正在提交，请刷新后查看"})
             return await call_next(request)
     except MaintenanceDenied as exc:
+        matched = re.fullmatch(r"/api/videos/([^/]+)(?:/slices/(\d+))?/process", request.url.path)
+        if request.method == 'POST' and matched:
+            video = db.get_video_by_youtube_id(matched[1], slice_index=int(matched[2] or 0))
+            if video:
+                from video_processing.utils.execution_recovery import execution_status
+                return JSONResponse(content={'success': False, 'code': 'EXECUTION_WAIT',
+                    **execution_status(db, _OUT_DIR, video)})
         return JSONResponse(status_code=503, content={"detail": {"code": exc.code, "message": str(exc)}})
 
 
@@ -1747,6 +1755,11 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
     import time
 
     out = Path(__file__).resolve().parents[2] / "output"
+    from video_processing.core.wechat_request_guard import WeChatRequestDeferred
+    try:
+        cooldown = _wechat_cooldown_guard().cooldown()
+    except WeChatRequestDeferred:
+        cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
     owner = read_lease_owner(canonical_wechat_session_lock_path(out / "wechat_state.json"))
     details = db.get_publication_queue_details([v["id"] for v in videos if v.get("id")])
     try:
@@ -1760,6 +1773,7 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             continue
         detail = details.get(video.get("id"), {})
         reason = video.get("publication_wait_reason") or "等待发布执行者领取"
+        cooldown_waiting = False
         if video.get("publication_review_required"):
             reason = "成片已就绪，等待人工复核通过"
         elif settings.wechat_publishing_paused:
@@ -1768,15 +1782,19 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             reason = f"等待前序切片 {detail['predecessor']} 完成发布"
         elif detail.get("next_attempt_at") and detail['next_attempt_at'] > datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'):
             reason = "上传前失败退避，到期自动重试"
+        elif cooldown["active"]:
+            cooldown_waiting = True
+            previous = "本次执行被平台限流；" if str(video.get("publication_wait_reason", "")).startswith("本次执行被平台限流") else ""
+            reason = previous + "加工完成 · 等待账号冷却：" + cooldown["reason"]
         elif owner:
             reason = f"同账号浏览器占用：{owner.get('video', '其他操作')}（{owner.get('stage', '浏览器操作')}，PID {owner.get('pid', '未知')}）"
         elif not healthy:
             reason = "发布执行者心跳缺失，等待恢复；成片已保留"
         elif runtime.get("current_video") and runtime['current_video'] != video['youtube_id']:
             reason = f"发布执行者正在处理 {runtime['current_video']}（{runtime.get('stage', '发布中')}）"
-        video.update(display_status="READY_TO_PUBLISH", publication_wait_reason=reason,
+        video.update(display_status="READY_COOLDOWN" if cooldown_waiting else "READY_TO_PUBLISH", publication_wait_reason=reason,
                      publication_next_attempt_at=detail.get("next_attempt_at"), publication_owner=owner,
-                     publication_target="视频号")
+                     publication_target="视频号", wechat_cooldown=cooldown)
 
 
 @app.get("/api/videos")
@@ -1819,6 +1837,7 @@ def get_videos(
         like_rate_min=like_rate_min, like_rate_max=like_rate_max,
     )
     for video in videos:
+        video['execution_recovery'] = db.execution_recovery(video['youtube_id'], video.get('slice_index') or 0)
         video['cover_provenance'] = db.get_cover_context(video['youtube_id'], video.get('slice_index') or 0)
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
     _attach_publish_display_fields(videos)
@@ -2744,27 +2763,88 @@ def _check_engagement_action(youtube_id: str, action: str, version: Optional[str
         raise HTTPException(409, "任务状态或操作资格已变化，请刷新列表后重新检查")
 
 
+def _wechat_cooldown_guard():
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    return WeChatRequestGuard(_OUT_DIR / "wechat_state.json")
+
+
+def _manual_cooldown_check(video: dict, action: str, version: str):
+    """登记等待请求；不签发任何跳过账号冷却的凭据。"""
+    from video_processing.utils.execution_recovery import execution_status
+    if action not in ('', 'wait'):
+        return {'success': False, 'error': '单次跳过已停用，请选择恢复后执行此任务'}, None
+    state = execution_status(db, _OUT_DIR, video)
+    if state['request']:
+        return {'success': True, 'waiting': state['request']['state'] == 'WAITING',
+                **state, 'message': state['request']['message']}, None
+    if action == 'wait':
+        index = int(video.get('slice_index') or 0)
+        prefix = video['youtube_id'] + (f'_s{index}' if index else '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', prefix):
+            return {'success': False, 'error': '任务身份无法确认'}, None
+        try:
+            with TaskLease(_OUT_DIR / 'task_locks' / (prefix + '.lock'), stage='登记等待意图', video=prefix):
+                request = db.enqueue_execution_recovery(video['youtube_id'], index)
+        except TaskLeaseBusy:
+            return {'success': False, 'error': '任务已有执行者，请刷新查看，无需重复登记'}, None
+        if not request:
+            return {'success': False, 'error': '任务状态已变化，未登记，请刷新核验'}, None
+        return {'success': True, 'waiting': True, **state, 'request': request,
+                'message': '已登记等待恢复；满足统一调度条件后执行，无需重复点击'}, None
+    if state['blockers']:
+        return {'success': False, 'code': 'EXECUTION_WAIT', **state,
+                'error': '任务尚未满足执行条件'}, None
+    return None, None
+
+
+@app.get('/api/execution-recovery')
+def get_execution_recovery():
+    from video_processing.utils.execution_recovery import recovery_view
+    return recovery_view(db, _OUT_DIR)
+
+
+@app.post('/api/execution-recovery/{youtube_id}')
+def request_execution_recovery(youtube_id: str, slice_index: int = 0):
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        raise HTTPException(404, '任务不存在')
+    reply, _ = _manual_cooldown_check(video, 'wait', '')
+    return reply
+
+
 @app.post("/api/videos/{youtube_id}/process")
-def process_video_now(youtube_id: str, engagement_version: Optional[str] = None):
+def process_video_now(youtube_id: str, engagement_version: Optional[str] = None,
+                      cooldown_action: str = "", cooldown_version: str = ""):
     """立即处理指定视频，忽略分数阈值。"""
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
     _check_engagement_action(youtube_id, "process", engagement_version)
+    if db.execution_recovery(youtube_id):
+        return _manual_cooldown_check(video, cooldown_action, cooldown_version)[0]
     guard_reason = _wechat_submission_guard_reason(video)
     if guard_reason:
         return {"success": False, "error": guard_reason}
     # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频仅供浏览，禁止通过 API 直接触发自动处理管线
     if video.get("source") == "DISCOVERY":
         return {"success": False, "error": "DISCOVERY 来源视频不允许自动处理，请手动添加后再执行"}
+    if video.get("status") != "PENDING":
+        return {"success": False, "error": "任务状态已变化，请刷新列表"}
+    reply, override = _manual_cooldown_check(video, cooldown_action, cooldown_version)
+    if reply is not None:
+        return reply
     if not db.claim_video_for_processing(youtube_id):
+        if override:
+            _wechat_cooldown_guard().revoke_override(override)
         return {"success": False, "error": f"视频当前状态不是 PENDING，或者已被其他进程抢占处理"}
 
     fresh = db.get_video_by_youtube_id(youtube_id)
     if fresh:
+        if override:
+            fresh["_wechat_cooldown_override"] = override
         _trigger_video_async(fresh)
 
-    return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
+    return {"success": True, "message": ("已确认跳过本地冷却，仅尝试一次：" if override else "已在后台启动处理：") + video['title']}
 
 
 @app.post("/api/videos/{youtube_id}/promote")
@@ -3359,7 +3439,8 @@ def retry_slice(youtube_id: str, slice_index: int):
 
 
 @app.post("/api/videos/{youtube_id}/slices/{slice_index}/process")
-def process_slice_now(youtube_id: str, slice_index: int):
+def process_slice_now(youtube_id: str, slice_index: int,
+                      cooldown_action: str = "", cooldown_version: str = ""):
     """[Unknown_Model_planning] 立即处理指定切片子任务，忽略分数。"""
     video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if not video:
@@ -3370,6 +3451,10 @@ def process_slice_now(youtube_id: str, slice_index: int):
             "success": False,
             "error": f"只有 PENDING 状态的切片可以启动（当前：{video['status']}）"
         }
+
+    reply, _ = _manual_cooldown_check(video, cooldown_action, cooldown_version)
+    if reply is not None:
+        return reply
 
     # 检查父视频文件是否下载就绪
     from video_processing.pipeline_manager import PipelineManager
@@ -3388,12 +3473,22 @@ def process_slice_now(youtube_id: str, slice_index: int):
             "error": f"前序切片 {prev_indices} 尚未发布/跳过/手动上传，当前切片已被顺序锁阻断。"
         }
 
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": guard_reason}
+    reply, override = _manual_cooldown_check(video, cooldown_action, cooldown_version)
+    if reply is not None:
+        return reply
     # 抢占任务
     if not db.claim_video_for_processing(youtube_id, slice_index=slice_index):
+        if override:
+            _wechat_cooldown_guard().revoke_override(override)
         return {"success": False, "error": "切片已被其他进程抢占。"}
 
     fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if fresh:
+        if override:
+            fresh["_wechat_cooldown_override"] = override
         _trigger_video_async(fresh)
 
     return {
