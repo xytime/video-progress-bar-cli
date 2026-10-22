@@ -40,6 +40,19 @@ def setup_task(tmp_path, monkeypatch, age=0, luna=False, channel='channel'):
     return queue,task,db
 
 
+def test_auth_wait_preserves_budget_and_deadline_fallback(tmp_path, monkeypatch):
+    queue, task, db = setup_task(tmp_path, monkeypatch, luna=True)
+    monkeypatch.setattr(reconciler, '_agy_auth_ready', lambda db: False)
+    assert reconciler.reconcile() == 0
+    assert not (task.finish_dir / 'antigravity_attempt.json').exists()
+    assert not (task.finish_dir / 'luna_handoff.json').exists()
+    assert db.get_video_by_youtube_id('cover-guard')['status'] == 'AI_COVER_PENDING'
+    # 认证等待不延长原有截止时间；到期后仍可交接既有兜底。
+    assert queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=300,
+                                     now=task.antigravity_deadline + timedelta(seconds=1))
+    assert queue.luna_handoff(task)['reason'] == 'agy_deadline'
+
+
 @pytest.mark.parametrize('recovered,douyin',[(False,False),(False,True),(True,True)])
 def test_target_cover_completion_and_crash_recovery_atomically_enroll(tmp_path,monkeypatch,recovered,douyin):
     from video_processing.db.wallstreet_experiment import CHANNEL_ID

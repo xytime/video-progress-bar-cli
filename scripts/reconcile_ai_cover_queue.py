@@ -29,6 +29,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,11 +45,33 @@ from video_processing.db import PipelineDB
 from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.utils.cover_agy import run_process, QUALITY_VERSION
 from video_processing.utils.provider_circuit import ProviderCircuit
+from video_processing.utils.agy_background_auth import auth_ready, require_auth
 
 
 logger = logging.getLogger(__name__)
 LOCK_PATH = PROJECT_ROOT / "output" / "ai_cover_reconciler.lock"
 _COVER_QUEUE_ACTIVE_STATUS = "AI_COVER_PENDING"
+
+
+def _agy_auth_ready(db: PipelineDB) -> bool:
+    env = build_subprocess_env(include_gemini=False, include_telegram=False)
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
+        env.pop(key, None)
+
+    def notify():
+        from video_processing.telegram_delivery import send_text
+        logger.warning("AGY_AUTH_REQUIRED：请手动运行 agy 登录；后台禁止自动授权，截止后沿用封面兜底")
+        try:
+            send_text(event_type="cover.agy_auth_required", priority="P1", db=db,
+                      text="Antigravity CLI 认证不可用，请在本机终端运行 agy 手动登录。后台已禁止自动弹授权页；每五分钟检查恢复，任务截止后沿用现有封面兜底。",
+                      dedupe_key="agy-cover-auth-required", cooldown_seconds=86400)
+        except Exception:
+            logger.warning("AGY 认证提醒投递异常；状态保存在 output/agy_cover_auth.json")
+
+    return auth_ready(PROJECT_ROOT / "output" / "agy_cover_auth.json",
+                      check=lambda: require_auth(settings.agy_command, cwd=PROJECT_ROOT / "output",
+                                                 env=env, runner=run_process),
+                      notify=notify, now=time.time())
 
 
 def _is_dedicated_cover(cover_path: Path) -> bool:
@@ -356,11 +379,19 @@ def reconcile() -> int:
                     and (task.primary_provider == "agy" or settings.enable_antigravity_cover_fallback)
                     and queue.antigravity_due(task)
                     and not circuit.blocked()
+                    and _agy_auth_ready(db)
                 ):
                     _run_antigravity(task)
                     visual = queue.accepted_visual(task)
                     generated_by = queue.accepted_source(task)
-                    circuit.record(visual is not None)
+                    try:
+                        auth_wait = json.loads((task.finish_dir / "antigravity_attempt.json").read_text()).get("status") == "auth_required"
+                    except (OSError, ValueError):
+                        auth_wait = False
+                    if auth_wait:
+                        _agy_auth_ready(db)
+                    else:
+                        circuit.record(visual is not None)
                 if (visual is None and getattr(settings, "enable_codex_luna_cover_fallback", False)
                         and queue.prepare_luna_handoff(
                             task, circuit_open=circuit.blocked(),

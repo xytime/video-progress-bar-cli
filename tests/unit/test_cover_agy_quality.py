@@ -29,6 +29,7 @@ def test_cli_strips_credentials_and_rejects_failure_envelope(tmp_path, monkeypat
         captured.update(kw)
         return subprocess.CompletedProcess(command, 0, '{"status":"ERROR"}', '')
     monkeypatch.setattr(agy, 'run_process', process)
+    monkeypatch.setattr(agy, 'require_auth', lambda *a, **k: None)
     with pytest.raises(RuntimeError, match='FAILED_ENVELOPE'):
         agy.run_cli(['agy'], cwd=tmp_path, timeout=1)
     assert captured['env'] == {'PATH':'/usr/bin'}

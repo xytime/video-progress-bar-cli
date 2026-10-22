@@ -38,6 +38,7 @@ if str(SRC_ROOT) not in sys.path:
 from cover.creative_brief import resolve_photographic_style
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
 from video_processing.utils.agy_provider import _normalize_agy_model
+from video_processing.utils.agy_background_auth import AgyAuthRequired
 from video_processing.utils.cover_agy import run_cli, review_image, valid_quality, QUALITY_VERSION
 
 
@@ -284,8 +285,10 @@ def _run_task(args: argparse.Namespace, task: AICoverTask, queue: AICoverQueue) 
     except Exception as exc:
         _write_json(
             attempt_path,
-            {"task_id": task.task_id, "provider": "antigravity", "attempt_number": attempt_number,
-             "status": "failed", "stage": stage, "failed_at": _iso(_now()), "error": str(exc)[:1200]},
+            {"task_id": task.task_id, "provider": "antigravity",
+             "status": "auth_required" if isinstance(exc, AgyAuthRequired) else "failed",
+             "attempt_number": attempt_number - 1 if isinstance(exc, AgyAuthRequired) else attempt_number,
+             "stage": stage, "failed_at": _iso(_now()), "error": str(exc)[:1200]},
         )
         claim_path.unlink(missing_ok=True)
         # 外层协调器依赖 stderr；只输出稳定 CLI 分类，其他诊断仍从任务回执读取。

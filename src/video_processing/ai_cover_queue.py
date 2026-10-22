@@ -380,7 +380,7 @@ class AICoverQueue:
                 return False
         except (OSError, ValueError, TypeError):
             return False
-        return (task.primary_provider == "agy" and attempt.get("status") in {"failed", "running"}
+        return (task.primary_provider == "agy" and attempt.get("status") in {"failed", "running", "auth_required"}
                 and count < int(task.payload.get("maximum_generation_attempts", 3)))
 
     @staticmethod

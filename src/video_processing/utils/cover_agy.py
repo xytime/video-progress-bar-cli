@@ -10,9 +10,11 @@ import os
 import re
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
 
 from video_processing.utils.agy_provider import _normalize_agy_model
+from video_processing.utils.agy_background_auth import AgyAuthRequired, background_command, require_auth
 
 QUALITY_VERSION = "agy-cover-quality-v1"
 QUALITY_FLAGS = ("image_inspected", "subject_relevant", "composition_complete", "adequate_detail", "no_severe_artifacts")
@@ -79,7 +81,7 @@ def cli_failure_detail(stdout: str, stderr: str) -> str:
     categories = (
         ("model_configuration", ("invalid model selection", "--effort is not supported", "unknown model")),
         ("location_unsupported", ("user location is not supported", "unsupported location", "unsupported country")),
-        ("authentication", ("not logged into", "unauthenticated", "invalid credentials")),
+        ("authentication", ("not logged into", "not authenticated", "unauthenticated", "invalid credentials")),
         ("quota", ("resource_exhausted", "quota exceeded", "quota exhausted", "rate limit", "too many requests")),
         ("network", ("connection refused", "connection reset", "no such host", "proxyconnect")),
         ("timeout", ("deadline_exceeded", "timed out", "timeout")),
@@ -102,9 +104,21 @@ def run_cli(command: list[str], *, cwd: Path, timeout: float) -> dict:
     env = build_subprocess_env(include_gemini=False, include_telegram=False)
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
         env.pop(key, None)
-    process = run_process(command, cwd=cwd, timeout=timeout, env=env)
+    require_auth(command[0], cwd=cwd, env=env, runner=run_process)
+    # 预检与实际调用之间也可能失去认证；浏览器仍被隔离，认证故障回到人工等待。
+    with tempfile.TemporaryDirectory(prefix='agy-call-', dir=cwd) as directory:
+        log = Path(directory) / 'call.log'
+        guarded = background_command([command[0], '--log-file', str(log), *command[1:]])
+        try:
+            process = run_process(guarded, cwd=cwd, timeout=timeout, env=env)
+        finally:
+            evidence = log.read_text(errors='replace') if log.is_file() else ''
+            if 'triggering interactive OAuth' in evidence or 'Starting OAuth authentication flow' in evidence:
+                raise AgyAuthRequired('AGY_AUTH_REQUIRED: authentication expired during background call')
     stdout, stderr = process.stdout, process.stderr
     if process.returncode:
+        if cli_failure_detail(stdout, stderr) == 'category=authentication':
+            raise AgyAuthRequired('AGY_AUTH_REQUIRED: authentication rejected')
         # 仅持久化稳定分类，禁止回显整条命令、提示词或环境。
         raise RuntimeError(f"AGY_CALL_FAILED: exit={process.returncode}; {cli_failure_detail(stdout, stderr)}")
     try:

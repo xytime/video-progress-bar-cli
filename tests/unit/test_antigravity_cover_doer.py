@@ -119,3 +119,20 @@ def test_worker_lock_prevents_second_generation(tmp_path, monkeypatch):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert worker.run(args) == 0
     assert not (task.finish_dir/'antigravity_attempt.json').exists()
+
+
+def test_auth_expiry_waits_without_consuming_attempt_then_recovers(tmp_path, monkeypatch):
+    from video_processing.utils.agy_background_auth import AgyAuthRequired
+    queue, task, args = inputs(tmp_path)
+    def unavailable(*a):
+        raise AgyAuthRequired('AGY_AUTH_REQUIRED')
+    monkeypatch.setattr(worker, '_generate', unavailable)
+    assert worker.run(args) == 1
+    attempt = json.loads((task.finish_dir/'antigravity_attempt.json').read_text())
+    assert attempt['status'] == 'auth_required' and attempt['attempt_number'] == 0
+    assert queue.antigravity_due(task)
+    assert not queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=300)
+    monkeypatch.setattr(worker, '_generate', generate)
+    monkeypatch.setattr(worker, 'review_image', quality)
+    assert worker.run(args) == 0
+    assert queue.accepted_visual(task)
