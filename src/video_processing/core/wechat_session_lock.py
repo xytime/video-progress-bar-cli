@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 按上下文与闭环双层约束列表预算，保留原生限流即停。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.4.0 | 2026-10-20 | Codex | 会话入口遵守账户共享冷却；上下文首个请求前登记会话并捕获所有原生限流响应。 |
 | 1.3.0 | 2026-10-18 | Antigravity | 新增 SessionLockStatus 与 inspect_wechat_session_lock 结构化判锁接口，消除空字典恒真陷阱。 |
@@ -65,6 +66,8 @@ def guard_wechat_context(context):
             raise WeChatSessionLockBusy(str(exc)) from exc
         session._request_started = True
     context._wechat_rate_limit_seen = False
+    context._wechat_list_request_count = 0
+    context_list_requests = 0
 
     def response_received(response):
         if session.request_guard.observe_response(response):
@@ -77,15 +80,22 @@ def guard_wechat_context(context):
             session._request_count += 1
 
     def route_request(route):
+        nonlocal context_list_requests
         if session._request_limited:
             route.abort()
             return
         from urllib.parse import urlsplit
         path = urlsplit(route.request.url).path
         if path.endswith("/post/post_list"):
-            if session._list_request_count >= 2:
+            from config.settings import settings
+            budget = (settings.wechat_interaction_list_request_budget
+                      if session.purpose in {"评论", "回复"} else 2)
+            contexts = {"评论": 2, "回复": 3}.get(session.purpose, 1)
+            if context_list_requests >= budget or session._list_request_count >= budget * contexts:
                 route.abort()
                 return
+            context_list_requests += 1
+            context._wechat_list_request_count = context_list_requests
             session._list_request_count += 1
         route.continue_()
 

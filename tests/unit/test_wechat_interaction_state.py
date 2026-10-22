@@ -572,3 +572,22 @@ def test_ensure_english_world_wechat_publication_preserves_published_monotonicit
     # 状态必须保持 PUBLISHED，绝不可倒退为 SUBMITTED_BOUND
     assert reentered["state"] == "PUBLISHED"
 
+
+
+@pytest.mark.parametrize('submitted', [False, True])
+def test_deferred_preserves_budget_and_never_retries_submit_intent(tmp_path, submitted):
+    db = PipelineDB(db_path=str(tmp_path / 'deferred.db'))
+    pub = _published_target(db, tmp_path, 'deferred')
+    now = datetime.datetime(2026, 10, 23, tzinfo=UTC)
+    item = db.queue_wechat_interaction(
+        publication_id=pub['id'], platform_post_id='export/post_deferred',
+        interaction_type='POLL_STAND', provider='rule', comment_text='approved text', now=now)
+    claim = db.claim_due_wechat_interaction(now=now)
+    if submitted:
+        assert db.mark_wechat_interaction_submit_intent(item['id'], claim['lease_token'], now=now)
+    result = db.finish_wechat_interaction_attempt(
+        item['id'], claim['lease_token'], result_status='DEFERRED',
+        error_message='评论和回复共用六小时间隔，本轮不访问', now=now)
+    assert result['status'] == ('UNCERTAIN' if submitted else 'RETRY_WAIT')
+    assert result['attempt_count'] == (1 if submitted else 0)
+    assert '六小时' in result['error_message']

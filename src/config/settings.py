@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| interaction-recovery-v1 | 2026-10-23 | Codex | 声明每浏览器上下文的有界作品列表请求预算。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | scheduler-v1 | 2026-10-21 | Codex | 全账号恢复期/稳定期频率上限和增强版优先身份。 |
@@ -147,6 +148,8 @@ def _default_codex_text_command() -> str:
 
 
 class Settings(BaseSettings):
+    wechat_interaction_list_request_budget: int = Field(default=6, ge=2, le=10)
+
     """
     应用全局配置。
     字段来源优先级：环境变量 > .env 文件 > 字段默认值。

@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-22 | Antigravity | 支持绑定任务的单次跳过凭据穿过会话间隔与配额等待。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.0.0 | 2026-10-20 | Codex | 持久保存原生 -360/HTTP 429、会话间隔与指数退避；只记录脱敏端点及业务码。 |
 """
@@ -159,9 +160,11 @@ class WeChatRequestGuard:
             self._limited_recorded = False
             self._save(row, {"event": "COOLDOWN_OVERRIDE_CONSUMED", "video": video})
 
+    def _has_override(self, row) -> bool:
+        return self._override_generation is not None and self._override_generation == self._generation(row)
+
     def _check_session(self, row, now):
-        if ((self._manual_login or not settings.wechat_account_scheduler_enabled) and self._override_generation is not None
-                and self._override_generation == self._generation(row)):
+        if self._has_override(row):
             return
         self._check(row, now)
 
@@ -227,8 +230,10 @@ class WeChatRequestGuard:
             return
         with self._locked():
             row, now = self._read(), time.time()
-            self._check(row, now)  # 调度策略不接受跳过冷却凭据。
-            reason = admission(row, now, purpose, task)
+            bypass = self._has_override(row)
+            if not bypass:
+                self._check(row, now)
+            reason = admission(row, now, purpose, task, bypass_cooldown=bypass)
             self._save(row, {"event": "QUEUED" if not reason else "DEFERRED",
                              "purpose": purpose, "task": task, "caller": caller, "reason": reason})
             if reason:
@@ -286,8 +291,10 @@ class WeChatRequestGuard:
                 schedule = row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})
                 schedule["sessions"].append({"at": now, "purpose": "登录", "task": self.task})
             elif settings.wechat_account_scheduler_enabled:
-                self._check(row, now)
-                reason = admission(row, now, purpose, self.task, consume=True)
+                bypass = self._has_override(row)
+                if not bypass:
+                    self._check(row, now)
+                reason = admission(row, now, purpose, self.task, consume=True, bypass_cooldown=bypass)
                 if reason:
                     self._save(row, {"event": "DEFERRED", "reason": reason, "task": self.task})
                     raise WeChatRequestDeferred(reason)

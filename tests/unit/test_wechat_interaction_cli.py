@@ -267,3 +267,12 @@ def test_generate_comment_handles_corrupt_copy_file(monkeypatch, tmp_path: Path)
     assert draft is not None
     assert "兜底降级标题" in draft.formatted_comment or "Tech" in draft.formatted_comment or len(draft.formatted_comment) > 0
 
+
+
+@pytest.mark.parametrize('options', [
+    {}, {'platform_post_id': 'export/target', 'count': 2},
+    {'platform_post_id': 'export/target', 'dry_run': True},
+    {'platform_post_id': 'export/target', 'reconcile_pending': True},
+])
+def test_one_time_override_requires_single_explicit_live_target(options):
+    assert wechat_commenter.run_interaction(skip_cooldown_once=True, **options) == 2

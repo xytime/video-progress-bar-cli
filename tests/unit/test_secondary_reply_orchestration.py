@@ -423,8 +423,14 @@ def test_author_already_replied_and_unknown_state_block_send(env):
     out = env.orch.submit(_approved(env, "c_phone"))
     assert out.status == "SKIPPED_ALREADY_REPLIED" and env.platform.outbound_requests == []
     env.platform.mode = "state-unknown"
-    out2 = env.orch.submit(_approved(env, "c_unknown"))
-    assert out2.status == "REJECTED_BEFORE_INTENT" and env.platform.outbound_requests == []
+    tid = _approved(env, "c_unknown")
+    out2 = env.orch.submit(tid)
+    assert out2.status == "DEFERRED_AUTHOR_STATE_UNKNOWN" and env.platform.outbound_requests == []
+    assert env.db.get_secondary_reply_task(tid)["status"] == "APPROVED"
+    assert not env.db.check_secondary_reply_idempotency("export/orch", "c_unknown", account_key=TEST_ACCOUNT)
+    env.platform.mode = "success"
+    assert env.orch.submit(tid).status == "VERIFIED"
+    assert len(env.platform.outbound_requests) == 1
 
 
 def test_fixture_drafts_are_refused_unless_explicitly_allowed(env):

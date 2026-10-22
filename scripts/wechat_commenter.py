@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 具名单次补发、空队列目录发现与作品身份恢复。 |
 | 2.5.0 | 2026-09-26 | Codex | 传递完整已发布文案以唯一绑定评论页场景 ID，保留短定位提示。 |
 | 2.5.0 | 2026-09-20 | Antigravity | 增加文案文件读取 UnicodeDecodeError 与非 UTF-8 异常捕获，平稳降级使用标题。 |
 | 2.4.0 | 2026-09-20 | Antigravity | 支持目标 target 显式提供 copy_path 生成文案与定位提示，兼容 English World 作品。 |
@@ -49,7 +50,8 @@ from video_processing.core.maintenance import entry, guarded, gate, running, Mai
 class _LiveServices:
     """将生成、浏览器和通知收口到 runner 的一个注入点。"""
 
-    def __init__(self, db: Any, *, headless: bool, notify_tg: bool) -> None:
+    def __init__(self, db: Any, *, headless: bool, notify_tg: bool,
+                 skip_cooldown_once: bool = False) -> None:
         from video_processing.interaction import InteractionService
 
         self.db = db
@@ -57,6 +59,7 @@ class _LiveServices:
         self.notify_tg = notify_tg
         self.generator = InteractionService()
         self.last_draft = None
+        self.skip_cooldown_once = skip_cooldown_once
 
     @staticmethod
     def _published_title_hint(
@@ -122,7 +125,38 @@ class _LiveServices:
         if hint:
             call_kwargs["video_title"] = hint[:96]
             call_kwargs["published_description"] = hint
-        return BrowserCommenter(headless=self.headless).post_comment(**call_kwargs)
+        commenter = BrowserCommenter(headless=self.headless)
+        if not self.skip_cooldown_once:
+            result = commenter.post_comment(**call_kwargs)
+            self._reconcile_observed_posts(result)
+            return result
+        from video_processing.core.wechat_request_guard import WeChatRequestGuard
+        guard = WeChatRequestGuard(commenter.state_path)
+        cooldown = guard.cooldown()
+        if cooldown['active'] and cooldown['reason'] == '视频号返回限流':
+            return 'DEFERRED', None, '平台限流仍有效，人工补发不覆盖平台限制'
+        token = guard.issue_override(call_kwargs['platform_post_id'], cooldown['version'])
+        try:
+            result = commenter.post_comment(**call_kwargs, cooldown_override=token)
+            self._reconcile_observed_posts(result)
+            return result
+        finally:
+            guard.revoke_override(token)
+
+    def _reconcile_observed_posts(self, result):
+        """复用已结束会话的证据补齐新作品，不增加平台请求或修改本次发送结论。"""
+        if not result[1]:
+            return
+        receipt = Path(result[1]).parent / 'receipt.json'
+        if not receipt.is_file():
+            return
+        from video_processing.interaction.publication_reconciliation import reconcile_observed_publications
+        try:
+            recovered = reconcile_observed_publications(self.db, receipt, PROJECT_ROOT / 'output')
+            if recovered:
+                logger.info('根据评论页完整文案唯一绑定 %s 条已投稿作品', len(recovered))
+        except Exception as exc:
+            logger.warning('作品身份自动对账未完成，保留原记录: %s', exc)
 
     def notify_result(
         self,
@@ -190,8 +224,12 @@ def run_interaction(
     notify_tg: bool = True,
     worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
     count: int = 1,
+    skip_cooldown_once: bool = False,
 ) -> int:
     """运行有限互动 tick；批量模式只消费从未建立互动账本的最新候选。"""
+    if skip_cooldown_once and (not platform_post_id or count != 1 or dry_run or reconcile_pending):
+        logger.error('单次补发必须绑定 --post-id，且不能与批量、dry-run 或自动对账同时使用')
+        return 2
     if not 1 <= int(count) <= MAX_MANUAL_INTERACTION_BATCH_SIZE:
         logger.error("--count 必须介于 1 和 %d", MAX_MANUAL_INTERACTION_BATCH_SIZE)
         return 2
@@ -224,7 +262,8 @@ def run_interaction(
                     logger.error("[Dry Run] 只读账本不可用: %s", exc)
                     return 1
                 raise
-            services = _LiveServices(db, headless=headless, notify_tg=notify_tg and not dry_run)
+            services = _LiveServices(db, headless=headless, notify_tg=notify_tg and not dry_run,
+                                     skip_cooldown_once=skip_cooldown_once)
             if dry_run:
                 if int(count) == 1:
                     result = run_interaction_tick(
@@ -260,6 +299,13 @@ def run_interaction(
                             "视频号互动 tick 结束: status=%s post_id=%s detail=%s",
                             result.status, result.platform_post_id, result.detail or "",
                         )
+                        if result.status == "NO_WORK" and not (platform_post_id or video_id or reconcile_pending):
+                            from video_processing.interaction import BrowserCommenter
+                            from video_processing.interaction.publication_reconciliation import recover_idle_publications
+                            recovered = recover_idle_publications(
+                                db, BrowserCommenter(headless=headless), PROJECT_ROOT / 'output')
+                            if recovered:
+                                logger.info("空队列目录发现恢复 %s 条作品；后续 tick 按正常冷却处理", len(recovered))
                         return 0 if result.status in {
                             "NO_WORK", "NOT_DUE", "COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN"
                         } else 1
@@ -304,6 +350,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="不受 live 开关限制的本地规则预览；数据库只读，不启动 AGY/浏览器/通知")
     parser.add_argument("--no-headless", action="store_true", help="以有头浏览器运行")
     parser.add_argument("--no-tg", action="store_true", help="跳过 Telegram 结果通知")
+    parser.add_argument('--skip-cooldown-once', action='store_true',
+                        help='显式人工补发：仅当前 --post-id 跳过调度冷却，不覆盖平台限流或提交去重')
     args = parser.parse_args()
     sys.exit(run_interaction(
         platform_post_id=args.post_id, video_id=args.video_id,
@@ -311,6 +359,7 @@ def main() -> None:
         refresh_draft=args.refresh_draft,
         dry_run=args.dry_run, headless=not args.no_headless, notify_tg=not args.no_tg,
         count=args.count,
+        skip_cooldown_once=args.skip_cooldown_once,
     ))
 
 

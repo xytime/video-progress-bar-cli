@@ -10,6 +10,7 @@
    调用沙箱 ``AgySecondaryReplyProvider`` 生成双语草稿、落库 ``PENDING_REVIEW`` 并通过 ``TelegramApprovalTransport`` 推送审批卡片。
 
 # Modification History
+| interaction-recovery-v1 | 2026-10-23 | Codex | 所有阶段限定显式作品，零上限不执行，未知作者状态保留批准。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.1.0 | 2026-10-17 | Antigravity | 新增 resolve_published_copy_text 解析落盘文案文件用于评论页场景 ID 绑定与草稿背景摘要 |
@@ -194,6 +195,7 @@ def run_secondary_reply_tick(
     # =========================================================================
     due_uncertain = db.get_due_uncertain_secondary_reply_tasks(
         account_key=acct,
+        platform_post_id=platform_post_id,
         max_attempts=reconcile_cap,
         now_utc=now_dt,
         limit=max(0, int(max_reconcile_per_tick)),
@@ -211,8 +213,9 @@ def run_secondary_reply_tick(
     if settings.enable_wechat_secondary_reply_live_submission:
         approved_tasks = db.get_approved_secondary_reply_tasks(
             account_key=acct,
+            platform_post_id=platform_post_id,
             now_utc=now_dt,
-            limit=max(1, int(max_submit_per_tick)),
+            limit=max(0, int(max_submit_per_tick)),
         )
         sent_count = 0
         for atask in approved_tasks:
@@ -240,6 +243,11 @@ def run_secondary_reply_tick(
                 continue
 
             sub_out = orch.submit(tid)
+            if sub_out.status in ("DEFERRED_SESSION_BUSY", "DEFERRED_AUTHOR_STATE_UNKNOWN"):
+                report["submit_deferred"].append(
+                    {"task_id": tid, "action": "DEFERRED_KEEP_APPROVED", "reason": sub_out.detail}
+                )
+                break
             report["submitted"].append(
                 {
                     "task_id": tid,

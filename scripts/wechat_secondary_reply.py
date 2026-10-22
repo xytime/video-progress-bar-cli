@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 具名单次恢复入口和严格的单作品操作上限。 |
 | 1.7.0 | 2026-10-17 | Antigravity | 接入 M3.5 tick 定时周期子命令、默认 TelegramApprovalTransport、持久化证据目录与 DB 作品标题回填 (CR-01/CR-02/CR-04) |
 | 1.6.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 PipelineDB.delete_secondary_reply_task；拆分 request-approval 与 approve-callback 审批入口 |
 | 1.5.0 | 2026-10-17 | Codex | 完善 main() 返回码保护与 verify-platform / calibrate-dom 统一集成测试支持 (M3) |
@@ -282,7 +283,10 @@ def _build_real_platform(args, db: Optional[PipelineDB] = None):
     finder = (settings.wechat_reply_author_finder_id or "").strip()
     if not finder:
         raise SystemExit("AUTHOR_FINDER_ID_NOT_CONFIGURED: 请配置 wechat_reply_author_finder_id")
-    adapter = SecondaryReplyBrowserAdapter(headless=not getattr(args, "headed", False))
+    adapter = SecondaryReplyBrowserAdapter(
+        headless=not getattr(args, "headed", False),
+        manual_retry_post_id=(args.post_id if getattr(args, 'skip_cooldown_once', False) else ''),
+    )
     cli_title = getattr(args, "video_title", "") or ""
     evidence_dir = getattr(args, "evidence_dir", None) or ops.DEFAULT_EVIDENCE_DIR
 
@@ -344,7 +348,14 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_T
     parser.add_argument("--max-submit", type=int, default=1, help="tick：单次最多发送 APPROVED 条数")
     parser.add_argument("--scan-posts", type=int, default=None, help="tick：单次最多扫描作品数")
     parser.add_argument("--max-drafts", type=int, default=None, help="tick：单次最多生成草稿数")
+    parser.add_argument('--skip-cooldown-once', action='store_true',
+                        help='人工恢复：仅 --post-id 一次工作流跳过调度冷却，平台限流不覆盖')
     args = parser.parse_args(argv)
+    if args.skip_cooldown_once and args.scan_posts is None:
+        args.scan_posts = 1
+    if args.skip_cooldown_once and (args.command != 'tick' or not args.post_id or args.max_submit > 1
+                                    or args.max_reconcile > 1 or (args.scan_posts or 0) > 1):
+        parser.error('单次补发要求 tick --post-id，并将对账、发送、扫描上限各设为 0 或 1')
 
     if args.command == "stop":
         print(json.dumps(ops.stop(), ensure_ascii=False, indent=2))

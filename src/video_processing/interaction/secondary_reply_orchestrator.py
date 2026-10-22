@@ -9,6 +9,7 @@
 - 任何已持久化提交意图之后的不明确结果一律进入 UNCERTAIN/只读对账，绝不重发。
 
 # Modification History
+| interaction-recovery-v1 | 2026-10-23 | Codex | 意图前作者状态未知暂缓重查，批准有效期与去重账本保持约束。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.2.1 | 2026-10-23 | Codex | 单条回复复核/发送/回读共用平台账户许可，准入等待保留 APPROVED，意图后异常仅对账。 |
@@ -237,8 +238,8 @@ class SecondaryReplyOrchestrator:
             self.db.record_secondary_reply_skipped(task_id, reason="AUTHOR_ALREADY_REPLIED")
             return SubmitOutcome("SKIPPED_ALREADY_REPLIED", "作者已回复", task_id)
         if state != "NOT_REPLIED":
-            self.db.record_secondary_reply_failed(task_id, error_message="AUTHOR_REPLY_STATE_UNKNOWN")
-            return SubmitOutcome("REJECTED_BEFORE_INTENT", "无法完整判断是否已回复，禁止发送", task_id)
+            self.db.release_claimed_secondary_reply_task(task_id, lease)
+            return SubmitOutcome("DEFERRED_AUTHOR_STATE_UNKNOWN", "无法完整判断是否已回复；保持批准状态，在有效期内重新核查", task_id)
 
         make_guard = getattr(self.platform, "make_guard", None)
         if callable(make_guard):

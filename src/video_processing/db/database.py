@@ -4,6 +4,8 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| 3.102.0 | 2026-10-22 | Antigravity | 优化 finish_wechat_interaction_attempt：在遇到 wechat session lock busy 且无提交意图时扣减 attempt_count 恢复 RETRY_WAIT，避免因调度器与发布锁避让耗尽重试预算。 |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
@@ -12521,7 +12523,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
         normalized = str(result_status or "FAILED").upper()
         if normalized == "PENDING_REVIEW":
             normalized = "UNCERTAIN"
-        if normalized not in {"COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN", "FAILED"}:
+        if normalized not in {"COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN", "FAILED", "DEFERRED"}:
             raise ValueError("Unsupported WeChat interaction result status")
         now_value = now or datetime.datetime.now(datetime.timezone.utc)
         if now_value.tzinfo is None:
@@ -12558,6 +12560,23 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                     )
                 else:
                     next_attempt_at = None
+            elif (
+                (normalized == "DEFERRED" or (
+                    normalized == "FAILED"
+                    and str(error_message or "").strip() == "wechat session lock busy"
+                ))
+                and current.get("submit_intent_at") is None
+            ):
+                # 浏览器会话锁或账户冷却避让尚未启动浏览器，不扣减任务的真实重试预算
+                new_attempt_count = max(0, int(current["attempt_count"]) - 1)
+                conn.execute(
+                    "UPDATE wechat_interactions SET attempt_count = ? WHERE id = ?",
+                    (new_attempt_count, int(interaction_id)),
+                )
+                final_status = "RETRY_WAIT"
+                next_attempt_at = self._wechat_interaction_timestamp(
+                    now_value + datetime.timedelta(seconds=300)
+                )
             else:
                 exhausted = int(current["attempt_count"]) >= int(current["max_attempts"])
                 final_status = "FAILED" if exhausted else "RETRY_WAIT"
@@ -13463,14 +13482,44 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             conn.commit()
             return True, new_status
 
+    def bind_observed_wechat_publication(self, publication_id: int, platform_post_id: str,
+                                         evidence_path: str) -> Optional[dict]:
+        """仅补齐未绑定的既有投稿；CAS 防止覆盖其他会话或已绑定的作品身份。"""
+        if not platform_post_id.strip() or not Path(evidence_path).is_file():
+            raise ValueError('作品绑定需要原生 ID 和已落盘证据')
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conflict = conn.execute(
+                'SELECT id FROM wechat_publications WHERE platform_post_id = ? AND id != ?',
+                (platform_post_id, publication_id),
+            ).fetchone()
+            if conflict:
+                return None
+            changed = conn.execute(
+                '''UPDATE wechat_publications SET platform_post_id = ?, state = 'SUBMITTED_BOUND',
+                   evidence_path = ?, last_reconciled_at = CURRENT_TIMESTAMP,
+                   updated_at = CURRENT_TIMESTAMP, last_error_message = NULL
+                   WHERE id = ? AND platform_post_id IS NULL
+                   AND state IN ('SUBMITTED_UNBOUND', 'UNCERTAIN')''',
+                (platform_post_id, evidence_path, publication_id),
+            ).rowcount
+            if not changed:
+                return None
+            return dict(conn.execute('SELECT * FROM wechat_publications WHERE id = ?',
+                                     (publication_id,)).fetchone())
+
+
     def get_approved_secondary_reply_tasks(
         self,
         *,
         account_key: Optional[str] = None,
         limit: int = 5,
         now_utc: Optional[datetime.datetime] = None,
+        platform_post_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """获取待发送的 APPROVED（或租约已过期的 CLAIMED）二级回复任务，自动淘汰已过审批有效期的任务。"""
+        if int(limit) <= 0:
+            return []
         now = now_utc or datetime.datetime.now(datetime.timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=datetime.timezone.utc)
@@ -13484,18 +13533,21 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 WHERE status IN ('APPROVED', 'CLAIMED')
                   AND approval_expires_at IS NOT NULL
                   AND approval_expires_at < ?
+                  AND (? IS NULL OR account_key = ?)
+                  AND (? IS NULL OR platform_post_id = ?)
                 """,
-                (now_iso,),
+                (now_iso, account_key, account_key, platform_post_id, platform_post_id),
             )
             rows = conn.execute(
                 """
                 SELECT * FROM wechat_secondary_reply_tasks
                 WHERE (? IS NULL OR account_key = ?)
+                  AND (? IS NULL OR platform_post_id = ?)
                   AND (status = 'APPROVED' OR (status = 'CLAIMED' AND lease_expires_at < ?))
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-                (account_key, account_key, now_iso, max(1, int(limit))),
+                (account_key, account_key, platform_post_id, platform_post_id, now_iso, max(1, int(limit))),
             ).fetchall()
             conn.commit()
             return [dict(r) for r in rows]
@@ -14059,8 +14111,11 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
         max_attempts: Optional[int] = None,
         now_utc: Optional[datetime.datetime] = None,
         limit: int = 5,
+        platform_post_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """获取已到退避时间且未超最大自动对账次数的 UNCERTAIN / SUBMIT_INTENT 任务。"""
+        if int(limit) <= 0:
+            return []
         max_att = max_attempts if max_attempts is not None else int(getattr(settings, "wechat_reply_max_reconcile_attempts", 4))
         now = now_utc or datetime.datetime.now(datetime.timezone.utc)
         if now.tzinfo is None:
@@ -14072,6 +14127,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 SELECT * FROM wechat_secondary_reply_tasks
                 WHERE status IN ('UNCERTAIN', 'SUBMIT_INTENT')
                   AND (? IS NULL OR account_key = ?)
+                  AND (? IS NULL OR platform_post_id = ?)
                   AND COALESCE(reconcile_count, 0) < ?
                   AND (
                       status = 'SUBMIT_INTENT'
@@ -14081,7 +14137,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 ORDER BY COALESCE(next_reconcile_at, updated_at) ASC, id ASC
                 LIMIT ?
                 """,
-                (account_key, account_key, max_att, now_iso, max(1, int(limit))),
+                (account_key, account_key, platform_post_id, platform_post_id, max_att, now_iso, int(limit)),
             ).fetchall()
             return [dict(r) for r in rows]
 

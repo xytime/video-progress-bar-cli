@@ -75,7 +75,8 @@ def interaction_page(chromium):
         page.close()
 
 
-def _run(page, tmp_path: Path, *, mode="success", target="post-target", verify_only=False):
+def _run(page, tmp_path: Path, *, mode="success", target="post-target", verify_only=False,
+         expected_comment_id=None):
     page.evaluate("mode => { window.fixtureState.mode = mode; }", mode)
     commenter = BrowserCommenter(
         state_path=tmp_path / "unused-state.json",
@@ -92,6 +93,7 @@ def _run(page, tmp_path: Path, *, mode="success", target="post-target", verify_o
         attempt_dir=attempt,
         before_submit=None if verify_only else (lambda: True),
         verify_only=verify_only,
+        expected_comment_id=expected_comment_id,
     )
     receipt = json.loads((attempt / "receipt.json").read_text(encoding="utf-8"))
     return result, receipt, attempt
@@ -429,3 +431,42 @@ def test_navigation_unready_or_login_never_reaches_target_resolution(
         assert writes == []
     finally:
         page.close()
+
+
+@pytest.mark.parametrize('target_present', [True, False])
+def test_missing_target_loads_next_page_once_and_stops_without_progress(chromium, target_present):
+    page = chromium.new_page(viewport={'width': 800, 'height': 600})
+    ids = ['first']
+    descriptions = {'first': 'first description'}
+    description = '完整已发布文案用于唯一作品绑定，这是不会使用模糊前缀替代的完整文字。'
+    page.set_content('''<div class="feeds-container" style="height:200px;overflow:auto;width:300px">
+        <div style="height:5000px">first</div></div>
+        <script>window.wheels=0;document.querySelector('.feeds-container').addEventListener('wheel',()=>{
+        window.wheels++;fetch('https://fixture.invalid/page');});</script>''')
+    def load(route):
+        if target_present and 'target' not in ids:
+            ids.append('target')
+            descriptions['target'] = description
+        route.fulfill(json={})
+    page.route('https://fixture.invalid/page', load)
+    commenter = BrowserCommenter(dom_timeout_ms=300, poll_interval_ms=20)
+    try:
+        commenter._load_target_page(page, 'target', description, ids, descriptions)
+        assert page.evaluate('window.wheels') == 1
+        assert ('target' in ids) == target_present
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize('expected_id,status', [('existing', 'COMMENTED'), ('different', 'UNCERTAIN')])
+def test_fresh_readback_requires_accepted_id_even_when_text_matches(interaction_page, tmp_path, expected_id, status):
+    page, writes = interaction_page
+    page.evaluate('''text => document.querySelector('[data-object-id="post-target"]').addEventListener('click', () => {
+      const node=document.createElement('div'); node.dataset.commentId='existing'; node.dataset.authorRole='author';
+      node.textContent=text; document.querySelector('[data-comment-list]').append(node);
+    })''', COMMENT)
+    result, receipt, _ = _run(page, tmp_path, verify_only=True, expected_comment_id=expected_id)
+    assert result[0] == status
+    assert receipt['expected_comment_id'] == expected_id
+    assert writes == []
+    assert page.evaluate('window.fixtureState.writeOpened') == 0

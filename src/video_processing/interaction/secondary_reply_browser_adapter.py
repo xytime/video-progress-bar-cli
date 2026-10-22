@@ -11,6 +11,7 @@
 - 故障注入安全：提交意图落盘后任何异常仅转入 UNCERTAIN 只读对账
 
 # Modification History
+| interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.6.3 | 2026-10-23 | Codex | 恢复具名作品只读会话；单条回复闭环共享账户许可，独立上下文保持写入守卫与请求预算。 |
@@ -127,6 +128,7 @@ class SecondaryReplyBrowserAdapter:
         headless: bool = True,
         comment_url: str = WECHAT_COMMENT_URL,
         lock_timeout_seconds: float = 10.0,
+        manual_retry_post_id: str = "",
     ) -> None:
         self.state_path = Path(state_path)
         self.headless = headless
@@ -138,6 +140,31 @@ class SecondaryReplyBrowserAdapter:
         self._last_comment_list_payload: Optional[Dict[str, Any]] = None
         self._bound_scene_post_id: Optional[str] = None
         self._active_guard: Optional[SecondaryReplySubmissionGuard] = None
+        self._manual_retry_post_id = manual_retry_post_id
+        self._manual_retry_consumed = False
+
+    @contextlib.contextmanager
+    def _session_scope(self, post_id: str):
+        """显式人工恢复最多签发一个绑定作品的许可，平台限流仍停止。"""
+        from video_processing.core.wechat_request_guard import WeChatRequestGuard
+        token = ''
+        request_guard = WeChatRequestGuard(self.state_path)
+        if self._manual_retry_post_id and not self._manual_retry_consumed:
+            if post_id != self._manual_retry_post_id:
+                raise WeChatSessionLockBusy('人工补发许可与作品不匹配')
+            cooldown = request_guard.cooldown()
+            if cooldown['active'] and cooldown['reason'] == '视频号返回限流':
+                raise WeChatSessionLockBusy('平台限流仍有效，人工补发不覆盖平台限制')
+            token = request_guard.issue_override(post_id, cooldown['version'])
+            self._manual_retry_consumed = True
+        try:
+            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                                   purpose='回复', video=post_id, cooldown_override=token) as session:
+                yield session
+        finally:
+            if token:
+                request_guard.revoke_override(token)
+
 
     def _setup_page_listeners(self, page, guard: Optional[SecondaryReplySubmissionGuard] = None) -> None:
         """注册页面网络监听：捕获 comment_list 响应数据、折叠/分页标志与活跃作品 ID。"""
@@ -279,10 +306,10 @@ class SecondaryReplyBrowserAdapter:
         if (
             self._active_guard is not None
             and self._active_export_id == scene_post_id
-            and self._active_guard.expected_post_id == platform_post_id
+            and self._active_guard.expected_export_id == platform_post_id
             and scene_post_id != platform_post_id
         ):
-            self._active_guard.expected_post_id = scene_post_id
+            self._active_guard.expected_export_id = scene_post_id
         return True, None
 
     def _locate_unique_visible_control(
@@ -769,8 +796,7 @@ class SecondaryReplyBrowserAdapter:
             raise WeChatSessionLockBusy("回复工作流不允许嵌套")
         if not post_id.strip():
             raise WeChatSessionLockBusy("缺少具体作品身份，禁止回复")
-        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                               purpose="回复", video=post_id) as session:
+        with self._session_scope(post_id) as session:
             self._workflow_session = session
             try:
                 yield
@@ -790,9 +816,7 @@ class SecondaryReplyBrowserAdapter:
         session = getattr(self, "_workflow_session", None)
         if session is not None and (session.video != post_id or current_wechat_session() is not session):
             raise WeChatSessionLockBusy("回复工作流作品身份不匹配")
-        scope = contextlib.nullcontext() if session is not None else WeChatSessionLock(
-            self.state_path, timeout_seconds=self.lock_timeout_seconds, purpose="回复", video=post_id,
-        )
+        scope = contextlib.nullcontext() if session is not None else self._session_scope(post_id)
         with scope:
             with sync_playwright() as p:
                 browser = p.chromium.launch(

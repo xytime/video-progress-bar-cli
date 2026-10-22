@@ -8,6 +8,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 有界翻页、独立精确回读及只读目录发现；等待不消耗重试。 |
+| 3.2.0 | 2026-10-23 | Codex | 会话准入延迟返回具体原因，不再将账户冷却伪装为锁占用。 |
 | 3.1.0 | 2026-10-03 | Codex | 有界等待首页与评论卡片就绪，只采集评论场景作品 ID，避免初始化竞态和跨场景污染。 |
 | 3.0.0 | 2026-09-26 | Codex | 绑定评论页完整文案与场景 ID；发送前阻断错帖请求，限定作品与完整作者评论回读。 |
 | 2.9.0 | 2026-09-23 | Antigravity | 修复视频号后台处理中作品未上架导致卡片索引错位发评的严重缺陷；引入内容前缀强校验、详情面板文本核验与发评请求作品ID不符硬熔断（Fail-Closed）。 |
@@ -296,6 +298,7 @@ class BrowserCommenter:
         before_submit: Callable[[], bool] | None = None,
         verify_only: bool = False,
         published_description: Optional[str] = None,
+        cooldown_override: str = "",
     ) -> BrowserResult:
         """提交或只读核验作者评论，保持 ``(status, evidence, error)`` 返回合同。"""
         post_id = str(platform_post_id or "").strip()
@@ -314,7 +317,7 @@ class BrowserCommenter:
         attempt_dir = self._new_attempt_dir(evidence_dir)
         try:
             with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                                   purpose="评论", video=post_id):
+                                   purpose="评论", video=post_id, cooldown_override=cooldown_override):
                 return self._run_browser(
                     comment_text=comment_text,
                     platform_post_id=post_id,
@@ -327,10 +330,24 @@ class BrowserCommenter:
         except WeChatSessionLockBusy as exc:
             return self._finish(
                 attempt_dir,
-                "FAILED",
-                "wechat session lock busy",
+                "DEFERRED",
+                str(exc),
                 details={"lock_error": str(exc), "clicked": False},
             )
+
+    def discover_publications(self, anchor_post_id: str, evidence_dir: Path) -> BrowserResult:
+        """空队列时有界读取作品目录；写评论路由全程阻断，不消耗互动任务次数。"""
+        attempt_dir = self._new_attempt_dir(evidence_dir)
+        try:
+            with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                                   purpose="评论", video=anchor_post_id):
+                return self._run_browser(
+                    comment_text="", platform_post_id=anchor_post_id, video_title=None,
+                    attempt_dir=attempt_dir, before_submit=None, verify_only=True,
+                    catalog_only=True,
+                )
+        except WeChatSessionLockBusy as exc:
+            return self._finish(attempt_dir, "DEFERRED", str(exc), details={"clicked": False})
 
     def _new_attempt_dir(self, evidence_dir: Optional[Path | str]) -> Path:
         root = (
@@ -355,6 +372,8 @@ class BrowserCommenter:
         before_submit: Callable[[], bool] | None,
         verify_only: bool,
         published_description: Optional[str] = None,
+        expected_comment_id: Optional[str] = None,
+        catalog_only: bool = False,
     ) -> BrowserResult:
         """创建浏览器；不关闭 Web 安全、不禁用 Chromium sandbox。"""
         with sync_playwright() as runtime:
@@ -374,6 +393,10 @@ class BrowserCommenter:
                 from video_processing.core.wechat_session_lock import guard_wechat_context
                 guard_wechat_context(context)
                 page = context.new_page()
+                if catalog_only:
+                    page.route("**/*", lambda route: route.abort()
+                               if urlparse(route.request.url).path in COMMENT_SUBMIT_PATHS
+                               else route.fallback())
                 captured_post_ids: list[str] = []
                 captured_post_descs: dict[str, str] = {}
                 captured_comments: list[dict[str, Any]] = []
@@ -412,7 +435,15 @@ class BrowserCommenter:
                         "page_readiness": navigation_error,
                         "clicked": False,
                     })
-                return self._interact_with_page(
+                self._load_target_page(page, None if catalog_only else platform_post_id, published_description,
+                                       captured_post_ids, captured_post_descs)
+                if catalog_only:
+                    return self._finish_page(page, attempt_dir, "CATALOG_OBSERVED", None, {
+                        "adapter_contract": "wechat-comment-catalog-v1",
+                        "observed_posts": captured_post_descs, "clicked": False,
+                        "verify_only": True, "anchor_post_id": platform_post_id,
+                    })
+                result = self._interact_with_page(
                     page,
                     comment_text=comment_text,
                     platform_post_id=platform_post_id,
@@ -424,9 +455,59 @@ class BrowserCommenter:
                     captured_post_descs=captured_post_descs,
                     captured_comments=captured_comments,
                     published_description=published_description,
+                    expected_comment_id=expected_comment_id,
                 )
             finally:
                 browser.close()
+        # 平台可能只乐观更新 DOM，未重新请求评论列表；关闭写入上下文后独立只读回读。
+        if not verify_only and result[0] == 'UNCERTAIN':
+            receipt = json.loads((attempt_dir / 'receipt.json').read_text(encoding='utf-8'))
+            accepted_id = receipt.get('accepted_comment_id')
+            if accepted_id:
+                readback_dir = attempt_dir / 'fresh_readback'
+                readback_dir.mkdir()
+                try:
+                    verified = self._run_browser(
+                        comment_text=comment_text, platform_post_id=platform_post_id,
+                        video_title=video_title, attempt_dir=readback_dir,
+                        before_submit=None, verify_only=True,
+                        published_description=published_description,
+                        expected_comment_id=str(accepted_id),
+                    )
+                except Exception as exc:
+                    logger.warning('独立回读失败，保留已受理状态并禁止重发: %s', exc)
+                    return result
+                if verified[0] == 'COMMENTED':
+                    return verified
+        return result
+
+    def _load_target_page(self, page, post_id, description, post_ids, descriptions):
+        """只滚动作品列表，有界等待新响应；无增量或达到预算时停止。"""
+        from config.settings import settings
+        from video_processing.core.wechat_session_lock import current_wechat_session
+        budget = settings.wechat_interaction_list_request_budget
+        for _ in range(budget - 2):
+            try:
+                if post_id is not None:
+                    _interaction_post_id(post_id, description, descriptions)
+                    return
+            except ValueError:
+                pass
+            session = current_wechat_session()
+            if session and (session._request_limited or
+                            getattr(page.context, '_wechat_list_request_count', 0) >= budget):
+                return
+            containers = page.locator('.feeds-container:visible, .scroll-list__wrp:visible, .scroll-list:visible')
+            if containers.count() == 0:
+                return
+            before = set(post_ids)
+            containers.first.hover()
+            page.mouse.wheel(0, 2500)
+            deadline = time.monotonic() + self.dom_timeout_ms / 1000
+            while set(post_ids) == before and time.monotonic() < deadline:
+                page.wait_for_timeout(self.poll_interval_ms)
+            if set(post_ids) == before:
+                return
 
     def _wait_for_page_controls(self, page, ready: Callable[[], bool]) -> Optional[str]:
         """有界等待正向控件，URL、登录提示或 DOM 异常均不能算作就绪。"""
@@ -564,6 +645,7 @@ class BrowserCommenter:
         captured_post_descs: Optional[dict[str, str]] = None,
         captured_comments: Optional[list[dict[str, Any]]] = None,
         published_description: Optional[str] = None,
+        expected_comment_id: Optional[str] = None,
     ) -> BrowserResult:
         """在已打开的真实页面上执行适配器合同，供隔离 Chromium 验收复用。"""
         clicked = False
@@ -577,6 +659,7 @@ class BrowserCommenter:
             "visible_feed_count": page.locator(".comment-feed-wrap:visible").count(),
             "captured_post_count": len(captured_post_ids or []),
             "captured_description_count": len(captured_post_descs or {}),
+            "observed_posts": dict(captured_post_descs or {}),
         }
         if not _PLATFORM_POST_ID_RE.fullmatch(platform_post_id):
             return self._finish_page(
@@ -718,6 +801,13 @@ class BrowserCommenter:
                     page.wait_for_timeout(self.poll_interval_ms)
 
             metadata["existing_author_comments"] = existing
+            if verify_only and expected_comment_id:
+                metadata['expected_comment_id'] = expected_comment_id
+                matched = [item for item in existing if item['comment_id'] == expected_comment_id
+                           and item['text'] == expected_text]
+                if len(matched) != 1:
+                    return self._finish_page(page, attempt_dir, 'UNCERTAIN',
+                                             '独立回读尚未找到已受理的精确评论 ID 与完整正文', metadata)
             if any(item["text"] == expected_text for item in existing):
                 if not verify_only:
                     try:

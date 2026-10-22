@@ -29,7 +29,8 @@ SUBMIT = "/cgi-bin/mmfinderassistant-bin/comment/create_comment"
 @pytest.fixture
 def live_entry(chromium, monkeypatch, tmp_path):
     monkeypatch.setattr(type(settings), "default_output_dir", property(lambda self: tmp_path))
-    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
+    if hasattr(settings, "wechat_scheduler_policy_path"):
+        monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
     monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", True)
     monkeypatch.setattr(settings, "wechat_scheduler_priority_video", "")
     state = tmp_path / "wechat_state.json"
@@ -140,3 +141,31 @@ def test_workflow_rejects_other_post_and_cleans_scope(live_entry):
     assert current_wechat_session() is None
     assert live_entry.adapter._workflow_session is None
     assert live_entry.contexts == []
+
+
+def test_manual_reply_retry_is_single_use_and_bound_to_post(live_entry):
+    s = live_entry
+    with s.adapter.open_session(readonly_post_id=POST):
+        pass
+    s.adapter._manual_retry_post_id = POST
+    with pytest.raises(WeChatSessionLockBusy, match='作品不匹配'):
+        with s.adapter.open_session(readonly_post_id='another-post'):
+            pytest.fail('不得跨作品使用许可')
+    with s.adapter.open_session(readonly_post_id=POST):
+        pass
+    assert len(s.contexts) == 2
+    with pytest.raises(WeChatSessionLockBusy):
+        with s.adapter.open_session(readonly_post_id=POST):
+            pytest.fail('单次补发不得永久跳过账户间隔')
+    assert len(s.contexts) == 2
+    assert not s.guard.snapshot().get('manual_overrides')
+
+
+def test_manual_reply_retry_never_overrides_native_rate_limit(live_entry):
+    s = live_entry
+    s.guard.record_limited(endpoint='/test', code=-360)
+    s.adapter._manual_retry_post_id = POST
+    with pytest.raises(WeChatSessionLockBusy, match='平台限流仍有效'):
+        with s.adapter.open_session(readonly_post_id=POST):
+            pytest.fail('平台限流必须停止')
+    assert s.contexts == []
