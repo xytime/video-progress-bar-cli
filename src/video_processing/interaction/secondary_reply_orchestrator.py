@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-23 | Codex | 单条回复复核/发送/回读共用平台账户许可，准入等待保留 APPROVED，意图后异常仅对账。 |
 | 1.1.0 | 2026-10-17 | Antigravity | 移除对 secondary_reply_browser_adapter 的直接依赖，从契约层导入 SecondaryReplySubmissionGuard 并纳入平台端口协议 |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：统一编排服务，演示 CLI 与测试共用；终审、意图、守卫、回读、对账同一路径 |
 """
@@ -18,6 +19,7 @@
 from __future__ import annotations
 
 import datetime
+from contextlib import nullcontext
 import hashlib
 import json
 import logging
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from video_processing.db.database import PipelineDB
+from video_processing.core.wechat_session_lock import WeChatSessionLockBusy
 from video_processing.interaction.secondary_reply_approval import (
     dispatch_approval_request,
     handle_approval_callback,
@@ -212,6 +215,22 @@ class SecondaryReplyOrchestrator:
             self.db.record_secondary_reply_failed(task_id, error_message="FINAL_TEXT_DIFFERS_FROM_APPROVED")
             return SubmitOutcome("REJECTED_BEFORE_INTENT", "FINAL_TEXT_DIFFERS_FROM_APPROVED", task_id)
 
+        scope = getattr(self.platform, "submission_scope", lambda _post_id: nullcontext())
+        try:
+            with scope(post_id):
+                return self._submit_claimed(task_id, claimed, final_text, now_dt)
+        except WeChatSessionLockBusy as exc:
+            after = self.db.get_secondary_reply_task(task_id)
+            if after and after["status"] == "SUBMIT_INTENT":
+                self.db.record_secondary_reply_uncertain(task_id, error_message=str(exc), now_utc=now_dt)
+                return SubmitOutcome("UNCERTAIN", str(exc), task_id)
+            self.db.release_claimed_secondary_reply_task(task_id, lease)
+            return SubmitOutcome("DEFERRED_SESSION_BUSY", str(exc), task_id)
+
+    def _submit_claimed(self, task_id, claimed, final_text, now_dt) -> SubmitOutcome:
+        """在平台提供的同一账户许可内完成单条回复，平台替身沿用原端口契约。"""
+        lease = claimed["lease_token"]
+        post_id, root_id = claimed["platform_post_id"], claimed["comment_id"]
         # 锁内复核：作者是否已回复（手机并发仍无法被本地锁排除）
         state = self.platform.author_reply_state(post_id=post_id, root_id=root_id)
         if state == "REPLIED":

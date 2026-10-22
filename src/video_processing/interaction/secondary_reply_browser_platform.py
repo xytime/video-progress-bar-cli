@@ -4,7 +4,7 @@
 ``SecondaryReplyPlatformPort``：作者回复状态只读复核、唯一出站发送、全新会话独立回读。
 
 边界：
-- 每个端口方法各开一次全新会话（持 WeChatSessionLock，生成与人工等待不持锁）。
+- 每个端口方法使用全新浏览器上下文；同条回复复核/发送/回读共用账户锁与预算。
 - 回读/对账用全新会话，读到的是服务器数据而非发送会话的乐观 DOM。
 - 端口自身不写库；意图持久化由编排传入的 ``before_submit`` 完成。
 - 真实平台仍需 M3 只读样本验证；默认不被任何入口自动构造。
@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.2 | 2026-10-23 | Codex | 为扫描、作者复核和独立回读传入作品身份；单条发送闭环共享账户许可。 |
 | 1.3.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments 端口方法与 lookup_reply 可选短退避重试，吸收平台异步索引延迟 (CR-01 / M3.5) |
 | 1.2.0 | 2026-10-17 | Antigravity | 移除对适配器私有方法 (_interact_with_page / _new_evidence_dir) 的直接调用，改为使用公开接口并从契约层导入 SecondaryReplySubmissionGuard |
 | 1.1.0 | 2026-10-17 | Codex | 新增 calibrate_controls 与 calibrate_and_verify 只读控件校准及平台状态验证 (R1/R2) |
@@ -21,6 +22,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 import tempfile
 import time
 from pathlib import Path
@@ -58,6 +60,11 @@ class BrowserSecondaryReplyPlatform:
         self.account_finder_id = account_finder_id
         self._hints = post_hints or (lambda _post_id: ("", ""))
         self._session = session_factory or adapter.open_session
+        self.submission_scope = (lambda post_id: nullcontext()) if session_factory else adapter.reply_workflow
+        self._readonly_session = (
+            (lambda post_id: self._session(None)) if session_factory
+            else (lambda post_id: adapter.open_session(readonly_post_id=post_id))
+        )
         self._trusted_origins = trusted_origins
         self._evidence_dir = evidence_dir or Path(tempfile.gettempdir()) / "secondary_reply_evidence"
         self._lookup_max_attempts = max(1, int(lookup_max_attempts))
@@ -72,7 +79,7 @@ class BrowserSecondaryReplyPlatform:
     def author_reply_state(self, *, post_id: str, root_id: str) -> str:
         title, desc = self._hints(post_id)
         try:
-            with self._session(None) as page:
+            with self._readonly_session(post_id) as page:
                 status, _ev, _reason = self.adapter.execute_page_reply_flow(
                     page, task_id=0, platform_post_id=post_id, root_comment_id=root_id,
                     reply_content="-", video_title=title, published_description=desc,
@@ -123,7 +130,7 @@ class BrowserSecondaryReplyPlatform:
             state = "UNKNOWN"
             reply_id = ""
             try:
-                with self._session(None) as page:
+                with self._readonly_session(post_id) as page:
                     state, reply_id = self.adapter.find_author_reply(
                         page, platform_post_id=post_id, root_comment_id=root_id, reply_content=text,
                         author_id=self.account_finder_id, video_title=title, published_description=desc,
@@ -160,7 +167,7 @@ class BrowserSecondaryReplyPlatform:
         title = video_title or hint_title
         desc = published_description or hint_desc
         try:
-            with self._session(None) as page:
+            with self._readonly_session(post_id) as page:
                 return self.adapter.discover_comments_on_page(
                     page,
                     platform_post_id=post_id,

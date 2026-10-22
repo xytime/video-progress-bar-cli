@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.3 | 2026-10-23 | Codex | 恢复具名作品只读会话；单条回复闭环共享账户许可，独立上下文保持写入守卫与请求预算。 |
 | 1.6.1 | 2026-10-17 | Antigravity | 修复 post/post_list HTTP 201 响应捕获，支持通过 >=30 字符唯一已发布文案跨场景绑定 exportId 并在滚动分页时动态重算探针 |
 | 1.6.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments_on_page 接口与 comment_list 原始载荷捕获，供 M3.5 Tick 扫描复用 |
 | 1.5.0 | 2026-10-17 | Antigravity | 统一校准与发送的卡片绑定、父评论与回复控件唯一定位逻辑；从契约层导入 SecondaryReplySubmissionGuard；公开 create_evidence_dir 与 execute_page_reply_flow；收紧 calibrate_page_controls 身份与文本证据要求 |
@@ -49,6 +50,7 @@ from video_processing.core.wechat_session_lock import (
     WeChatSessionLock,
     WeChatSessionLockBusy,
     canonical_wechat_session_lock_path,
+    current_wechat_session,
 )
 from video_processing.db.database import PipelineDB
 from video_processing.interaction.secondary_reply_contract import (
@@ -761,14 +763,37 @@ class SecondaryReplyBrowserAdapter:
     _interact_with_page = execute_page_reply_flow
 
     @contextlib.contextmanager
-    def open_session(self, guard: Optional[SecondaryReplySubmissionGuard] = None):
+    def reply_workflow(self, post_id: str):
+        """同一回复的复核、发送、独立回读共享一次有界账户许可。"""
+        if getattr(self, "_workflow_session", None) is not None:
+            raise WeChatSessionLockBusy("回复工作流不允许嵌套")
+        if not post_id.strip():
+            raise WeChatSessionLockBusy("缺少具体作品身份，禁止回复")
+        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
+                               purpose="回复", video=post_id) as session:
+            self._workflow_session = session
+            try:
+                yield
+            finally:
+                self._workflow_session = None
+
+    @contextlib.contextmanager
+    def open_session(
+        self, guard: Optional[SecondaryReplySubmissionGuard] = None, *, readonly_post_id: str = "",
+    ):
         """会话锁 + 全新 Chromium 上下文 + 发送路由守卫，yield 已打开评论页的 page。"""
         if not self.state_path.exists():
             raise FileNotFoundError(f"登录态文件不存在: {self.state_path}")
-        if guard is None:
-            raise WeChatSessionLockBusy("无已绑定回复待办，停止自动扫描评论")
-        with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                               purpose="回复", video=guard.expected_export_id):
+        post_id = guard.expected_export_id if guard is not None else readonly_post_id.strip()
+        if not post_id:
+            raise WeChatSessionLockBusy("缺少具体作品身份，禁止评论扫描或回复")
+        session = getattr(self, "_workflow_session", None)
+        if session is not None and (session.video != post_id or current_wechat_session() is not session):
+            raise WeChatSessionLockBusy("回复工作流作品身份不匹配")
+        scope = contextlib.nullcontext() if session is not None else WeChatSessionLock(
+            self.state_path, timeout_seconds=self.lock_timeout_seconds, purpose="回复", video=post_id,
+        )
+        with scope:
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=self.headless, args=["--window-size=1920,1080", "--no-proxy-server"],
@@ -1352,7 +1377,7 @@ class SecondaryReplyBrowserAdapter:
     ) -> Dict[str, Any]:
         """只读环境下的完整卡片导航、作者状态核验及控件校准入口（无写操作、无许可守卫、路由硬拦截）。"""
         out_dir = self.create_evidence_dir(evidence_dir)
-        with self.open_session(guard=None) as page:
+        with self.open_session(readonly_post_id=platform_post_id) as page:
             return self.calibrate_page_controls(
                 page,
                 platform_post_id=platform_post_id,
