@@ -179,3 +179,33 @@ def test_retirement_requires_completed_matching_deployment(tmp_path, monkeypatch
         path.write_text(json.dumps(value))
         with pytest.raises(DeploymentDenied):
             host.retirement_snapshot(settings.project_root, tmp_path)
+
+
+@pytest.mark.parametrize("fault", [None, "target", "source", "verify"])
+def test_recovered_adoption_requires_complete_native_receipts(tmp_path, monkeypatch, fault):
+    from config.settings import settings
+    from video_processing.core.deployment import digest, write_json
+    owner = {"pid": 123, "birth": "known", "source_hash": "a" * 64,
+             "cwd": str(settings.project_root), "protocol": host.PROTOCOL}
+    completed_previous(tmp_path, owner)
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    plan["sources"]["before"] = {"head": "previous"}
+    write_json(tmp_path / "plan.json", plan)
+    journal = json.loads((tmp_path / "journal.json").read_text())
+    journal["plan"] = digest(plan)
+    write_json(tmp_path / "journal.json", journal)
+    (tmp_path / "adopt.json").unlink()
+    write_json(tmp_path / "adopt-intent.json", {"before": "previous", "target": "bad" if fault == "target" else "previous"})
+    write_json(tmp_path / "sources.json", {"schema": 1, "groups": sorted(host.SOURCE_GROUPS),
+                                          "source_hash": "b" * 64 if fault == "source" else owner["source_hash"]})
+    write_json(tmp_path / "verify.json", {"ok": fault != "verify"})
+    monkeypatch.setattr(host, "read_lease_owner", lambda path: owner if path.stem == "ui" else None)
+    monkeypatch.setattr(host, "process_birth", lambda pid: "known")
+    if fault:
+        with pytest.raises(DeploymentDenied):
+            host.retirement_snapshot(settings.project_root, tmp_path)
+    else:
+        proof = host.retirement_snapshot(settings.project_root, tmp_path)
+        assert proof["owners"] == {"ui": owner}
+        assert "adopt.json" not in proof["files"]
+        assert "adopt-intent.json" in proof["files"]

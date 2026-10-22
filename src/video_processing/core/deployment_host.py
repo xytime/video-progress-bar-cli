@@ -40,7 +40,22 @@ def retirement_snapshot(root, directory):
     previous = read_json(directory / "plan.json")
     require(Path(previous["root"]).resolve() == Path(root).resolve(), "RETIREMENT_ROOT_MISMATCH")
     require(Deployment(previous, directory, None).status()["state"] == "COMPLETE", "RETIREMENT_DEPLOYMENT_INCOMPLETE")
-    adopted = read_json(directory / "adopt.json")
+    proof_names = ["plan.json", "journal.json", "start.json"]
+    if (directory / "adopt.json").exists():
+        adopted = read_json(directory / "adopt.json")
+        proof_names.append("adopt.json")
+    else:
+        # 中断发生在采用后、写回执前时，recover 会验证采用后置条件并记 COMPLETE。
+        # 仅接受完整原生部署的 intent、来源验证、启动与最终回读链，不补造旧回执。
+        intent = read_json(directory / "adopt-intent.json")
+        sources = read_json(directory / "sources.json")
+        verified = read_json(directory / "verify.json")
+        require(intent.get("target") == previous["sources"]["target"]
+                and intent.get("before") == previous["sources"]["before"]["head"]
+                and sources.get("schema") == 1 and sources.get("groups") == sorted(SOURCE_GROUPS)
+                and verified.get("ok") is True, "RETIREMENT_PROOF_INVALID")
+        adopted = {"ok": True, "target": intent["target"], "source_hash": sources.get("source_hash")}
+        proof_names.extend(["adopt-intent.json", "sources.json", "verify.json"])
     started = read_json(directory / "start.json")["inspection"]
     require(adopted.get("ok") is True and adopted.get("target") == previous["sources"]["target"]
             and started.get("safe") is True, "RETIREMENT_PROOF_INVALID")
@@ -56,8 +71,7 @@ def retirement_snapshot(root, directory):
             owners[role] = row
     require(owners and owners.get("ui") == started["workers"].get("ui"), "RETIREMENT_UI_UNPROVEN")
     return {"directory": str(directory), "owners": owners,
-            "files": {name: sha((directory / name).read_bytes()) for name in
-                      ("plan.json", "journal.json", "adopt.json", "start.json")}}
+            "files": {name: sha((directory / name).read_bytes()) for name in proof_names}}
 
 
 def retirement_owners(proof):
