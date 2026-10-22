@@ -84,6 +84,25 @@ class WeChatRequestGuard:
                     "business_code": row.get("business_code") if limited else None,
                     "reason": "视频号返回限流" if limited else "账号会话最小间隔"}
 
+    def acknowledge_unfrozen(self, version):
+        """仅供操作者明确确认平台解冻后调用；保留历史、正常间隔及投稿去重。"""
+        with self._locked():
+            row, now = self._read(), time.time()
+            if version != self._version(row):
+                raise WeChatRequestDeferred("账号状态已变化，不能解除新的限流")
+            previous_until = row["blocked_until"]
+            row["blocked_until"] = 0
+            row["next_session_at"] = max(
+                row.get("last_session_at", 0) + settings.wechat_scheduler_stable_interval_seconds,
+                now,
+            )
+            row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})["recovery_started"] = now - 86400
+            row["manual_overrides"] = {}
+            row["reason"] = "OPERATOR_CONFIRMED_UNFROZEN"
+            self._save(row, {"event": "OPERATOR_CONFIRMED_UNFROZEN",
+                             "previous_blocked_until": previous_until,
+                             "last_limited_at": row.get("last_limited_at", 0)})
+
     def issue_override(self, video, version):
         """将显式确认绑定当前冷却版本和单个任务；不清除共享冷却。"""
         with self._locked():
