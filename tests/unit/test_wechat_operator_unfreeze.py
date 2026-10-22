@@ -29,3 +29,23 @@ def test_operator_unfreeze_retains_history_spacing_and_new_limit(tmp_path, monke
     assert "recovery_started" not in guard.snapshot()["schedule"]
     with pytest.raises(WeChatRequestDeferred):
         guard.check()
+
+
+def test_unfreeze_keeps_recent_login_interval_and_rejects_stale_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setattr(type(module.settings), "default_output_dir", property(lambda _: tmp_path))
+    monkeypatch.setattr(module.settings, "wechat_account_scheduler_enabled", True)
+    guard = WeChatRequestGuard(tmp_path / "wechat_state.json")
+    guard.record_limited(endpoint="/test")
+    with guard._locked():
+        row = guard._read()
+        row["last_session_at"] = module.time.time()
+        guard._save(row, {"event": "FIXTURE"})
+    old = guard.cooldown()["version"]
+    guard.acknowledge_unfrozen(old)
+    with pytest.raises(WeChatRequestDeferred):
+        guard.check()
+    guard.record_limited(endpoint="/test-new-limit")
+    state = guard.snapshot()
+    with pytest.raises(WeChatRequestDeferred):
+        guard.acknowledge_unfrozen(old)
+    assert guard.snapshot() == state
