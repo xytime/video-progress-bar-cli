@@ -85,7 +85,7 @@ def test_watcher_allows_allow_only_in_the_explicit_video_account_application_win
     assert 'containsText(elementName, "视频号创作平台") and my containsText(elementName, "申请使用")' in _CLICK_AUTH_SCRIPT
     assert 'containsText(elementValue, "视频号创作平台") and my containsText(elementValue, "申请使用")' in _CLICK_AUTH_SCRIPT
     assert "if isVideoAccountApplication then" in _CLICK_AUTH_SCRIPT
-    assert 'if elementName is "允许" then' in _CLICK_AUTH_SCRIPT
+    assert 'if elementName is "允许" or elementName is "确定" then' in _CLICK_AUTH_SCRIPT
     assert 'candidateName in {"登录", "授权登录", "确认登录"}' in _CLICK_AUTH_SCRIPT
 
 
@@ -327,3 +327,18 @@ def test_unsupported_ax_click_can_use_strict_visual_fallback():
         watcher._poll()
     visual.assert_called_once()
     assert watcher.clicked and watcher.last_result == 'VISUAL_WINDOW_DISMISSED'
+
+
+def test_confirm_button_requires_same_scoped_application_and_unique_green_target():
+    from scripts.wechat_desktop_auth import _verified_visual_allow_center
+    image, observations = _visual_fixture()
+    observations[-1]['text'] = '确定'
+    assert _verified_visual_allow_center(image, observations) == (300, 370)
+    assert _verified_visual_allow_center(image, observations[1:]) is None
+    assert _verified_visual_allow_center(image, observations[:1] + observations[2:]) is None
+    assert _verified_visual_allow_center(image, observations + [observations[-1]]) is None
+    observations[-1]['confidence'] = 0.5
+    assert _verified_visual_allow_center(image, observations) is None
+    observations[-1]['confidence'] = 1
+    observations[-1]['box'] = [0.1, 0.1, 0.1, 0.06]
+    assert _verified_visual_allow_center(image, observations) is None

@@ -2,7 +2,7 @@
 
 该模块只在网页已主动点击“微信快捷登录”后短时运行。它不会启动微信、不会扫描
 二维码，也不会点击普通聊天窗口中的通用“允许/确认”按钮；仅“视频号创作平台
-申请使用”窗口中的“允许”在白名单内。没有明确的登录/授权窗口或辅助功能权限时
+申请使用”窗口中的“允许/确定”在白名单内。没有明确的登录/授权窗口或辅助功能权限时
 返回失败，由调用方回退二维码或 LOGIN_REQUIRED。
 
 # Modification History
@@ -121,7 +121,7 @@ tell application "System Events"
                     try
                         set elementName to (name of element) as text
                     end try
-                    if elementName is "允许" then
+                    if elementName is "允许" or elementName is "确定" then
                         click element
                         return "CLICKED_LOGIN"
                     end if
@@ -275,7 +275,7 @@ def _vision_command(*args: str, timeout: float = 3):
 
 
 def _verified_visual_allow_center(image, observations) -> tuple[int, int] | None:
-    """同一窗口必须同时具备申请方、申请提示和绿色按钮内的精确“允许”。"""
+    """同一窗口必须同时具备申请方、申请提示和绿色按钮内的精确“允许/确定”。"""
     if not isinstance(observations, list):
         return None
     center = _find_visual_allow_button(image)
@@ -294,7 +294,7 @@ def _verified_visual_allow_center(image, observations) -> tuple[int, int] | None
             box = (x*width, (1-y-h)*height, (x+w)*width, (1-y)*height)
             if conf >= 0.3:
                 lines.append((text, box))
-            if conf >= 0.8 and text == "允许":
+            if conf >= 0.8 and text in {"允许", "确定"}:
                 allows.append(box)
         except (KeyError, TypeError, ValueError):
             continue
