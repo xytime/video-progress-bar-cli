@@ -177,7 +177,7 @@
       if(!result.candidates.length) list.append(text('p',result.total ? '本页没有候选，请返回上一页。' : [...params].some(([k,v])=>k!=='page'&&v) ? '当前筛选没有匹配的候选，可清空筛选。' : '候选池尚无结果；搜索开放后可手动搜索采集规则。','hint'));
       result.candidates.forEach(candidate=>{
         const meta=candidate.metadata, card=text('article','', 'candidate-card'); card.dataset.key=candidate.key;
-        card.append(text('h3',meta.title), text('p',`YouTube · ${meta.channel_name || '频道未知'} · ${when(meta.published_at)} · ${meta.duration===null?'时长未知':meta.duration+' 秒'}`,'hint'));
+        card.append(text('h3',meta.title), SourcePublication.create(meta.published_at), text('p',`YouTube · ${meta.channel_name || '频道未知'} · ${when(meta.published_at)} · ${meta.duration===null?'时长未知':meta.duration+' 秒'}`,'hint'));
         card.append(text('p',`播放 ${meta.views??'未知'} · 点赞 ${meta.likes??'未知'} · 语言未核实`,'hint'),text('p',`命中：${candidate.topics.map(t=>t.name).join('、')} · ${statusNames[candidate.state]} · ${statusNames[candidate.eligibility]}`));
         const progress=candidate.collection || {};
         const names={WAIT_SCHEDULE:'等待调度（规则未启用或观察队列轮候）',OBSERVING:'观察中',QUALIFIED:'已达标，等待准入',WAIT_REFRESH:'统计已过期，等待刷新',INCOMPLETE:'待补齐',RESTRICTED:'未通过规则',EXPIRED:'观察到期或规则已停用',REJECTED:'已排除',ADMITTED:'已入队',EXISTING:'已存在于主队列'};

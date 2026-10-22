@@ -1194,35 +1194,37 @@
     .lr-ok   { color: var(--yellow); font-weight: 600; }
     .lr-low  { color: var(--orange); }
     .lr-poor { color: var(--red);    }
-    /* ── 新鲜度点 ── */
-    .source-published-age-fresh { color: var(--green) !important; font-weight: 600; }
-    .source-published-age-today { color: var(--teal)  !important; }
-    .source-published-age-week  { color: var(--yellow)!important; }
-    .ingest-time-chip { color: var(--text2); }
-    .freshness-line {
-      display: inline-flex; align-items: center; flex-wrap: wrap;
-      flex: 1 1 100%; width: 100%; box-sizing: border-box;
-      column-gap: 7px; row-gap: 2px; vertical-align: middle;
-      padding: 5px 10px 5px 8px; border: 1px solid currentColor;
-      border-left-width: 5px; border-radius: 6px;
-      font-size: 0.78rem; font-weight: 750; line-height: 1.55;
-      font-variant-numeric: tabular-nums; letter-spacing: 0.005em;
+    /* 2026-10-22 Codex：原始发布距今的唯一色板；独立字段，跨页面与主题共用。 */
+    :root {
+      --source-age-fresh-fg: #15803d; --source-age-fresh-bg: #dcfce7;
+      --source-age-green-fg: #4d7c0f; --source-age-green-bg: #ecfccb;
+      --source-age-yellow-fg: #a16207; --source-age-yellow-bg: #fff8e1;
+      --source-age-orange-fg: #b45309; --source-age-orange-bg: #fff6ec;
+      --source-age-rust-fg: #9a3412; --source-age-rust-bg: #fee7db;
+      --source-age-old-fg: #6b4f43; --source-age-old-bg: #ede5df;
     }
-    .freshness-line-separator { opacity: 0.58; }
-    .video-meta-row .freshness-line-age { color: inherit; font-weight: 850; white-space: nowrap; }
-    .freshness-line-fresh {
-      color: #052e2b; background: #5eead4; border-color: #14b8a6;
-      box-shadow: 0 0 0 2px rgba(45,212,191,0.2);
+    .source-age {
+      --source-age-fg: var(--text2); --source-age-bg: var(--glass);
+      display: inline-flex; align-items: center; flex: 0 0 auto; width: fit-content;
+      max-width: 100%; margin: 3px 0; padding: 4px 8px;
+      color: var(--source-age-fg); background: var(--source-age-bg);
+      border: 1px solid currentColor; border-radius: 6px;
+      font-size: .875rem; line-height: 1.4; font-weight: 700;
+      font-variant-numeric: tabular-nums; white-space: normal;
+      overflow-wrap: anywhere; vertical-align: middle;
     }
-    .freshness-line-recent {
-      color: #422006; background: #fbbf24; border-color: #f59e0b;
-    }
-    .freshness-line-stale {
-      color: #431407; background: #fb923c; border-color: #f97316;
-    }
-    .freshness-line-very-stale {
-      color: #fff1f2; background: #be123c; border-color: #fb7185;
-      box-shadow: 0 0 0 2px rgba(244,63,94,0.18);
+    .source-age[data-freshness="fresh"] { --source-age-fg: var(--source-age-fresh-fg); --source-age-bg: var(--source-age-fresh-bg); }
+    .source-age[data-freshness="green"] { --source-age-fg: var(--source-age-green-fg); --source-age-bg: var(--source-age-green-bg); }
+    .source-age[data-freshness="yellow"] { --source-age-fg: var(--source-age-yellow-fg); --source-age-bg: var(--source-age-yellow-bg); }
+    .source-age[data-freshness="orange"] { --source-age-fg: var(--source-age-orange-fg); --source-age-bg: var(--source-age-orange-bg); }
+    .source-age[data-freshness="rust"] { --source-age-fg: var(--source-age-rust-fg); --source-age-bg: var(--source-age-rust-bg); }
+    .source-age[data-freshness="old"] { --source-age-fg: var(--source-age-old-fg); --source-age-bg: var(--source-age-old-bg); }
+    .source-publication-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; flex-basis: 100%; min-width: 0; }
+    .source-publication-detail { color: var(--text2); font-size: .8125rem; overflow-wrap: anywhere; }
+    :root[data-theme="contrast"] .source-age { border-width: 2px; }
+    @media (max-width: 650px) {
+      .source-publication-meta { gap: 3px 8px; }
+      .source-publication-detail { flex-basis: 100%; }
     }
     /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
     .activity-table td.vt-cell,

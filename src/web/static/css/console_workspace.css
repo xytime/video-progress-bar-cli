@@ -1,3 +1,4 @@
+/* 2026-10-22 Codex：移除覆盖新鲜度的旧灰色样式，字段统一由 dashboard.css 维护。 */
 /* 2026-10-12 Codex：v0.3 导航与总览；颜色只引用 dashboard.css 语义变量。 */
 .console-layout { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; padding:0; }
 .console-layout::before,.console-layout::after { display:none; }
@@ -25,8 +26,6 @@
 .console-layout .panel,.console-panel { background:var(--glass); border:1px solid var(--border); border-radius:8px; box-shadow:none; margin-bottom:18px; }
 .console-layout .tabs-header { overflow:auto; flex-wrap:wrap; }
 .console-layout .tab-btn { min-height:44px; font-size:.875rem; }
-.console-layout .freshness-line { background:transparent; border:0; padding:0; color:var(--text2); font-size:.875rem; }
-.console-layout .freshness-line-age { color:var(--text2); font-weight:400; }
 .console-layout .card-active-pulsing,.console-layout .tab-btn-pulsing { animation:none!important; box-shadow:none!important; }
 .console-layout .video-zh-title { font-size:1rem; }
 .console-layout .panel-title { font-size:1rem; }

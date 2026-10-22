@@ -112,7 +112,7 @@
       for(const row of data.results){const r=row.observation,m=r.metadata, line=node('tr','');line.dataset.key=row.key;line.dataset.category=r.category;
         const cells=labels.map(label=>{const cell=node('td','');cell.dataset.label=label;line.append(cell);return cell;});
         const link=node('a',m.title||'来源资料不足','prefilter-video-title');link.href='https://www.youtube.com/watch?v='+encodeURIComponent(m.youtube_id);link.target='_blank';link.rel='noopener noreferrer';
-        cells[0].append(link,node('p',m.channel_name||m.channel_id||'未知频道','hint'),node('p','发布 '+when(m.published_at)+'（北京时间）','hint'),node('p','获取 '+when(row.fetched_at)+'（北京时间）','hint'));
+        cells[0].append(link,node('p',m.channel_name||m.channel_id||'未知频道','hint'),SourcePublication.create(m.published_at),node('p','发布 '+when(m.published_at)+'（北京时间）','hint'),node('p','获取 '+when(row.fetched_at)+'（北京时间）','hint'));
         const detail=node('details','', 'prefilter-conclusion');detail.append(node('summary',names[r.category]),node('p',r.reasons.join('；'),'hint'));cells[0].append(detail);
         cells[1].append(node('strong',m.views==null?'未知':m.views.toLocaleString(),'prefilter-views'),node('p','点赞 '+(m.likes==null?'未知':m.likes.toLocaleString()),'hint'));
         cells[2].append(node('span',m.likes==null||!m.views?'未知':(m.likes/m.views*100).toFixed(2)+'%','prefilter-metric'));
