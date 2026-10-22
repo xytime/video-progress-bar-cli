@@ -1135,6 +1135,8 @@ def _write_submission_receipt(
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         temporary_path.replace(receipt_path)
+        from video_processing.core.wechat_session_lock import bind_current_wechat_publication
+        bind_current_wechat_publication(receipt.get("platform_post_id"), receipt_path)
     except Exception as exc:
         logger.warning("Failed to persist WeChat submission identity receipt: %s", exc)
 
