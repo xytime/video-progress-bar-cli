@@ -11,6 +11,7 @@
 - 故障注入安全：提交意图落盘后任何异常仅转入 UNCERTAIN 只读对账
 
 # Modification History
+| root-reply-scope-v1 | 2026-10-23 | Codex | 回复触发器限定父评论直属主体，排除已展开的观众子回复控件；仍拒绝主体内歧义。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -380,8 +381,17 @@ class SecondaryReplyBrowserAdapter:
                 "error": f"一级评论节点不唯一或未找到 (commentId: {root_comment_id})",
             }
 
+        # 已展开的观众子回复也有同款图标；只在根评论直属主体中定位触发器。
+        root_main = parent_item.locator(":scope > .comment-item-main").filter(visible=True)
+        if root_main.count() > 1:
+            return {"ok": False, "error": "父评论直属主体不唯一，触发歧义阻断"}
+        reply_scope = parent_item
+        if root_main.count() == 1:
+            reply_scope = root_main.locator(":scope > .comment-main-content > .comment-row > .comment-actions").filter(visible=True)
+            if reply_scope.count() != 1:
+                return {"ok": False, "error": "父评论直属操作区不唯一或缺失，触发歧义阻断"}
         reply_selector, reply_btn_loc, reply_err = self._locate_unique_visible_control(
-            parent_item,
+            reply_scope,
             REPLY_TRIGGER_SELECTORS,
             control_label="父评论内回复按钮",
         )
