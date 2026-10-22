@@ -1025,7 +1025,7 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         result = json.loads(raw)
     except Exception as e:  # noqa: BLE001
         logger.exception("wechat_login command failed")
-        await notice.edit_text(fmt.fmt_error(f"启动微信登录失败：{e}"), parse_mode="Markdown")
+        await notice.edit_text(f"启动微信登录失败：{e}", parse_mode=None)
         return
 
     if result.get("ok"):
@@ -1033,7 +1033,7 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             result.get("message", "微信登录请求已受理，正在获取二维码。"),
         )
     else:
-        await notice.edit_text(fmt.fmt_error(result.get("error", "启动微信登录失败")), parse_mode="Markdown")
+        await notice.edit_text(result.get("error", "启动微信登录失败"), parse_mode=None)
 
 
 def _get_wechat_login_info() -> dict:

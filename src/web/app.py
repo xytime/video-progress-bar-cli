@@ -1,5 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
+
 | evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
 | cover-source-v1 | 2026-10-15 | Codex | 列表返回统一封面来源，缩略图读取投稿冻结文件。 |
 | maintenance-v1 | 2026-10-12 | Codex | 共用持久化准入、调度角色互斥、单项线程归属和资源等待；维护启动保留本地候选管理。 |
@@ -489,10 +491,6 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
     if settings.wechat_account_scheduler_enabled and reason != "manual":
         return {"success": False, "deferred": True, "message": "账户统一调度已停用自动保活及预热重登"}
     from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
-    try:
-        WeChatRequestGuard(Path(__file__).parent.parent.parent / "output/wechat_state.json").check()
-    except WeChatRequestDeferred as exc:
-        return {"success": False, "deferred": True, "message": str(exc)}
     prj_root = Path(__file__).parent.parent.parent
     python = str(prj_root / ".venv" / "bin" / "python")
     script = str(prj_root / "scripts" / "wechat_uploader.py")
@@ -513,7 +511,17 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
         except Exception:
             pass
 
-    if not preserve_marker:
+    manual_login_token = ""
+    try:
+        guard = WeChatRequestGuard(state)
+        if reason == "manual":
+            manual_login_token = guard.issue_manual_login()
+        else:
+            guard.check()
+    except WeChatRequestDeferred as exc:
+        return {"success": False, "deferred": True, "message": str(exc)}
+
+    if not preserve_marker and not manual_login_token:
         try:
             login_at_path.unlink()
         except FileNotFoundError:
@@ -524,6 +532,8 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
         pass
 
     args = [python, script, "--login-only", "--relogin", "--state", str(state)]
+    if manual_login_token:
+        args.extend(["--manual-login-token", manual_login_token])
     if not headless:
         args.append("--no-headless")
     if preserve_marker:
@@ -547,10 +557,10 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
                 and post_auth_at > pre_auth_at
                 and post_auth_at >= (start_ts - 2.0)
             )
-            if auth_succeeded_this_run:
+            if auth_succeeded_this_run and not manual_login_token:
                 _restore_login_required_after_wechat_login()
                 _resume_eligible_english_world_after_wechat_login()
-            else:
+            elif not auth_succeeded_this_run:
                 import logging
                 logging.getLogger(__name__).warning(
                     f"WeChat login subprocess finished (code={result.returncode}) but fresh authorization was not confirmed (pre={pre_auth_at}, post={post_auth_at}, start={start_ts})."
@@ -3891,7 +3901,9 @@ def wechat_login(headless: bool = True):
     也可以传递 headless=false 以便在本地有图形界面的机器上弹出浏览器。
     # [Gemini_2.0_Flash_fast]
     """
-    started = _start_wechat_login_flow(headless=headless, preserve_marker=False, reason="manual login")
+    started = _start_wechat_login_flow(headless=headless, preserve_marker=False, reason="manual")
+    if not started.get("success"):
+        return started
     if started.get("already_running"):
         started["message"] = "微信登录程序已在运行，请使用当前二维码扫码"
     return {

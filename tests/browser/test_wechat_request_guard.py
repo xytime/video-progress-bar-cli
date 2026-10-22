@@ -15,11 +15,20 @@ from video_processing.core.wechat_request_guard import WeChatRequestGuard
 from video_processing.core.wechat_session_lock import WeChatSessionLock, WeChatSessionLockBusy
 
 
-def test_initial_page_business_limit_is_seen_without_ready_controls(chromium, tmp_path):
+@pytest.mark.parametrize("manual", [False, True])
+def test_initial_page_business_limit_is_seen_without_ready_controls(chromium, tmp_path, monkeypatch, manual):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", manual)
+    monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
     state = tmp_path / "state.json"
     api = "https://channels.weixin.qq.com/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list"
     calls = []
-    with WeChatSessionLock(state, purpose="发布"):
+    token = ""
+    if manual:
+        guard = WeChatRequestGuard(state)
+        guard.record_limited(endpoint="/prior-limit")
+        token = guard.issue_manual_login()
+    with WeChatSessionLock(state, purpose="登录" if manual else "发布", manual_login_token=token):
         context = create_wechat_context(chromium)
 
         def respond(route):
@@ -47,6 +56,7 @@ def test_initial_page_business_limit_is_seen_without_ready_controls(chromium, tm
 
 def test_real_uploader_stops_on_initial_business_limit_before_ready_check(tmp_path, monkeypatch):
     from scripts import wechat_uploader as uploader
+    monkeypatch.setattr(uploader.settings, "wechat_account_scheduler_enabled", False)
     original_factory = uploader.create_wechat_context
     calls = []
 

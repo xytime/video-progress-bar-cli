@@ -1,5 +1,7 @@
 """视频号浏览器会话的跨进程排他锁。
 
+| manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
+
 锁文件由 Playwright storage-state 的规范化绝对路径唯一派生，确保上传、
 保活和评论适配器不会同时使用或改写同一份登录态。
 
@@ -157,6 +159,7 @@ class WeChatSessionLock:
         purpose: str = "浏览器操作",
         video: str = "",
         cooldown_override: str = "",
+        manual_login_token: str = "",
     ) -> None:
         self.state_path = Path(state_path).expanduser().resolve(strict=False)
         self.lock_path = canonical_wechat_session_lock_path(self.state_path)
@@ -165,6 +168,7 @@ class WeChatSessionLock:
         self._handle = None
         self.purpose = purpose
         self.video = video
+        self.manual_login_token = manual_login_token
         self.cooldown_override = cooldown_override
         self.request_guard = WeChatRequestGuard(self.state_path)
         self._request_started = False
@@ -175,7 +179,7 @@ class WeChatSessionLock:
 
     def acquire(self) -> "WeChatSessionLock":
         """在截止时间内尝试获取锁，超时即抛出可识别的 busy 异常。"""
-        if self.purpose not in {"发布", "状态核对"} and read_lease_owner(self.state_path.parent / "wechat_publish_priority.lock"):
+        if not self.manual_login_token and self.purpose not in {"发布", "状态核对"} and read_lease_owner(self.state_path.parent / "wechat_publish_priority.lock"):
             raise WeChatSessionLockBusy("待发布任务优先；评论/保活本轮让出浏览器")
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.lock_path.open("a+", encoding="utf-8")
@@ -183,6 +187,13 @@ class WeChatSessionLock:
         while True:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if self.manual_login_token:
+                    if self.purpose != "登录" or self.cooldown_override:
+                        raise WeChatOverrideInvalid("人工登录许可仅可用于登录")
+                    try:
+                        self.request_guard.consume_manual_login(self.manual_login_token)
+                    except WeChatRequestDeferred as exc:
+                        raise WeChatOverrideInvalid(str(exc)) from exc
                 if self.cooldown_override:
                     try:
                         self.request_guard.consume_override(self.cooldown_override, self.video)
@@ -190,7 +201,7 @@ class WeChatSessionLock:
                         raise WeChatOverrideInvalid(str(exc)) from exc
                 try:
                     self.request_guard.check()
-                    if self.video:
+                    if self.video and not self.manual_login_token:
                         self.request_guard.admission(self.purpose, self.video, Path(sys.argv[0]).name)
                 except WeChatCooldownDeferred as exc:
                     raise WeChatSessionCooldown(str(exc)) from exc
@@ -273,6 +284,9 @@ def guarded_wechat_browser_session(
                             break
                     if purpose != "发布" or bound.arguments.get("login_only") or bound.arguments.get("verify_only"):
                         raise WeChatOverrideInvalid("单次跳过只允许当前作品发布")
+                login_token = bound.arguments.get("manual_login_token") or ""
+                if login_token and (not bound.arguments.get("login_only") or bound.arguments.get("verify_only")):
+                    raise WeChatOverrideInvalid("人工登录许可不能用于投稿或回查")
                 effective_purpose = ("状态核对" if bound.arguments.get("verify_only") else
                                      "登录" if bound.arguments.get("login_only") else purpose)
                 task = (str(bound.arguments.get("platform_post_id") or "") if effective_purpose == "状态核对"
@@ -280,7 +294,7 @@ def guarded_wechat_browser_session(
                         else purpose)
                 with gate().admit("wechat-resource", key) as ticket:
                     with WeChatSessionLock(state_path, timeout_seconds=timeout_seconds, purpose=effective_purpose,
-                                           video=video if override else task, cooldown_override=override) as session:
+                                           video=video if override else task, cooldown_override=override, manual_login_token=login_token) as session:
                         session.request_guard.metadata = {name: str(bound.arguments[name]) for name in
                             ("copy_path", "title_path", "state_path") if bound.arguments.get(name)}
                         ticket.start()

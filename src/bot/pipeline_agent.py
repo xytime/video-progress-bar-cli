@@ -826,6 +826,7 @@ class PipelineAgent:
         login_cmd = [
             self.venv_python,
             script,
+            "--cooldown-result-codes",
             "--login-only",          # 默认 headless → 截图 QR 发 Telegram，远程扫码
             "--relogin",             # 强制出二维码（即使当前已登录），支持「临期主动重登刷新 24h」；
                                      # 旧会话在扫码成功前保持有效，未扫不掉线
@@ -838,6 +839,9 @@ class PipelineAgent:
             extra_env["TELEGRAM_CHAT_ID"] = str(self.chat_id)
         env = build_subprocess_env(extra_env, include_gemini=False)
         try:
+            from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+            token = WeChatRequestGuard(state).issue_manual_login()
+            login_cmd.extend(["--manual-login-token", token])
             # 后台 Bot 的终端可能已撤销，登录子进程不能继承失效的 stdin。
             proc = subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
             try:
@@ -849,12 +853,14 @@ class PipelineAgent:
                 return json.dumps({"ok": False, "error": self._wechat_login_failure(code)})
             return json.dumps({"ok": True, "message": "登录流程已完成，请用 /last_login 核对登录状态。"})
         except Exception as e:
-            return json.dumps({"ok": False, "error": f"启动微信登录失败：{type(e).__name__}"})
+            return json.dumps({"ok": False, "error": str(e) if isinstance(e, WeChatRequestDeferred) else f"启动微信登录失败：{type(e).__name__}"})
 
     @staticmethod
     def _wechat_login_failure(code: int) -> str:
+        if code == 15:
+            return "未生成新二维码：账号本地冷却尚未结束，登录请求已在启动浏览器前停止。"
         if code == 11:
-            return "未生成新二维码：视频号浏览器会话正被占用。请等待当前登录或上传结束后再发送 /wechat_login。"
+            return "未生成新二维码：会话正被占用或账户调度暂不允许登录，请查看后台状态；本次未启动浏览器。"
         return f"微信登录未完成（退出码 {code}），旧二维码不可继续使用。请重新发送 /wechat_login；如仍无图片，请检查登录日志与 Telegram 网络。"
 
     def _watch_wechat_login(self, proc) -> None:

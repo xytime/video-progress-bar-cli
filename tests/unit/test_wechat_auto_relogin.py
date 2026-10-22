@@ -123,7 +123,7 @@ def test_start_wechat_login_flow_unmodified_auth_does_not_resume(tmp_path, monke
     assert not mock_restore.called
 
 
-def test_start_wechat_login_flow_fresh_auth_resumes_tasks(tmp_path, monkeypatch):
+def test_manual_login_fresh_auth_does_not_resume_tasks(tmp_path, monkeypatch):
     """子进程 returncode=0 且真实写入了新的 authorized_at 时，成功触发任务恢复。"""
     from unittest.mock import MagicMock, patch
     output = _prepare_project(tmp_path, monkeypatch)
@@ -150,5 +150,5 @@ def test_start_wechat_login_flow_fresh_auth_resumes_tasks(tmp_path, monkeypatch)
         assert res["success"] is True
         if web_app._wechat_login_thread:
             web_app._wechat_login_thread.join(timeout=2.0)
-    assert mock_restore.called
+    assert not mock_restore.called
 

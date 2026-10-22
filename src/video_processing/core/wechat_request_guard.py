@@ -1,5 +1,7 @@
 """视频号账户级请求退避；跨作品、跨进程共享，拒绝请求不延长冷却。
 
+| manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
+
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -54,6 +56,7 @@ class WeChatRequestGuard:
         self.audit_path = state.with_name(f".{state.name}.requests.jsonl")
         self._override_generation = None
         self._limited_recorded = False
+        self._manual_login = False
         self.purpose = ""
         self.task = ""
         self.caller = ""
@@ -97,6 +100,25 @@ class WeChatRequestGuard:
             self._save(row, {"event": "COOLDOWN_OVERRIDE_ISSUED", "video": video})
             return token
 
+    def issue_manual_login(self):
+        """显式人工入口签发十五分钟单次许可；重复点击不会反复开启后台。"""
+        with self._locked():
+            row, now = self._read(), time.time()
+            if now < row.get("manual_login_issued_at", 0) + 900:
+                raise WeChatRequestDeferred("手动登录已申请，请等待当前扫码流程；十五分钟内不重复启动")
+            token = uuid.uuid4().hex
+            row.setdefault("manual_overrides", {})[hashlib.sha256(token.encode()).hexdigest()] = {
+                "video": "__manual_login__", "expires_at": now + 900,
+                "generation": list(self._generation(row))}
+            row["manual_login_issued_at"] = now
+            self._save(row, {"event": "MANUAL_LOGIN_ISSUED"})
+            return token
+
+    def consume_manual_login(self, token):
+        self.consume_override(token, "__manual_login__")
+        self._manual_login = True
+        self.purpose, self.task = "登录", "manual-login"
+
     def revoke_override(self, token):
         with self._locked():
             row = self._read()
@@ -119,7 +141,7 @@ class WeChatRequestGuard:
             self._save(row, {"event": "COOLDOWN_OVERRIDE_CONSUMED", "video": video})
 
     def _check_session(self, row, now):
-        if (not settings.wechat_account_scheduler_enabled and self._override_generation is not None
+        if ((self._manual_login or not settings.wechat_account_scheduler_enabled) and self._override_generation is not None
                 and self._override_generation == self._generation(row)):
             return
         self._check(row, now)
@@ -239,7 +261,12 @@ class WeChatRequestGuard:
         with self._locked():
             row, now = self._read(), time.time()
             self._check_session(row, now)
-            if settings.wechat_account_scheduler_enabled:
+            if self._manual_login:
+                if purpose != "登录":
+                    raise WeChatRequestDeferred("人工登录许可不能用于其他操作")
+                schedule = row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})
+                schedule["sessions"].append({"at": now, "purpose": "登录", "task": self.task})
+            elif settings.wechat_account_scheduler_enabled:
                 self._check(row, now)
                 reason = admission(row, now, purpose, self.task, consume=True)
                 if reason:

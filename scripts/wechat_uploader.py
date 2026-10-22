@@ -1,5 +1,7 @@
 """WeChat Channels Automated Video Uploader
 
+| manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
+
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
@@ -2548,6 +2550,9 @@ def run_uploader(
     article_url: str | None = None,
     article_title: str | None = None,
     article_task_decision: str | None = None,
+    cooldown_override: str | None = None,
+    cooldown_result_codes: bool = False,
+    manual_login_token: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -2888,7 +2893,8 @@ def run_uploader(
                     return 1
 
         if login_only:
-            _restore_login_required_tasks_after_login(resume_submission=False)
+            if not manual_login_token:
+                _restore_login_required_tasks_after_login(resume_submission=False)
             logger.info("Login-only mode completed successfully without triggering submissions.")
             browser.close()
             return 0
@@ -4150,6 +4156,9 @@ def run_uploader(
 def main():
     parser = argparse.ArgumentParser(description="Upload and publish videos to WeChat Channels.")
     parser.add_argument("--video",         help="Path to vertical MP4 video file")
+    parser.add_argument("--manual-login-token", help="人工登录单次许可，禁止投稿或回查")
+    parser.add_argument("--cooldown-override", help="控制台签发的单任务单次冷却确认凭据")
+    parser.add_argument("--cooldown-result-codes", action="store_true", help="调用方支持冷却与许可失效细分返回码")
     parser.add_argument("--copy",          help="Path to WeChat copy description text file")
     parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
@@ -4216,6 +4225,9 @@ def main():
     try:
         code = run_uploader(
             video_path    = args.video,
+            manual_login_token = args.manual_login_token,
+            cooldown_override = args.cooldown_override,
+            cooldown_result_codes = args.cooldown_result_codes,
             copy_path     = args.copy,
             title_path    = args.title_file,
             cover_path    = args.cover,

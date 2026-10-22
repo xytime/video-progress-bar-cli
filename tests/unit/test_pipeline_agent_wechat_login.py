@@ -60,15 +60,17 @@ assert '已完成' in result['message'], result
     assert result.returncode == 0, result.stderr
     started = json.loads((tmp_path / "started.json").read_text())
     assert started["stdin"] == ""
-    assert started["args"] == [
-        "--login-only", "--relogin", "--state", str(tmp_path / "output/wechat_state.json")
+    assert started["args"][:-2] == [
+        "--cooldown-result-codes", "--login-only", "--relogin", "--state", str(tmp_path / "output/wechat_state.json")
     ]
 
 
-def test_login_busy_is_not_reported_as_started(tmp_path):
+def test_login_busy_is_not_reported_as_started(tmp_path, monkeypatch):
     from unittest.mock import Mock, patch
     from bot.pipeline_agent import PipelineAgent
 
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
     agent = PipelineAgent.__new__(PipelineAgent)
     agent.project_root = tmp_path
     agent.output_dir = tmp_path / 'output'
@@ -99,3 +101,24 @@ def test_late_login_failure_notifies_requester():
     proc.wait.return_value = 0
     agent._watch_wechat_login(proc)
     agent.send_telegram_message.assert_not_called()
+
+
+def test_login_cooldown_is_not_reported_as_busy():
+    from bot.pipeline_agent import PipelineAgent
+    assert "本地冷却" in PipelineAgent._wechat_login_failure(15)
+
+
+def test_command_failure_with_underscore_uses_plain_text(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import bot.telegram_bot as bot
+    notice = SimpleNamespace(edit_text=AsyncMock())
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=AsyncMock(return_value=notice)),
+                             effective_chat=SimpleNamespace(id=123))
+    monkeypatch.setattr(bot, "_check_admin", lambda _: True)
+    monkeypatch.setattr(bot, "PipelineAgent", lambda **kwargs: SimpleNamespace(
+        trigger_wechat_login=lambda: json.dumps({"ok": False, "error": "请发送 /wechat_login"})))
+    asyncio.run(bot.cmd_wechat_login(update, SimpleNamespace(bot=None)))
+    assert notice.edit_text.call_args.kwargs["parse_mode"] is None
+    assert "/wechat_login" in notice.edit_text.call_args.args[0]
