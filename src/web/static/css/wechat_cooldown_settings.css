@@ -1,0 +1,37 @@
+/* 视频号冷却与调度策略页面布局；沿用现有控制台语义颜色、表单与对话框。 */
+.wechat-cooldown-settings .wc-runtime-panel { margin-bottom:20px; padding:18px; border:1px solid var(--border); border-radius:8px; background:var(--glass); }
+.wechat-cooldown-settings .wc-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.wechat-cooldown-settings .wc-section-head h2 { margin:0 0 4px; font-size:1.1rem; }
+.wechat-cooldown-settings .wc-section-head p { margin:0; max-width:780px; }
+.wechat-cooldown-settings .wc-btn-warning { border-color:var(--yellow); color:var(--text); background:color-mix(in srgb,var(--yellow) 16%,var(--bg2)); font-weight:600; }
+.wechat-cooldown-settings .wc-btn-warning:disabled { opacity:.45; border-color:var(--border); background:var(--bg2); font-weight:normal; }
+.wechat-cooldown-settings .wc-metrics-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+.wechat-cooldown-settings .wc-metric-card { padding:12px 14px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); display:flex; flex-direction:column; gap:4px; min-width:0; }
+.wechat-cooldown-settings .wc-metric-label { font-size:.78rem; color:var(--text3); }
+.wechat-cooldown-settings .wc-metric-card strong { font-size:1.02rem; overflow-wrap:anywhere; }
+.wechat-cooldown-settings .wc-recent-sessions summary { cursor:pointer; font-size:.86rem; color:var(--text2); padding:4px 0; }
+.wechat-cooldown-settings .wc-session-list { margin-top:8px; font-size:.82rem; color:var(--text2); display:flex; flex-direction:column; gap:6px; max-height:200px; overflow:auto; }
+.wechat-cooldown-settings .wc-session-row { display:flex; justify-content:space-between; gap:12px; padding:6px 10px; border-radius:4px; background:var(--bg2); border:1px solid var(--border); }
+.wechat-cooldown-settings .wc-layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:18px; align-items:start; }
+.wechat-cooldown-settings .wc-fields { display:flex; flex-direction:column; gap:16px; }
+.wechat-cooldown-settings .wc-toggle { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:10px 0; margin:0; font-size:.9rem; }
+.wechat-cooldown-settings .wc-toggle small { display:block; margin-top:4px; font-weight:normal; }
+.wechat-cooldown-settings input[type="checkbox"] { width:22px; height:22px; flex:0 0 22px; margin:0; accent-color:var(--blue); }
+.wechat-cooldown-settings .wc-preset-bar { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 14px; }
+.wechat-cooldown-settings .wc-preset { font-size:.82rem; padding:6px 12px; min-height:36px; }
+.wechat-cooldown-settings .wc-grid-2col { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.wechat-cooldown-settings .wc-summary-list { margin:12px 0; display:flex; flex-direction:column; gap:10px; }
+.wechat-cooldown-settings .wc-summary-list > div { display:flex; justify-content:space-between; gap:12px; padding-bottom:8px; border-bottom:1px solid var(--border); font-size:.88rem; }
+.wechat-cooldown-settings .wc-summary-list dt { color:var(--text2); }
+.wechat-cooldown-settings .wc-summary-list dd { margin:0; font-weight:600; text-align:right; }
+.wechat-cooldown-settings #feedback { white-space:pre-line; overflow-wrap:anywhere; }
+.wechat-cooldown-settings #feedback:empty { display:none; }
+.wechat-cooldown-settings [aria-invalid="true"] { border-color:var(--red); }
+@media(max-width:1050px) {
+  .wechat-cooldown-settings .wc-metrics-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .wechat-cooldown-settings .wc-layout { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:640px) {
+  .wechat-cooldown-settings .wc-metrics-grid,
+  .wechat-cooldown-settings .wc-grid-2col { grid-template-columns:minmax(0,1fr); }
+}

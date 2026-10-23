@@ -1,0 +1,11 @@
+/* 冷却确认沿用控制台主题与原生 dialog；不影响其他弹层。 */
+.manual-cooldown-dialog { box-sizing:border-box; margin:auto; width:min(540px,calc(100vw - 32px)); max-height:85dvh; overflow:auto; padding:24px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; font:inherit; }
+.manual-cooldown-dialog::backdrop { background:rgb(0 0 0 / .6); }
+.manual-cooldown-dialog h2 { font-size:1.125rem; margin:0 0 14px; }
+.manual-cooldown-dialog p { font-size:.875rem; line-height:1.65; margin:12px 0; overflow-wrap:anywhere; }
+.manual-cooldown-dialog dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px 16px; font-size:.875rem; line-height:1.6; }
+.manual-cooldown-dialog dt { color:var(--text2); }
+.manual-cooldown-dialog dd { margin:0; overflow-wrap:anywhere; }
+.manual-cooldown-dialog .manual-cooldown-force { border-color:var(--orange); }
+.manual-cooldown-dialog button:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+@media(max-width:650px) { .manual-cooldown-dialog { padding:18px; } .manual-cooldown-dialog .console-confirm-actions button { flex:1 1 100%; white-space:normal; } }

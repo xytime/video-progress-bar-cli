@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>视频号冷却与调度 · 视频控制台</title>
+  <script>
+  (() => {
+    const root = document.documentElement;
+    const system = matchMedia('(prefers-color-scheme: dark)');
+    let prefs = {};
+    try { prefs = JSON.parse(localStorage.getItem('vp-display-preferences') || '{}') || {}; } catch (_) {}
+    const theme = ['system', 'dark', 'light', 'contrast'].includes(prefs.theme) ? prefs.theme : 'system';
+    const apply = () => {
+      root.dataset.theme = theme === 'system' ? (system.matches ? 'dark' : 'light') : theme;
+      root.dataset.textSize = ['standard', 'large', 'xlarge'].includes(prefs.size) ? prefs.size : 'large';
+    };
+    apply();
+    system.addEventListener('change', apply);
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="stylesheet" href="/static/css/product_settings.css">
+  <link rel="stylesheet" href="/static/css/console_workspace.css">
+  <link rel="stylesheet" href="/static/css/wechat_cooldown_settings.css">
+  <script defer src="/static/js/wechat_cooldown_settings.js"></script>
+  <script defer src="/static/js/console_navigation.js"></script>
+</head>
+<body>
+<main class="product-settings wechat-cooldown-settings">
+  <nav class="breadcrumbs" aria-label="当前位置">
+    <a id="back" href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">视频号冷却与调度</span>
+  </nav>
+  <header class="page-header">
+    <div>
+      <h1>视频号冷却与调度</h1>
+      <p class="hint">查看账号实时冷却与 24 小时会话配额、确认平台限流解冻，以及调整后台调度参数（默认保留安全生产值）。</p>
+    </div>
+    <div class="header-actions">
+      <span id="dirty-state" role="status">正在载入…</span>
+      <button id="reload" type="button" disabled>刷新状态</button>
+      <button id="reset-defaults" type="button" disabled>恢复推荐默认</button>
+      <button id="save" class="primary" type="button" disabled>保存策略</button>
+    </div>
+  </header>
+  <p id="feedback" role="status" aria-live="polite"></p>
+
+  <section class="wc-runtime-panel" aria-labelledby="runtime-heading">
+    <div class="wc-section-head">
+      <div>
+        <h2 id="runtime-heading">账号实时冷却与调度状态</h2>
+        <p class="hint">“等待冷却”大多数时候是两次投稿之间的正常节流间隔（默认 15 分钟），并非平台封禁。仅当遇到 -360 / 429 平台限流或处于 24 小时恢复期时，才需要人工确认解冻。</p>
+      </div>
+      <div class="wc-unfreeze-box">
+        <button id="btn-unfreeze" type="button" class="wc-btn-warning" disabled>确认平台已解冻（解除限流／恢复期）</button>
+      </div>
+    </div>
+    <div class="wc-metrics-grid" id="runtime-metrics">
+      <div class="wc-metric-card">
+        <span class="wc-metric-label">当前状态</span>
+        <strong id="rt-status">正在读取…</strong>
+        <small id="rt-reason" class="hint">—</small>
+      </div>
+      <div class="wc-metric-card">
+        <span class="wc-metric-label">下次允许访问</span>
+        <strong id="rt-until">—</strong>
+        <small id="rt-remaining" class="hint">—</small>
+      </div>
+      <div class="wc-metric-card">
+        <span class="wc-metric-label">近 24 小时会话配额</span>
+        <strong id="rt-quota">—</strong>
+        <small id="rt-interval-mode" class="hint">—</small>
+      </div>
+      <div class="wc-metric-card">
+        <span class="wc-metric-label">历史限流级数 / 最近限流</span>
+        <strong id="rt-streak">—</strong>
+        <small id="rt-last-limited" class="hint">—</small>
+      </div>
+    </div>
+    <details class="wc-recent-sessions">
+      <summary>最近 24 小时平台访问记录（<span id="rt-session-count">0</span> 次）</summary>
+      <div id="rt-sessions-list" class="wc-session-list">正在读取…</div>
+    </details>
+  </section>
+
+  <form id="settings-form" novalidate>
+    <fieldset id="editor" disabled>
+      <legend class="sr-only">视频号账户冷却与调度策略配置</legend>
+      <div class="wc-layout">
+        <div class="wc-fields">
+          <section>
+            <h2>账户统一调度总开关</h2>
+            <label class="wc-toggle" for="scheduler-enabled">
+              <span>
+                <strong>启用视频号账户统一调度器（推荐开启）</strong>
+                <small class="hint">开启时按下方稳定期／恢复期间隔与 24 小时配额自动排队节流；关闭后仅保留基础会话最小间隔，不再限制 15 分钟间隔与每日总次数（高风险，易触发 -360 限流）。</small>
+              </span>
+              <input id="scheduler-enabled" type="checkbox">
+            </label>
+          </section>
+
+          <section>
+            <h2>日常稳定期调度参数（推荐保持默认）</h2>
+            <p class="hint">平时无平台限流时生效。默认每 15 分钟（900 秒）最多启动 1 次投稿会话，24 小时最多 20 次。</p>
+            <div class="wc-preset-bar">
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="900">默认 15 分钟 (900s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="600">10 分钟 (600s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="300">5 分钟 (300s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="1800">30 分钟 (1800s)</button>
+            </div>
+            <div class="wc-grid-2col">
+              <div>
+                <label for="stable-interval-seconds">稳定期最小间隔（秒，60–86400，默认 900）</label>
+                <input id="stable-interval-seconds" type="number" min="60" max="86400" step="1">
+                <small id="stable-interval-hint" class="hint"></small>
+              </div>
+              <div>
+                <label for="daily-limit">稳定期 24 小时最大会话数（1–100，默认 20）</label>
+                <input id="daily-limit" type="number" min="1" max="100" step="1">
+                <small class="hint">包含发布与新投稿状态核对会话</small>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h2>平台限流后恢复期与底层退避参数</h2>
+            <p class="hint">当平台返回 -360 或 HTTP 429 后，账号解冻后的首 24 小时进入恢复期（或点击上方“确认平台已解冻”直接跳过恢复期）。</p>
+            <div class="wc-grid-2col">
+              <div>
+                <label for="recovery-interval-seconds">恢复期最小间隔（秒，300–86400，默认 3600）</label>
+                <input id="recovery-interval-seconds" type="number" min="300" max="86400" step="1">
+                <small id="recovery-interval-hint" class="hint"></small>
+              </div>
+              <div>
+                <label for="recovery-limit">恢复期 24 小时最大会话数（1–20，默认 1）</label>
+                <input id="recovery-limit" type="number" min="1" max="20" step="1">
+              </div>
+              <div>
+                <label for="request-min-interval-seconds">基础会话最小间隔（秒，1–3600，默认 60）</label>
+                <input id="request-min-interval-seconds" type="number" min="1" max="3600" step="1">
+                <small class="hint">每次结束浏览器会话后写入 next_session_at 的保底间隔</small>
+              </div>
+              <div>
+                <label for="rate-limit-cooldown-seconds">限流指数退避基数（秒，300–86400，默认 1800）</label>
+                <input id="rate-limit-cooldown-seconds" type="number" min="300" max="86400" step="1">
+                <small class="hint">启用统一调度时首次限流固定至少退避 24 小时</small>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="wc-summary-panel">
+          <h2>当前策略摘要</h2>
+          <p class="hint">保存后立即通过文件热加载在 Web、守护进程与上传脚本间生效，无需重启服务。</p>
+          <dl class="wc-summary-list">
+            <div><dt>统一调度器</dt><dd id="sum-enabled">—</dd></div>
+            <div><dt>稳定期最小间隔</dt><dd id="sum-stable-interval">—</dd></div>
+            <div><dt>稳定期 24h 上限</dt><dd id="sum-daily-limit">—</dd></div>
+            <div><dt>恢复期最小间隔</dt><dd id="sum-recovery-interval">—</dd></div>
+            <div><dt>恢复期 24h 上限</dt><dd id="sum-recovery-limit">—</dd></div>
+            <div><dt>基础会话间隔</dt><dd id="sum-req-interval">—</dd></div>
+            <div><dt>限流退避基数</dt><dd id="sum-rate-cooldown">—</dd></div>
+          </dl>
+          <p id="policy-preview" class="hint" role="status"></p>
+        </aside>
+      </div>
+    </fieldset>
+  </form>
+
+  <dialog id="unfreeze-dialog" aria-labelledby="unfreeze-heading">
+    <h2 id="unfreeze-heading">确认平台已解冻</h2>
+    <p>此操作将清除当前的本地平台限流倒计时（<code>blocked_until</code>）并结束 24 小时恢复期限制，恢复按日常稳定期间隔排队。</p>
+    <p class="hint">请仅在微信视频号助手后台已确认可以正常访问作品列表时执行；操作保留已有投稿去重记录与会话历史。</p>
+    <div class="dialog-foot">
+      <button id="unfreeze-cancel" type="button" autofocus>取消</button>
+      <button id="unfreeze-confirm" type="button" class="primary">确认解冻</button>
+    </div>
+  </dialog>
+
+  <dialog id="discard-dialog" aria-labelledby="discard-heading">
+    <h2 id="discard-heading">有尚未保存的修改</h2>
+    <p>继续会丢弃当前表单中的修改。</p>
+    <div class="dialog-foot">
+      <button id="keep-editing" type="button" autofocus disabled>继续编辑</button>
+      <button id="discard" type="button" disabled>丢弃修改并继续</button>
+    </div>
+  </dialog>
+</main>
+</body>
+</html>
