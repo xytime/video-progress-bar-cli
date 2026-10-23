@@ -48,3 +48,21 @@ UI 静态审计：独立修复版本为 0 项；生产组合版本保留既有 `
 ## 实际限制
 
 历史任务没有完整的 ASR/翻译完成快照。生词 JSON 和质量报告不足以还原全部 42 段，不能冒充有效缓存；首次重试仍需补跑一次，之后下游失败可直接复用。此次未执行历史任务的完整重新出片，因此第 169 帧反例通过不等于整条视频已完成渲染或已获平台受理。
+
+
+## 追加：授权验证、上线及正式重试（17:08）
+
+用户本轮明确授权“验证并上线、重发失败视频”。按视频 ID 精确处理，未批量重试其它历史失败项。
+
+- 原人工批准已被运行日志确认生效；原第 169 帧后又遇到百分比写法、孤帧 OCR 和衣服纹理误识别。新增规范化数字/百分比证据、双向字幕轨迹、严格孤帧/合框恢复；画面文字不擦除，仍保留于 B 的避让障碍。
+- 增加原片 SHA-256 绑定的 4,061 帧 OCR/人脸/ASR 数据夹具。整片通过；错误数值、未知句子、缺少单侧/双侧证据、连续低置信错误、第二条字幕轨迹等阻断反例继续通过。
+- 生产现有修改＋本次修复的组合源码通过 **259 项、14 条依赖弃用警告**。OS 隔离探针退出码 0，浏览器运行退出码 0。证据：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-gcpwfhcf/`，源码清单 SHA-256 `6a3900fe83399b3590085ec9a191654fa96904d5248394b498cfd5d3b9c439c5`。
+- 修复提交 `8c879f804233b3119d19c96c8db04bdac2a9025d`。原生部署事务 `3580df6735e5444ea4522c45b1eaed94` 九步完成，主工作区 `main`、新 UI PID **58951**、端口 **9100**，采用/启动源码 SHA-256 `cbd98d73837b2cf081ad2edb5a07b79577d32e7e49c58126f0ff6bbf71bb4611`。原有 dirty/untracked 保留，配置和调度恢复。
+- 首次冻结因既有 `wallstreet-render / pair:18` 在途而停在 `SCHEDULE_DAEMON_NOT_DRAINED`。等待它自然结束；核对源码、调度、保护基线及 `active=[] / unknown=[SOURCES_NOT_VERIFIED]` 后，在项目部署互斥下调用原生 freeze 动作完成冻结，再由原生 `recover` 完成后续步骤。未强杀在途任务、强解锁或改写事务日志。
+- 正式重试前，用只读 SQLite 一致性快照确认 `i1WsMclsgOs` 为 `FAILED / process_pid=null`，微信与抖音账本均无提交记录。仅调用一次 `/api/videos/i1WsMclsgOs/retry`，返回 `success=true / triggered=true`。
+- **17:08:17–17:08:24 实际运行确认：人工 P0 放行有效；文案、ASR、翻译均复用；全片定位通过。最终 FAILED，错误为“整片 B 上下均无安全位置，需人工处理”。没有进入上传器，没有平台受理或公开可见证据。** 此失败是字幕排版门禁，不是重新审核或重新转录。
+- 链接对应的另一条视频 `zUv-6-FPQfw` 为现有待发布项，原人工批准仍在，平台账本无记录；本轮未另外重置或重复触发。其既有二创策划仍由原任务管理。
+
+部署及重试证据：`/Users/ryusei/Library/Application Support/VideoProcessing/deployments/retry-resume-20261023-b/`，含基线、冻结补完、备份、采用/启动、最终回读和 `before-retry.json / retry-response.json / after-retry.json`。
+
+剩余发布阻塞与待确认的单片版式：[补充规格](../specs/retry-blocked-caption-layout-2026-10-23.md)。该方案尚未开发或上线，不将一次重试等同于发布成功。
