@@ -27,6 +27,18 @@ def test_progress_reporter_writes_atomic_stage_payload(tmp_path):
     assert not (tmp_path / ".caption_progress.json.tmp").exists()
 
 
+def test_reused_steps_survive_later_stage_heartbeats(tmp_path):
+    path=tmp_path/'progress.json'
+    reporter=_build_progress_reporter(path)
+    reporter.reused_steps.add('copy')
+    reporter('ASR_REUSED')
+    reporter('TRANSLATION_REUSED')
+    reporter('SOURCE_CAPTION_LOCATING')
+    payload=json.loads(path.read_text())
+    assert payload['reused_steps']==['asr','copy','translation']
+    assert payload['stage']=='SOURCE_CAPTION_LOCATING'
+
+
 def test_resource_wait_moves_effective_stage_start_but_not_heartbeat(tmp_path, monkeypatch):
     import importlib
     module = importlib.import_module("cli.commands.auto_caption")

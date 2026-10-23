@@ -2,6 +2,11 @@
 
 依赖方向：web.app → 本模块；db.database 提供统一阶段（含分页前筛选）。
 本模块仅使用标准库，不导入 Web、DAL 或调度器。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-23 | Codex | 活跃任务沿用真实字幕阶段和复用状态。 |
 """
 import hashlib
 import json
@@ -43,7 +48,7 @@ def present_engagement(video: dict) -> dict:
     if stage == "ENG_LOW_SCORE":
         reason = f"当前 {video.get('score', 0)} 分，自动入队线 {video.get('engagement_score_line', 75)} 分"
     if stage == "ENG_ACTIVE":
-        label = ACTIVE_LABELS.get(video.get("status"), label)
+        label = video.get("processing_detail") or ACTIVE_LABELS.get(video.get("status"), label)
     if video.get("publication_review_required") and stage == "ENG_VERIFY":
         reason = "该任务要求人工复核，暂不能从高互动列表重新启动"
     if stage in {"ENG_POLICY", "ENG_FAILED", "ENG_PENDING", "ENG_LOGIN", "ENG_READY"}:

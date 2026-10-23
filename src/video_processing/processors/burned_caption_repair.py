@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.1.0 | 2026-10-23 | Codex | 相邻帧合框证据确认同基线拆出的单字形，保留未知文字阻断。 |
 | 2.0.0 | 2026-10-21 | Codex | A/B 全片决策、原片回退、逐帧人脸避让及有来源摘要的 OCR 缓存。 |
 | 1.0.0 | 2026-10-21 | Codex | A 方案接入：逐帧识别与保守修补、完整画面、来源及成片摘要门禁。 |
 """
@@ -138,7 +139,7 @@ def _locate(source, segments, directory, fps, progress):
                 if len(frames) % max(1, round(fps * 5)) == 0:
                     LOG.info("[SourceCaptionScan] 已定位 %s 帧", len(frames))
                     if progress:
-                        progress("VIDEO_RENDERING")
+                        progress("SOURCE_CAPTION_LOCATING")
     finally:
         capture.release()
     if not frames:
@@ -192,6 +193,8 @@ def _classify(frames, segments, fps):
             if len(compact) >= 5:
                 matches = matches or SequenceMatcher(None, compact, local_text, autojunk=False).find_longest_match().size / len(compact) >= .8
             if not matches:
+                matches = _split_glyph_matches(row, rows, frames, index, fps, local_words)
+            if not matches:
                 # 分行硬字幕可能把短词单列；必须由同帧、相邻且同列的完整词组提供证据。
                 for buddy in rows:
                     other = buddy['box']
@@ -225,6 +228,30 @@ def _classify(frames, segments, fps):
         return selected, None
     top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
     return selected, (top + bottom) / 2
+
+
+def _split_glyph_matches(row, rows, frames, index, fps, local_words):
+    """单字形必须紧贴可信主句，且前后 0.2 秒内确有同位置合框 OCR；不忽略该字形。"""
+    normalized = lambda value: ''.join(c for c in value.lower() if c.isalnum()).replace('0', 'o')
+    glyph, box = normalized(row['text']), row['box']
+    if len(glyph) != 1 or row['confidence'] < .9:
+        return False
+    for buddy in rows:
+        other, words = buddy['box'], _words(buddy['text'])
+        if (buddy is row or buddy['confidence'] < .9 or not words or not words <= local_words
+                or abs((box[1]+box[3]-other[1]-other[3])/2) > .012
+                or not .4 <= (box[3]-box[1])/(other[3]-other[1]) <= 1.2
+                or box[2]-box[0] > .12 or not -.025 <= box[0]-other[2] <= .018):
+            continue
+        combined = normalized(buddy['text']) + glyph
+        union = [min(box[0],other[0]),min(box[1],other[1]),max(box[2],other[2]),max(box[3],other[3])]
+        for nearby in range(max(0,index-max(1,round(fps*.2))), min(len(frames),index+max(1,round(fps*.2))+1)):
+            if nearby == index:
+                continue
+            if any(r['confidence'] >= .9 and normalized(r['text']) == combined
+                   and all(abs(a-b) < .015 for a,b in zip(r['box'],union)) for r in frames[nearby]):
+                return True
+    return False
 
 
 def _anchors(rows, fps):

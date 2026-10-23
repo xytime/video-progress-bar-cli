@@ -32,6 +32,7 @@
 | 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| retry-resume-v1 | 2026-10-23 | Codex | 历史审核标签不再提供当前复核入口，展示真实字幕阶段与复用结果。 |
 | 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
 | 3.24.0 | 2026-08-21 | Codex | 回收无存活进程的预提交孤儿任务；提交后状态继续 fail-closed，且待绑定提交进入待核验而非加工队列 |
 | 3.25.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究与二次制作确认 API；不接入通用队列或发布入口 |
@@ -112,6 +113,7 @@ import fcntl  # [Claude_Opus_4.6_Thinking_planning] 用于 _is_pipeline_manager_
 import sys
 import signal
 import time
+import json
 import shutil
 import subprocess
 import threading
@@ -1326,6 +1328,13 @@ def _read_publish_text(path: Path, *, max_chars: int = 800) -> Optional[str]:
 def _attach_publish_display_fields(rows: list[dict]) -> list[dict]:
     """为仪表盘行补齐真实投递标题，保证后台列表与平台发布标题一致。"""
     for row in rows:
+        from video_processing.core.censorship_state import review_state
+        row['censorship_state'] = review_state(row, bool(
+            row.get('bypass_censorship') and db.has_manual_p0_approval(
+                row.get('youtube_id'), slice_index=int(row.get('slice_index') or 0))))
+        row['processing_detail'] = _caption_processing_detail(row)
+        em = row.get('error_msg') or ''
+        row['failure_summary'] = '原字幕定位失败' if row.get('status') == 'FAILED' and '原字幕位置或文字不确定' in em else ''
         yid = row.get("youtube_id")
         if not yid:
             continue
@@ -1349,6 +1358,31 @@ def _attach_publish_display_fields(rows: list[dict]) -> list[dict]:
             and published_title != source_zh_title
         )
     return rows
+
+
+def _caption_processing_detail(row: dict) -> str:
+    """只展示当前活跃字幕任务的近期心跳，终态不沿用旧阶段。"""
+    if row.get('status') != 'TRANSCRIBING':
+        return ''
+    yid, index = row.get('youtube_id'), int(row.get('slice_index') or 0)
+    prefix = f'{yid}_s{index}' if index else yid
+    labels = dict(STARTING='字幕准备中', AUDIO_EXTRACTING='提取音频中', MODEL_LOADING='加载识别模型中',
+                  TRANSCRIBING='转录中', TRANSLATING='翻译中', ASR_REUSED='复用转录',
+                  TRANSLATION_REUSED='复用翻译', SOURCE_CAPTION_LOCATING='继续原字幕定位',
+                  ASS_GENERATING='生成字幕排版', VIDEO_RENDERING='继续视频渲染', COMPLETE='字幕处理完成')
+    try:
+        path = _OUT_DIR / f'{prefix}_caption_progress.json'
+        if path.stat().st_size > 16384:
+            return ''
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        age = time.time() - float(payload['updated_at'])
+        if not 0 <= age <= 90:
+            return ''
+        reused = [label for key, label in (('copy', '复用已有文案'), ('asr', '复用转录'),
+                                           ('translation', '复用翻译')) if key in payload.get('reused_steps', [])]
+        return ' · '.join(reused + [labels.get(payload.get('stage'), '字幕处理中')])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
 
 
 def _sha256_file(path: Path) -> str:
@@ -2897,18 +2931,8 @@ def _read_censorship_review_subtitle(
 
 def _censor_layer_from_error(error_msg: str):
     """从 error_msg 反推审查层级与告警严重度。返回 (layer, label, severity)。"""
-    em = error_msg or ""
-    if "Social Unrest Review" in em:
-        return ("RISK", "平台题材风险 · 社会动荡", "high")
-    if "Censorship P0" in em:
-        return ("P0", "P0 · 政治安全违禁", "critical")
-    if "Censorship P1" in em:
-        return ("P1", "P1 · 敏感内容挂起", "high")
-    if "Censorship P2" in em:
-        return ("P2", "P2 · 商业合规降权", "medium")
-    if "Channel Policy" in em:
-        return ("CP", "频道策略限制", "low")
-    return (None, "未知审查层", "low")
+    from video_processing.core.censorship_state import censor_layer_from_error
+    return censor_layer_from_error(error_msg)
 
 
 def _build_keyword_cloud(text_zh: str, text_en: str, matched_terms: list, top_k: int = 40) -> list:
@@ -3076,13 +3100,13 @@ def bypass_censor(
         return {"success": False, "error": guard_reason}
 
     em = video.get("error_msg") or ""
-    is_censor_fail = ("Censorship" in em) or ("Channel Policy" in em) or ("Social Unrest Review" in em) or bool(video.get("censor_tag"))
+    is_censor_fail = _censor_layer_from_error(em)[0] is not None
     if video.get("status") != "FAILED" or not is_censor_fail:
         return {"success": False,
                 "error": f"仅审查类失败(FAILED)的视频可复核放行（当前状态：{video.get('status')}）"}
 
     layer, _label, _sev = _censor_layer_from_error(em)
-    is_p0_redline = layer == "P0" or video.get("censor_tag") == "🔴 政治安全违禁"
+    is_p0_redline = layer == "P0"
     if is_p0_redline and not (
         request and request.confirm_p0_review and request.confirm_pipeline_resume
     ):

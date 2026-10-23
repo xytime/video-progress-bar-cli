@@ -435,6 +435,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Store segments for TTS generation later
         self.segments = segments
         from .burned_caption_repair import prepare_source, fallback_source, RepairUnsuitable
+        self._report_progress('SOURCE_CAPTION_LOCATING')
         self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
         try:
             return self._build_ass_file(segments)

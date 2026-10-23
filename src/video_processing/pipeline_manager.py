@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
@@ -329,6 +330,7 @@ _CAPTION_STAGE_TIMEOUT_SEC = {
     "TRANSLATING": 12 * 60,
     "ASS_GENERATING": 6 * 60,
     "VIDEO_RENDERING": 40 * 60,
+    "SOURCE_CAPTION_LOCATING": 40 * 60,
     "COMPLETE": 60,
 }
 _CAPTION_DEFAULT_STAGE_TIMEOUT_SEC = 6 * 60
@@ -4657,7 +4659,8 @@ class PipelineManager:
 
                 if copy_checkpoint_ready:
                     logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name} (label ok)")
-                    self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
+                    self.db.update_video_status(yid, "PROCESSING", slice_index=slice_index)
+                    self._report_runtime_stage(yid, 'COPY_REUSED', slice_index=slice_index)
                 else:
                     _reason = checkpoint_reason or (
                         "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
@@ -4785,7 +4788,8 @@ class PipelineManager:
 
                 if _cache_valid:
                     logger.info(f"[SKIP] Transcribe checkpoint (subtitle contract verified): {vertical.name}")
-                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
+                    self.db.update_video_status(yid, "PROCESSING", slice_index=slice_index)
+                    self._report_runtime_stage(yid, 'RENDER_REUSED', slice_index=slice_index)
                 else:
                     self._report_runtime_stage(
                         yid,
@@ -4822,6 +4826,7 @@ class PipelineManager:
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                         "--progress-file", str(progress_file),
+                        *(['--copy-reused'] if copy_checkpoint_ready else []),
                     ]
                     # [Claude_Opus_4.8] 源视频「发布日期」毛玻璃戳：仅在开关开启且能取到合法 upload_date 时注入。
                     # 主视频行自带 upload_date；切片行不带 → 回退父行(slice_index=0)。缺失/非法则跳过（不烧戳）。

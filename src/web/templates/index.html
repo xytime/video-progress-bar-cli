@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-23 | Codex | 当前审核阻塞、历史批准和真实字幕阶段分别展示，主行分集共用。 |
   | 2026-10-17 | Codex | 只读命中证据与当前重扫分开，保留 P0 双确认门禁。 |
   | 2026-10-15 | Codex | 缩略图下统一来源标识与键盘可展开证据，兼容手机。 |
   | 2026-10-12 | Codex | v0.3 共享五区导航、只读总览、列表 URL 恢复及可见区域刷新。 |
@@ -746,6 +747,7 @@
     PUBLISH_PRECHECK: ['发布前校验', 'PENDING'],
     DOWNLOADING: ['下载中', 'DOWNLOADING'],
     TRANSCRIBING: ['转录中', 'TRANSCRIBING'],
+    CAPTION_PROCESSING: ['字幕处理中', 'TRANSCRIBING'],
     COPYWRITING: ['文案生成中', 'COPYWRITING'],
     RENDERING: ['渲染中', 'RENDERING'],
     AI_COVER_PENDING: ['待生成封面', 'PENDING'],
@@ -783,6 +785,22 @@
       : ['PUBLISHED', 'COMPLETED'].includes(badge) ? 'st-published'
       : badge === 'PENDING' ? 'st-none' : 'st-review';
     return {label, badge, tone, description: description || label, tooltip: `${description || label}（${raw}）`};
+  }
+
+  function censorshipBadge(v) {
+    const state = v.censorship_state || {};
+    const text = state.current_layer ? `当前待复核：${state.current_label}`
+      : state.history_tag ? [state.approval_label, `历史命中：${state.history_tag}`].filter(Boolean).join(' · ') : '';
+    if (!text) return '';
+    const color = state.current_layer ? 'var(--red)' : 'var(--text2)';
+    return `<span class="meta-chip censor-badge" style="color:${color};border:1px solid var(--border);white-space:normal">${escapeHtml(text)}</span>`;
+  }
+
+  function videoStatusBadge(v) {
+    const badge = v.failure_summary
+      ? `<span class="badge badge-FAILED" title="${escapeAttr(v.error_msg || '')}">${escapeHtml(v.failure_summary)}</span>`
+      : statusBadge(v.processing_detail ? 'CAPTION_PROCESSING' : (v.display_status || v.status));
+    return badge + (v.processing_detail ? `<div class="processing-detail" style="white-space:normal;font-size:.75rem;color:var(--text2);margin-top:6px">${escapeHtml(v.processing_detail)}</div>` : '');
   }
 
   function readyPublicationDetails(v) {
@@ -1616,7 +1634,7 @@
         const promoteBtn = `<button class="btn-retry btn-reset" onclick="promoteVideo('${v.youtube_id}')" title="转为手动加急任务并立即下载、生成字幕/封面并发布到视频号">📥 加入队列</button>`;
         // [Claude_Opus_4.8] 审查类失败：提供「🔓 复核放行」一键绕过（带警示弹窗 + 关键词标签云）
         const _emForBypass = v.error_msg || '';
-        const isCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emForBypass) || !!v.censor_tag);
+        const isCensorFail = v.censorship_state?.can_review === true;
         const bypassBtn = isCensorFail
           ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
           : '';
@@ -1819,35 +1837,7 @@
           ? `<span class="meta-chip" style="background: rgba(245, 158, 11, 0.12); color: var(--yellow); border: 1px solid rgba(245, 158, 11, 0.24); font-weight: 500;">🌍 英语世界短视频</span>`
           : '';
 
-        // [Gemini_3.5_Flash_planning] 敏感词检测展示
-        let censorBadge = '';
-        if (v.censor_tag) {
-          let censorColor = 'var(--text3)';
-          let censorBg = 'rgba(255,255,255,0.05)';
-          let censorBorder = 'rgba(255,255,255,0.1)';
-          if (v.censor_tag.includes('🔴') || v.censor_tag.includes('政治')) {
-            censorColor = 'var(--red)';
-            censorBg = 'rgba(239, 68, 68, 0.15)';
-            censorBorder = 'rgba(239, 68, 68, 0.25)';
-          } else if (v.censor_tag.includes('🟡') || v.censor_tag.includes('敏感') || v.censor_tag.includes('政策')) {
-            censorColor = 'var(--yellow)';
-            censorBg = 'rgba(245, 158, 11, 0.15)';
-            censorBorder = 'rgba(245, 158, 11, 0.25)';
-          } else if (v.censor_tag.includes('🚫') || v.censor_tag.includes('限制') || v.censor_tag.includes('策略')) {
-            censorColor = 'var(--blue)';
-            censorBg = 'rgba(59, 130, 246, 0.15)';
-            censorBorder = 'rgba(59, 130, 246, 0.25)';
-          } else if (v.censor_tag.includes('🔵') || v.censor_tag.includes('预警') || v.censor_tag.includes('合规')) {
-            censorColor = 'var(--accent2)';
-            censorBg = 'rgba(139, 92, 246, 0.15)';
-            censorBorder = 'rgba(139, 92, 246, 0.25)';
-          }
-          censorBadge = `<span class="meta-chip censor-badge censor-hit" style="background: ${censorBg}; color: ${censorColor}; border: 1px solid ${censorBorder}; font-weight: 500;">⚠️ ${v.censor_tag}</span>`;
-        } else {
-          if (currentTab === 'high_likes' || v.source === 'DISCOVERY') {
-            censorBadge = `<span class="meta-chip censor-badge" style="color: var(--text2); border: 1px solid var(--border);">审查未核验</span>`;
-          }
-        }
+        const censorBadge = censorshipBadge(v);
 
         const badgesPart = [
           categoryBadge,
@@ -1892,7 +1882,7 @@
               `}
               ${coverSource}
               <div class="cover-status-badge mobile-only">
-                ${currentTab === 'high_likes' ? '' : statusBadge(v.display_status || v.status)}
+                ${currentTab === 'high_likes' ? '' : videoStatusBadge(v)}
               </div>
             </div>
           </td>`;
@@ -1967,7 +1957,7 @@
             <td class="vt-cell ${viewsCls}">${viewsStr}</td>
             <td class="lr-cell ${lrCls}">${lrStr}</td>
             <td class="status-cell">
-              ${currentTab === 'high_likes' ? window.EngagementRows.state(v) : `<span class="desktop-only-status">${statusBadge(v.display_status || v.status)}</span>${readyPublicationDetails(v)}`}
+              ${currentTab === 'high_likes' ? window.EngagementRows.state(v) : `<span class="desktop-only-status">${videoStatusBadge(v)}</span>${readyPublicationDetails(v)}`}
               ${v.status === 'DOWNLOADING' ? `
               <div class="dl-progress" data-dlprog="${v.youtube_id}">
                 <div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div>
@@ -2431,7 +2421,7 @@
           const deleteBtn = `<button class="btn-hard-reset" onclick="deleteSlice('${s.youtube_id}', ${s.slice_index})" title="彻底删除分集" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
           // [Claude_Opus_4.8] BUG-1 配套：分集审查类失败也提供「🔓 复核放行」（按 slice_index 粒度放行）
           const _emSlice = s.error_msg || '';
-          const sliceIsCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emSlice) || !!s.censor_tag);
+          const sliceIsCensorFail = s.censorship_state?.can_review === true;
           const sliceBypassBtn = sliceIsCensorFail
             ? `<button class="btn-bypass" onclick="openBypassModal('${s.youtube_id}', ${s.slice_index})" title="人工复核后绕过审查并继续发布该分集">🔓 复核放行</button>`
             : '';
@@ -2486,7 +2476,7 @@
               </td>
               <td class="vt-cell" style="color:var(--text3);">—</td>
               <td class="lr-cell" style="color:var(--text3);">—</td>
-              <td class="status-cell" style="white-space:nowrap">${statusBadge(s.display_status || s.status)}${readyPublicationDetails(s)} <div style="margin-top:6px;">${retryBtn}</div></td>
+              <td class="status-cell" style="white-space:nowrap">${videoStatusBadge(s) + censorshipBadge(s)}${readyPublicationDetails(s)} <div style="margin-top:6px;">${retryBtn}</div></td>
               <td class="score-cell">${scoreControls}</td>
               <td class="time-cell"><span class="video-time">${relativeTime(s.updated_at)}</span></td>
             </tr>

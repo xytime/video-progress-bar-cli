@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-23 | Codex | 只读断言区分测试主动恢复标题导致的更新时间，避免跨秒误报。 |
 | 1.0.0 | 2026-10-17 | Codex | 三主题桌面/手机证据与错误清理、原文注入及双确认验收。 |
 """
 from pathlib import Path
@@ -68,7 +69,7 @@ def review(chromium, tmp_path, monkeypatch):
     page.close()
     client.close()
     assert not state['writes'] and not state['errors']
-    assert db.get_video_by_youtube_id('review-case') == original
+    assert db.get_video_by_youtube_id('review-case') == {**original, 'updated_at': state.get('intentional_updated_at', original['updated_at'])}
     assert db.is_blacklisted('review-case') and not db.has_manual_p0_approval('review-case')
 
 
@@ -134,3 +135,4 @@ def test_failed_and_missing_evidence_do_not_leave_old_hit(review):
     expect(page.locator('#bypass-evidence')).not_to_contain_text('真实命中')
     expect(page.locator('#btn-confirm-bypass')).to_be_disabled()
     db.update_video_zh_title('review-case', original_title)
+    state['intentional_updated_at'] = db.get_video_by_youtube_id('review-case')['updated_at']

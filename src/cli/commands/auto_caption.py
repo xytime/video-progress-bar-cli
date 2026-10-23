@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 1.8.0 | 2026-10-23 | Codex | 心跳保留已复用步骤，让字幕定位/渲染与转录分开展示。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，提供 cli 主入口与 edge/indextts 选择 |
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-cosy 参数，支持阿里云百炼 CosyVoice 配音服务，标有 # [Gemini_3.5_Flash_planning] |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --mute-original / --no-mute-original 参数，支持将原视频静音只保留 TTS，标注 # [Gemini_3.5_Flash_planning] |
@@ -35,6 +36,7 @@ class _CaptionProgressReporter:
     def __init__(self, progress_file: Path):
         self._progress_file = progress_file
         self._stage = "STARTING"
+        self.reused_steps = set()
         self._stage_started_at = time.time()
         self._stage_wait_baseline = wait_state()["seconds"]
         self._process_wait_baseline = self._stage_wait_baseline
@@ -48,6 +50,8 @@ class _CaptionProgressReporter:
                 self._stage_started_at = time.time()
                 self._stage_wait_baseline = wait_state()["seconds"]
             self._stage = stage
+            if stage in {'ASR_REUSED', 'TRANSLATION_REUSED'}:
+                self.reused_steps.add('asr' if stage == 'ASR_REUSED' else 'translation')
         self._write_current()
 
     def start(self) -> None:
@@ -68,6 +72,7 @@ class _CaptionProgressReporter:
         try:
             with self._lock:
                 stage = self._stage
+                reused_steps = sorted(self.reused_steps)
                 stage_started_at = self._stage_started_at
                 waiting = wait_state()
                 stage_started_at += max(0, waiting["seconds"] - self._stage_wait_baseline)
@@ -76,6 +81,7 @@ class _CaptionProgressReporter:
             temporary.write_text(
                 json.dumps({
                     "stage": stage,
+                    "reused_steps": reused_steps,
                     "stage_started_at": stage_started_at,
                     "updated_at": time.time(),
                     "resource_waiting": waiting["waiting"],
@@ -112,10 +118,13 @@ def _build_progress_reporter(progress_file: Path | None):
 @click.option('--bilingual', is_flag=True, help='Show bilingual subtitles (ZH+EN) in Vertical mode. Default is Chinese only.')
 @click.option('--source-date', default=None, help='Source video publish date (YYYY-MM-DD) for the frosted date stamp in the top-left corner. Vertical mode only.')  # [Claude_Opus_4.8]
 @click.option('--progress-file', type=click.Path(path_type=Path), default=None, help='Optional atomic stage heartbeat file for the parent pipeline.')
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file):
+@click.option('--copy-reused', is_flag=True, help='Report an already verified copywriting checkpoint.')
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file, copy_reused=False):
     """Generate and burn bilingual subtitles for a video."""
     progress_reporter = _build_progress_reporter(progress_file)
     if progress_reporter is not None:
+        if copy_reused:
+            progress_reporter.reused_steps.add('copy')
         progress_reporter.start()
     try:
         if vertical:

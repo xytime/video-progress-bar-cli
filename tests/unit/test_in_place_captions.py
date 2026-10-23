@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-23 | Codex | 第169帧单字形拆框及缺失相邻合框证据的阻断回归。 |
 | 1.0.0 | 2026-10-21 | Codex | 无 host OCR/网络的纯数据门禁与摘要失效回归。 |
 """
 import json
@@ -38,6 +39,31 @@ def test_uncertain_moving_or_unaligned_text_stops(frames,segments):
 def test_no_detected_text_changes_no_pixels():
     assert repair._classify([[],[]],[],30)==([[],[]],None)
     assert not repair._mask(np.zeros((640,360,3),np.uint8),[]).any()
+
+
+def split_glyph_frames():
+    main=dict(text='STILL 7.4',confidence=1,box=[.222222,.784375,.711111,.846875])
+    glyph=dict(text='O',confidence=1,box=[.694444,.790625,.766667,.834375])
+    merged=dict(text='STILL 7.4 0',confidence=1,box=[.221919,.783529,.766970,.847721])
+    return [[merged],[main,glyph],[merged]]
+
+
+def test_real_frame_169_glyph_kept_in_caption_mask_with_neighbor_evidence():
+    frames=split_glyph_frames()
+    selected,_=repair._classify(frames,[dict(text='Mortgages still 7.4 percent.',start=0,end=1)],30)
+    assert selected[1] == [r['box'] for r in frames[1]]
+
+
+@pytest.mark.parametrize('change',['no_neighbor','other_word','off_baseline','unrelated_asr','low_confidence'])
+def test_split_glyph_without_complete_evidence_still_blocks(change):
+    frames=split_glyph_frames()
+    text='Mortgages still 7.4 percent.'
+    if change=='no_neighbor': frames=[frames[1]]
+    if change=='other_word': frames[1][1]['text']='UNKNOWN'
+    if change=='off_baseline': frames[1][1]['box'][1:4:2]=[.60,.64]
+    if change=='unrelated_asr': text='Entirely different speech.'
+    if change=='low_confidence': frames[1][1]['confidence']=.7
+    with pytest.raises(ValueError):repair._classify(frames,[dict(text=text,start=0,end=1)],30)
 
 
 def test_position_change_splits_caption_time_in_place(tmp_path):

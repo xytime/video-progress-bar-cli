@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
 | 1.39.0 | 2026-10-08 | Antigravity | 修复 _remaining_translation_budget 在 __new__ 单体实例中缺少 _translation_deadline 属性时的 AttributeError 缺陷。 |
 | 1.38.0 | 2026-10-05 | Codex | 全供应商共享字幕预算，Google 逐段检查点与完整候选日志。 |
 | 1.37.0 | 2026-10-03 | Codex | 最后追加 Luna CLI 候选，保留严格质量和完整批次合同。 |
@@ -52,6 +53,7 @@
 | 1.35.0 | 2026-09-08 | Codex | 委托纯函数补齐明确关闭翻译时的原文字幕，翻译失败不静默回退。 |
 """
 import logging
+from copy import deepcopy
 import re
 from pathlib import Path
 from typing import Callable, Optional, List, Dict, Any, Union
@@ -67,6 +69,7 @@ from ..utils.translation_helper import translate_batch as _google_batch_fallback
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_context import build_translation_context
 from ..utils.source_caption import build_source_caption_event
+from ..utils.caption_checkpoints import CaptionCheckpoints, implementation, translation_contract, fingerprint
 from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
@@ -205,31 +208,46 @@ class AutoCaptionProcessor(VideoProcessorBase):
         """
         logger.info(f"Processing video: {self.input_path} with style: {self.style}")
         
-        # 1. 确保模型已加载
-        self._report_progress("MODEL_LOADING")
-        self._load_model()
-        
-        # 2. 提取音频
-        self._report_progress("AUDIO_EXTRACTING")
-        audio_path = self._extract_audio()
-        if audio_path:
-            logger.info(f"Audio extracted to: {audio_path}")
-        else:
-            logger.info("No audio stream extracted (video is likely silent).")
-        
+        checkpoints = CaptionCheckpoints(self.input_path, dict(
+            model=self.model_size, language=self.src_lang, device=self.device,
+            whisper_version=getattr(whisper, '__version__', 'unknown'),
+            implementation=implementation([type(self)._load_model, type(self)._extract_audio,
+                                           type(self)._transcribe_audio]),
+        ))
+        audio_path = None
         try:
-            # 3. 转录
-            if audio_path is not None:
-                self._report_progress("TRANSCRIBING")
-                segments = self._transcribe_audio(audio_path)
+            saved = checkpoints.load('asr', checkpoints.identity['asr'])
+            if saved is not None:
+                segments, self.detected_lang = saved['segments'], saved['detected_lang']
+                self._report_progress('ASR_REUSED')
             else:
-                logger.info("Skipping transcription since there is no audio track.")
-                segments = []
+                self._report_progress('AUDIO_EXTRACTING')
+                audio_path = self._extract_audio()
+                if audio_path is not None:
+                    self._report_progress('MODEL_LOADING')
+                    self._load_model()
+                    self._report_progress('TRANSCRIBING')
+                    segments = self._transcribe_audio(audio_path)
+                else:
+                    segments = []
+                checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
             # 4. 翻译 (如果提供了目标语言且不同于源语言)
             if self.target_lang and self.target_lang != self.src_lang:
-                self._report_progress("TRANSLATING")
-                segments = self._translate_segments(segments)
+                contract = dict(asr_sha256=fingerprint(segments), src_lang=self.src_lang,
+                                detected_lang=self.detected_lang, target_lang=self.target_lang,
+                                translation=translation_contract(self, settings))
+                source_segments = deepcopy(segments)
+                saved = checkpoints.load('translation', contract, source_segments)
+                if saved is not None:
+                    segments = saved['segments']
+                    self._translation_quality_audit = saved.get('quality_audit', [])
+                    self._report_progress('TRANSLATION_REUSED')
+                else:
+                    self._report_progress("TRANSLATING")
+                    segments = self._translate_segments(segments)
+                    checkpoints.save('translation', contract, segments, self.detected_lang,
+                                     source_segments, self._translation_quality_audit)
             
             # 5. 生成 ASS 字幕 (双语样式)
             self._report_progress("ASS_GENERATING")

@@ -104,3 +104,9 @@
 ## 平台题材复核恢复（2026-10-23 用户确认）
 
 依据 `docs/specs/censorship-review-recovery-2026-10-23.md`。既有复核弹窗使用原生 dialog，继承 dashboard 主题、局部 live region 与 Escape/焦点恢复；保留 P0 双确认。平台题材原输入不可核实时禁用批准，提供独立“重新审查”。重新审查只追加完整输入快照与当前规则审计，任务仍暂停；明确批准后才恢复既有管线。批准绑定当前显示的审计编号、输入和规则版本，服务器再次核对当前素材；错误就地显示、重复提交禁用、关闭后旧响应作废。读取故障不显示旧命中，超时结果不明须重新打开核实。验证由 `tests/unit/test_social_unrest_review.py` 与 `tests/browser/test_social_unrest_review_flow.py` 负责。
+
+## 重试与人工复核（2026-10-23 用户确认修复）
+
+当前错误分类 owner 为 `core/censorship_state.py`，API 返回 `censorship_state`，主行与分集共用 `censorshipBadge`。历史命中独立展示；P0 批准须有原台账。只有 FAILED 且当前错误属于审查时显示复核入口；后端再次核验，不能凭历史标签放行。技术错误显示实际失败摘要，普通重试沿用原批准边界与投稿防重保护。
+
+字幕阶段由当前任务的近期原子心跳提供；显示复用文案、转录、翻译及正在执行的定位/渲染。过期心跳与终态不显示旧进度。沿用现有主题、自然换行与文字状态，按钮及弹窗 owner 不变。验证：`tests/browser/test_retry_resume_display.py`、`tests/unit/test_retry_review_state.py`。Browser plugin not available；使用项目隔离 Playwright。
