@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publishing-recovery-v1 | 2026-10-23 | Codex | 将发布恢复执行者纳入原生维护归属与排空检查。 |
+| 1.1.0 | 2026-10-18 | AGY | 增加加载时模块指纹 loaded_modules_hash、空白上下文浏览器能力预检与有界退避、以及通用受控 stop_worker |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
 | 1.0.0 | 2026-10-12 | Codex | 真实角色锁、未接入来源阻断及正常 SIGTERM 生命周期 |
 | 1.0.1 | 2026-10-13 | Codex | macOS 使用系统 lsof 路径，兼容 launchd 精简 PATH |
@@ -29,7 +31,7 @@ import ctypes
 import sys
 
 PROTOCOL = 1
-ROLES = ("ui", "auto-pipeline", "queue-runner", "ready-supervisor", "keepalive-watchdog", "ready-worker", "wallstreet-worker")
+ROLES = ("publishing-recovery-worker", "ui", "auto-pipeline", "queue-runner", "ready-supervisor", "keepalive-watchdog", "ready-worker", "wallstreet-worker")
 SOURCE_GROUPS = {"cron", "launchd", "manual", "bot", "independent-workers"}
 
 

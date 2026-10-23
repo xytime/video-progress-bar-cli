@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | 1.0.0 | 2026-10-22 | Antigravity | 初始创建：提供视频号账户冷却状态查询、操作者确认解冻 (acknowledge_unfrozen) 及调度参数 CAS 保存与热加载 API |
 """
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,7 +47,9 @@ def _build_runtime_status(state_path: Path) -> dict[str, Any]:
     """读取当前账户冷却、恢复期与 24h 会话配额使用情况（纯脱敏元数据）。"""
     guard = WeChatRequestGuard(state_path)
     cooldown = guard.cooldown()
+    admission = guard.evaluate(account_only=True)
     row = guard.snapshot()
+    cooldown["version"] = guard.recovery_version(row)
     now = time.time()
     schedule = row.get("schedule", {})
     sessions = [s for s in schedule.get("sessions", []) if isinstance(s, dict) and s.get("at", 0) > now - DAY]
@@ -74,6 +78,7 @@ def _build_runtime_status(state_path: Path) -> dict[str, Any]:
 
     return {
         "cooldown": cooldown,
+        "admission": admission,
         "platform_frozen": platform_frozen,
         "recovering": recovering,
         "can_unfreeze": platform_frozen or recovering,
@@ -87,7 +92,7 @@ def _build_runtime_status(state_path: Path) -> dict[str, Any]:
         "failure_streak": int(row.get("failure_streak") or 0),
         "reason_code": str(row.get("reason") or "NORMAL"),
         "business_code": row.get("business_code"),
-        "sessions_24h_count": len(sessions),
+        "sessions_24h_count": admission["sessions_24h_count"],
         "effective_daily_limit": limit,
         "effective_interval_seconds": interval,
         "queue_count": len(queue),
@@ -142,6 +147,9 @@ def create_wechat_cooldown_settings_router(
             f"/static/js/wechat_cooldown_settings.js?v={js_v}",
             content,
         )
+        recovery_js = static_dir / "js" / "publishing_recovery.js"
+        content = content.replace('/static/js/publishing_recovery.js"',
+                                  f'/static/js/publishing_recovery.js?v={int(recovery_js.stat().st_mtime)}"')
         return HTMLResponse(
             content,
             headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
@@ -175,9 +183,10 @@ def create_wechat_cooldown_settings_router(
         try:
             config = load_policy(active)
             guard = WeChatRequestGuard(resolved_state)
-            guard.acknowledge_unfrozen(body.version)
+            guard.recover_local(operation_id=str(uuid.uuid4()), expected_version=body.version,
+                                reset_cooldown=True)
             payload = view(config)
-            payload["message"] = "已确认平台解冻：平台限流锁与恢复期限制已解除，后续任务按正常稳定期间隔排队。"
+            payload["message"] = "已清除本地冷却与恢复期；平台真实状态仍需人工核实，其它限制继续生效。"
             return payload
         except WeChatRequestDeferred as exc:
             raise HTTPException(409, str(exc)) from exc

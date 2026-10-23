@@ -148,6 +148,7 @@ def _default_codex_text_command() -> str:
 
 
 class Settings(BaseSettings):
+    wechat_scheduler_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_scheduler_policy.json"
     wechat_interaction_list_request_budget: int = Field(default=6, ge=2, le=10)
 
     """

@@ -21,6 +21,8 @@
   // 扫描、登录与完整流水线由共享 header 保持全分区可见。
   const products=document.createElement('a'); products.href='/product-settings';products.textContent='商品挂载';products.className='btn-tool-prefs';tools.prepend(products);app.append(tools);
   const vocabulary=document.createElement('a'); vocabulary.href='/vocabulary-outro-settings';vocabulary.textContent='生词片尾';vocabulary.className='btn-tool-prefs';tools.prepend(vocabulary);
+  const wechatCooldown=document.createElement('a'); wechatCooldown.href='/wechat-cooldown-settings';wechatCooldown.textContent='发布恢复与调度';wechatCooldown.className='btn-tool-prefs';tools.prepend(wechatCooldown);
+  const recoveryEntry=document.createElement('a');recoveryEntry.href='/wechat-cooldown-settings';recoveryEntry.className='btn-tool-prefs';recoveryEntry.textContent='发布恢复与批量重试';$('tab-error').after(recoveryEntry);
   function paint(tab=legacy.tab()) {
     $('workspace-title').textContent=titles[view];document.title=titles[view]+' · 视频运营工作台';
     overview.hidden=view!=='overview';$('global-funnel-panel').hidden=view!=='overview';
@@ -29,6 +31,8 @@
     tools.hidden=view!=='operations';$('backfill-panel').hidden=view!=='operations';
     document.querySelectorAll('.tab-btn').forEach(el=>el.hidden=groups[el.id.slice(4)]!==view);
     prefilterEntry.hidden=view!=='topics';
+    recoveryEntry.hidden=!(view==='production'&&['error','ready'].includes(tab));
+    recoveryEntry.href='/wechat-cooldown-settings?window=24h'+(tab==='ready'?'&include_ready=1':'');
     window.ConsoleNavigation.select(view);
   }
   const prefilterEntry=document.createElement('a');prefilterEntry.href='/video-prefilter';prefilterEntry.className='btn-tool-prefs';prefilterEntry.textContent='视频预筛选';
@@ -69,10 +73,13 @@
   }
   function persist() {
     if(restoring||!['topics','production','publications'].includes(view))return;
-    rememberFilters(legacy.tab());
+    const tab=legacy.tab();
+    rememberFilters(tab);
     const params=new URLSearchParams(legacy.query());params.set('view',view);
     const url='/?'+params.toString();if(location.pathname+location.search!==url)history.pushState(null,'',url);
     prefilterEntry.hidden=view!=='topics';
+    recoveryEntry.hidden=!(view==='production'&&['error','ready'].includes(tab));
+    recoveryEntry.href='/wechat-cooldown-settings?window=24h'+(tab==='ready'?'&include_ready=1':'');
     window.ConsoleNavigation.select(view);
   }
   function selectTab(tab) { view=groups[tab]||'topics';paint(tab); }

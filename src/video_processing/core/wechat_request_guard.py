@@ -5,6 +5,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| recovery-console-v1 | 2026-10-23 | Codex | 公开纯准入快照与有版本、幂等、原生互斥保护的本地额度／冷却恢复。 |
+| 1.1.0 | 2026-10-22 | Antigravity | 接入视频号调度策略 mtime 热加载，并支持绑定任务的单次跳过凭据穿过会话间隔与配额等待。 |
 | 1.1.0 | 2026-10-22 | Antigravity | 支持绑定任务的单次跳过凭据穿过会话间隔与配额等待。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.0.0 | 2026-10-20 | Codex | 持久保存原生 -360/HTTP 429、会话间隔与指数退避；只记录脱敏端点及业务码。 |
@@ -23,7 +25,8 @@ import uuid
 from urllib.parse import urlsplit
 
 from config.settings import settings
-from .wechat_account_schedule import admission
+from ..utils.wechat_scheduler_policy import sync_wechat_scheduler_settings
+from .wechat_account_schedule import admission, evaluate
 
 
 class WeChatRequestDeferred(RuntimeError):
@@ -104,11 +107,11 @@ class WeChatRequestGuard:
                              "previous_blocked_until": previous_until,
                              "last_limited_at": row.get("last_limited_at", 0)})
 
-    def issue_override(self, video, version):
+    def issue_override(self, video, version, *, full_state=False):
         """将显式确认绑定当前冷却版本和单个任务；不清除共享冷却。"""
         with self._locked():
             row, now = self._read(), time.time()
-            if not video or version != self._version(row):
+            if not video or version != (self.recovery_version(row) if full_state else self._version(row)):
                 raise WeChatRequestDeferred("冷却状态已变化，请重新确认")
             grants = {key: value for key, value in row.get("manual_overrides", {}).items()
                       if value["expires_at"] > now and value["video"] != video}
@@ -199,6 +202,17 @@ class WeChatRequestGuard:
                         or any(type(v) not in (int, float) or not math.isfinite(v)
                                for v in grant["generation"])):
                     raise ValueError("manual_override")
+            schedule = row.get("schedule", {})
+            for name in ("sessions", "queue", "recovery_priority"):
+                values = schedule.get(name, [])
+                if not isinstance(values, list):
+                    raise ValueError(name)
+                for value in values:
+                    keys = ("at",) if name == "sessions" else (("at", "seen") if name == "queue" else ("expires_at",))
+                    if not isinstance(value, dict) or any(type(value.get(k)) not in (int, float) or not math.isfinite(value[k]) for k in keys):
+                        raise ValueError(name)
+                    if not isinstance(value.get("task"), str) or (name != "recovery_priority" and not isinstance(value.get("purpose"), str)):
+                        raise ValueError(name)
             return row
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise WeChatRequestDeferred("视频号共享退避记录不可验证，停止请求") from exc
@@ -223,6 +237,84 @@ class WeChatRequestGuard:
     def snapshot(self):
         with self._locked():
             return self._read()
+
+    @staticmethod
+    def recovery_version(row):
+        """完整本地状态版本；任何新会话、新限流或凭据变化均使旧确认失效。"""
+        return hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def evaluate(self, purpose="发布", task="", *, account_only=False):
+        sync_wechat_scheduler_settings()
+        with self._locked():
+            row = self._read()
+            return {**evaluate(row, time.time(), purpose, task, account_only=account_only),
+                    "version": self.recovery_version(row), "failure_streak": row["failure_streak"],
+                    "last_limited_at": row.get("last_limited_at"),
+                    "queue_count": len(row.get("schedule", {}).get("queue", []))}
+
+    def admission_view(self, task):
+        """兼容单片确认和队列展示的准入视图；全部阻塞来自同一纯计算。"""
+        sync_wechat_scheduler_settings()
+        with self._locked():
+            row, now = self._read(), time.time()
+            info = evaluate(row, now, task=task)
+            until = info["until"]
+            return {**info, "active": not info["allowed"], "version": self.recovery_version(row),
+                    "remaining_seconds": max(0, math.ceil(until-now)) if until else None,
+                    "business_code": row.get("business_code") if row["blocked_until"] > now else None,
+                    "reason": "；".join(b["reason"] for b in info["blockers"]) or "本地账户限制已满足"}
+
+    def recover_local(self, *, operation_id, expected_version, reset_quota=False,
+                      reset_cooldown=False, priority_tasks=()):
+        """只恢复操作者确认的本地限制；状态文件与浏览器均持原生锁，重放返回原回执。"""
+        if not operation_id or len(operation_id) > 80:
+            raise ValueError("缺少有效操作 ID")
+        browser_path = self.path.with_name(self.path.name.replace(".requests.json", ".browser.lock"))
+        browser_path.parent.mkdir(parents=True, exist_ok=True)
+        with browser_path.open("a+") as browser:
+            try:
+                fcntl.flock(browser, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise WeChatRequestDeferred("真实浏览器会话正在使用账号，请等待释放后恢复") from exc
+            with self._locked():
+                row, now = self._read(), time.time()
+                receipts = row.get("recovery_operations", {})
+                if operation_id in receipts:
+                    return receipts[operation_id]
+                if expected_version != self.recovery_version(row):
+                    raise WeChatRequestDeferred("账号状态已变化，请刷新预览后重新确认；未重置任何限制")
+                before = evaluate(row, now, account_only=True)
+                state = row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})
+                if reset_quota:
+                    state.update(quota_epoch=operation_id, quota_reset_at=now)
+                if reset_cooldown:
+                    row.update(blocked_until=0, next_session_at=0, failure_streak=0,
+                               reason="OPERATOR_LOCAL_RECOVERY")
+                    state.update(recovery_started=now - 86401, interval_reset_at=now)
+                    row["manual_overrides"] = {}
+                if priority_tasks:
+                    state["recovery_priority"] = [p for p in state.get("recovery_priority", []) if p["expires_at"] > now] + [
+                        {"task": task, "expires_at": now + 1800, "operation_id": operation_id}
+                        for task in dict.fromkeys(priority_tasks)]
+                after = evaluate(row, now, account_only=True)
+                receipt = {"operation_id": operation_id, "at": now,
+                           "reset_quota": reset_quota, "reset_cooldown": reset_cooldown,
+                           "priority_count": len(priority_tasks),
+                           "before": before, "after": after}
+                row.setdefault("recovery_operations", {})[operation_id] = receipt
+                self._save(row, {"event": "OPERATOR_LOCAL_RECOVERY", **receipt})
+                return receipt
+
+    def cancel_recovery_priority(self, operation_id):
+        """取消仅撤回该批次尚未消费的优先位置，不回滚账户状态。"""
+        with self._locked():
+            row = self._read()
+            state = row.get("schedule", {})
+            old = state.get("recovery_priority", [])
+            remaining = [p for p in old if p.get("operation_id") != operation_id]
+            if remaining != old:
+                state["recovery_priority"] = remaining
+                self._save(row, {"event": "RECOVERY_PRIORITY_CANCELLED", "operation_id": operation_id})
 
     def admission(self, purpose, task, caller=""):
         self.purpose, self.task, self.caller = purpose, task, caller
@@ -289,7 +381,7 @@ class WeChatRequestGuard:
                 if purpose != "登录":
                     raise WeChatRequestDeferred("人工登录许可不能用于其他操作")
                 schedule = row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})
-                schedule["sessions"].append({"at": now, "purpose": "登录", "task": self.task})
+                schedule["sessions"].append({"at": now, "purpose": "登录", "task": self.task, "quota_epoch": schedule.get("quota_epoch", "legacy")})
             elif settings.wechat_account_scheduler_enabled:
                 bypass = self._has_override(row)
                 if not bypass:

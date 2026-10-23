@@ -19,10 +19,11 @@
     "browser"
   ],
   "commands": {
-    "browser": ".venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/browser/test_dashboard_workspace.py tests/browser/test_product_settings_browser.py tests/browser/test_topic_candidates_browser.py tests/browser/test_manual_product_selection_browser.py tests/unit/test_dashboard_interactions.py tests/browser/test_vocabulary_outro_settings_browser.py tests/browser/test_video_prefilter_browser.py"
+    "browser": ".venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/browser/test_dashboard_workspace.py tests/browser/test_product_settings_browser.py tests/browser/test_topic_candidates_browser.py tests/browser/test_manual_product_selection_browser.py tests/unit/test_dashboard_interactions.py tests/browser/test_vocabulary_outro_settings_browser.py tests/browser/test_video_prefilter_browser.py tests/browser/test_publishing_recovery_browser.py"
   },
   "evidence": {
     "crudFullFlow": "tests/browser/test_topic_candidates_browser.py",
-    "failurePaths": "tests/browser/test_topic_candidates_browser.py"
+    "failurePaths": "tests/browser/test_topic_candidates_browser.py",
+    "publishingRecovery": "tests/browser/test_publishing_recovery_browser.py"
   }
 }

@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 按上下文与闭环双层约束列表预算，保留原生限流即停。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.4.0 | 2026-10-20 | Codex | 会话入口遵守账户共享冷却；上下文首个请求前登记会话并捕获所有原生限流响应。 |
@@ -42,6 +43,7 @@ R = TypeVar("R")
 EXIT_WECHAT_SESSION_BUSY = 11  # 未进入被保护函数，更未启动浏览器或发表。
 EXIT_WECHAT_COOLDOWN = 15
 EXIT_WECHAT_OVERRIDE_INVALID = 16
+EXIT_WECHAT_ACCOUNT_DEFERRED = 17
 _SESSION: ContextVar = ContextVar("wechat_request_session", default=None)
 
 
@@ -63,7 +65,7 @@ def guard_wechat_context(context):
         try:
             session.request_guard.start_session(session.purpose)
         except WeChatRequestDeferred as exc:
-            raise WeChatSessionLockBusy(str(exc)) from exc
+            raise WeChatAccountDeferred(str(exc)) from exc
         session._request_started = True
     context._wechat_rate_limit_seen = False
     context._wechat_list_request_count = 0
@@ -132,6 +134,10 @@ class WeChatSessionLockBusy(RuntimeError):
 
 class WeChatSessionCooldown(WeChatSessionLockBusy):
     """本地账户冷却，区别于真实浏览器互斥。"""
+
+
+class WeChatAccountDeferred(WeChatSessionLockBusy):
+    """额度、排队或账号记录阻塞，不冒充浏览器占用。"""
 
 
 class WeChatOverrideInvalid(WeChatSessionLockBusy):
@@ -216,7 +222,7 @@ class WeChatSessionLock:
                 except WeChatCooldownDeferred as exc:
                     raise WeChatSessionCooldown(str(exc)) from exc
                 except WeChatRequestDeferred as exc:
-                    raise WeChatSessionLockBusy(str(exc)) from exc
+                    raise WeChatAccountDeferred(str(exc)) from exc
                 self._handle = handle
                 self._request_started = False
                 self._request_limited = False
@@ -314,6 +320,8 @@ def guarded_wechat_browser_session(
                 return EXIT_WECHAT_COOLDOWN if bound.arguments.get("cooldown_result_codes") else busy_result
             except WeChatOverrideInvalid:
                 return EXIT_WECHAT_OVERRIDE_INVALID
+            except WeChatAccountDeferred:
+                return EXIT_WECHAT_ACCOUNT_DEFERRED if bound.arguments.get("cooldown_result_codes") else busy_result
             except WeChatSessionLockBusy:
                 return busy_result
 

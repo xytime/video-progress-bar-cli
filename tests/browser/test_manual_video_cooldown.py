@@ -31,6 +31,7 @@ def cooldown_page(dashboard):
             route.fulfill(json={'success':False,'code':'WECHAT_COOLDOWN','cooldown':info,'prepared':True})
     page.route('**/api/videos/**/process*', route)
     yield page, state
+    assert not state["errors"], state["errors"]
 
 
 def execute(page):
@@ -43,7 +44,7 @@ def execute(page):
 def test_cancel_escape_and_focus_never_issue_force(cooldown_page):
     page, state = cooldown_page
     button = execute(page)
-    dialog = page.get_by_role('dialog', name='视频号账号正在冷却')
+    dialog = page.get_by_role('dialog', name='视频号账号准入受阻')
     expect(dialog.get_by_text('视频号返回限流（-360）', exact=True)).to_be_visible()
     expect(dialog.get_by_role('button',name='取消',exact=True)).to_be_focused()
     expect(button).to_be_disabled()

@@ -35,3 +35,34 @@
   .wechat-cooldown-settings .wc-metrics-grid,
   .wechat-cooldown-settings .wc-grid-2col { grid-template-columns:minmax(0,1fr); }
 }
+
+/* 发布恢复沿用 dashboard 主题、原生控件及文档滚动。 */
+.pr-panel { margin-block: 18px; }
+.pr-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-block:14px; }
+.pr-actions label,.pr-options label { display:flex; gap:8px; align-items:center; }
+.pr-actions input[type=checkbox],.pr-options input { width:18px; height:18px; flex:none; }
+.pr-actions select,.pr-actions input[type=text] { padding:9px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); color:var(--text); font:inherit; max-width:100%; }
+.pr-options { border:1px solid var(--border); border-radius:8px; padding:14px; display:grid; gap:12px; }
+.pr-table-wrap { overflow:auto; max-width:100%; border:1px solid var(--border); border-radius:8px; }
+.pr-table { width:100%; min-width:1000px; border-collapse:collapse; text-align:left; font-size:.9rem; }
+.pr-table th,.pr-table td { padding:12px; border-bottom:1px solid var(--border); vertical-align:top; overflow-wrap:anywhere; }
+.pr-table td:nth-child(2) { min-width:180px; }
+.pr-table td:nth-child(3) { min-width:150px; }
+.pr-table td:nth-child(4) { min-width:200px; }
+.pr-table td:nth-child(5) { min-width:220px; }
+#pr-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+@media(max-width:600px) { #pr-metrics { grid-template-columns:minmax(0,1fr); } }
+.pr-table small { display:block; color:var(--text2); margin-top:6px; }
+.pr-table input { width:18px; height:18px; }
+.pr-metric { border:1px solid var(--border); padding:14px; border-radius:8px; }
+.pr-metric strong,.pr-metric small { display:block; }
+.pr-metric strong { font-size:1.2rem; margin:6px 0; }
+.pr-operation { padding:14px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.pr-operation li { margin:10px 0; }
+.pr-operation summary { cursor:pointer; line-height:1.7; }
+.pr-policy > summary { padding:18px; cursor:pointer; border:1px solid var(--border); border-radius:8px; }
+#pr-confirm-dialog { width:min(640px, calc(100vw - 32px)); max-height:calc(100dvh - 48px); overflow:auto; }
+#pr-confirm-body ul { max-height:30vh; overflow:auto; padding-inline-start:24px; }
+#pr-blockers li { margin-block:8px; }
+.pr-panel details { margin-top:14px; }
+@media(max-width:600px) { .wechat-cooldown-settings .page-header { position:static; } .pr-actions > button { min-height:44px; } .pr-panel { padding:14px; } .wc-section-head { flex-wrap:wrap; gap:10px; } .pr-actions input[type=text] { width:100%; } }

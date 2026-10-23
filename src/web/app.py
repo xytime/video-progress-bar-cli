@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
 
 | evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
@@ -218,6 +219,16 @@ def _create_topic_tracker():
 
 
 app.include_router(create_topic_candidates_router(_create_topic_tracker, port=settings.dashboard_port))
+
+
+from web.wechat_cooldown_settings import create_wechat_cooldown_settings_router
+app.include_router(create_wechat_cooldown_settings_router(active=settings.wechat_scheduler_policy_path))
+from web.publishing_recovery import create_publishing_recovery_router
+from video_processing.utils.publishing_recovery_worker import ensure_publishing_recovery_worker
+app.include_router(create_publishing_recovery_router(
+    db, settings.project_root,
+    wake=lambda: ensure_publishing_recovery_worker(db, settings.project_root),
+))
 
 
 @app.middleware("http")
@@ -1784,6 +1795,11 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
     import time
 
     out = Path(__file__).resolve().parents[2] / "output"
+    from video_processing.core.wechat_request_guard import WeChatRequestDeferred
+    try:
+        cooldown = _wechat_cooldown_guard().admission_view("")
+    except WeChatRequestDeferred:
+        cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
     owner = read_lease_owner(canonical_wechat_session_lock_path(out / "wechat_state.json"))
     details = db.get_publication_queue_details([v["id"] for v in videos if v.get("id")])
     try:
@@ -1795,6 +1811,11 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
         is_ready = video.get("status") == "PUBLISH_PRECHECK" or (video.get("status") == "PENDING" and video.get("preparation_ready"))
         if not is_ready:
             continue
+        try:
+            prefix = video['youtube_id'] + (f"_s{video['slice_index']}" if video.get('slice_index') else "")
+            cooldown = _wechat_cooldown_guard().admission_view(prefix)
+        except WeChatRequestDeferred:
+            cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
         detail = details.get(video.get("id"), {})
         reason = video.get("publication_wait_reason") or "等待发布执行者领取"
         if video.get("publication_review_required"):
@@ -1805,6 +1826,10 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             reason = f"等待前序切片 {detail['predecessor']} 完成发布"
         elif detail.get("next_attempt_at") and detail['next_attempt_at'] > datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'):
             reason = "上传前失败退避，到期自动重试"
+        elif cooldown["active"]:
+            cooldown_waiting = True
+            previous = "本次执行被平台限流；" if str(video.get("publication_wait_reason", "")).startswith("本次执行被平台限流") else ""
+            reason = previous + "加工完成 · 等待账号准入（冷却／额度／排队）：" + cooldown["reason"]
         elif owner:
             reason = f"同账号浏览器占用：{owner.get('video', '其他操作')}（{owner.get('stage', '浏览器操作')}，PID {owner.get('pid', '未知')}）"
         elif not healthy:
@@ -2781,8 +2806,48 @@ def _check_engagement_action(youtube_id: str, action: str, version: Optional[str
         raise HTTPException(409, "任务状态或操作资格已变化，请刷新列表后重新检查")
 
 
+def _wechat_cooldown_guard():
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    return WeChatRequestGuard(_OUT_DIR / "wechat_state.json")
+
+
+def _manual_cooldown_check(video: dict, action: str, version: str):
+    """确认前不认领、不改任务；只签发绑定当前作品的单次许可。"""
+    from video_processing.core.wechat_request_guard import WeChatRequestDeferred
+    if action not in ("", "wait", "force"):
+        return {"success": False, "error": "未知冷却操作"}, None
+    guard = _wechat_cooldown_guard()
+    try:
+        prefix = video["youtube_id"] + (f"_s{video['slice_index']}" if video.get("slice_index") else "")
+        info = guard.admission_view(prefix)
+        hard = {"SUBMISSION_PROTECTED", "RESERVED_PRIORITY", "RECOVERY_RESERVED", "READBACK_DISABLED", "KEEPALIVE_DISABLED"}
+        if any(b["code"] in hard for b in info["blockers"]):
+            return {"success": False, "code": "WECHAT_ACCOUNT_BLOCKED", "error": info["reason"],
+                    "recovery_url": "/wechat-cooldown-settings"}, None
+        if action == "wait":
+            return {"success": True, "waiting": True, "cooldown": info,
+                    "message": "保留任务，等待冷却结束后自动重试"}, None
+        if action == "force":
+            prefix = video["youtube_id"]
+            if video.get("slice_index"):
+                prefix += f"_s{video['slice_index']}"
+            if version != info["version"]:
+                return {"success": False, "code": "WECHAT_COOLDOWN", "cooldown": info,
+                        "prepared": bool(video.get("preparation_ready")),
+                        "error": "冷却状态已变化，请重新确认"}, None
+            return None, guard.issue_override(prefix, version, full_state=True)
+        if info["active"]:
+            return {"success": False, "code": "WECHAT_COOLDOWN", "cooldown": info,
+                    "prepared": bool(video.get("preparation_ready")),
+                    "error": "账号准入受阻，请查看全部原因，选择等待或确认单次尝试"}, None
+        return None, None
+    except WeChatRequestDeferred as exc:
+        return {"success": False, "error": str(exc)}, None
+
+
 @app.post("/api/videos/{youtube_id}/process")
-def process_video_now(youtube_id: str, engagement_version: Optional[str] = None):
+def process_video_now(youtube_id: str, engagement_version: Optional[str] = None,
+                      cooldown_action: str = "", cooldown_version: str = ""):
     """立即处理指定视频，忽略分数阈值。"""
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
@@ -2794,14 +2859,23 @@ def process_video_now(youtube_id: str, engagement_version: Optional[str] = None)
     # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频仅供浏览，禁止通过 API 直接触发自动处理管线
     if video.get("source") == "DISCOVERY":
         return {"success": False, "error": "DISCOVERY 来源视频不允许自动处理，请手动添加后再执行"}
+    if video.get("status") != "PENDING":
+        return {"success": False, "error": "任务状态已变化，请刷新列表"}
+    reply, override = _manual_cooldown_check(video, cooldown_action, cooldown_version)
+    if reply is not None:
+        return reply
     if not db.claim_video_for_processing(youtube_id):
+        if override:
+            _wechat_cooldown_guard().revoke_override(override)
         return {"success": False, "error": f"视频当前状态不是 PENDING，或者已被其他进程抢占处理"}
 
     fresh = db.get_video_by_youtube_id(youtube_id)
     if fresh:
+        if override:
+            fresh["_wechat_cooldown_override"] = override
         _trigger_video_async(fresh)
 
-    return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
+    return {"success": True, "message": ("已确认跳过本地冷却，仅尝试一次：" if override else "已在后台启动处理：") + video['title']}
 
 
 @app.post("/api/videos/{youtube_id}/promote")
@@ -3334,54 +3408,23 @@ def retry_video(youtube_id: str, engagement_version: Optional[str] = None):
 
 @app.post("/api/videos/retry-recent")
 def retry_recent(hours: int = 24):
-    """批量重试最近 N 小时内 FAILED / LOGIN_REQUIRED 的任务：重置为 PENDING（复用 GC 保留的
-    成片/封面/文案 checkpoint，秒级重跑）。供 Telegram /retry <hours>。
-
-    仅重置状态、不在此逐条触发（避免一次性 spawn 过多进程）；score>=75 的会被仪表盘调度器
-    在下次巡检自动重新发布（盘中重负载护栏仍生效）。
-    """
-    if hours <= 0 or hours > 720:
-        return {"success": False, "error": "hours 需在 1~720 之间"}
-    rows = db.get_failed_videos_since(hours)
-    safe_rows = [row for row in rows if not _wechat_submission_guard_reason(row)]
-    count = 0
-    for r in safe_rows:
-        db.update_video_status(
-            r["youtube_id"], "PENDING", error_msg=None,
-            slice_index=int(r.get("slice_index") or 0),
-        )
-        count += 1
-    return {
-        "success": True,
-        "count": count,
-        "skipped_platform_guard": len(rows) - count,
-        "hours": hours,
-        "items": [(r.get("title") or "")[:42] for r in safe_rows[:10]],
-    }
+    """旧调用保留参数，进入同一固定预览确认流程，避免扩大范围或误重投。"""
+    return {"success": False, "confirmation_required": True, "hours": hours,
+            "error": "请在发布恢复后台预览并确认具体任务，旧接口不再直接批量修改状态。",
+            "url": "/wechat-cooldown-settings?window=24h"}
 
 
 @app.get("/api/videos/retry-recent/preview")
 def retry_recent_preview(hours: int = 24):
-    """只读预览最近 N 小时内 /retry <hours> 会重置的任务。"""
     if hours <= 0 or hours > 720:
         return {"success": False, "error": "hours 需在 1~720 之间"}
-    rows = db.get_failed_videos_since(hours)
-    safe_rows = [row for row in rows if not _wechat_submission_guard_reason(row)]
-    return {
-        "success": True,
-        "count": len(safe_rows),
-        "skipped_platform_guard": len(rows) - len(safe_rows),
-        "hours": hours,
-        "items": [
-            {
-                "youtube_id": r.get("youtube_id"),
-                "slice_index": int(r.get("slice_index") or 0),
-                "title": (r.get("title") or "")[:80],
-                "status": r.get("status"),
-            }
-            for r in safe_rows[:10]
-        ],
-    }
+    from video_processing.publishing_recovery import PublishingRecoveryService
+    from datetime import datetime, timedelta, timezone
+    last = datetime.now(timezone.utc)
+    result = PublishingRecoveryService(db, settings.project_root).preview(
+        window="custom", start=(last-timedelta(hours=hours)).isoformat(), end=last.isoformat())
+    return {**result, "success": True, "count": sum(i["eligible"] for i in result["items"]),
+            "hours": hours, "url": "/wechat-cooldown-settings?preview="+result["preview_id"]}
 
 
 @app.post("/api/videos/{youtube_id}/slices/{slice_index}/retry")
@@ -3429,7 +3472,8 @@ def retry_slice(youtube_id: str, slice_index: int):
 
 
 @app.post("/api/videos/{youtube_id}/slices/{slice_index}/process")
-def process_slice_now(youtube_id: str, slice_index: int):
+def process_slice_now(youtube_id: str, slice_index: int,
+                      cooldown_action: str = "", cooldown_version: str = ""):
     """[Unknown_Model_planning] 立即处理指定切片子任务，忽略分数。"""
     video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if not video:
@@ -3458,12 +3502,22 @@ def process_slice_now(youtube_id: str, slice_index: int):
             "error": f"前序切片 {prev_indices} 尚未发布/跳过/手动上传，当前切片已被顺序锁阻断。"
         }
 
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": guard_reason}
+    reply, override = _manual_cooldown_check(video, cooldown_action, cooldown_version)
+    if reply is not None:
+        return reply
     # 抢占任务
     if not db.claim_video_for_processing(youtube_id, slice_index=slice_index):
+        if override:
+            _wechat_cooldown_guard().revoke_override(override)
         return {"success": False, "error": "切片已被其他进程抢占。"}
 
     fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if fresh:
+        if override:
+            fresh["_wechat_cooldown_override"] = override
         _trigger_video_async(fresh)
 
     return {

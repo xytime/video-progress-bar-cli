@@ -65,7 +65,10 @@
   function renderRuntime(rt) {
     runtime = rt;
     if (!rt) return;
-    if (rt.platform_frozen) {
+    if (rt.admission?.blockers?.length) {
+      $('rt-status').textContent = '等待账号准入';
+      $('rt-reason').textContent = rt.admission.blockers.map(b => b.reason).join('；');
+    } else if (rt.platform_frozen) {
       $('rt-status').textContent = '平台限流冷却中';
       $('rt-reason').textContent = `触发原因：${rt.cooldown?.reason || '视频号返回限流'}${rt.business_code != null ? ` (${rt.business_code})` : ''}`;
     } else if (rt.recovering) {
@@ -75,10 +78,10 @@
       $('rt-status').textContent = '正常会话节流间隔中';
       $('rt-reason').textContent = '非平台封禁；按稳定期间隔顺序放行队列';
     } else {
-      $('rt-status').textContent = '空闲 · 可立即发布';
+      $('rt-status').textContent = '本地账户限制已满足';
       $('rt-reason').textContent = '无活跃冷却或会话间隔等待';
     }
-    $('rt-until').textContent = rt.effective_until > Date.now() / 1000 ? fmtTime(rt.effective_until) : '现在';
+    $('rt-until').textContent = rt.admission && !rt.admission.allowed ? (rt.admission.until ? fmtTime(rt.admission.until) : '未知，等待条件变化') : '现在';
     $('rt-remaining').textContent = fmtRemaining(rt.effective_remaining_seconds);
     $('rt-quota').textContent = `${rt.sessions_24h_count} / ${rt.effective_daily_limit} 次`;
     $('rt-interval-mode').textContent = `${rt.recovering ? '恢复期' : '稳定期'}间隔 ${fmtDuration(rt.effective_interval_seconds)} · 排队 ${rt.queue_count} 条`;
@@ -94,6 +97,7 @@
 
   function state() {
     $('editor').disabled = !saved || busy;
+    document.querySelectorAll('.wc-preset').forEach(b => b.disabled = !saved || busy);
     $('reload').disabled = busy;
     $('reset-defaults').disabled = !saved || busy;
     $('save').disabled = !dirty() || busy || conflict;
@@ -234,6 +238,7 @@
   $('btn-unfreeze').addEventListener('click', () => {
     if (!runtime?.can_unfreeze || busy) return;
     returnFocus = document.activeElement;
+    $('unfreeze-cancel').disabled = false; $('unfreeze-confirm').disabled = false;
     unfreezeDialog.showModal();
     $('unfreeze-cancel').focus();
   });

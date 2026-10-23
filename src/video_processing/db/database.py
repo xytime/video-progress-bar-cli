@@ -11,6 +11,7 @@
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | preupload-rate-limit-v1 | 2026-10-20 | Codex | 具名一次性恢复单次上传前 -360，核验原包和负面提交证据并保留不可变尝试。 |
 | 3.99.0 | 2026-10-17 | Antigravity | M3.5: 新增 wechat_comment_scan_state 扫描水位表、二级回复对账指数退避字段与审批消息 ID 字段，新增认领释放、到期对账查询与扫描水位推进 DAL 方法。 |
 | 3.98.0 | 2026-10-17 | Antigravity | 收回二级回复观众评论查询与任务物理删除至 PipelineDB 具名方法，并在审批绑定/消费/提交意图事务内拒绝 local_operator 与 local-cli 伪身份。 |
@@ -225,9 +226,10 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
 from .delivery_recovery import DeliveryRecoveryDAL
+from .publishing_recovery import PublishingRecoveryDAL
 
 
-class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -297,6 +299,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
             self.initialize_delivery_recovery()
+            self.initialize_publishing_recovery()
         self._initializing_schema = False
         from ..core.maintenance import running
         if not self._read_only and running():
@@ -4878,6 +4881,8 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 '''SELECT pv.*
                    FROM processed_videos pv
                    WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
                      AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
@@ -5239,6 +5244,8 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             SELECT pv.*
             FROM processed_videos pv
             WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
               AND pv.score < 75
               AND IFNULL(pv.source, '') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
               AND IFNULL(pv.is_manually_scored, 0) = 0
@@ -5473,7 +5480,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 """SELECT pv.id, wp.state, wp.last_error_message
                    FROM processed_videos pv
                    JOIN wechat_publications wp ON wp.video_id = pv.id
-                   WHERE pv.status = 'PENDING'"""
+                   WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))"""
             )
             pub_rows = cursor.fetchall()
             for r in pub_rows:
@@ -5596,7 +5605,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
         query = f"""
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
-            WHERE pv.status = 'PENDING' AND ({threshold_sql}) {readiness}
+            WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND ({threshold_sql}) {readiness}
               AND 'pipeline:' || pv.youtube_id || ':' || pv.slice_index NOT IN (SELECT value FROM json_each(?))
               AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
               AND {rate_sql}
@@ -5658,6 +5669,8 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
               AND pv.source IN ('AUTO','KEYWORD') AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
@@ -5965,7 +5978,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             ''', (since,)).fetchone()
             queue = conn.execute('''
                 SELECT count(*) FROM processed_videos pv
-                WHERE pv.status = 'PENDING' AND pv.score >= 75
+                WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND pv.score >= 75
                   AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
                   AND COALESCE(pv.publication_review_required, 0) = 0
                   AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
@@ -6019,7 +6034,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
             queue = conn.execute(
                 """SELECT COUNT(*) AS count
                    FROM processed_videos pv
-                   WHERE pv.status = 'PENDING' AND pv.score >= 75
+                   WHERE pv.status = 'PENDING'
+              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
+                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND pv.score >= 75
                      AND IFNULL(pv.source, '') != 'DISCOVERY'
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'

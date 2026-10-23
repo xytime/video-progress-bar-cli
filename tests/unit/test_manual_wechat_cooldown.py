@@ -201,7 +201,7 @@ def test_queue_explains_ready_cooldown(api):
     rows = [db.get_video_by_youtube_id('one')]
     web_app._attach_ready_publication_fields(rows)
     assert rows[0]['display_status'] == 'READY_COOLDOWN'
-    assert '加工完成 · 等待账号冷却' in rows[0]['publication_wait_reason']
+    assert '加工完成 · 等待账号准入' in rows[0]['publication_wait_reason']
     assert rows[0]['wechat_cooldown']['business_code'] == -360
 
 
@@ -232,7 +232,7 @@ def test_ready_submission_keeps_artifacts_and_state_while_cooling(tmp_path, guar
     manager._submit_ready_video(manager.db.get_video_by_youtube_id('one'))
     row = manager.db.get_video_by_youtube_id('one')
     assert row['status'] == 'PENDING' and row['preparation_ready'] == 1
-    assert '等待账号冷却' in row['publication_wait_reason']
+    assert '等待账号准入' in row['publication_wait_reason']
     assert artifact.read_bytes() == b'existing artifact'
 
 

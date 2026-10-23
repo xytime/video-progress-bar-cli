@@ -6,6 +6,8 @@
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
+| 3.100.0 | 2026-10-18 | Antigravity | 上传与回查子进程持久化 uploader_stdio.log 诊断证据；回查支持捕获非零退出码并在返回 2 时记录登录恢复信号；接入 manual_publish_leases 两阶段状态机、四件套清单摘要校验及锁忙退回。 |
 | 3.99.0 | 2026-10-13 | Codex | 接入字幕绑定生词片尾及派生成片选择，不改变状态机与发布授权 |
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
 | 3.72.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：受控开关控制、按视频挂接决策冻结并透传上传器。 |
@@ -3892,6 +3894,23 @@ class PipelineManager:
         )
         return decision.declare_original
 
+    def _defer_wechat_cooldown_if_needed(self, video) -> bool:
+        """在领取及派生上传器前检查账户冷却，单次许可仍在上传入口核验。"""
+        if video.get("_wechat_cooldown_override"):
+            return False
+        from .core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+        try:
+            prefix = video["youtube_id"] + (f"_s{video['slice_index']}" if video.get("slice_index") else "")
+            info = WeChatRequestGuard(self._OUT_DIR / "wechat_state.json").evaluate(task=prefix)
+            if info["allowed"]:
+                return False
+            reason = "加工完成 · 等待账号准入：" + "；".join(b["reason"] for b in info["blockers"])
+        except WeChatRequestDeferred as exc:
+            reason = str(exc)
+        self.db.defer_ready_publication(video["youtube_id"], reason,
+                                       slice_index=int(video.get("slice_index") or 0))
+        return True
+
     @guarded("video", lambda self, video: str(video["youtube_id"]) + ":" + str(video.get("slice_index", 0)))
     def _submit_ready_video(self, video: Dict[str, Any]) -> None:
         """只读检查点后提交；不领取加工锁，不调用下载或渲染。调用者持单视频锁。"""
@@ -3904,6 +3923,8 @@ class PipelineManager:
         if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
             return
         if video.get("publication_review_required"):
+            return
+        if self._defer_wechat_cooldown_if_needed(video):
             return
         claimed = False
         try:
@@ -4136,6 +4157,15 @@ class PipelineManager:
                 return
             if upload_err.returncode == 14:
                 self.db.defer_ready_publication(yid, '商品等待：未点击发表，保留原商品和成片，按有界退避重新核验', slice_index=slice_index)
+                return
+            if upload_err.returncode == 17:
+                from .core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+                try:
+                    info = WeChatRequestGuard(self._OUT_DIR / "wechat_state.json").evaluate(task=prefix)
+                    reason = "账号准入等待：" + "；".join(b["reason"] for b in info["blockers"])
+                except WeChatRequestDeferred as exc:
+                    reason = str(exc)
+                self.db.defer_ready_publication(yid, reason, slice_index=slice_index)
                 return
             if upload_err.returncode == 11:
                 rearm_fn = getattr(self.db, "rearm_manual_publish_lease_on_busy", None)

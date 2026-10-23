@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>视频号冷却与调度 · 视频控制台</title>
+  <title>发布恢复与调度 · 视频控制台</title>
   <script>
   (() => {
     const root = document.documentElement;
@@ -24,17 +24,18 @@
   <link rel="stylesheet" href="/static/css/console_workspace.css">
   <link rel="stylesheet" href="/static/css/wechat_cooldown_settings.css">
   <script defer src="/static/js/wechat_cooldown_settings.js"></script>
+  <script defer src="/static/js/publishing_recovery.js"></script>
   <script defer src="/static/js/console_navigation.js"></script>
 </head>
 <body>
 <main class="product-settings wechat-cooldown-settings">
   <nav class="breadcrumbs" aria-label="当前位置">
-    <a id="back" href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">视频号冷却与调度</span>
+    <a id="back" href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">发布恢复与调度</span>
   </nav>
   <header class="page-header">
     <div>
-      <h1>视频号冷却与调度</h1>
-      <p class="hint">查看账号实时冷却与 24 小时会话配额、确认平台限流解冻，以及调整后台调度参数（默认保留安全生产值）。</p>
+      <h1>发布恢复与调度</h1>
+      <p class="hint">在后台重置本地额度与冷却、批量续跑失败任务；每次操作都保留范围和结果记录。</p>
     </div>
     <div class="header-actions">
       <span id="dirty-state" role="status">正在载入…</span>
@@ -45,6 +46,39 @@
   </header>
   <p id="feedback" role="status" aria-live="polite"></p>
 
+  <section class="wc-runtime-panel pr-panel" aria-labelledby="pr-heading">
+    <div class="wc-section-head"><h2 id="pr-heading">当前账户准入</h2><button type="button" id="pr-refresh" disabled>刷新账户与批次</button></div>
+    <p id="pr-status" role="status">正在读取当前账户…</p>
+    <div id="pr-metrics" class="wc-runtime-grid"></div>
+    <ul id="pr-blockers"></ul>
+    <p id="pr-owners" class="hint"></p>
+    <p class="hint">额度是本地滚动 24 小时访问预算，发布、登录及互动共用。重置不改变上限或平台真实限制，评论和回复的 6 小时间隔保留。</p>
+    <div class="pr-actions"><button type="button" data-recovery="quota" disabled>重置本地额度</button><button type="button" data-recovery="cooldown" disabled>清除本地冷却</button><button type="button" data-recovery="all" disabled>重置全部本地发布限制</button></div>
+    <details><summary>最近真实访问记录</summary><div id="pr-sessions"></div></details>
+  </section>
+
+  <section class="wc-runtime-panel pr-panel" aria-labelledby="pr-failures-heading">
+    <h2 id="pr-failures-heading">失败任务批量续跑</h2>
+    <p class="hint">主流水线含切片。有效文案、转录、翻译和成片继续复用；需要登录或人工处理的任务有独立入口。</p>
+    <form id="pr-filter" novalidate>
+      <div class="pr-actions"><label for="pr-window">失败时间（北京时间）</label><select id="pr-window"><option value="today">今天</option><option value="24h" selected>最近 24 小时</option><option value="custom">自定义（最多 30 天）</option></select><label><input id="pr-ready" type="checkbox">同时查看已就绪待发布</label><button id="pr-preview" type="submit">预览任务</button></div>
+      <div id="pr-custom" class="pr-actions" hidden><label for="pr-start">开始</label><input id="pr-start" type="text" placeholder="2026-10-23T00:00" aria-describedby="pr-date-help"><label for="pr-end">结束</label><input id="pr-end" type="text" placeholder="2026-10-23T23:00" aria-describedby="pr-date-help"><span id="pr-date-help" class="hint">输入 YYYY-MM-DDTHH:mm，按北京时间计算。</span></div>
+    </form>
+    <p id="pr-feedback" role="status" aria-live="polite"></p>
+    <p id="pr-summary" class="hint">点击预览后选择具体任务，不会自动扩展到后续新增的失败。</p>
+    <div id="pr-results" hidden>
+      <div class="pr-actions"><label><input id="pr-page-select" type="checkbox">选择本页可恢复项</label><button id="pr-select-all" type="button" disabled>选择全部匹配可恢复项</button><button id="pr-clear" type="button" disabled>清空选择</button><strong id="pr-selected">已选 0 项</strong></div>
+      <p class="hint">“估算”表示旧记录仅能按更新时间推算失败范围，默认不选，可逐条勾选。</p>
+      <div class="pr-table-wrap" tabindex="0" aria-label="恢复任务列表，可横向滚动"><table class="pr-table"><thead><tr><th>选择</th><th>任务 / 切片</th><th>失败时间</th><th>分类与原因</th><th>下一步骤 / 产物</th></tr></thead><tbody id="pr-rows"></tbody></table></div>
+      <div class="pr-actions"><button id="pr-prev" type="button" disabled>上一页</button><span id="pr-page" role="status"></span><button id="pr-next" type="button" disabled>下一页</button></div>
+      <fieldset class="pr-options"><legend>本次选中任务的恢复选项</legend><label><input id="pr-priority" type="checkbox">优先尝试一次（不抢占在途任务）</label><label><input id="pr-backoff" type="checkbox">解除已验证的提交前上传失败退避一次</label><label><input id="pr-avoidance" type="checkbox">本次跳过制作时段与美股盘中软避让（30 分钟有效，一次只加工一项）</label></fieldset>
+      <div class="pr-actions"><button data-recovery="retry" class="primary" type="button" disabled>重试所选任务</button><button data-recovery="combined" type="button" disabled>重置全部本地限制并重试所选</button></div>
+    </div>
+  </section>
+
+  <section class="wc-runtime-panel pr-panel" aria-labelledby="pr-history-heading"><div class="wc-section-head"><h2 id="pr-history-heading">操作与逐项结果</h2><button id="pr-check" type="button" hidden disabled>核对原操作结果</button></div><p id="pr-history-feedback" role="status"></p><div id="pr-history"></div><div class="pr-actions"><button id="pr-history-prev" type="button" disabled>较新操作</button><span id="pr-history-page"></span><button id="pr-history-next" type="button" disabled>较早操作</button></div></section>
+
+  <details class="pr-policy"><summary>高级调度策略与兼容状态</summary>
   <section class="wc-runtime-panel" aria-labelledby="runtime-heading">
     <div class="wc-section-head">
       <div>
@@ -52,7 +86,7 @@
         <p class="hint">“等待冷却”大多数时候是两次投稿之间的正常节流间隔（默认 15 分钟），并非平台封禁。仅当遇到 -360 / 429 平台限流或处于 24 小时恢复期时，才需要人工确认解冻。</p>
       </div>
       <div class="wc-unfreeze-box">
-        <button id="btn-unfreeze" type="button" class="wc-btn-warning" disabled>确认平台已解冻（解除限流／恢复期）</button>
+        <button id="btn-unfreeze" hidden type="button" class="wc-btn-warning" disabled>清除本地冷却（兼容入口）（解除限流／恢复期）</button>
       </div>
     </div>
     <div class="wc-metrics-grid" id="runtime-metrics">
@@ -103,10 +137,10 @@
             <h2>日常稳定期调度参数（推荐保持默认）</h2>
             <p class="hint">平时无平台限流时生效。默认每 15 分钟（900 秒）最多启动 1 次投稿会话，24 小时最多 20 次。</p>
             <div class="wc-preset-bar">
-              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="900">默认 15 分钟 (900s)</button>
-              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="600">10 分钟 (600s)</button>
-              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="300">5 分钟 (300s)</button>
-              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="1800">30 分钟 (1800s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="900" disabled>默认 15 分钟 (900s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="600" disabled>10 分钟 (600s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="300" disabled>5 分钟 (300s)</button>
+              <button type="button" class="wc-preset" data-target="stable-interval-seconds" data-val="1800" disabled>30 分钟 (1800s)</button>
             </div>
             <div class="wc-grid-2col">
               <div>
@@ -117,14 +151,14 @@
               <div>
                 <label for="daily-limit">稳定期 24 小时最大会话数（1–100，默认 20）</label>
                 <input id="daily-limit" type="number" min="1" max="100" step="1">
-                <small class="hint">包含发布与新投稿状态核对会话</small>
+                <small class="hint">包含发布、登录和互动会话；不自动查询投稿结果</small>
               </div>
             </div>
           </section>
 
           <section>
             <h2>平台限流后恢复期与底层退避参数</h2>
-            <p class="hint">当平台返回 -360 或 HTTP 429 后，账号解冻后的首 24 小时进入恢复期（或点击上方“确认平台已解冻”直接跳过恢复期）。</p>
+            <p class="hint">当平台返回 -360 或 HTTP 429 后，账号解冻后的首 24 小时进入恢复期（或点击上方“清除本地冷却（兼容入口）”直接跳过恢复期）。</p>
             <div class="wc-grid-2col">
               <div>
                 <label for="recovery-interval-seconds">恢复期最小间隔（秒，300–86400，默认 3600）</label>
@@ -167,13 +201,15 @@
     </fieldset>
   </form>
 
+  </details>
+
   <dialog id="unfreeze-dialog" aria-labelledby="unfreeze-heading">
-    <h2 id="unfreeze-heading">确认平台已解冻</h2>
+    <h2 id="unfreeze-heading">清除本地冷却（兼容入口）</h2>
     <p>此操作将清除当前的本地平台限流倒计时（<code>blocked_until</code>）并结束 24 小时恢复期限制，恢复按日常稳定期间隔排队。</p>
     <p class="hint">请仅在微信视频号助手后台已确认可以正常访问作品列表时执行；操作保留已有投稿去重记录与会话历史。</p>
     <div class="dialog-foot">
-      <button id="unfreeze-cancel" type="button" autofocus>取消</button>
-      <button id="unfreeze-confirm" type="button" class="primary">确认解冻</button>
+      <button id="unfreeze-cancel" type="button" autofocus disabled>取消</button>
+      <button id="unfreeze-confirm" type="button" class="primary" disabled>确认解冻</button>
     </div>
   </dialog>
 
@@ -185,6 +221,7 @@
       <button id="discard" type="button" disabled>丢弃修改并继续</button>
     </div>
   </dialog>
+  <dialog id="pr-confirm-dialog" aria-labelledby="pr-confirm-title"><h2 id="pr-confirm-title">确认恢复操作</h2><div id="pr-confirm-body"></div><p id="pr-confirm-feedback" role="status"></p><div class="dialog-foot"><button id="pr-cancel" type="button" autofocus disabled>取消</button><button id="pr-confirm" class="primary" type="button" disabled>确认执行</button></div></dialog>
 </main>
 </body>
 </html>

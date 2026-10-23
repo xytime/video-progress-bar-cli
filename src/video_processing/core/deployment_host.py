@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publishing-recovery-v1 | 2026-10-23 | Codex | 发布恢复 worker 空闲后沿用精确身份受控停止。 |
+| 1.4.0 | 2026-10-18 | AGY | stop() 兼容独立二创执行者 wallstreet-worker 受控校验与 SIGTERM 退出 |
 | 1.2.0 | 2026-10-14 | Codex | 已完成阶段配置可原样保留部署；仍验证持久 OFF、来源、备份及预算 |
 | 1.3.0 | 2026-10-15 | Codex | 绑定已完成部署与精确角色快照，安全退役源码漂移的旧 worker |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
@@ -240,12 +242,13 @@ class HostDeployment:
         self.wait_exit(ui)
         self.schedules.wait_unloaded(UI)
         after = self.safe()
-        require(set(after["workers"]) <= {"ready-worker"}, "UNEXPECTED_REMAINING_WORKER")
-        worker = after["workers"].get("ready-worker")
-        if worker:
-            self.owner_check("ready-worker", worker)
-            os.kill(worker["pid"], signal.SIGTERM)
-            self.wait_exit(worker)
+        require(set(after["workers"]) <= {"ready-worker", "wallstreet-worker", "publishing-recovery-worker"}, "UNEXPECTED_REMAINING_WORKER")
+        for role in ("ready-worker", "wallstreet-worker", "publishing-recovery-worker"):
+            worker = after["workers"].get(role)
+            if worker:
+                self.owner_check(role, worker)
+                os.kill(worker["pid"], signal.SIGTERM)
+                self.wait_exit(worker)
         require(not self.safe()["workers"], "WORKERS_NOT_STOPPED")
         return {"ok": True, "owners": state["workers"]}
 

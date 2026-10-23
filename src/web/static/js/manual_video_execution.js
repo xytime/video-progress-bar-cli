@@ -16,7 +16,7 @@ window.ManualVideoExecution = (() => {
       dialog.className = 'manual-cooldown-dialog';
       dialog.setAttribute('aria-labelledby', 'manual-cooldown-title');
       dialog.setAttribute('aria-describedby', 'manual-cooldown-description');
-      dialog.innerHTML = `<h2 id="manual-cooldown-title">视频号账号正在冷却</h2>
+      dialog.innerHTML = `<h2 id="manual-cooldown-title">视频号账号准入受阻</h2>
         <p id="manual-cooldown-description"></p><dl><dt>原因</dt><dd data-cooldown-reason></dd>
         <dt>预计可重试</dt><dd data-cooldown-until></dd><dt>剩余时间</dt><dd data-cooldown-remaining aria-live="off"></dd></dl>
         <p>是否跳过本地冷却，立即尝试执行这条视频？平台仍可能拒绝请求。仅对当前视频执行一次，其他任务继续等待。</p>
@@ -33,9 +33,9 @@ window.ManualVideoExecution = (() => {
       const info = result.cooldown;
       dialog.querySelector('[data-cooldown-reason]').textContent = info.reason +
         (info.business_code != null ? `（${info.business_code}）` : '');
-      dialog.querySelector('[data-cooldown-until]').textContent = new Date(info.until * 1000)
-        .toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false}) + '（北京时间）';
-      const tick = () => { dialog.querySelector('[data-cooldown-remaining]').textContent = remaining(info.until - Date.now() / 1000); };
+      dialog.querySelector('[data-cooldown-until]').textContent = info.until ? new Date(info.until * 1000)
+        .toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false}) + '（北京时间）' : '未知，等待排队或其它条件变化';
+      const tick = () => { dialog.querySelector('[data-cooldown-remaining]').textContent = info.until ? remaining(info.until - Date.now() / 1000) : '时间未知'; };
       tick();
       const timer = setInterval(tick, 1000);
       dialog.addEventListener('close', () => {

@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
+| 1.6.0 | 2026-10-18 | AGY | 心跳记录加载时源码与模块指纹，并在派生子 worker 与认领任务前执行空白浏览器能力预检与有界退避 |
 | 1.5.0 | 2026-10-10 | Codex | 心跳回读当前 TED 原片清理开关和配方，验证独立执行者运行采用。 |
 | 1.4.0 | 2026-10-09 | Codex | 非阻塞唤起独立二创执行者，不阻塞 A 发布。 |
 | 1.3.0 | 2026-10-05 | Codex | 心跳暴露字幕共享期限、节流与源下载冷却配置，供运行采用验收。 |
@@ -55,6 +57,12 @@ def dispatch_once(manager: PipelineManager) -> int:
     """只取就绪候选，不让高分未加工任务挤占发布名额。"""
     if not running() or settings.wechat_publishing_paused:
         return 0
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        if not WeChatRequestGuard(manager._OUT_DIR / "wechat_state.json").evaluate(account_only=True)["allowed"]:
+            return 0
+    except WeChatRequestDeferred:
+        return 0
     videos = manager.db.get_high_score_pending_videos(
         min_score=75, limit=1, ready_only=True,
         channel_min_scores=settings.auto_publish_channel_min_scores,
@@ -69,6 +77,12 @@ def dispatch_once(manager: PipelineManager) -> int:
 def dispatch_english_world_once(manager: PipelineManager) -> int:
     """既有自动授权的英语世界成片同样独立续投，保留专用投稿器的全部闸门。"""
     if not running() or not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
+        return 0
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        if not WeChatRequestGuard(manager._OUT_DIR / "wechat_state.json").evaluate(account_only=True)["allowed"]:
+            return 0
+    except WeChatRequestDeferred:
         return 0
     manager.db.restore_expired_english_world_operator_recoveries()
     item = manager.db.get_next_auto_approved_english_world_submission(
@@ -160,6 +174,8 @@ def main(argv=None) -> int:
                         ensure_wallstreet_worker()
                         from video_processing.utils.delivery_recovery_worker import ensure_delivery_recovery_worker
                         ensure_delivery_recovery_worker(manager.db, ROOT)
+                        from video_processing.utils.publishing_recovery_worker import ensure_publishing_recovery_worker
+                        ensure_publishing_recovery_worker(manager.db, ROOT)
                         attempted = dispatch_once(manager)
                         attempted += dispatch_english_world_once(manager)
                         report({"stage": "IDLE", "current_video": None})
