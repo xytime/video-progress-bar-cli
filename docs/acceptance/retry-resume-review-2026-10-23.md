@@ -65,4 +65,4 @@ UI 静态审计：独立修复版本为 0 项；生产组合版本保留既有 `
 
 部署及重试证据：`/Users/ryusei/Library/Application Support/VideoProcessing/deployments/retry-resume-20261023-b/`，含基线、冻结补完、备份、采用/启动、最终回读和 `before-retry.json / retry-response.json / after-retry.json`。
 
-剩余发布阻塞与待确认的单片版式：[补充规格](../specs/retry-blocked-caption-layout-2026-10-23.md)。该方案尚未开发或上线，不将一次重试等同于发布成功。
+17:08 时剩余发布阻塞与待确认的单片版式：[补充规格](../specs/retry-blocked-caption-layout-2026-10-23.md)。之后用户已确认方案；单片版式的实施、上线与本轮正式重试结果见 [后续验收](retry-framed-caption-2026-10-23.md)，不将重试等同于发布成功。
