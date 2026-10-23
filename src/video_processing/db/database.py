@@ -2016,6 +2016,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 "review_stage": "TEXT DEFAULT NULL",
                 "platform": "TEXT DEFAULT NULL",
                 "input_hash": "TEXT DEFAULT NULL",
+                "review_input_json": "TEXT DEFAULT NULL",
             }.items():
                 if column_name not in censorship_incident_columns:
                     self._logger.info("[Migration] Adding censorship_incidents.%s column...", column_name)
@@ -2522,8 +2523,9 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
         zh_title: Optional[str] = None,
         description_preview: Optional[str] = None,
         text_excerpt: Optional[str] = None,
+        review_input_json: Optional[str] = None,
     ) -> int:
-        """记录一次审查命中，用于事故复盘与规则积累；正文仅保留短摘录。"""
+        """记录一次审查命中，用于事故复盘与规则积累；正文摘要限长，平台题材审查另存完整输入快照。"""
         with self.get_connection() as conn:
             video = conn.execute(
                 "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
@@ -2533,8 +2535,8 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                 """INSERT INTO censorship_incidents
                    (video_id, youtube_id, slice_index, stage, level, action, tag, score,
                     matched, channel, decision, rule_pack_version, rule_id, source_field,
-                    review_stage, platform, input_hash, title, zh_title, description_preview, text_excerpt)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    review_stage, platform, input_hash, title, zh_title, description_preview, text_excerpt, review_input_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     video["id"] if video else None,
                     youtube_id,
@@ -2557,6 +2559,7 @@ class PipelineDB(DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL
                     (zh_title or "")[:300] or None,
                     (description_preview or "")[:600] or None,
                     (text_excerpt or "")[:600] or None,
+                    review_input_json,
                 ),
             )
             conn.commit()

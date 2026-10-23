@@ -143,12 +143,12 @@ class CensorshipService:
         except Exception as exc:
             logger.warning("[CensorLedger] failed to record incident for %s: %s", yid, exc)
 
-    def _social_unrest_blocked(self, yid, slice_index, documents, *, title, zh_title, description, stage, platform):
+    def _social_unrest_blocked(self, yid, slice_index, documents, *, title, zh_title, description, stage, platform, output_dir=None):
         evidence = social_unrest_review.evaluate(documents)
         if not evidence:
             return False
         incidents = self.db.get_censorship_incidents(yid, slice_index=slice_index, limit=100)
-        if social_unrest_review.approved(incidents, evidence):
+        if social_unrest_review.approved(incidents, evidence, stage=stage, platform=platform):
             return False
         self.db.record_censorship_incident(
             yid, slice_index=slice_index, stage="social_unrest", level="RISK",
@@ -159,6 +159,8 @@ class CensorshipService:
             input_hash=evidence["input_hash"], title=title, zh_title=zh_title,
             description_preview=next((doc["text"] for doc in documents if doc["source"] == "description"), ""),
             text_excerpt=social_unrest_review.ledger_excerpt(evidence),
+            review_input_json=social_unrest_review.snapshot(
+                self.db.get_video_by_youtube_id(yid, slice_index=slice_index), documents, output_dir),
         )
         self.db.update_video_censor_status(yid, social_unrest_review.TAG, 80, slice_index=slice_index)
         self.db.update_video_status(
@@ -176,7 +178,7 @@ class CensorshipService:
 
     def check(self, yid: str, title: str, description: str = "", zh_title: str = "",
               slice_index: int = 0, subtitle_text: str = "", *, stage: str = "pipeline",
-              fail_closed: bool = False, platform: str = "", review_documents=None) -> bool:
+              fail_closed: bool = False, platform: str = "", review_documents=None, review_output_dir=None) -> bool:
         """执行审查。返回 True 表示命中（任意层）→ 需要拦截/中断；False 表示全部通过。
 
         subtitle_text（症结 8）：仅并入违法层 P0/P1/P2（精确词匹配，对长转录安全），
@@ -219,7 +221,7 @@ class CensorshipService:
                              social_unrest_review.text_documents(title, zh_title, description, subtitle_text))
                 if self._social_unrest_blocked(
                     yid, slice_index, documents, title=title, zh_title=zh_title, description=description,
-                    stage=stage, platform=platform,
+                    stage=stage, platform=platform, output_dir=review_output_dir,
                 ):
                     return True
             # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────

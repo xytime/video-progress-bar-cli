@@ -186,7 +186,8 @@ def test_rules_change_invalidates_manual_approval(manager, monkeypatch):
     manager.db.record_censorship_incident(
         "unrest", stage="manual_review", level="RISK", action="MANUAL_BYPASS", tag=review.TAG,
         score=None, matched=incident["matched"], channel="operator", decision=review.APPROVAL,
-        input_hash=incident["input_hash"], rule_pack_version=incident["rule_pack_version"])
+        input_hash=incident["input_hash"], rule_pack_version=incident["rule_pack_version"],
+        review_stage=incident["review_stage"], platform=incident["platform"])
     assert not manager._check_censorship("unrest", "Tech", stage="source_subtitle_preflight", fail_closed=True)
     monkeypatch.setattr(censor_engine, "current_rules_fingerprint", lambda: "changed-rule-version")
     assert manager._check_censorship("unrest", "Tech", stage="source_subtitle_preflight", fail_closed=True)
@@ -223,7 +224,7 @@ def test_manual_review_binds_input_and_rules(manager, monkeypatch):
     payload = client.get("/api/videos/unrest/censor-keywords").json()
     assert payload["evidence"]["status"] == "VERIFIED_REPLAY"
     assert any(row.get("layer") == "RISK" for row in payload["matched"])
-    assert client.post("/api/videos/unrest/bypass-censor").json()["success"]
+    assert client.post("/api/videos/unrest/bypass-censor", json=binding(payload["evidence"])).json()["success"]
     assert not manager._check_censorship("unrest", "Daily technology update", stage="source_subtitle_preflight", fail_closed=True)
     source.write_text(source.read_text().replace("fuel costs", "rising prices"))
     assert manager._check_censorship("unrest", "Daily technology update", stage="source_subtitle_preflight", fail_closed=True)
@@ -302,3 +303,129 @@ def test_engagement_exposes_risk_as_manual_review(manager):
     assert row["engagement_stage"] == "ENG_POLICY"
     assert present_engagement(row)["action"] == "bypass-censor"
     assert row["score"] == 90 and not manager.db.is_blacklisted("unrest")
+
+
+def binding(evidence):
+    return {key: evidence[key] for key in ('incident_id', 'input_hash', 'rule_version')}
+
+
+
+def api(manager, monkeypatch):
+    import web.app
+    monkeypatch.setattr(web.app, 'db', manager.db)
+    monkeypatch.setattr(web.app, '_OUT_DIR', manager._OUT_DIR)
+    trigger = Mock()
+    monkeypatch.setattr(web.app, '_trigger_video_async', trigger)
+    return TestClient(web.app.app), trigger
+
+
+def test_long_description_snapshot_and_legacy_exact_recovery(manager):
+    description = 'Safe financial analysis. ' * 80 + 'Protesters march over fuel costs.'
+    (manager._OUT_DIR / 'unrest.description').write_text(description + '\n')
+    assert manager._check_censorship('unrest', 'Daily technology update', description)
+    row = manager.db.get_censorship_incidents('unrest')[0]
+    assert len(row['description_preview']) == 600
+    assert len(json.loads(row['review_input_json'])['fields']['description']) > 600
+    video = manager.db.get_video_by_youtube_id('unrest')
+    assert review.replay(video, row, manager._OUT_DIR)['status'] == 'VERIFIED_REPLAY'
+    legacy = {**row, 'review_input_json': None}
+    assert review.replay(video, legacy, manager._OUT_DIR)['status'] == 'VERIFIED_REPLAY'
+    (manager._OUT_DIR / 'unrest.description').write_text(description + ' changed')
+    assert review.replay(video, row, manager._OUT_DIR)['status'] == 'UNAVAILABLE'
+    assert review.replay(video, legacy, manager._OUT_DIR)['status'] == 'UNAVAILABLE'
+
+
+@pytest.mark.parametrize('clear', [False, True])
+def test_fresh_review_only_then_explicit_bound_approval(manager, monkeypatch, clear):
+    source = vtt(manager._OUT_DIR, 'Protesters march over fuel costs.')
+    assert manager._check_censorship('unrest', 'Daily technology update', stage='source_subtitle_preflight')
+    before = manager.db.get_video_by_youtube_id('unrest')
+    original = manager.db.get_censorship_incidents('unrest')[0]
+    source.write_text(source.read_text().replace('Protesters march over fuel costs.',
+                      'Safe technology update.' if clear else 'Riots erupt in Paris.'))
+    client, trigger = api(manager, monkeypatch)
+    unavailable = client.get('/api/videos/unrest/censor-keywords').json()['evidence']
+    assert unavailable['status'] == 'UNAVAILABLE'
+    assert not client.post('/api/videos/unrest/bypass-censor', json=binding(unavailable)).json()['success']
+    new = client.post('/api/videos/unrest/review-censor', json={'incident_id': original['id']}).json()
+    assert new['success'] and new['evidence']['status'] == 'VERIFIED_REPLAY'
+    assert bool(new['evidence']['terms']) is not clear
+    assert manager.db.get_video_by_youtube_id('unrest') == before
+    trigger.assert_not_called()
+    rows = manager.db.get_censorship_incidents('unrest')
+    assert len(rows) == 2 and rows[1] == original
+    assert not any(row['decision'] == review.APPROVAL for row in rows)
+    # 相同请求再次读取不重复追加，陈旧审计编号不能用于新一轮审查。
+    assert client.post('/api/videos/unrest/review-censor', json={'incident_id': new['evidence']['incident_id']}).json()['success']
+    assert len(manager.db.get_censorship_incidents('unrest')) == 2
+    assert not client.post('/api/videos/unrest/review-censor', json={'incident_id': original['id']}).json()['success']
+    assert not client.post('/api/videos/unrest/bypass-censor').json()['success']
+    assert not client.post('/api/videos/unrest/bypass-censor', json=binding(unavailable)).json()['success']
+    assert client.post('/api/videos/unrest/bypass-censor', json=binding(new['evidence'])).json()['success']
+    trigger.assert_called_once()
+    assert not manager._check_censorship('unrest', 'Daily technology update', stage='source_subtitle_preflight')
+    assert not client.post('/api/videos/unrest/bypass-censor', json=binding(new['evidence'])).json()['success']
+    trigger.assert_called_once()
+
+
+def test_bound_evidence_rejects_rules_and_metadata_change(manager, monkeypatch):
+    vtt(manager._OUT_DIR, 'Protesters march over fuel costs.')
+    assert manager._check_censorship('unrest', 'Daily technology update', stage='source_subtitle_preflight')
+    client, trigger = api(manager, monkeypatch)
+    old = client.get('/api/videos/unrest/censor-keywords').json()['evidence']
+    before = manager.db.get_video_by_youtube_id('unrest')
+    monkeypatch.setattr(censor_engine, 'current_rules_fingerprint', lambda: 'new-version')
+    assert not client.post('/api/videos/unrest/bypass-censor', json=binding(old)).json()['success']
+    fresh = client.post('/api/videos/unrest/review-censor', json={'incident_id':old['incident_id']}).json()['evidence']
+    assert fresh['rule_version'] == 'new-version'
+    manager.db.update_video_zh_title('unrest', 'Changed translated title')
+    assert not client.post('/api/videos/unrest/bypass-censor', json=binding(fresh)).json()['success']
+    assert manager.db.get_video_by_youtube_id('unrest')['status'] == before['status']
+    trigger.assert_not_called()
+
+
+def test_missing_final_evidence_does_not_append_or_resume(manager, monkeypatch):
+    ass(manager._OUT_DIR, 'Riots erupt in Paris.')
+    (manager._OUT_DIR / 'unrest_title.txt').write_text('Technology')
+    (manager._OUT_DIR / 'unrest_copy.txt').write_text('Technology')
+    assert manager._check_censorship('unrest', 'Technology', zh_title='Technology', stage='wechat_publish')
+    original = manager.db.get_censorship_incidents('unrest')
+    (manager._OUT_DIR / 'unrest.ass').unlink()
+    client, trigger = api(manager, monkeypatch)
+    assert not client.post('/api/videos/unrest/review-censor', json={'incident_id':original[0]['id']}).json()['success']
+    assert manager.db.get_censorship_incidents('unrest') == original
+    trigger.assert_not_called()
+
+
+def test_approval_cannot_cross_stage_or_platform():
+    evidence = {'input_hash':'same-input', 'rule_version':'same-rule'}
+    row = dict(decision=review.APPROVAL, input_hash='same-input', rule_pack_version='same-rule',
+               review_stage='wechat_publish', platform='微信')
+    assert review.approved([row], evidence, stage='wechat_publish', platform='微信')
+    assert not review.approved([row], evidence, stage='platform_publish', platform='微信')
+    assert not review.approved([row], evidence, stage='wechat_publish', platform='抖音')
+
+
+def test_corrupt_snapshot_can_be_rechecked_from_complete_current_files(manager, monkeypatch):
+    source = vtt(manager._OUT_DIR, 'Protesters march over fuel costs.')
+    assert manager._check_censorship('unrest', 'Daily technology update', stage='source_subtitle_preflight')
+    incident = manager.db.get_censorship_incidents('unrest')[0]
+    broken = {**incident, 'review_input_json':'{broken'}
+    video = manager.db.get_video_by_youtube_id('unrest')
+    assert review.replay(video, broken, manager._OUT_DIR)['status'] == 'UNAVAILABLE'
+    assert review.evaluate(review.current_documents(video, broken, manager._OUT_DIR, fresh=True))
+    source.unlink()
+    with pytest.raises(ValueError, match='源字幕缺失'):
+        review.current_documents(video, broken, manager._OUT_DIR, fresh=True)
+
+
+def test_recheck_cannot_replace_missing_rendered_subtitles_with_source_only(manager):
+    vtt(manager._OUT_DIR, 'A safe technology update.')
+    rendered = ass(manager._OUT_DIR, 'Riots erupt in Paris.')
+    (manager._OUT_DIR / 'unrest_title.txt').write_text('Technology')
+    (manager._OUT_DIR / 'unrest_copy.txt').write_text('Technology')
+    assert manager._check_censorship('unrest', 'Technology', zh_title='Technology', stage='wechat_publish')
+    incident = manager.db.get_censorship_incidents('unrest')[0]
+    rendered.unlink()
+    with pytest.raises(ValueError, match='发布字幕缺失'):
+        review.current_documents(manager.db.get_video_by_youtube_id('unrest'), incident, manager._OUT_DIR, fresh=True)

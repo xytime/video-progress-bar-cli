@@ -3782,7 +3782,7 @@ class PipelineManager:
         return CensorshipService(self.db, self.send_telegram_msg).check(
             yid, title, description, zh_title=zh_title,
             slice_index=slice_index, subtitle_text=subtitle_text,
-            stage=stage, fail_closed=fail_closed, platform=platform, review_documents=review_documents,
+            stage=stage, fail_closed=fail_closed, platform=platform, review_documents=review_documents, review_output_dir=self._OUT_DIR,
         )
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────

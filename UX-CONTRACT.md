@@ -100,3 +100,7 @@
 共享计算、DOM 与每分钟本地刷新由 `src/web/static/js/source_publication.js` 维护；来源精确时间必须含时区，只有日期时标“约”（UTC 日期估算），缺失和无效/未来时间使用中性色并显示未知/异常。入库、任务更新和平台发布时间不应用此分级。
 
 唯一色板 owner 为 `src/web/static/css/dashboard.css` 的 `--source-age-*`：不足 1 天 #15803D、1–2 天 #4D7C0F、2–3 天 #A16207、3–7 天 #B45309、7–10 天 #9A3412、10 天以上 #6B4F43，区间左闭右开。搭配浅色底、细边框和加粗时间；暗/亮主题保持同一识别顺序，高对比主题加强边框。验证由 `tests/browser/test_source_publication_browser.py` 覆盖六档边界、刷新、全部主列表及分集、候选与预筛选的实际 DOM、三主题对比度、手机溢出和截图。
+
+## 平台题材复核恢复（2026-10-23 用户确认）
+
+依据 `docs/specs/censorship-review-recovery-2026-10-23.md`。既有复核弹窗使用原生 dialog，继承 dashboard 主题、局部 live region 与 Escape/焦点恢复；保留 P0 双确认。平台题材原输入不可核实时禁用批准，提供独立“重新审查”。重新审查只追加完整输入快照与当前规则审计，任务仍暂停；明确批准后才恢复既有管线。批准绑定当前显示的审计编号、输入和规则版本，服务器再次核对当前素材；错误就地显示、重复提交禁用、关闭后旧响应作废。读取故障不显示旧命中，超时结果不明须重新打开核实。验证由 `tests/unit/test_social_unrest_review.py` 与 `tests/browser/test_social_unrest_review_flow.py` 负责。

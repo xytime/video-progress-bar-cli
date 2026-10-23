@@ -234,7 +234,7 @@ async def maintenance_admission(request, call_next):
                 pass
         with gate().admit("web-write", key) as ticket:
             ticket.start()
-            if matched and request.url.path.rsplit("/", 1)[-1] in {"process", "promote", "retry", "bypass-censor"}:
+            if matched and request.url.path.rsplit("/", 1)[-1] in {"process", "promote", "retry", "bypass-censor", "review-censor"}:
                 # 同一视频的人工恢复请求跨线程/进程互斥，先核实版本再执行完整动作。
                 lock_key = hashlib.sha256(matched[1].encode()).hexdigest()
                 try:
@@ -1209,9 +1209,12 @@ class BatchDeleteRequest(BaseModel):  # [Gemini_2.5_Pro_planning]
 
 
 class CensorshipBypassRequest(BaseModel):
-    """P0 放行必须由界面提交两项独立确认；非 P0 可省略请求体。"""
+    """P0 须双确认；平台题材复核须绑定当前展示的审计及输入、规则版本。"""
     confirm_p0_review: bool = False
     confirm_pipeline_resume: bool = False
+    incident_id: Optional[int] = None
+    input_hash: Optional[str] = None
+    rule_version: Optional[str] = None
 
 
 class PlatformBackfillQueueRequest(BaseModel):
@@ -3007,6 +3010,46 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
     }
 
 
+@app.post("/api/videos/{youtube_id}/review-censor")
+def review_censor(youtube_id: str, request: CensorshipBypassRequest, slice_index: int = 0,
+                  engagement_version: Optional[str] = None):
+    """对当前完整素材追加独立审计；不批准、不恢复、不发通知或投稿。"""
+    from video_processing import social_unrest_review as review
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video or video.get("status") != "FAILED" or _censor_layer_from_error(video.get("error_msg") or "")[0] != "RISK":
+        return {"success": False, "error": "仅平台题材审查失败的视频可重新审查"}
+    _check_engagement_action(youtube_id, "bypass-censor", engagement_version, slice_index)
+    guard = _wechat_submission_guard_reason(video)
+    if guard:
+        return {"success": False, "error": guard}
+    incident = next((row for row in db.get_censorship_incidents(
+        youtube_id, slice_index=slice_index, limit=100) if row.get("stage") == "social_unrest"), {})
+    if request.incident_id != incident.get("id") or not incident:
+        return {"success": False, "error": "审计已更新，请关闭弹窗后重新打开"}
+    try:
+        documents = review.current_documents(video, incident, _OUT_DIR, fresh=True)
+        evidence = review.current_evidence(documents)
+        if (incident.get("review_input_json") and evidence["input_hash"] == incident.get("input_hash")
+                and evidence["rule_version"] == incident.get("rule_pack_version")
+                and review.replay(video, incident, _OUT_DIR)["status"] == "VERIFIED_REPLAY"):
+            return {"success": True, "evidence": review.replay(video, incident, _OUT_DIR)}
+        fields = {d["source"]: d["text"] for d in documents}
+        incident_id = db.record_censorship_incident(
+            youtube_id, slice_index=slice_index, stage="social_unrest", level="RISK",
+            action="RECHECK_ONLY", tag=review.TAG, score=None, matched=evidence["matched"], channel="operator",
+            decision="SOCIAL_UNREST_MANUAL_REVIEW" if evidence["terms"] else "SOCIAL_UNREST_RECHECK_CLEAR",
+            rule_pack_version=evidence["rule_version"], input_hash=evidence["input_hash"],
+            rule_id="social_unrest." + evidence.get("family", "clear"), source_field=evidence["source_field"],
+            review_stage=incident.get("review_stage") or "pipeline", platform=incident.get("platform"),
+            title=fields.get("title"), zh_title=fields.get("zh_title"), description_preview=fields.get("description"),
+            text_excerpt=review.ledger_excerpt(evidence), review_input_json=review.snapshot(video, documents, _OUT_DIR))
+        current = next(row for row in db.get_censorship_incidents(youtube_id, slice_index=slice_index, limit=100)
+                       if row["id"] == incident_id)
+        return {"success": True, "evidence": review.replay(video, current, _OUT_DIR)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {"success": False, "error": "重新审查失败：" + str(exc)}
+
+
 @app.post("/api/videos/{youtube_id}/bypass-censor")
 def bypass_censor(
     youtube_id: str,
@@ -3018,7 +3061,7 @@ def bypass_censor(
 
     仅 FAILED 且失败原因为审查（P0/P1/P2 或 Channel Policy）的视频可放行。
     P0 放行必须提交内容复核和恢复管线两项确认，并先写入独立审计台账；
-    非 P0 保持既有的单击人工复核流程。
+    平台题材风险须提交当前可核实审计的绑定字段；其他层沿用既有流程。
 
     [Claude_Opus_4.8] BUG-1 配套：bypass 现按 (youtube_id, slice_index) 粒度放行——
     与管线侧 _check_censorship 透传 slice_index 对齐，避免「放行父视频即静默放行全部切片」。
@@ -3075,7 +3118,10 @@ def bypass_censor(
             youtube_id, slice_index=slice_index, limit=100) if row.get("stage") == "social_unrest"), {})
         evidence = replay(video, incident, _OUT_DIR)
         if evidence["status"] != "VERIFIED_REPLAY":
-            return {"success": False, "error": "原输入或规则无法核实，禁止泛化放行：" + evidence["message"]}
+            return {"success": False, "error": "原输入或规则无法核实，请先重新审查：" + evidence["message"], "evidence_stale": True}
+        if not request or (request.incident_id, request.input_hash, request.rule_version) != (
+                evidence["incident_id"], evidence["input_hash"], evidence["rule_version"]):
+            return {"success": False, "error": "复核证据已过期或未绑定，请刷新证据后确认", "evidence_stale": True}
         db.record_censorship_incident(
             youtube_id, slice_index=slice_index, stage="manual_review", level="RISK",
             action="MANUAL_BYPASS", tag=TAG, score=None, matched=incident.get("matched"), channel="operator",

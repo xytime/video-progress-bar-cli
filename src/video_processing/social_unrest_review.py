@@ -108,44 +108,114 @@ def evaluate(documents):
     return None
 
 
-def approved(incidents, evidence):
+def approved(incidents, evidence, *, stage, platform):
     return any(row.get("decision") == APPROVAL
+               and row.get("review_stage") == stage
+               and (row.get("platform") or "") == platform
                and row.get("input_hash") == evidence["input_hash"]
                and row.get("rule_pack_version") == evidence["rule_version"] for row in incidents)
 
 
+def snapshot(video, documents, output_dir=None):
+    """与审计行原子保存完整输入，摘要不能代替送审正文。"""
+    fields = {key: next((d["text"] for d in documents if d["source"] == key), "")
+              for key in ("title", "zh_title", "description", "subtitle")}
+    prefix = video["youtube_id"] + (f"_s{video['slice_index']}" if video.get("slice_index") else "")
+    path = Path(output_dir) / (prefix + ".description") if output_dir else None
+    use_description = bool(path and path.is_file() and path.read_text(encoding="utf-8").strip() == fields["description"])
+    return json.dumps({"schema": 1, "youtube_id": video["youtube_id"],
+                       "slice_index": int(video.get("slice_index") or 0), "documents": documents,
+                       "metadata": {k: video.get(k) or "" for k in ("title", "zh_title", "description")},
+                       "fields": fields, "description_file": use_description}, ensure_ascii=False)
+
+
+def current_documents(video, incident, output_dir, *, fresh=False, full_description=False):
+    stage = incident.get("review_stage") or "pipeline"
+    if stage not in REVIEW_STAGES | {"pipeline"}:
+        raise ValueError("未知审查阶段，无法核实完整输入")
+    root = Path(output_dir)
+    prefix = video["youtube_id"] + (f"_s{video['slice_index']}" if video.get("slice_index") else "")
+    try:
+        saved = json.loads(incident["review_input_json"]) if incident.get("review_input_json") else None
+    except (ValueError, TypeError):
+        if not fresh:
+            raise ValueError("完整输入快照损坏，请重新审查")
+        saved = None
+    if saved:
+        if (saved.get("schema") != 1 or saved.get("youtube_id") != video["youtube_id"]
+                or saved.get("slice_index") != int(video.get("slice_index") or 0)
+                or input_hash(saved["documents"]) != incident.get("input_hash")):
+            if not fresh:
+                raise ValueError("完整输入快照校验失败，请重新审查")
+            saved = None
+    if saved:
+        changed = any((video.get(k) or "") != value for k, value in saved["metadata"].items())
+        if changed and not fresh:
+            raise ValueError("当前元数据与原审计输入不一致，须重新审查")
+        fields = dict(saved["fields"])
+        if changed:
+            fields.update(title=video.get("title") or "", zh_title=video.get("zh_title") or "")
+    else:
+        fields = {"title": incident.get("title") or "", "zh_title": incident.get("zh_title") or "",
+                  "description": incident.get("description_preview") or "", "subtitle": ""}
+        if fresh:
+            fields.update(title=video.get("title") or "", zh_title=video.get("zh_title") or "")
+    if stage in FINAL_STAGES:
+        copy_file = root / (prefix + "_copy.txt")
+        if stage == "platform_publish" and incident.get("platform") == "快手":
+            dedicated = root / (prefix + "_kuaishou_copy.txt")
+            copy_file = dedicated if dedicated.is_file() else copy_file
+            fields["title"] = video.get("zh_title") or video.get("title") or video["youtube_id"]
+            fields["zh_title"] = video.get("zh_title") or fields["title"]
+        else:
+            fields["title"] = (root / (prefix + "_title.txt")).read_text(encoding="utf-8").strip()
+            fields["zh_title"] = fields["title"]
+        fields["description"] = copy_file.read_text(encoding="utf-8")
+        if stage == "platform_publish":
+            fields["description"] = fields["description"].strip()
+    elif stage == "pipeline" and (fresh or full_description or saved and saved.get("description_file")):
+        path = root / (prefix + ".description")
+        if path.is_file():
+            fields["description"] = path.read_text(encoding="utf-8").strip()
+        elif saved and saved.get("description_file"):
+            raise ValueError("完整源描述文件缺失，须恢复素材后重新审查")
+        elif fresh and not saved and len(fields["description"]) >= 600:
+            raise ValueError("历史描述已截断且完整文件缺失，无法重新审查")
+    documents = collect_documents(video, root, **fields, stage=stage)
+    if fresh:
+        if stage == "source_subtitle_preflight" and not any(
+                d.get("cues") or d["source"] == "subtitle" and d["text"].strip() for d in documents):
+            raise ValueError("完整源字幕缺失，须恢复素材后重新审查")
+        previous = saved.get("documents", []) if saved else []
+        expected_ass = (str(incident.get("source_field") or "").startswith("rendered_ass:")
+                        or any(d["source"].startswith("rendered_ass:") for d in previous))
+        if stage in FINAL_STAGES and expected_ass and not any(d["source"].startswith("rendered_ass:") for d in documents):
+            raise ValueError("原发布字幕缺失，须恢复素材后重新审查")
+    return documents
+
+
+def current_evidence(documents):
+    return evaluate(documents) or {"input_hash": input_hash(documents),
+        "rule_version": censor_engine.current_rules_fingerprint(), "terms": [], "matched": "",
+        "source_field": "", "basis": "当前完整输入未命中此题材规则", "context": ""}
+
+
 def replay(video, incident, output_dir):
-    """只在原输入/规则均可重现时展示位置；无法重现时不能提供泛化放行。"""
+    """历史快照、当前素材、当前规则一致后才接受对应人工决定。GET 无写入。"""
     base = {"status": "UNAVAILABLE", "incident_id": incident.get("id"),
             "rule_id": incident.get("rule_id"), "rule_version": incident.get("rule_pack_version"),
             "input_hash": incident.get("input_hash"), "review_stage": incident.get("review_stage")}
     try:
-        stage = incident.get("review_stage")
-        if stage in FINAL_STAGES:
-            prefix = video["youtube_id"] + (f"_s{video['slice_index']}" if video.get("slice_index") else "")
-            root = Path(output_dir)
-            copy_file = root / (prefix + "_copy.txt")
-            if stage == "platform_publish" and incident.get("platform") == "快手":
-                dedicated_copy = root / (prefix + "_kuaishou_copy.txt")
-                copy_file = dedicated_copy if dedicated_copy.is_file() else copy_file
-                title = video.get("zh_title") or video.get("title") or video["youtube_id"]
-                zh_title = video.get("zh_title") or title
-            else:
-                title = (root / (prefix + "_title.txt")).read_text(encoding="utf-8").strip()
-                zh_title = title
-            description = copy_file.read_text(encoding="utf-8")
-            if stage == "platform_publish":
-                description = description.strip()
-        else:
-            # 审计字段有长度上限，截断后不能匹配完整输入 hash 时按不可回放处理。
-            title, zh_title, description = (incident.get(k) or "" for k in ("title", "zh_title", "description_preview"))
-        documents = collect_documents(video, output_dir, title=title, zh_title=zh_title,
-                                      description=description, stage=stage)
-        evidence = evaluate(documents)
-        if not evidence or evidence["input_hash"] != base["input_hash"] or evidence["rule_version"] != base["rule_version"]:
+        documents = current_documents(video, incident, output_dir)
+        if input_hash(documents) != base["input_hash"] and not incident.get("review_input_json"):
+            # 旧台账仅存 600 字摘要；只有完整描述能严格复现原 hash 才认可恢复。
+            documents = current_documents(video, incident, output_dir, full_description=True)
+        evidence = current_evidence(documents)
+        if (evidence["input_hash"] != base["input_hash"] or evidence["rule_version"] != base["rule_version"]
+                or not evidence["terms"] and incident.get("decision") != "SOCIAL_UNREST_RECHECK_CLEAR"):
             raise ValueError("输入或规则与原审计不一致，须重新审查")
         return {**base, **evidence, "status": "VERIFIED_REPLAY",
-                "message": "平台题材风险，非违法结论；原输入及规则指纹一致。",
+                "message": "平台题材复核：完整输入及规则指纹一致。" if evidence["terms"] else "重新审查完成：当前完整输入未命中此题材规则。",
                 "timing_note": "时间来自实际 VTT/ASS cue；元数据无时间，不推测画面。"}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {**base, "message": str(exc)}
