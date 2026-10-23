@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.2.0 | 2026-10-23 | Codex | 对齐百分比与数字写法；用双向 ASR 轨迹区分字幕、孤帧 OCR 错误与画面文字。 |
 | 2.1.0 | 2026-10-23 | Codex | 相邻帧合框证据确认同基线拆出的单字形，保留未知文字阻断。 |
 | 2.0.0 | 2026-10-21 | Codex | A/B 全片决策、原片回退、逐帧人脸避让及有来源摘要的 OCR 缓存。 |
 | 1.0.0 | 2026-10-21 | Codex | A 方案接入：逐帧识别与保守修补、完整画面、来源及成片摘要门禁。 |
@@ -15,6 +16,7 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from difflib import SequenceMatcher
 import hashlib
 import json
@@ -110,7 +112,128 @@ def _recognize(worker, frame):
 
 
 def _words(text):
-    return set(re.findall(r"[a-z]+", text.lower()))
+    return set(re.findall(r"[a-z]+", _spoken_text(text)))
+
+
+def _spoken_text(text):
+    text = text.lower().replace('%', ' percent ').replace("'", '').replace('’', '')
+    text = re.sub(r'\b(?:[a-z]-)+[a-z]\b', lambda m: m[0].replace('-', ''), text)
+    def number(match):
+        whole, dot, fraction = match[0].partition('.')
+        spoken = _integer_words(int(whole))
+        if dot:
+            spoken += ' point '+' '.join(_integer_words(int(digit)) for digit in fraction)
+        return match[0]+' '+spoken
+    return re.sub(r'\b\d+(?:\.\d+)?\b', number, text)
+
+
+def _integer_words(value):
+    small = 'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split()
+    tens = 'zero ten twenty thirty forty fifty sixty seventy eighty ninety'.split()
+    if not 0 <= value < 1000:
+        return ''
+    if value < 20:
+        return small[value]
+    if value < 100:
+        return tens[value//10]+(' '+small[value%10] if value%10 else '')
+    return small[value//100]+' hundred'+(' and '+_integer_words(value%100) if value%100 else '')
+
+
+def _numeric_caption(text, local_text):
+    """仅纯数字 OCR 可与 ASR 数值对齐；小数点偶发丢失不改变字形定位。"""
+    if not re.fullmatch(r'\s*\d+(?:\.\d+)?\s*%?\s*', text):
+        return False
+    compact = lambda value: format(Decimal(value).normalize(), 'f').replace('.', '')
+    return any(compact(text.strip().rstrip('%').strip()) == compact(number)
+               for number in re.findall(r'\d+(?:\.\d+)?', local_text))
+
+
+def _caption_text_matches(text, spoken):
+    if re.fullmatch(r'\s*\d+(?:\.\d+)?\s*%?\s*', text):
+        return _numeric_caption(text, spoken)
+    tokens, local = _words(text), _words(spoken)
+    compact = ''.join(re.findall('[a-z]+', _spoken_text(text)))
+    context = ''.join(re.findall('[a-z]+', _spoken_text(spoken)))
+    return (bool(tokens) and len(tokens & local)/len(tokens) >= .5
+            or len(compact) >= 4 and compact in context
+            or len(compact) >= 5 and SequenceMatcher(None, compact, context, autojunk=False).find_longest_match().size/len(compact) >= .8)
+
+
+def _same_caption_line(a, b):
+    return (abs((a[0]+a[2]-b[0]-b[2])/2) < .03
+            and abs((a[1]+a[3]-b[1]-b[3])/2) < .012
+            and abs(a[3]-a[1]-b[3]+b[1]) < .016)
+
+
+def _track_pair(box, evidence, index, fps, seconds=.6):
+    """只使用直接匹配 ASR 的原始证据，禁止插值结果继续充当证据。"""
+    pair = []
+    limit = max(1, round(fps*seconds))
+    for direction in (-1, 1):
+        found = None
+        for distance in range(1, limit+1):
+            other = index+direction*distance
+            if not 0 <= other < len(evidence):
+                break
+            found = next((r for r in evidence[other] if _same_caption_line(box, r['box'])), None)
+            if found:
+                break
+        if found is None:
+            return None
+        pair.append(found)
+    return pair
+
+
+def _isolated_ocr(row, pair):
+    """低置信孤帧只有前后文字、完整边界都一致时才可恢复。"""
+    glyph_count = lambda text: sum(c.isalnum() for c in text)
+    return (pair and _spoken_text(pair[0]['text']) == _spoken_text(pair[1]['text'])
+            and (row['confidence'] < .75 or abs(glyph_count(row['text'])-glyph_count(pair[0]['text'])) <= 1)
+            and all(abs(a-b) < .015 for a,b in zip(pair[0]['box'], pair[1]['box']))
+            and all(abs(a-b) < .015 for a,b in zip(row['box'], pair[0]['box'])))
+
+
+def _joined_line_matches(row, rows, evidence, index, fps):
+    """拆行 OCR 的一字误识别须由两侧同文合框及完整并集边界确认。"""
+    if row['confidence'] < .9:
+        return False
+    compact = lambda text: ''.join(c for c in text.lower() if c.isalnum())
+    for buddy in rows:
+        a, b = row['box'], buddy['box']
+        if buddy is row or buddy['confidence'] < .9:
+            continue
+        left, right = sorted((row, buddy), key=lambda r:r['box'][0])
+        if (abs((a[1]+a[3]-b[1]-b[3])/2) > .012
+                or not -.025 <= right['box'][0]-left['box'][2] <= .018):
+            continue
+        union = [min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[2]),max(a[3],b[3])]
+        pair = _track_pair(union, evidence, index, fps, .2)
+        if not pair or not _isolated_ocr(dict(text=left['text']+right['text'], box=union, confidence=1), pair):
+            continue
+        expected, actual = compact(pair[0]['text']), compact(left['text']+right['text'])
+        edits = SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes()
+        if len(expected) >= 5 and sum(max(i2-i1,j2-j1) for tag,i1,i2,j1,j2 in edits if tag != 'equal') <= 1:
+            return True
+    return False
+
+
+def _outside_caption_track(row, current, evidence, index, fps):
+    # 同帧另有独立 ASR 字幕，且其前后 0.2 秒轨迹一致；分离的画面文字保留原像素。
+    # 它仍进入 B 方案障碍物，不能被当作待擦除字幕或从避让计算中删除。
+    box = row['box']
+    if len(row['text'].strip()) == 1 and row['text'].strip().isalpha() and box[3]-box[1] >= .025:
+        return False  # 单字母拆框必须走专门的合框证据，不能作为背景静默忽略。
+    if _track_pair(box, evidence, index, fps, .2):
+        return False  # 另一条有直接 ASR 支持的字幕轨迹不能当作背景忽略。
+    anchors = [*current, *(r for previous in evidence[max(0,index-max(1,round(fps*.2))):index]
+                          for r in previous)]
+    for anchor in anchors:
+        other = anchor['box']
+        separation = .025 if row['confidence'] < .5 else .05
+        if (other[1]-box[3] > separation and box[3]-box[1] <= .08
+                and _track_pair(other, evidence, index, fps, .2)):
+            return True
+    return False
 
 
 def _locate(source, segments, directory, fps, progress):
@@ -164,19 +287,18 @@ def _scan_file(source, fps):
 def _classify(frames, segments, fps):
     # 画面中央的疑似字幕必须有临近转录证据；不能仅凭整段文字没变就当台标放过。
     selected, boxes = [], []
-    # ASR 会漏掉短促应答。只接受前后 1 秒内有直接转录证据、同左缘同基线的连续字幕轨迹。
-    evidence = []
+    # ASR 会漏掉短促应答；补位只能来自两侧直接匹配的连续轨迹。
+    direct = []
     for index, rows in enumerate(frames):
-        local = set().union(*(_words(s.get('text', '')) for s in segments
-            if s['start']-5 <= index/fps <= s['end']+5))
-        evidence.append([r['box'] for r in rows if r['confidence'] >= .9 and len(_words(r['text'])) >= 2
-                         and len(_words(r['text']) & local)/len(_words(r['text'])) >= .5])
+        spoken = ' '.join(s.get('text', '') for s in segments if s['start']-5 <= index/fps <= s['end']+5)
+        direct.append([r for r in rows if r['confidence'] >= .9 and _caption_text_matches(r['text'], spoken)
+                       and .38 <= r['box'][1] < r['box'][3] <= .94
+                       and .025 <= r['box'][3]-r['box'][1] <= .08])
     for index, rows in enumerate(frames):
         now = index / fps
         local_words = set().union(*(_words(s.get("text", "")) for s in segments
             if s["start"] - 5 <= now <= s["end"] + 5))
-        local_text = ''.join(re.findall('[a-z]+', ' '.join(s.get('text', '').lower() for s in segments
-            if s['start'] - 5 <= now <= s['end'] + 5)))
+        spoken = ' '.join(s.get('text', '') for s in segments if s['start'] - 5 <= now <= s['end'] + 5)
         chosen = []
         for row in rows:
             text, box = row["text"], row["box"]
@@ -185,21 +307,23 @@ def _classify(frames, segments, fps):
                 continue
             if row['confidence'] < .5 and box[3]-box[1] < .018 and box[2]-box[0] < .08:
                 continue  # 拉链等纹理偶发的微小低置信 OCR 不认作原字幕；不改动这些像素。
+            if _outside_caption_track(row, direct[index], direct, index, fps):
+                continue
             tokens = _words(text)
             if not any(c.isalnum() for c in text):
                 continue
-            matches = bool(tokens) and len(tokens & local_words) / len(tokens) >= .5
-            compact = ''.join(re.findall('[a-z]+', text.lower()))
-            if len(compact) >= 5:
-                matches = matches or SequenceMatcher(None, compact, local_text, autojunk=False).find_longest_match().size / len(compact) >= .8
+            matches = _caption_text_matches(text, spoken)
             if not matches:
                 matches = _split_glyph_matches(row, rows, frames, index, fps, local_words)
+            if not matches:
+                matches = _joined_line_matches(row, rows, direct, index, fps)
             if not matches:
                 # 分行硬字幕可能把短词单列；必须由同帧、相邻且同列的完整词组提供证据。
                 for buddy in rows:
                     other = buddy['box']
                     if (buddy is row or buddy['confidence'] < .75 or
                             max(box[3], other[3])-min(box[1], other[1]) > .18 or
+                            min(box[3], other[3])-max(box[1], other[1]) > .005 or
                             min(box[2], other[2]) <= max(box[0], other[0])):
                         continue
                     combined = tokens | _words(buddy['text'])
@@ -210,12 +334,16 @@ def _classify(frames, segments, fps):
                     if tokens and combined and (len(combined & local_words)/len(combined) >= .6 or grouped):
                         matches = True
                         break
-            if not matches and row['confidence'] >= .9:
-                nearby = range(max(0,index-round(fps)), min(len(frames),index+round(fps)+1))
-                matches = any(abs(box[0]-b[0]) < .025 and abs(box[1]-b[1]) < .02
-                              and abs((box[3]-box[1])-(b[3]-b[1])) < .015
-                              for j in nearby for b in evidence[j])
-            if row["confidence"] < .75 or not matches:
+            pair = _track_pair(box, direct, index, fps) if not matches or row['confidence'] < .75 else None
+            stable_ocr = _isolated_ocr(row, _track_pair(box, direct, index, fps, 1/fps)) if not matches or row['confidence'] < .75 else False
+            short_reply = len(tokens) == 1 or tokens <= {'correct','right','yes','yeah','okay','ok'}
+            if not matches and short_reply and row['confidence'] >= .9 and pair:
+                matches = True  # 短应答/连写词由两侧直接 ASR 证据确认位置；保留字形掩膜。
+            if stable_ocr:
+                matches = True
+                box = [min(r['box'][0] for r in pair), min(r['box'][1] for r in pair),
+                       max(r['box'][2] for r in pair), max(r['box'][3] for r in pair)]
+            if (row["confidence"] < .75 and not stable_ocr) or not matches:
                 raise ValueError(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}")
             if box[3] - box[1] > .08 or box[2] - box[0] > .94:
                 raise ValueError("原字幕字形范围超出可安全修补边界")

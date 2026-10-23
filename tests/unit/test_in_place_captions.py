@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-23 | Codex | 实片全扫描、百分比和数字、双向轨迹、孤帧及背景文字保护。 |
 | 1.1.0 | 2026-10-23 | Codex | 第169帧单字形拆框及缺失相邻合框证据的阻断回归。 |
 | 1.0.0 | 2026-10-21 | Codex | 无 host OCR/网络的纯数据门禁与摘要失效回归。 |
 """
@@ -64,6 +65,87 @@ def test_split_glyph_without_complete_evidence_still_blocks(change):
     if change=='unrelated_asr': text='Entirely different speech.'
     if change=='low_confidence': frames[1][1]['confidence']=.7
     with pytest.raises(ValueError):repair._classify(frames,[dict(text=text,start=0,end=1)],30)
+
+
+def test_real_full_scan_and_background_obstacles_are_preserved():
+    import gzip
+    from video_processing.processors.source_caption_fallback import fallback_geometry
+    path=Path(__file__).parents[1]/'fixtures/source_caption_i1WsMclsgOs.json.gz'
+    data=json.loads(gzip.decompress(path.read_bytes()))
+    frames=[o['rows'] for o in data['observations']]
+    before=json.dumps(frames)
+    selected,_=repair._classify(frames,data['segments'],30)
+    assert len(selected)==4061 and sum(bool(x) for x in selected)==4046
+    assert selected[169]==[r['box'] for r in frames[169]]
+    assert selected[173]==[r['box'] for r in frames[173] if r['text']=='PERCENT']
+    assert selected[176]==[r['box'] for r in frames[176] if r['text']=='PERCENT']
+    assert selected[2312]==[r['box'] for r in frames[2312] if r['text']=='TREASURY']
+    geometry=fallback_geometry(selected,data['observations'],640,30)
+    background=next(r['box'] for r in frames[2312] if r['text']=='9')
+    assert background in geometry['frames'][2312]['text']
+    assert json.dumps(frames)==before
+
+
+@pytest.mark.parametrize('text,spoken',[
+    ('PERCENT','still 7.40%'),('TENYEAR','the 10 year treasuries'),
+    ('ITS 2020',"It's 2020"),('2.3','roughly 2.3 percentage points'),
+    ('74','7.40%'),('HUNDRED','roughly 179'),('B-N-D','the fund BND'),
+])
+def test_spoken_and_written_forms_locate_without_changing_text(text,spoken):
+    frames=[[row(text)]]
+    assert repair._classify(frames,[dict(text=spoken,start=0,end=1)],30)[0][0]
+    assert frames[0][0]['text']==text
+
+
+@pytest.mark.parametrize('text,spoken',[('100','1'),('9','179'),('5.5','6.5')])
+def test_numeric_caption_contract_rejects_different_values(text,spoken):
+    assert not repair._numeric_caption(text,spoken)
+    with pytest.raises(ValueError):
+        repair._classify([[row(text)]],[dict(text=spoken,start=0,end=1)],30)
+
+
+def test_centered_short_reply_needs_independent_evidence_on_both_sides():
+    anchor=row('the cats'); reply=row('HMM');reply['box'][0:3:2]=[.35,.65]
+    segments=[dict(text='the cats',start=0,end=1)]
+    assert repair._classify([[anchor],[reply],[anchor]],segments,30)[0][1]
+    for frames in ([[reply],[anchor]],[[anchor],[reply]],[[reply]]):
+        with pytest.raises(ValueError):repair._classify(frames,segments,30)
+    with pytest.raises(ValueError):
+        repair._classify([[anchor]]+[[]]*30+[[reply]]+[[]]*30+[[anchor]],segments,30)
+
+
+def test_split_line_ocr_typo_requires_both_merged_neighbors():
+    anchor=dict(text='AND BY',confidence=1,box=[.294,.784,.705,.84])
+    split=[dict(text='ANDI',confidence=1,box=[.294,.784,.578,.837]),
+           dict(text='BY',confidence=1,box=[.555,.784,.705,.837])]
+    segments=[dict(text='And by the summer',start=0,end=1)]
+    assert repair._classify([[anchor],split,[anchor]],segments,30)[0][1] == [r['box'] for r in split]
+    for frames in ([split,[anchor]],[[anchor],split],[[anchor],[dict(split[0],text='UNKNOWN'),split[1]],[anchor]]):
+        with pytest.raises(ValueError):repair._classify(frames,segments,30)
+
+
+def test_low_confidence_recovery_requires_immediate_identical_neighbors():
+    anchor=row('the cats'); glitch=row('garbled',confidence=.3)
+    segments=[dict(text='the cats the dogs',start=0,end=1)]
+    assert repair._classify([[anchor],[glitch],[anchor]],segments,30)[0][1]
+    for frames in ([[anchor],[glitch],[glitch],[anchor]],
+                   [[anchor],[glitch],[row('the dogs')]]):
+        with pytest.raises(ValueError):repair._classify(frames,segments,30)
+
+
+def test_unknown_in_caption_band_and_second_supported_track_are_not_dropped():
+    anchor=row('the cats',top=.78)
+    background=row('9',top=.63)
+    segments=[dict(text='the cats',start=0,end=1)]
+    selected,_=repair._classify([[anchor],[anchor,background],[anchor]],segments,30)
+    assert selected[1]==[anchor['box']]
+    with pytest.raises(ValueError):repair._classify([[anchor,background]],segments,30)
+    unknown=row('unknown sentence',top=.78)
+    with pytest.raises(ValueError):repair._classify([[anchor],[unknown],[anchor]],segments,30)
+    # 有第二条独立 ASR 字幕时保留它，仍由既有跨区域门禁决定是否安全。
+    upper=row('the dogs',top=.55)
+    with pytest.raises(ValueError):
+        repair._classify([[anchor,upper]]*3,[dict(text='the cats the dogs',start=0,end=1)],30)
 
 
 def test_position_change_splits_caption_time_in_place(tmp_path):
