@@ -199,3 +199,29 @@ def test_final_claim_race_finishes_batch_and_soft_permit_is_not_renewed(recovery
     first=recovery.db.get_publishing_recovery_operation(op['id'])['items'][0]
     assert first['permit_used'] and first['permit_expires']==op['items'][0]['permit_expires']
     assert not recovery.dispatch_once(SimpleNamespace(_process_single_video=deferred))
+
+
+@pytest.mark.parametrize('reason', [
+    'Social Unrest Review: 平台题材风险：社会动荡 (骚乱)',
+    "Channel Policy Reject: 频道策略限制 (matched: 'trump+senate' via en)",
+    "Censorship P1 Suspend: 政策敏感拦截 (matched: 'vpn')",
+    'CENSORSHIP_P0: policy review',
+])
+def test_legacy_content_gates_require_review_but_preserve_manual_approval(recovery, reason):
+    video=add(recovery,'legacy-review')
+    recovery.db.update_video_status('legacy-review','FAILED',error_msg=reason)
+    assert not recovery.preview()['items'][0]['eligible']
+    recovery.db.set_bypass_censorship('legacy-review',True)
+    item=recovery.preview()['items'][0]
+    assert item['eligible'] and '已人工放行' in item['approval']
+
+
+def test_legacy_caption_gate_and_large_log_have_short_actionable_summary(recovery):
+    add(recovery,'legacy-caption')
+    text=('INFO translating segments\n'*1000)+'ValueError: 第 0 帧原字幕位置或文字不确定，停止出片：Trump Gawks\nAborted!'
+    recovery.db.update_video_status('legacy-caption','FAILED',error_msg=text)
+    recovery.db.set_bypass_censorship('legacy-caption',True)
+    item=recovery.preview()['items'][0]
+    assert not item['eligible'] and item['category']=='manual'
+    assert '停止出片' in item['reason'] and len(item['reason'])<280
+    assert recovery.db.get_video_by_youtube_id('legacy-caption')['error_msg']==text

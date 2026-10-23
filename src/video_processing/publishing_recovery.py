@@ -28,6 +28,13 @@ PROTECTED = {"PUBLISHING", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND
 ACTIVE = {"PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING"}
 
 
+def failure_summary(value):
+    """旧记录可能保存整段子进程日志；列表只展示末尾有效错误，完整记录仍留在原任务。"""
+    lines = [line.strip() for line in str(value or "").splitlines()
+             if line.strip() and line.strip() not in {"Aborted!", "Traceback (most recent call last):"}]
+    return (lines[-1] if lines else "")[:240]
+
+
 def prefix_for(video):
     yid, index = video["youtube_id"], int(video.get("slice_index") or 0)
     prefix = f"{yid}_s{index}" if index else yid
@@ -108,13 +115,16 @@ class PublishingRecoveryService:
         video, flags = record["video"], record["flags"]
         prefix = prefix_for(video)
         state = video["status"]
+        raw_reason = video.get("error_msg") or video.get("publication_wait_reason") or ""
+        content_gate = bool(re.search(r"Censorship[ _]P[012]|Social Unrest Review|Channel Policy Reject|政策敏感拦截|频道策略限制|平台题材风险", raw_reason, re.I))
+        quality_gate = bool(re.search(r"需人工处理|门禁|商品绑定|PRODUCT_.*BLOCK|COPY_QUALITY|停止出片|原字幕位置或文字不确定|整片 [AB].*安全位置|TRANSLATION_QUALITY", raw_reason, re.I))
         item = {"id": video["id"], "youtube_id": video["youtube_id"], "slice_index": video.get("slice_index", 0),
                 "title": video.get("zh_title") or video.get("title") or prefix, "status": state,
                 "revision": revision(video), "failed_at": video.get("failed_at") or video.get("updated_at"),
                 "estimated": not bool(video.get("failed_at")), "score": video.get("score"),
-                "reason": video.get("error_msg") or video.get("publication_wait_reason") or "",
+                "reason": failure_summary(raw_reason),
                 "ready": bool(video.get("preparation_ready")), "eligible": False, "category": "manual",
-                "source": video.get("source"), "approval": "需处理" if video.get("publication_review_required") else "发布前按现有绑定复核"}
+                "source": video.get("source"), "approval": "需处理" if video.get("publication_review_required") else "已人工放行；发布前核对绑定" if video.get("bypass_censorship") else "发布前按现有绑定复核"}
         if state in PROTECTED or flags["submission_protected"] or has_account_submission(account, video):
             item.update(category="protected", reason="已有提交意图、回执或结果待确认，禁止重投")
         elif state in ACTIVE or video.get("process_pid") or read_lease_owner(self.out / "task_locks" / f"{prefix}.lock"):
@@ -132,7 +142,7 @@ class PublishingRecoveryService:
             item.update(reason="需要登录，完成后台扫码登录后重新预览", href="/?view=operations")
         elif video.get("publication_review_required"):
             item.update(reason="内容审批尚未完成，请先在审核队列处理", href="/?view=production&tab=review")
-        elif re.search(r"需人工处理|门禁|商品绑定|PRODUCT_.*BLOCK|CENSORSHIP_P0|COPY_QUALITY", item["reason"], re.I):
+        elif quality_gate or (content_gate and not video.get("bypass_censorship")):
             item.update(reason="质量、内容或商品门禁需先处理：" + item["reason"], href="/?view=production&tab=error")
         elif state not in {"FAILED", "PENDING", "WECHAT_DEFERRED"}:
             item.update(reason="当前状态不适用技术恢复")
