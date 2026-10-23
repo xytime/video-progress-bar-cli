@@ -225,3 +225,18 @@ def test_legacy_caption_gate_and_large_log_have_short_actionable_summary(recover
     assert not item['eligible'] and item['category']=='manual'
     assert '停止出片' in item['reason'] and len(item['reason'])<280
     assert recovery.db.get_video_by_youtube_id('legacy-caption')['error_msg']==text
+
+
+def test_cancel_during_account_setup_does_not_leave_priority_reservation(recovery,monkeypatch):
+    video=add(recovery,'cancel-race')
+    cmd=request(recovery,recovery.preview(),[video['id']],priority=True)
+    original=recovery.guard.recover_local
+    def interrupted(**kwargs):
+        recovery.cancel(cmd['operation_id'])
+        return original(**kwargs)
+    monkeypatch.setattr(recovery.guard,'recover_local',interrupted)
+    operation=recovery.execute(cmd)
+    assert operation['state']=='CANCELLED'
+    assert operation['receipt']['priority_count']>0
+    assert recovery.guard.snapshot()['schedule']['recovery_priority']==[]
+    assert recovery.db.pending_publishing_recovery_items()==[]

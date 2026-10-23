@@ -212,6 +212,9 @@ class PublishingRecoveryService:
                     reset_quota=request.get("reset_quota", False), reset_cooldown=request.get("reset_cooldown", False),
                     priority_tasks=priority)
             self.db.finish_publishing_recovery_setup(key, receipt=receipt)
+            # 取消可能先于账户文件落盘；登记结束后再撤回本批次的残余优先位置。
+            if self.db.get_publishing_recovery_operation(key)["state"] == "CANCELLED":
+                self.guard.cancel_recovery_priority(key)
         except (ValueError, WeChatRequestDeferred) as exc:
             self.db.finish_publishing_recovery_setup(key, error=str(exc))
 
