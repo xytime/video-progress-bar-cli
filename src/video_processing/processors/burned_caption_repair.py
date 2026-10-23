@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.3.0 | 2026-10-23 | Codex | 单片已确认独立字幕区绑定原片、完整时间轴、版式和实现凭证。 |
 | 2.2.0 | 2026-10-23 | Codex | 对齐百分比与数字写法；用双向 ASR 轨迹区分字幕、孤帧 OCR 错误与画面文字。 |
 | 2.1.0 | 2026-10-23 | Codex | 相邻帧合框证据确认同基线拆出的单字形，保留未知文字阻断。 |
 | 2.0.0 | 2026-10-21 | Codex | A/B 全片决策、原片回退、逐帧人脸避让及有来源摘要的 OCR 缓存。 |
@@ -498,6 +499,25 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     if w < h and h/w > 1920/1080 + .001:
         raise ValueError("源片比 9:16 更窄，现有布局会裁切，需先人工规范化")
     source_hash = digest(source)
+    from .approved_caption_layout import approved_layout, validate_segments
+    approved = approved_layout(source, source_hash)
+    if approved is not None:
+        approved.geometry(w, h)
+        validate_segments(segments, duration)
+        identity = dict(source_sha256=source_hash, layout=approved.payload(),
+                        layout_sha256=digest(Path(__file__).with_name('approved_caption_layout.py')),
+                        segments_sha256=hashlib.sha256(json.dumps(segments, sort_keys=True,
+                            ensure_ascii=False).encode()).hexdigest())
+        directory = source.parent / '.caption-repair' / hashlib.sha256(
+            json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        directory.mkdir(parents=True, exist_ok=True)
+        plan = directory / 'plan.json'
+        _write(plan, dict(identity=identity, mode='FRAMED', crop=False,
+                         extra_subtitle_panel=True, clean_sha256=source_hash,
+                         canvas=[1080, 1920], source_canvas=[w, h], fps=fps,
+                         frames=round(duration*fps)))
+        LOG.info('[ApprovedCaptionLayout] %s：完整画面 675x1200，双语区 1350–1700', approved.profile)
+        return PreparedCaptions(source, None, source_hash, plan, mode='FRAMED')
     identity = {"version": VERSION, "source_sha256": source_hash, "vision_sha256": digest(VISION),
                 "implementation_sha256": digest(Path(__file__)), "fallback_sha256": digest(FALLBACK),
                 "segments_sha256": hashlib.sha256(json.dumps(segments, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
@@ -560,6 +580,7 @@ def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaption
         "output_sha256": digest(output), "ass_sha256": digest(ass), "plan": str(prepared.plan.resolve()),
         "plan_sha256": digest(prepared.plan), "implementation_sha256": digest(Path(__file__)),
         "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "vision_sha256": digest(VISION),
+        "approved_layout_sha256": digest(Path(__file__).with_name('approved_caption_layout.py')),
         "fallback_sha256": digest(FALLBACK), "mode": prepared.mode})
 
 
@@ -569,10 +590,18 @@ def render_receipt_matches(output: Path, source: Path) -> bool:
         if w >= h:
             return True
         data = json.loads(output.with_suffix(".captions.json").read_text())
+        from .approved_caption_layout import approved_layout
+        approved = approved_layout(source, digest(source))
+        if approved is not None:
+            plan = json.loads(Path(data['plan']).read_text())
+            if (data['mode'] != 'FRAMED' or plan['identity']['layout'] != approved.payload()
+                    or plan['identity']['layout_sha256'] != digest(Path(__file__).with_name('approved_caption_layout.py'))):
+                return False
         return (data["version"] == VERSION and data["source_sha256"] == digest(source)
             and data["output_sha256"] == digest(output) and data["ass_sha256"] == digest(source.with_suffix(".ass"))
             and data["plan_sha256"] == digest(Path(data["plan"]))
             and data['renderer_sha256'] == digest(Path(__file__).with_name('vertical_processor.py'))
+            and data['approved_layout_sha256'] == digest(Path(__file__).with_name('approved_caption_layout.py'))
             and data["fallback_sha256"] == digest(FALLBACK)
             and data["implementation_sha256"] == digest(Path(__file__)) and data["vision_sha256"] == digest(VISION))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

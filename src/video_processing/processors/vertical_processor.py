@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 2.9.0   | 2026-10-23 | Codex | 已确认单片采用完整等比原画面及独立双语区，按实际字体边界闭锁。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
 | 1.6.0   | 2026-07-17 | Codex | 移除 CosyVoice；高品质 TTS 改由本地 IndexTTS，并迁移历史 cosyvoice 任务 |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
@@ -437,6 +438,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         from .burned_caption_repair import prepare_source, fallback_source, RepairUnsuitable
         self._report_progress('SOURCE_CAPTION_LOCATING')
         self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
+        if self._prepared_captions.mode == 'FRAMED' and not self.bilingual:
+            raise ValueError('单片已确认版式必须保留完整双语字幕')
         try:
             return self._build_ass_file(segments)
         except RepairUnsuitable as exc:
@@ -447,6 +450,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         from .burned_caption_repair import caption_spans, RepairUnsuitable
         from .source_caption_fallback import place_fallback, caption_width
         in_place = self._prepared_captions.center_y is not None
+        from .approved_caption_layout import approved_layout
+        framed = approved_layout(self.input_path, self._prepared_captions.source_hash) if self._prepared_captions.mode == 'FRAMED' else None
         
         # Initialize ASS file
         subs = pysubs2.SSAFile()
@@ -454,6 +459,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         subs.info['PlayResY'] = VerticalLayout.CANVAS_HEIGHT
 
         font_size = min(self.font_size, 64) if self._prepared_captions.mode == "B" else self.font_size
+        if framed:
+            font_size = min(self.font_size, framed.font_size)
         
         # [Gemini_3.5_Flash_planning] 英文实际渲染字号缩水至 0.71，中文设为 0.81 以获得最佳比例
         en_size = int(font_size * 0.71)
@@ -461,6 +468,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         # Calculate dynamic wrap width
         safe_width = 940 if in_place else int(VerticalLayout.CANVAS_WIDTH * 0.96)
+        if framed:
+            safe_width = framed.subtitle_width
         
         # [Gemini_3.5_Flash_planning] 计算折行限制：中文等宽，英文 Georgia 比例字体宽度因子设为 0.54 以防溢出
         wrap_width_zh = max(10, int(safe_width / zh_size))
@@ -479,6 +488,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
         is_vertical_input = video_w < video_h
         layout_params = VerticalLayout.calculate(video_w, video_h)
+        if framed:
+            layout_params = framed.geometry(video_w, video_h)
 
         # Parse background color and alpha
         bg_hex = config.get("bg_color", "&H000000")
@@ -503,7 +514,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             outline = max(outline, 10)
             
         shadow = config.get("shadow", 0)
-        if in_place:
+        if in_place or framed:
             border_style, outline, shadow = 1, 3.5, 1
             bg_color = pysubs2.Color(0, 0, 0, 255)
 
@@ -524,14 +535,16 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             subtitle_max_height = max(200, int(font_size * 3.5) + outline * 2 - 20)  # [Gemini_3.5_Flash_planning] Fixed syntax error by adding closing parenthesis
         if in_place:
             subtitle_max_height = 300
+        if framed:
+            subtitle_max_height = framed.subtitle_bottom - framed.subtitle_top
         layout = SubtitleLayout(
             en_size=en_size,
             zh_size=zh_size,
-            safe_width=750 if self._prepared_captions.mode == "B" else safe_width,
+            safe_width=framed.wrap_width if framed else (750 if self._prepared_captions.mode == "B" else safe_width),
             max_height=subtitle_max_height,
             outline=outline,
         )
-        if in_place:
+        if in_place or framed:
             layout.spacer_px = 30  # 实际 ASS 的 24pt 透明行也按 1.25 行高计入。
         stylist = SubtitleStylist(layout)
 
@@ -540,7 +553,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             fontsize=font_size,
             primarycolor=pysubs2.Color(255, 210, 63),
             backcolor=bg_color,
-            outlinecolor=pysubs2.Color(0, 0, 0, 0) if in_place else bg_color,
+            outlinecolor=pysubs2.Color(0, 0, 0, 0) if in_place or framed else bg_color,
             borderstyle=border_style,
             outline=outline,
             shadow=shadow,
@@ -588,6 +601,18 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 heights.append(size*1.25)
             return sum(heights) + outline*2
         fallback_positions = None
+        if framed:
+            heights = [caption_height(r) for r in rendered_segments]
+            widths = [caption_width(r, outline) for r in rendered_segments]
+            if (not heights or max(heights) > subtitle_max_height
+                    or max(widths) > safe_width):
+                raise VideoProcessingError('单片独立字幕区放不下完整双语内容，停止出片')
+            from .burned_caption_repair import _write
+            import json
+            plan = json.loads(self._prepared_captions.plan.read_text())
+            plan['placement'] = dict(top=framed.subtitle_top, bottom=framed.subtitle_bottom,
+                                     heights=heights, widths=widths, segments=len(segments))
+            _write(self._prepared_captions.plan, plan)
         if self._prepared_captions.mode == 'B':
             # 全片同一方向；每句按同期原字幕包围框定位，避免少数高字幕把全片挤向人脸。
             heights = [caption_height(r) for r in rendered_segments]
@@ -621,6 +646,10 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             vocab_items = seg.get('vocab', {})
 
             event_text = rendered.ass_text
+            if framed:
+                subs.events.append(pysubs2.SSAEvent(start=start_ms, end=end_ms,
+                    text=rf"{{\pos(540,{framed.subtitle_top})}}" + event_text))
+                continue
             if in_place:
                 # 依照实际折行及字号计算整组高度，将中英整体置于原字幕中心。
                 actual_height = caption_height(rendered)
@@ -662,6 +691,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         """Compose 3-section layout using FFmpeg filter_complex"""
         if not hasattr(self, "_prepared_captions"):
             raise ValueError("必须先定位原字幕并生成原位 ASS，再烧录成片")
+        if self._prepared_captions.mode == 'FRAMED' and self.tts_provider:
+            raise ValueError('单片已确认版式仅保留原声，不允许新增配音')
         
         output_path = self.output_path or self.input_path.parent / f"{self.input_path.stem}_vertical{self.input_path.suffix}"
         self.output_path = output_path
@@ -767,6 +798,10 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
         # 2. Calculate Layout
         layout = VerticalLayout.calculate(w, h)
+        from .approved_caption_layout import approved_layout, picture_filters
+        framed = approved_layout(self.input_path, self._prepared_captions.source_hash) if self._prepared_captions.mode == 'FRAMED' else None
+        if framed:
+            layout = framed.geometry(w, h)
         
         # 3. Build Filter Complex
         # Escapes
@@ -774,7 +809,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         filters = []
         
-        if self.bg_blur:
+        if framed:
+            filters.extend(picture_filters(layout))
+        elif self.bg_blur:
             # Background: Scale input to Fill 1080x1920, Blur
             filters.append(f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg]")
             # Foreground: Scale to new_h
@@ -790,13 +827,16 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             filters.append(f"[fg]pad=1080:1920:0:{layout.video_y}:black[merged]")
 
         title_filters, title_label = _build_title_drawtext_filters("merged", self.title, self.font_path)
+        if framed:
+            # 已确认完整原画面，不叠加可能遮挡原画面的标题或日期水印。
+            title_filters, title_label = [], 'merged'
         filters.extend(title_filters)
         
         # Burn Subtitles
         # [Claude_Opus_4.8] 若启用「源视频发布日期戳」，字幕烧录输出改为中间标签 [ds_subbed]，
         # 之后再叠加毛玻璃日期戳产出 [out]；未启用则字幕直接产出 [out]（行为完全不变）。
         _stamp_value = (self.source_date or "").strip()
-        _stamp_enabled = bool(_stamp_value)
+        _stamp_enabled = bool(_stamp_value) and not framed
         if _stamp_enabled:
             filters.append(f"[{title_label}]ass='{escaped_ass}'[ds_subbed]")
         else:
@@ -906,7 +946,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             "-c:v", "libx264",
         ]
         if audio_inputs:
-            cmd += ["-c:a", "aac"]
+            cmd += ["-c:a", "copy" if framed else "aac"]
         cmd.append(str(output_path))
         
         logger.info(f"Rendering Vertical Video: {' '.join(cmd)}")
