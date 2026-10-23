@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| queue-preflight-v1 | 2026-10-24 | Codex | 新候选参与既有发布优先排序，预检不再被待冷却互动饿死。 |
 | recovery-console-v1 | 2026-10-23 | Codex | 统一只读准入、额度重置基线及单次恢复优先级，保留访问历史。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 冷却期间保留排队顺序，覆盖半小时回帖周期并避免首评饥饿。 |
 | 1.1.0 | 2026-10-22 | Antigravity | 支持单次跳过冷却凭据 bypass_cooldown 跳过访问间隔与排队等待，同时保留防重复提交与优先任务保护。 |
@@ -85,8 +86,8 @@ def evaluate(row, now, purpose="发布", task="", *, bypass_cooldown=False, acco
                             priority_tasks.index(identity) if identity in priority_tasks else 0,
                             q["purpose"] not in {"发布", "状态核对"}, q["at"])
                 if queue and task_identity(min(queue, key=rank)["task"]) != task_identity(task):
-                    # 显式恢复目标即使尚未登记 queue，也能先取得本次位置。
-                    if task_identity(task) not in priority_tasks or rank({"task": task, "purpose": purpose, "at": now}) >= rank(min(queue, key=rank)):
+                    # 新候选同样参与既有排序，避免待冷却互动挡住尚未登记的发布。
+                    if rank({"task": task, "purpose": purpose, "at": now}) >= rank(min(queue, key=rank)):
                         block("QUEUE_ORDER", "其他已排队任务在前，本轮只等待，不打开后台")
     untils = [b["until"] for b in blockers if b["until"] is not None]
     return {"allowed": not blockers, "blockers": blockers,
