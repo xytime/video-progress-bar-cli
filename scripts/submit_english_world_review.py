@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 取消英语世界强制绑定；无商品受理须有同任务同策略及最终清空实读证据。 |
 | operations-v1 | 2026-10-24 | Codex | 仅已证明未提交的技术失败接入两次重试；不重置授权或重复已受理项。 |
 | english-admission-v1 | 2026-10-24 | Codex | 领取前纯计算完整账户资格，不排队、不消耗额度、不生成无效上传尝试。 |
 | english-all-v1 | 2026-10-21 | Codex | 每条英语世界必须绑定快捷英语，命令及受理回执拒绝无商品降级。 |
@@ -87,7 +88,6 @@ def _english_world_uploader_command(
         "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
         "--evidence-dir", str(evidence_dir),
         "--fail-fast-login",
-        "--require-bound-product",
         "--require-original-declaration" if require_original_declaration else "--no-original-declaration",
     ]
     if product_decision is not None:
@@ -251,7 +251,7 @@ def _record_submission_result(
         evidence_dir, product_decision,
     ):
         state = "UNCERTAIN"
-        message = "提交后快捷英语绑定证据缺失或与冻结任务不符；保留原生 ID，停止重传及后续同步，需后台核验。"
+        message = "提交后商品挂载或清空证据缺失或与冻结任务不符；保留原生 ID，停止重传及后续同步，需后台核验。"
     elif platform_post_id and state != "UNDER_REVIEW":
         state = "UNCERTAIN"
         message = "已取得同次平台原生 ID，但投稿器未正常确认完成；保留 ID 并停止重传，需后台核验。"
@@ -275,7 +275,7 @@ def _record_submission_result(
 
 
 def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
-    """只接受本次任务、新规则版本的精确商品绑定，禁止无商品降级。"""
+    """接受同次任务的精确绑定或发表前再次确认清空的无商品回执。"""
     try:
         receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text(encoding='utf-8'))
         if not isinstance(receipt, dict):
@@ -287,10 +287,18 @@ def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
             return False
         if required:
             identities = {(item['product_id'], item['title']) for item in decision['product_decision']['candidates']}
-            return (decision.get('attachment_version') == 'wechat-english-all-v1'
-                    and receipt.get('binding_required') is True
-                    and receipt.get('binding_confirmed') is True and receipt.get('unbound_confirmed') is False
-                    and (receipt.get('actual_product_id'), receipt.get('actual_title')) in identities)
+            if decision.get('attachment_version') != 'wechat-english-all-v1':
+                return False
+            if receipt.get('binding_confirmed') is True and receipt.get('unbound_confirmed') is False:
+                return (receipt.get('actual_product_id'), receipt.get('actual_title')) in identities
+            if (receipt.get('state') != 'UNBOUND' or receipt.get('binding_required') is not False
+                    or receipt.get('binding_confirmed') is not False or receipt.get('unbound_confirmed') is not True
+                    or receipt.get('actual_product_id') or receipt.get('actual_title')
+                    or receipt.get('actual_platform_product_id')):
+                return False
+            final = json.loads((evidence_dir / 'product_pre_submit_readback.json').read_text(encoding='utf-8'))
+            return (isinstance(final, dict) and final.get('final_verified') is True
+                    and all(final.get(key) == value for key, value in receipt.items()))
         return False
     except (OSError, ValueError, KeyError, TypeError):
         return False

@@ -3,13 +3,14 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 用户批准取消发布池每日硬上限；null 表示不限，其他池边界不变。 |
 | demand-keepalive-v1 | 2026-10-25 | Codex | 用户批准按需保活的滚动 24 小时上限 16，仅调整保活池。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 迁移原有校验器到配置层，供存储与执行者共用，不放宽边界。 |
 """
 # 这是本次用户逐项确认的批准边界，不是微信平台规则，也不是客户端可修改的审批凭据。
 # 扩大此边界需要新的明确授权与代码审查；紧急版暂不开放后台任意放宽。
 APPROVED = {
-    "publish": {"rolling_24h_limit": 20, "min_interval_seconds": 180, "retry_policy": "write_actions"},
+    "publish": {"rolling_24h_limit": None, "min_interval_seconds": 180, "retry_policy": "write_actions"},
     "first_comment": {"rolling_24h_limit": 50, "rolling_1h_limit": 10, "min_interval_seconds": 60, "retry_policy": "write_actions"},
     "reply": {"rolling_24h_limit": 1000, "rolling_1h_limit": 50, "min_interval_seconds": 60,
               "max_replies_per_video_lifetime": 20, "retry_policy": "write_actions"},
@@ -47,14 +48,16 @@ def validate(data):
             if isinstance(approved, str):
                 if actual != approved:
                     raise ValueError("unknown retry profile")
+            elif approved is None and actual is None:
+                continue  # 发布池明确不设每日硬上限；保留字段兼容旧版本及审计。
             elif type(actual) is not int or not 1 <= actual <= 604800:
                 raise ValueError("positive integer required: " + key)
             elif key.endswith("seconds"):
                 if actual < approved:
                     raise ValueError("shorter interval requires new approval: " + key)
-            elif actual > approved:
+            elif approved is not None and actual > approved:
                 raise ValueError("higher limit requires new approval: " + key)
-        if value.get("rolling_1h_limit", 0) > value.get("rolling_24h_limit", 2147483647):
+        if value.get("rolling_1h_limit", 0) > (value.get("rolling_24h_limit") or 2147483647):
             raise ValueError("hourly quota exceeds daily quota")
     retries = data["retry_policies"]
     if not isinstance(retries, dict) or set(retries) != {"write_actions"}:

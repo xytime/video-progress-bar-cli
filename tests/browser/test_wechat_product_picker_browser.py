@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | 1.2.0 | 2026-10-12 | Codex | 覆盖同一选中行的双 ID、前后变动及实际挂载身份写入原生提交回执。 |
 | 1.1.0 | 2026-10-12 | Codex | 覆盖隐藏同名 iframe 与公开 Shadow DOM 的完整选品及多根冲突。 |
 """
@@ -84,6 +85,23 @@ def test_complete_flow_and_timing_confirmation(page):
     result=select_required_product(decision=decision,picker=picker,timeout_seconds=3)
     assert result.binding_confirmed and result.actual==TARGET
     assert picker.cancel_and_clear(timeout_ms=500)
+    assert picker.read_binding(timeout_ms=500) is None
+
+
+def test_english_unavailable_product_clean_form_is_accepted(page,tmp_path):
+    from tests.unit.test_wechat_product_attachment_v2 import product_fixture
+    from video_processing.db.database import PipelineDB
+    from video_processing.utils.wechat_product_task import freeze_task_product_decision
+    from video_processing.utils.wechat_product_execution import execute_product_task, finalize_product_before_submit
+    from scripts.submit_english_world_review import _product_receipt_is_confirmed
+    task=freeze_task_product_decision(PipelineDB(str(tmp_path/'test.sqlite')),'english:browser',
+        dict(content_type='ENGLISH_WORLD_SHORT',product_intent='AUTO'),product_fixture(tmp_path))
+    page.set_content(form(row('unrelated','无关商品')))
+    picker=PlaywrightProductPicker(page);evidence=tmp_path/'evidence'
+    assert execute_product_task(task,picker,evidence,tmp_path/'status.json')
+    assert not _product_receipt_is_confirmed(evidence,task)
+    assert finalize_product_before_submit(task,picker,evidence)
+    assert _product_receipt_is_confirmed(evidence,task)
     assert picker.read_binding(timeout_ms=500) is None
 
 

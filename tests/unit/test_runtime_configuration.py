@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 真实临时文件/SQLite/FastAPI覆盖配置治理与执行入口。 |
 """
 import copy
@@ -110,7 +111,7 @@ def test_invalid_active_fails_closed(configured,kind):
     with pytest.raises(OperationsPolicyError):load_policy()
 
 
-@pytest.mark.parametrize('field,value',[('publish.rolling_24h_limit',21),('first_comment.min_interval_seconds',59),('reply.rolling_1h_limit',51)])
+@pytest.mark.parametrize('field,value',[('first_comment.rolling_24h_limit',51),('first_comment.min_interval_seconds',59),('reply.rolling_1h_limit',51)])
 def test_no_ordinary_relaxation(configured,field,value):
     first,_=configured;data=first.domains();op,key=field.split('.');data['wechat_operations']['operations'][op][key]=value
     with pytest.raises(ValueError):save(data,first.revision)
@@ -280,7 +281,7 @@ def test_api_real_edit_preview_apply_and_rollback(api_setup):
     rollback=client.post('/api/runtime-configuration/preview',json={'expected_revision':applied.json()['revision'],'rollback_version':first.version,'reason':'合成回滚验证'}).json()
     assert rollback['can_apply']
     assert client.post('/api/runtime-configuration/apply',json={'preview_id':rollback['preview_id'],'operation_id':'api_rollback_00000001'}).status_code==200
-    assert load_policy()['operations']['publish']['rolling_24h_limit']==20
+    assert load_policy()['operations']['publish']['rolling_24h_limit'] is None
     assert len(client.get('/api/runtime-configuration/history').json()['versions'])==3
 
 
@@ -295,7 +296,7 @@ def test_api_security_and_csrf(api_setup,headers):
 def test_approval_not_forgeable_and_no_secrets_in_catalog(api_setup,monkeypatch):
     client,_,first=api_setup;monkeypatch.setattr(settings,'telegram_bot_token','SYNTHETIC_NEVER_EXPOSE')
     data=client.get('/api/runtime-configuration/current');assert 'SYNTHETIC_NEVER_EXPOSE' not in data.text
-    candidate=first.domains();candidate['wechat_operations']['operations']['publish']['rolling_24h_limit']=21
+    candidate=first.domains();candidate['wechat_operations']['operations']['first_comment']['rolling_24h_limit']=51
     body={'expected_revision':first.revision,'domains':candidate,'reason':'非法放宽测试'}
     report=client.post('/api/runtime-configuration/preview',json=body).json();assert report['approval_required'] and not report['can_apply']
     assert client.post('/api/runtime-configuration/apply',json={'preview_id':report['preview_id'],'operation_id':'not_approved_00000001'}).status_code==422

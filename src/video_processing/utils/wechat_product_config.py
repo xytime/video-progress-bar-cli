@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | english-all-v1 | 2026-10-21 | Codex | 运行采用回执准确记录英语世界的强制绑定要求。 |
 """
 from __future__ import annotations
@@ -17,7 +18,6 @@ import fcntl
 from datetime import datetime, timezone
 
 from video_processing.core.wechat_product_policy import ProductPolicy, parse_product_policy
-from video_processing.core.wechat_product_attachment import requires_bound_product
 
 
 def _unique_object(pairs):
@@ -101,7 +101,7 @@ def record_adoption(policy: ProductPolicy, decision, evidence_dir: Path, status_
     if result is not None:
         payload.update(binding_confirmed=result.binding_confirmed, reason=result.reason,
                        unbound_confirmed=result.state == 'UNBOUND',
-                       binding_required=bool(task_decision and requires_bound_product(task_decision)))
+                       binding_required=False)
     atomic_json(evidence_dir / 'product_policy_adoption.json', payload)
     atomic_json(status_path, payload)
 

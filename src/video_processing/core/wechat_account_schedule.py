@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | english-identity-v1 | 2026-10-24 | Codex | 英语学习卡同名成片按冻结包路径区分，保留同包提交去重和通用成片别名。 |
@@ -156,7 +157,7 @@ def _operation_blocks(sessions, now, operation, policy):
     blockers = []
     for key, seconds, label in (("rolling_24h_limit", DAY, "过去24小时"), ("rolling_1h_limit", 3600, "过去60分钟")):
         recent = [s for s in values if s["at"] > now - seconds]
-        if key in config and len(recent) >= config[key]:
+        if config.get(key) is not None and len(recent) >= config[key]:
             blockers.append({"code": "OPERATION_" + key.upper(), "reason": f"{operation} {label}额度已满",
                              "until": recent[-config[key]]["at"] + seconds})
     interval = config.get("min_interval_seconds", 0)

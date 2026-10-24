@@ -1,8 +1,9 @@
-"""商品挂载资格纯规则；英语世界每条强制挂载，制作顺序仅保留审计。
+"""商品挂载尝试资格纯规则；英语世界每条尝试快捷英语，允许安全无商品降级。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 区分英语世界专属选品与发表绑定要求，保留冻结候选规则。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界所有任务必须挂载，覆盖首条、旧包及人工跳过意图。 |
 """
 from __future__ import annotations
@@ -14,8 +15,8 @@ INTENTS = {'AUTO', 'NONE', 'PRODUCT'}
 STOP_STATES = {'PUBLISHED', 'UNDER_REVIEW', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'UNCERTAIN', 'PUBLISHING'}
 
 
-def requires_bound_product(payload: dict) -> bool:
-    """英语世界绑定要求由可信任务上下文确定，不能用可选标志降级。"""
+def uses_english_world_product(payload: dict) -> bool:
+    """英语世界专属选品身份；表示应尝试的商品，不要求最终绑定成功。"""
     return payload.get('context', {}).get('content_type') == 'ENGLISH_WORLD_SHORT'
 
 

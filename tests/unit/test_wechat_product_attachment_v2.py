@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | 1.2.0 | 2026-10-12 | Codex | 验证逐次失败证据保留，显式挂商品验收拒绝无绑定，日常降级保持。 |
 | 1.1.0 | 2026-10-11 | Codex | 缺商品可继续，覆盖旧等待释放、身份清理、两入口回执及已提交保护。 |
 """
@@ -290,7 +291,7 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     db.add_video('available','NONE','channel',score=80,product_intent='NONE')
     db.mark_video_ready_for_publication('available')
     class Manager:
-        def __init__(self):self.db=db;self.called=[]
+        def __init__(self):self.db=db;self.called=[];self._OUT_DIR=out
         def _process_single_video(self,row,**kwargs):self.called.append(row['youtube_id'])
     manager=Manager();monkeypatch.setattr(worker,'ROOT',tmp_path)
     monkeypatch.setattr(worker.settings,'wechat_product_policy_path',active)
@@ -362,7 +363,7 @@ def test_english_ready_wait_filter_entire_queue_before_limit(tmp_path,monkeypatc
     monkeypatch.setattr(worker,'ROOT',tmp_path)
     monkeypatch.setattr(worker,'settings',SimpleNamespace(enable_english_world_auto_publish=True,wechat_publishing_paused=False,wechat_product_policy_path=active))
     monkeypatch.setattr(worker.subprocess,'run',lambda args,**kw:(called.append(args) or SimpleNamespace(returncode=10)))
-    manager=SimpleNamespace(db=db,_report_runtime_stage=lambda *a,**kw:None)
+    manager=SimpleNamespace(db=db,_OUT_DIR=out,_report_runtime_stage=lambda *a,**kw:None)
     assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[0][0]
     with store._locked() as rows:rows['tasks'][identities[0][1]]['next_check_at']=0
     assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[0][0]

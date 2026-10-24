@@ -1,3 +1,4 @@
+/* optional-publish-v1 | 2026-10-25 | Codex | 显式显示无每日上限；清空数值以原CAS流程取消日额。 */
 /* runtime-center-v1 | 2026-10-24 | Codex | 草稿/预览/CAS/回滚与加载状态；无平台操作。 */
 (() => {
   'use strict';
@@ -22,14 +23,16 @@
   }
   function field(path,label,unit,range,defaultValue) {
     const box=node('div',undefined,'runtime-field'),id='field-'+path.replaceAll('.','-');
+    const unlimited=path==='wechat_operations.operations.publish.rolling_24h_limit';
     const title=node('label',label);title.htmlFor=id;
     const input=node('input');input.id=id;input.type='number';input.value=get(draft,path)??'';input.step=path.endsWith('google_translate_interval_seconds')?'0.1':'1';
+    if(unlimited)input.placeholder='无每日上限';
     if(range){input.min=range[0];input.max=range[1];}
-    const hint=node('small',(unit||'数值')+' · 默认 '+String(defaultValue??'未知')+(range?' · 允许 '+range.join('–'):''),'hint');hint.id=id+'-help';
+    const hint=node('small',(unit||'数值')+' · 默认 '+String(defaultValue??(unlimited?'无每日上限':'未知'))+(range?' · 允许 '+range.join('–'):'')+(unlimited?' · 留空表示无每日上限':''),'hint');hint.id=id+'-help';
     const error=node('span',invalid.get(path)||'','field-error');error.id=id+'-error';input.setAttribute('aria-describedby',hint.id+' '+error.id);
     input.setAttribute('aria-invalid',invalid.has(path)?'true':'false');
     input.addEventListener('input',()=>{
-      const value=input.value===''?null:Number(input.value),bad=value===null||!Number.isFinite(value)||(input.step==='1'&&!Number.isInteger(value))||(range&&(value<range[0]||value>range[1]));
+      const value=input.value===''?null:Number(input.value),bad=value===null?!unlimited:!Number.isFinite(value)||(input.step==='1'&&!Number.isInteger(value))||(range&&(value<range[0]||value>range[1]));
       put(draft,path,value);editEpoch++;if(bad)invalid.set(path,'请输入允许范围内的'+(input.step==='1'?'整数':'数值'));else invalid.delete(path);
       error.textContent=invalid.get(path)||'';input.setAttribute('aria-invalid',bad?'true':'false');preview=null;updateDirty();
     });box.append(title,input,hint,error);return box;
@@ -40,7 +43,7 @@
     $('operation-cards').replaceChildren();
     Object.keys(names).forEach(op=>{const values=draft.wechat_operations.operations[op];
       const card=node('section');card.append(node('h2',names[op]));const gate=node('p','正在读取本地用量…','gate-summary');gate.id='gate-'+op;card.append(gate);const fields=node('div',undefined,'runtime-fields');card.append(fields);
-      Object.entries(values).forEach(([key,val])=>{if(typeof val!=='number')return;const path='operations.'+op+'.'+key,meta=metadata.fields.find(r=>r.domain==='wechat_operations'&&r.key===path);fields.append(field('wechat_operations.'+path,labels[key],meta.unit,meta.range,meta.default));});
+      Object.entries(values).forEach(([key,val])=>{if(typeof val!=='number'&&val!==null)return;const path='operations.'+op+'.'+key,meta=metadata.fields.find(r=>r.domain==='wechat_operations'&&r.key===path);fields.append(field('wechat_operations.'+path,labels[key],meta.unit,meta.range,meta.default));});
       $('operation-cards').append(card);
     });
     $('retry-fields').replaceChildren();Object.entries(draft.wechat_operations.retry_policies.write_actions).forEach(([key,val])=>$('retry-fields').append(field('wechat_operations.retry_policies.write_actions.'+key,labels[key],key==='max_retries'?'首次之外的次数':'秒',key==='max_retries'?[0,2]:[60,604800],val)));
@@ -57,7 +60,7 @@
       const row=node('article',undefined,'catalog-row'),info=node('div');info.append(node('strong',r.name),node('p',r.source+' · '+r.boundary),node('code',r.path+(r.line?':'+r.line:'')),node('p',r.reason));
       const value=node('div');
       if(r.mode==='managed'&&!['wechat_operations','interaction_controls'].includes(r.domain))value.append(field(r.domain+'.'+r.key,r.name,r.unit,r.range,r.default));
-      else {value.append(node('strong',r.current===null?'实际生效值未知':String(r.current)),node('p','默认/声明值：'+(r.default===null?'不展示或未知':String(r.default))));if(r.mode==='managed'){const b=node('button','在操作额度编辑');b.type='button';b.onclick=()=>selectView('operations');value.append(b);}}
+      else {value.append(node('strong',r.current===null?(r.nullable?'无每日上限':'实际生效值未知'):String(r.current)),node('p','默认/声明值：'+(r.default===null?(r.nullable?'无每日上限':'不展示或未知'):String(r.default))));if(r.mode==='managed'){const b=node('button','在操作额度编辑');b.type='button';b.onclick=()=>selectView('operations');value.append(b);}}
       row.append(info,value);$('catalog-fields').append(row);
     }
     if(!rows.length)$('catalog-fields').append(node('p','没有匹配参数。可清空搜索或更换配置组。'));
@@ -82,13 +85,13 @@
   }
   async function poll(){if(!revision)return;const expected=revision;
     try{const data=await api('/state');if(expected!==revision)return;renderWorkers(data);if(data.revision!==revision){conflict=true;$('feedback').textContent='活动版本已被其他操作更新。当前草稿已保留，请重新载入后编辑。';updateDirty();}
-      for(const [op,g] of Object.entries(data.operations||{})){const box=$('gate-'+op);if(!box)continue;box.replaceChildren(node('strong',g.allowed?'账号时间门禁已满足':'正在等待'));box.append(node('span','24h已用 '+g.sessions_24h_count+(g.daily_limit?' / '+g.daily_limit:'')+' · 60分钟已用 '+g.sessions_1h_count+(g.hourly_limit?' / '+g.hourly_limit:'')));if(g.blockers.length)box.append(node('div',g.blockers.map(b=>b.reason).join('；')));if(!g.allowed)box.append(node('div',g.until?'最早满足已知时间门禁 '+stamp(g.until)+'，不保证执行':'还有无确定期限的门禁'));}
+      for(const [op,g] of Object.entries(data.operations||{})){const box=$('gate-'+op);if(!box)continue;box.replaceChildren(node('strong',g.allowed?'账号时间门禁已满足':'正在等待'));box.append(node('span','24h已用 '+g.sessions_24h_count+(g.daily_limit?' / '+g.daily_limit:(op==='publish'?' · 无每日上限':''))+' · 60分钟已用 '+g.sessions_1h_count+(g.hourly_limit?' / '+g.hourly_limit:'')));if(g.blockers.length)box.append(node('div',g.blockers.map(b=>b.reason).join('；')));if(!g.allowed)box.append(node('div',g.until?'最早满足已知时间门禁 '+stamp(g.until)+'，不保证执行':'还有无确定期限的门禁'));}
       $('waits').replaceChildren();for(const w of data.waits||[]){const row=node('article',undefined,'wait-row');row.append(node('strong','首评待办 #'+w.id),node('p',w.blockers.length?w.blockers.map(b=>b.reason).join('；'):'已满足账号时间门禁，仍等待任务资格和串行机会'),node('p','最早时间下界 '+stamp(w.until)+' · 本地调度 '+stamp(w.next_attempt_at)));$('waits').append(row);}if(!data.waits?.length)$('waits').append(node('p','没有可重算的本地首评等待；人工与不确定任务不在此自动队列。'));
       $('additional-gates').replaceChildren(...(data.additional_gates||[]).map(g=>node('p',g.name+'：'+g.value)));$('state-feedback').textContent='本地快照 '+stamp(Date.now()/1000)+'。'+data.meaning;
     }catch(e){$('state-feedback').textContent='门禁状态读取失败：'+e.message+'；不沿用旧的可执行结论。';for(const op of Object.keys(names)){const box=$('gate-'+op);if(box)box.textContent='当前状态未知，请重试';}}
   }
   async function openPreview(rollbackVersion=null){if(busy)return;if(invalid.size){$('feedback').textContent='请先修正字段错误';return;}const reason=$('reason').value.trim();if(reason.length<3){$('reason').setAttribute('aria-invalid','true');$('feedback').textContent='请填写至少3字的变更原因';$('change-reason').hidden=false;$('reason').focus();return;}$('reason').removeAttribute('aria-invalid');busy=true;updateDirty();
-    try{const epoch=editEpoch,body={expected_revision:revision,reason,...(rollbackVersion?{rollback_version:rollbackVersion}:{domains:draft})};const report=await api('/preview',{method:'POST',body:JSON.stringify(body)});if(epoch!==editEpoch){$('feedback').textContent='草稿已变化，请重新预览';return;}preview=report;operationId=crypto.randomUUID().replaceAll('-','');$('preview-content').replaceChildren();for(const d of report.changes){const row=node('div',undefined,'diff-row');row.append(node('strong',d.field),node('p',String(d.before)+' → '+String(d.after)));$('preview-content').append(row);}for(const [op,g] of Object.entries(report.proposed_operations||{})){if(!g.allowed)$('preview-content').append(node('p',names[op]+'：调整后仍等待 '+g.blockers.map(b=>b.reason).join('；')+'；最早下界 '+stamp(g.until)));}$('preview-content').append(node('p',report.risk),node('p','受影响的本地等待 '+report.waiting_tasks+' 条；'+(report.in_flight?'存在在途操作，继续原快照':'没有在途操作')),...report.effects.map(e=>node('p',e)));$('apply-feedback').textContent=report.message||'请核对以上差异；批准范围外的放宽不能在这里确认。';$('apply').disabled=!report.can_apply;$('preview-dialog').showModal();$('cancel-preview').focus();
+    try{const epoch=editEpoch,body={expected_revision:revision,reason,...(rollbackVersion?{rollback_version:rollbackVersion}:{domains:draft})};const report=await api('/preview',{method:'POST',body:JSON.stringify(body)});if(epoch!==editEpoch){$('feedback').textContent='草稿已变化，请重新预览';return;}preview=report;operationId=crypto.randomUUID().replaceAll('-','');$('preview-content').replaceChildren();for(const d of report.changes){const row=node('div',undefined,'diff-row');row.append(node('strong',d.field),node('p',(d.before===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.before))+' → '+(d.after===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.after))));$('preview-content').append(row);}for(const [op,g] of Object.entries(report.proposed_operations||{})){if(!g.allowed)$('preview-content').append(node('p',names[op]+'：调整后仍等待 '+g.blockers.map(b=>b.reason).join('；')+'；最早下界 '+stamp(g.until)));}$('preview-content').append(node('p',report.risk),node('p','受影响的本地等待 '+report.waiting_tasks+' 条；'+(report.in_flight?'存在在途操作，继续原快照':'没有在途操作')),...report.effects.map(e=>node('p',e)));$('apply-feedback').textContent=report.message||'请核对以上差异；批准范围外的放宽不能在这里确认。';$('apply').disabled=!report.can_apply;$('preview-dialog').showModal();$('cancel-preview').focus();
     }catch(e){$('feedback').textContent='预览失败：'+e.message+'。草稿已保留。';if(e.status===409)conflict=true;}finally{busy=false;updateDirty();}
   }
   async function apply(){if(busy||!preview?.can_apply)return;busy=true;$('apply').disabled=true;$('cancel-preview').disabled=true;$('apply-feedback').textContent='正在提交版本；不会中断在途操作…';

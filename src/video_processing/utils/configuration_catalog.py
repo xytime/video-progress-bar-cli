@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | runtime-center-v1 | 2026-10-24 | Codex | Settings/领域文件/18组静态候选统一分类；秘密与主机路径不返回值。 |
 """
 from __future__ import annotations
@@ -67,8 +68,8 @@ def catalog(current):
             rows.append({'id':'wechat_operations:'+key,'name':op_names[op]+'：'+labels[name],'group':'G02',
                 'current':current.domains()['wechat_operations']['operations'][op][name],'default':default,
                 'source':'活动版本 wechat_operations；旧共享额度不再覆盖','unit':'秒' if seconds else '次/滚动24h' if name=='rolling_24h_limit' else '次/滚动60分钟' if name=='rolling_1h_limit' else '条/视频累计' if name=='max_replies_per_video_lifetime' else '个视频/轮',
-                'range':[default,604800] if seconds else [1,default],'mode':'managed','boundary':'下一次准入；等待5秒内重算',
-                'reason':'超出用户批准边界需单独批准','path':'src/config/wechat_operations_schema.py','line':None,
+                'range':[default,604800] if seconds else [1,default or 604800], 'nullable':default is None,'mode':'managed','boundary':'下一次准入；等待5秒内重算',
+                'reason':'留空表示无每日上限；保留180秒间隔与真实限流退避' if default is None else '超出用户批准边界需单独批准','path':'src/config/wechat_operations_schema.py','line':None,
                 'domain':'wechat_operations','key':key})
     for name,default in [('max_retries',2),('interval_seconds',60)]:
         key='retry_policies.write_actions.'+name

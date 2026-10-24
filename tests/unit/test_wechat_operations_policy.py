@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | operations-v1 | 2026-10-24 | Codex | 验证独立预算、滚动边界、原子扣次、保守旧记录、重试和坏配置闭锁。 |
 | scan-timer-v1 | 2026-10-25 | Codex | 小幅定时抖动只等待已知时间；账号/未知门禁不等待放行，原生扣次及配置保持。 |
 """
@@ -51,7 +52,7 @@ def test_exact_approved_configuration_and_17_fields(active):
     assert len([v for o in policy['operations'].values() for k,v in o.items() if k!='retry_policy'])+2==17
     assert len(revision(policy))==64
 
-@pytest.mark.parametrize('value',[False,1.0,0,-1,None,'20'])
+@pytest.mark.parametrize('value',[False,1.0,0,-1,'20'])
 def test_strict_limit_types(active,value):
     policy,_=active;policy['operations']['publish']['rolling_24h_limit']=value
     with pytest.raises(ValueError):validate(policy)
@@ -71,6 +72,7 @@ def test_missing_config_fails_closed(active):
     with pytest.raises(WeChatRequestDeferred):load_policy()
 
 def test_independent_pools_and_old_epoch_not_free_quota(active):
+    policy,path=active;policy['operations']['publish']['rolling_24h_limit']=20;path.write_text(json.dumps(policy))
     now=time.time();row=state([event(now-400-i,'publish') for i in range(20)])
     row['schedule']['quota_epoch']='new-epoch'
     row['schedule']['last_interaction_at']=now
@@ -96,6 +98,7 @@ def test_rolling_boundaries_and_no_midnight_reset(active):
     assert evaluate(state([event(now-86400-i,'publish') for i in range(20)]),now,'发布','new')['allowed']
 
 def test_all_blockers_are_reported_and_eta_not_falsely_promised(active):
+    policy,path=active;policy['operations']['publish']['rolling_24h_limit']=20;path.write_text(json.dumps(policy))
     now=time.time();row=state([event(now-1-i,'publish') for i in range(20)])
     row['blocked_until']=now+400
     result=evaluate(row,now,'发布','new')

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界拒绝旧冻结规则，人工商品意图不能覆盖专属快捷英语候选。 |
 """
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 import hashlib
 import math
 from pathlib import Path
-from video_processing.core.wechat_product_attachment import attachment_decision, STOP_STATES, requires_bound_product
+from video_processing.core.wechat_product_attachment import attachment_decision, STOP_STATES, uses_english_world_product
 from video_processing.core.wechat_product_policy import ProductIdentity, parse_product_policy
 from video_processing.utils.wechat_product_config import load_policy, decision_payload, atomic_json
 from video_processing.utils.wechat_product_catalog import catalog_view
@@ -97,7 +98,7 @@ def selection_from_task(payload: dict):
     context = payload['context']
     keys = ('category', 'source_channel_id', 'content_type', 'product_topic')
     decision = policy.decide(**{k: context.get(k) for k in keys})
-    if payload['product_intent'] == 'PRODUCT' and not requires_bound_product(payload):
+    if payload['product_intent'] == 'PRODUCT' and not uses_english_world_product(payload):
         identity = ProductIdentity(context['product_id'], context['product_title'])
         decision = replace(decision, reason='MANUAL_EXACT', candidates=(identity,))
     if decision_payload(decision) != payload['product_decision']:
@@ -108,7 +109,7 @@ def selection_from_task(payload: dict):
 def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: Path, *, now=None) -> dict:
     old = db.get_product_task_decision(task_id)
     if old:
-        if requires_bound_product(old) and old.get('attachment_version') != 'wechat-english-all-v1':
+        if uses_english_world_product(old) and old.get('attachment_version') != 'wechat-english-all-v1':
             raise ValueError('英语世界旧冻结决定不符合每条绑定快捷英语的新规则，须重新审核，禁止直接投稿')
         return old
     if context.get('status') in STOP_STATES:
@@ -128,7 +129,7 @@ def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: P
         payload.update(policy_snapshot=json.loads(policy.serialized), config_version=policy.version, config_digest=policy.digest)
         keys = ('category', 'source_channel_id', 'content_type', 'product_topic')
         decision = policy.decide(**{k: context.get(k) for k in keys})
-        if outcome['product_intent'] == 'PRODUCT' and not requires_bound_product(payload):
+        if outcome['product_intent'] == 'PRODUCT' and not uses_english_world_product(payload):
             # 入队已验证身份；发布时再次验证有效性，不允许默认回退另一商品。
             choices = manual_product_options(policy_path)['products']
             matches = [r for r in choices if r['product_id'] == context['product_id'] and r['title'] == context['product_title']]
