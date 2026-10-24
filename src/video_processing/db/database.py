@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 结构化门禁等待、版本变更重算及年龄配置；不更改历史次数和提交事实。 |
 | cleanup-timeout-v1 | 2026-10-24 | Codex | 英语卡已证明未提交的清理技术失败纳入冻结写入重试链，达到上限在本地停止，不改用量。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -232,9 +233,10 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
+from .english_product_recovery import EnglishProductRecoveryDAL
 
 
-class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -1642,6 +1644,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 "CREATE INDEX IF NOT EXISTS idx_english_world_review_items_updated "
                 "ON english_world_review_items(updated_at DESC)"
             )
+            self.initialize_english_product_recovery(cursor)
             cursor.execute("PRAGMA table_info(english_world_review_items)")
             english_world_review_columns = {row[1] for row in cursor.fetchall()}
             for column, definition in (
@@ -8402,7 +8405,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             retry = conn.execute("SELECT next_attempt_at FROM wechat_write_retry_chains WHERE kind='english_world' AND task_id=?", (clean_id,)).fetchone()
             if retry and retry[0] and retry[0] > datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
                 return None
-            if settings.wechat_operations_enabled:
+            recovery = conn.execute("SELECT * FROM english_world_product_recoveries WHERE review_id=?", (clean_id,)).fetchone()
+            if recovery and (recovery['consumed_at'] or recovery['expires_at'] <= datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')):
+                return None
+            if settings.wechat_operations_enabled and not recovery:
                 eligible = conn.execute("SELECT id FROM english_world_review_items WHERE id=? AND state='SUBMISSION_APPROVED'", (clean_id,)).fetchone()
                 if eligible is None:
                     return None
@@ -8435,6 +8441,8 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             self._freeze_wechat_retry_chain_conn(conn, "english_world", clean_id)
             from uuid import uuid4
             attempt_id = uuid4().hex
+            if recovery:
+                conn.execute("UPDATE english_world_product_recoveries SET consumed_at=CURRENT_TIMESTAMP,attempt_id=? WHERE review_id=? AND consumed_at IS NULL", (attempt_id, clean_id))
             conn.execute(
                 """INSERT INTO english_world_submission_attempts (
                        attempt_id, review_id, approval_source, artifact_sha256, manifest_sha256,

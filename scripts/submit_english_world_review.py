@@ -5,6 +5,7 @@
 PipelineManager、不会扫描任何待处理项，也不会为失败/未确认的提交自动重试。
 
 # Modification History
+| product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | english-preferred-v1 | 2026-10-25 | Codex | 英语世界受理回执接受优先挂载新版冻结候选，默认兜底同样核对精确身份。 |
@@ -110,6 +111,10 @@ def _product_task_decision(db: PipelineDB, item: dict) -> dict:
     manifest = json.loads(raw)
     if not isinstance(manifest, dict):
         raise ValueError('English World product context manifest must be an object')
+    recovery = (db.get_english_world_product_recovery(item['id'])
+                if item.get('approval_source') == 'OPERATOR_RECOVERY' else None)
+    if recovery:
+        return recovery['payload']['decision']
     from video_processing.english_world.product_production import verify_product_production_context
     from video_processing.utils.wechat_product_task import freeze_task_product_decision, product_profile_scope
     state_path = _PROJECT_ROOT / 'output' / 'wechat_state.json'
@@ -340,7 +345,8 @@ def _manual_authorization_active(item: dict) -> bool:
 
 
 @guarded("english-submit", lambda review_id, **kw: "review:" + str(review_id), waiting=True)
-def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> int:
+def submit(review_id: str, *, operator_recovery_reason: str | None = None,
+           product_recovery_reason: str | None = None) -> int:
     """领取并执行一次投稿；即使浏览器异常也保留可审计的终态回执。"""
     if settings.wechat_publishing_paused:
         logger.warning("English World submission deferred because WeChat publishing is paused")
@@ -355,7 +361,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         logger.info("English World review item does not exist: %s", review_id)
         return 0
     if not settings.is_english_world_publish_window():
-        if not _manual_authorization_active(pending):
+        if not _manual_authorization_active(pending) and not product_recovery_reason:
             db.expire_english_world_submission_authorization(review_id)
             logger.info(
                 "English World submission deferred outside English World publish window: %s source=%s",
@@ -401,6 +407,17 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         try:
             _require_publish_package(pending)
             product_decision = _product_task_decision(db, pending)
+            if product_recovery_reason:
+                from video_processing.utils.wechat_product_task import freeze_task_product_decision
+                context = dict(product_decision['context'])
+                context.update(task_id='english-product-recovery:' + review_id,
+                               production_task_id=context.get('production_task_id') or product_decision['task_id'])
+                replacement = freeze_task_product_decision(db, context['task_id'], context,
+                                                          settings.wechat_product_policy_path)
+                pending = db.authorize_english_world_product_recovery(
+                    review_id, reason=product_recovery_reason,
+                    source_decision=product_decision, decision=replacement)
+                product_decision = replacement
             if product_decision is not None and product_decision.get('require_product') is True:
                 from video_processing.utils.wechat_product_execution import (
                     product_artifacts_digest, product_observation_generation, product_task_preflight,
@@ -433,6 +450,11 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         title = str(item.get("title") or "英语世界短视频")
         attempt_id = str(item["_attempt_id"])
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        recovery = (db.get_english_world_product_recovery(review_id)
+                    if pending.get('approval_source') == 'OPERATOR_RECOVERY' else None)
+        if recovery:
+            from video_processing.utils.wechat_product_config import atomic_json
+            atomic_json(evidence_dir / 'product_recovery_authorization.json', recovery)
         require_original = True
         try:
             require_original = _require_publish_package(item)
@@ -528,12 +550,16 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description="提交已批准的英语世界学习卡到视频号")
     parser.add_argument("--review-id", required=True, help="Telegram 审核项 ID")
-    parser.add_argument(
+    recovery_options = parser.add_mutually_exclusive_group()
+    recovery_options.add_argument(
         "--operator-recovery-reason",
         help="具名补发原因；仅可授权零尝试的 AUTO_POLICY 延后项并在两小时内提交",
     )
+    recovery_options.add_argument('--product-recovery-reason',
+        help='明确获准修复后重发；完整未提交证明后签发一次商品恢复，保留历史次数')
     args = parser.parse_args()
-    return submit(args.review_id, operator_recovery_reason=args.operator_recovery_reason)
+    return submit(args.review_id, operator_recovery_reason=args.operator_recovery_reason,
+                  product_recovery_reason=args.product_recovery_reason)
 
 
 if __name__ == "__main__":
