@@ -6,6 +6,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                  |
 |---------|------------|-------------------------------------|--------------------------------------------------------------|
+| demand-keepalive-v1 | 2026-10-25 | Codex | 按真实认证证据排期、跨重启退避与准确的准入等待原因。 |
+| 1.9.0   | 2026-10-18 | Antigravity                         | 捕获浏览器启动异常并归类为 BROWSER_LAUNCH_FAILED，接入 credential_generation 迟到结果 CAS 保护。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：WeChat Session 看门狗脚本，仅访问发布页刷新 Cookie |
 | 1.1.0   | 2026-06-27 | Claude_Opus_4.8 | [无痛重登·预警] 会话龄追踪(标记文件，刷新不重置、过期清零) + 临期预警：龄超 settings.wechat_session_warn_hours(默认22h) 即推 Telegram「该重扫」，在 ~24h 服务端硬上限断档前提醒；Telegram 凭据迁移至 settings（消除 os.environ 违规） |
 | 1.2.0   | 2026-06-27 | Claude_Opus_4.8 | 临期预警/过期告警话术改为引导「发 /wechat_login 取二维码到 Telegram 手机扫码」，与 pipeline_agent 无头 QR 推送闭环（替代原终端 --no-headless 命令） |
@@ -18,9 +20,10 @@
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新且正向控件校验通过
-    1 - 运行时错误（网络超时、SPA 未就绪、非微信来源、存储保存失败等）
+    1 - 运行时错误（网络超时、SPA 未就绪、非微信来源、存储保存失败、浏览器启动失败等）
     2 - Session 已过期（LOGIN_REQUIRED），需重新扫码
     11 - 锁占用（EXIT_WECHAT_SESSION_BUSY）
+    15/17 - 冷却或账户准入等待（命令行模式）
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
@@ -45,6 +48,7 @@ from video_processing.core.wechat_session_lock import (
 from video_processing.core.wechat_auth_state import (
     read_wechat_auth_state,
     record_wechat_keepalive_result,
+    record_wechat_keepalive_attempt,
 )
 from video_processing.core.wechat_page_contract import (
     is_official_wechat_origin,
@@ -146,6 +150,7 @@ def _maybe_warn_expiry(login_target: Path, warned_path: Path) -> None:
 def run_keepalive(
     state_path: str = "output/wechat_state.json",
     dwell: int = 15,
+    cooldown_result_codes: bool = False,
 ) -> int:
     """执行一次 WeChat Session 保活操作。
 
@@ -177,24 +182,54 @@ def run_keepalive(
         )
         return 1
 
-    with sync_playwright() as p:
-        logger.info("[Keepalive] Launching headless browser...")
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-web-security",
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--window-size=1280,800",
-                "--no-proxy-server",
-                "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
-            ]
+    initial_auth_state = read_wechat_auth_state(state_file)
+    expected_gen = initial_auth_state.get("credential_generation")
+    record_wechat_keepalive_attempt(state_file)
+
+    try:
+        pw_cm = sync_playwright()
+    except Exception as exc:
+        logger.error("[Keepalive] Failed to initialize Playwright runtime: %s", type(exc).__name__)
+        record_wechat_keepalive_result(
+            state_file,
+            status="BROWSER_LAUNCH_FAILED",
+            failure={
+                "stage": "browser_launch",
+                "error_type": "BROWSER_LAUNCH_FAILED",
+            },
+            expected_generation=expected_gen,
         )
+        return 1
 
-        context = create_wechat_context(browser, storage_state=state_file)
-
-        page = context.new_page()
+    with pw_cm as p:
+        logger.info("[Keepalive] Launching headless browser...")
+        try:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-web-security",
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--window-size=1280,800",
+                    "--no-proxy-server",
+                    "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
+                ]
+            )
+            context = create_wechat_context(browser, storage_state=state_file)
+            page = context.new_page()
+        except Exception as exc:
+            logger.error("[Keepalive] Browser launch or context initialization failed: %s", type(exc).__name__)
+            record_wechat_keepalive_result(
+                state_file,
+                status="BROWSER_LAUNCH_FAILED",
+                failure={
+                    "stage": "browser_launch",
+                    "error_type": "BROWSER_LAUNCH_FAILED",
+                },
+                expected_generation=expected_gen,
+            )
+            return 1
 
         # 导航与有界重试（最多重试 1 次，有界超时 25000ms）
         max_nav_attempts = 2
@@ -225,6 +260,7 @@ def run_keepalive(
                     "stage": "navigation",
                     "error_type": "NETWORK_TIMEOUT",
                 },
+                expected_generation=expected_gen,
             )
             browser.close()
             return 1
@@ -372,7 +408,7 @@ def run_keepalive(
             browser.close()
             return 1
 
-        record_wechat_keepalive_result(state_file, status="SUCCESS")
+        record_wechat_keepalive_result(state_file, status="SUCCESS", expected_generation=expected_gen)
         browser.close()
         logger.info("[Keepalive] Keepalive completed successfully.")
         return 0
@@ -399,6 +435,7 @@ def main():
     code = run_keepalive(
         state_path=args.state,
         dwell=args.dwell,
+        cooldown_result_codes=True,
     )
     sys.exit(code)
 

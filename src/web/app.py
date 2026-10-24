@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| demand-keepalive-v1 | 2026-10-25 | Codex | 按真实认证证据排期、跨重启退避与准确的准入等待原因。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
 
@@ -1083,16 +1084,8 @@ def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
 
 @registered("keepalive-watchdog")
 def _wechat_keepalive_loop(stop=None):
-    """[Claude_Sonnet_4.6_Thinking_planning] v3.2.0: WeChat Session 看门狗循环。
-
-    每隔随机的 min~max 分钟（可通过 settings 配置），启动一个独立子进程
-    （wechat_keepalive.py）无感访问微信视频号发布页，停留指定秒数后保存刷新的 Cookie。
-
-    互斥保护：若检测到微信上传任务正在运行，则跳过本轮，避免两个
-    Playwright 进程共享 Session 文件产生竞态。
-    """
+    """按成功认证证据保活；每分钟仅本地巡检，排期和失败退避跨重启保留。"""
     stop = stop if stop is not None else _scheduler_stop
-    import random
     import logging
     log = logging.getLogger(__name__)
 
@@ -1104,30 +1097,19 @@ def _wechat_keepalive_loop(stop=None):
     import subprocess as _sp
     import threading as _threading
 
-    retry_interval_seconds: int | None = None
+    from video_processing.core.wechat_auth_state import (
+        read_wechat_auth_state, record_wechat_keepalive_schedule,
+        record_wechat_keepalive_defer, record_wechat_keepalive_attempt,
+    )
+    from video_processing.core.wechat_keepalive_schedule import demand_plan
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+
     first_iteration = True
     while not stop.is_set():
         waited_this_round = False
         try:
-            # 首次启动等待 wechat_keepalive_initial_delay_seconds（默认 60s），其后按 min~max 随机或 5m 重试
-            if retry_interval_seconds is not None:
-                interval = retry_interval_seconds
-                retry_interval_seconds = None
-            elif first_iteration:
-                interval = max(5, int(getattr(settings, "wechat_keepalive_initial_delay_seconds", 60)))
-            else:
-                min_s = settings.wechat_keepalive_min_interval * 60
-                max_s = settings.wechat_keepalive_max_interval * 60
-                interval = random.randint(min_s, max_s)
+            interval = max(5, settings.wechat_keepalive_initial_delay_seconds) if first_iteration else 60
             first_iteration = False
-            next_ts = time.time() + interval
-            try:
-                from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
-                if running():
-                    record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
-            except Exception as _exc:
-                log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
-            log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
             stop.wait(interval)
             waited_this_round = True
             if stop.is_set():
@@ -1146,7 +1128,18 @@ def _wechat_keepalive_loop(stop=None):
                 log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
                 continue
 
-            # 互斥检测：若有微信上传相关线程或跨进程浏览器锁正在运行，5 分钟后快速重试
+            now = time.time()
+            auth = read_wechat_auth_state(state_file)
+            plan = demand_plan(auth, now, settings.wechat_keepalive_idle_seconds)
+            if plan["due"]:
+                admission = WeChatRequestGuard(state_file).evaluate("保活", account_only=True)
+                plan = demand_plan(auth, now, settings.wechat_keepalive_idle_seconds, admission)
+            record_wechat_keepalive_schedule(state_file, scheduled_at=plan["at"], heartbeat_at=now)
+            record_wechat_keepalive_defer(state_file, defer_reason=plan["reason"], timestamp=now)
+            if not plan["due"]:
+                continue
+
+            # 互斥检测：若有微信上传相关线程或跨进程浏览器锁正在运行，下一轮本地巡检再判定
             # 使用 inspect_wechat_session_lock(state_file).locked 显式布尔判锁，杜绝空字典 {} is not None 恒真陷阱
             active_threads = _threading.enumerate()
             upload_running = any(
@@ -1161,8 +1154,7 @@ def _wechat_keepalive_loop(stop=None):
                     record_wechat_keepalive_defer(state_file, defer_reason="LOCK_BUSY")
                 except Exception:
                     pass
-                log.info("[Keepalive] Upload or browser session lock busy, retrying in 5m.")
-                retry_interval_seconds = 300
+                log.info("[Keepalive] Upload or browser session lock busy, rechecking locally on the next tick.")
                 continue
 
             # 微信服务端会话存在约 24 小时绝对寿命；在达到阈值窗口（默认 10 小时）提前自动重登，
@@ -1181,7 +1173,6 @@ def _wechat_keepalive_loop(stop=None):
                 except Exception:
                     pass
                 log.warning(f"[Keepalive] Automatic pre-expiry relogin triggered: {started}")
-                retry_interval_seconds = 300
                 continue
 
             try:
@@ -1225,22 +1216,34 @@ def _wechat_keepalive_loop(stop=None):
                             reason="expired keepalive session",
                         )
                         log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
-                        retry_interval_seconds = 300
+                elif result.returncode in {15, 17}:
+                    admission = WeChatRequestGuard(state_file).evaluate("保活", account_only=True)
+                    plan = demand_plan(read_wechat_auth_state(state_file), time.time(),
+                                       settings.wechat_keepalive_idle_seconds, admission)
+                    record_wechat_keepalive_schedule(state_file, scheduled_at=max(time.time() + 60, plan["at"]))
+                    record_wechat_keepalive_defer(state_file, defer_reason=plan["reason"] or "ACCOUNT_WAIT")
+                    log.info("[Keepalive] Account admission deferred: %s", plan["reason"])
                 elif result.returncode == 11:
                     try:
                         from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
                         record_wechat_keepalive_defer(state_file, defer_reason="LOCK_BUSY")
                     except Exception:
                         pass
-                    log.info("[Keepalive] WeChat session lock busy (upload or other operation running), retrying in 5m.")
-                    retry_interval_seconds = 300
+                    log.info("[Keepalive] WeChat session lock busy (upload or other operation running), rechecking locally on the next tick.")
                 else:
+                    if (read_wechat_auth_state(state_file).get("last_keepalive_attempt_at") or 0) < now:
+                        record_wechat_keepalive_attempt(state_file)
                     log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
             except _sp.TimeoutExpired:
+                if (read_wechat_auth_state(state_file).get("last_keepalive_attempt_at") or 0) < now:
+                    record_wechat_keepalive_attempt(state_file)
                 log.error("[Keepalive] Keepalive subprocess timed out after 120s.")
             except FileNotFoundError:
+                record_wechat_keepalive_attempt(state_file)
                 log.error(f"[Keepalive] Keepalive script not found: {keepalive_script}")
             except Exception as e:
+                if (read_wechat_auth_state(state_file).get("last_keepalive_attempt_at") or 0) < now:
+                    record_wechat_keepalive_attempt(state_file)
                 log.error(f"[Keepalive] Unexpected error: {e}")
         except Exception as loop_exc:
             log.exception("[Keepalive] Unhandled exception in watchdog loop iteration: %s", loop_exc)
@@ -1249,7 +1252,6 @@ def _wechat_keepalive_loop(stop=None):
                 record_wechat_keepalive_defer(state_file, defer_reason="LOOP_EXCEPTION")
             except Exception:
                 pass
-            retry_interval_seconds = 300
             if not waited_this_round and not stop.is_set():
                 stop.wait(60)
 
@@ -4250,7 +4252,12 @@ def get_wechat_status():
         "logged_in": state_path.exists() and login_marker_active,
         "state_exists": state_path.exists(),
         "login_marker_active": login_marker_active,
-        "status_label": eval_status.get("status_label"),
+        "status_label": eval_status.get("status_label", "") + (
+            "；" + eval_status["keepalive_wait_label"] if eval_status.get("keepalive_wait_label")
+            and auth_state.get("defer_reason") != "RECENT_VERIFIED" else ""),
+        "keepalive_wait_reason": auth_state.get("defer_reason"),
+        "next_keepalive_scheduled_at": auth_state.get("next_keepalive_scheduled_at"),
+        "last_verified_at": auth_state.get("last_verified_at"),
         "authorization_relative_age": eval_status.get("relative_age", "无记录"),
         "authorization_time_bj": eval_status.get("login_time_bj", "无授权记录"),
         "qr_exists": qr_path.exists(),

@@ -377,3 +377,14 @@ def test_manual_login_does_not_override_true_platform_backoff(active):
     row=guard.snapshot();row['blocked_until']=time.time()+300
     guard.path.write_text(json.dumps(row))
     with pytest.raises(WeChatRequestDeferred):guard.check()
+
+
+def test_approved_keepalive_sixteen_rolling_boundary(active):
+    now = time.time()
+    assert active[0]["operations"]["keepalive"]["rolling_24h_limit"] == 16
+    row = state([event(now - 86400 + 1 + i, "keepalive") for i in range(16)])
+    blocked = evaluate(row, now, "保活", "keepalive")
+    assert not blocked["allowed"]
+    assert blocked["until"] == now + 1
+    assert evaluate(row, now + 1, "保活", "keepalive")["allowed"]
+    assert evaluate(row, now, "发布", "new")["allowed"]

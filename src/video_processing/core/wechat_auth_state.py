@@ -11,6 +11,8 @@ core/wechat_auth_state.py -> config/settings.py
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.5.0 | 2026-10-25 | Codex | 复用代际绑定的业务认证证据，持久化保活尝试和有界退避。 |
+| 1.4.0   | 2026-10-18 | Antigravity | 新增 BROWSER_LAUNCH_FAILED 分类、credential_generation 迟到结果 CAS 保护、重登失败指数退避、调度心跳与推迟原因记录、纯决策函数及独立逾期评估 |
 | 1.3.0   | 2026-09-28 | Antigravity | 新增 last_auth_attempt_* 尝试证据追踪，失败可查分类原因；完善读取校验与展示 |
 | 1.2.0   | 2026-09-28 | Antigravity | 区分历史保活失败与新验证时序、收口固定分类失败摘要、去除未来时间clamp、完整扩展名元数据派生与排期持久化 |
 | 1.1.0   | 2026-09-28 | Antigravity | 修复元数据路径唯一派生、read-modify-write并发锁、脱敏白名单过滤、严谨状态评定与调度覆盖 |
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -36,7 +39,7 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 BJ_TZ = ZoneInfo("Asia/Shanghai")
-AUTH_STATE_VERSION = "1.3.0"
+AUTH_STATE_VERSION = "1.5.0"
 
 DEFAULT_WECHAT_STATE_FILE = Path(__file__).resolve().parents[3] / "output" / "wechat_state.json"
 
@@ -50,6 +53,7 @@ VALID_KEEPALIVE_STATUSES = {
     "DOM_ERROR",
     "STORAGE_FAILED",
     "REUSE_VERIFICATION_FAILED",
+    "BROWSER_LAUNCH_FAILED",
     "UNKNOWN",
 }
 VALID_STAGES = {
@@ -61,6 +65,7 @@ VALID_STAGES = {
     "preflight",
     "keepalive",
     "auth",
+    "browser_launch",
 }
 
 # 严格白名单固定失败分类与脱敏摘要，绝不记录原始异常、完整 URL 或查询参数
@@ -73,9 +78,38 @@ VALID_FAILURE_CATEGORIES = {
     "LOGIN_REQUIRED": "检测到登录页或登录二维码",
     "REUSE_VERIFICATION_FAILED": "独立新上下文复用验证失败",
     "STORAGE_FAILED": "会话凭证持久化写入失败",
+    "BROWSER_LAUNCH_FAILED": "浏览器启动或沙箱权限失败",
     "BUSY_LOCK": "会话锁被其他进程占用",
     "UNKNOWN": "未分类运行时异常",
 }
+
+VALID_DEFER_REASONS = {
+    "DISABLED",
+    "MAINTENANCE",
+    "LOCK_BUSY",
+    "RELOGIN_IN_PROGRESS",
+    "NO_CREDENTIAL_FILE",
+    "LOGIN_REQUIRED_WAIT_MANUAL",
+    "LOOP_EXCEPTION",
+    "BUDGET_WAIT", "ACCOUNT_WAIT", "FAILURE_BACKOFF", "RECENT_VERIFIED", "CLOCK_INVALID",
+}
+
+
+def compute_credential_generation(
+    state_path: str | Path,
+    authorized_at: float | None = None,
+) -> str:
+    """计算当前凭证版本的唯一代际摘要（不暴露凭证内容）。"""
+    state_file = Path(state_path).expanduser().resolve(strict=False)
+    auth_part = f"{authorized_at:.6f}" if isinstance(authorized_at, (int, float)) else "none"
+    file_digest = "missing"
+    if state_file.is_file():
+        try:
+            file_digest = hashlib.sha256(state_file.read_bytes()).hexdigest()[:16]
+        except OSError:
+            file_digest = "unreadable"
+    raw = f"{state_file}:{auth_part}:{file_digest}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _validate_timestamp(ts: Any) -> float | None:
@@ -201,17 +235,35 @@ def read_wechat_auth_state(state_path: str | Path) -> dict[str, Any]:
 
                     att_method = str(data.get("last_auth_attempt_method") or "")
                     att_status = str(data.get("last_auth_attempt_status") or "")
+                    auth_ts = _validate_timestamp(data.get("authorized_at"))
+                    raw_gen = str(data.get("credential_generation") or "").strip()
+                    cred_gen = raw_gen if raw_gen else (
+                        compute_credential_generation(state_file, auth_ts)
+                        if (auth_ts is not None or state_file.is_file())
+                        else None
+                    )
+                    raw_defer = str(data.get("defer_reason") or "").strip()
+                    raw_fail_cnt = data.get("relogin_failure_count")
+                    fail_cnt = int(raw_fail_cnt) if isinstance(raw_fail_cnt, int) and not isinstance(raw_fail_cnt, bool) and raw_fail_cnt >= 0 else 0
 
                     return {
                         "version": str(data.get("version", AUTH_STATE_VERSION)),
                         "canonical_state_path": canonical_state_path_str,
                         "state_file": state_file.name,
-                        "authorized_at": _validate_timestamp(data.get("authorized_at")),
+                        "authorized_at": auth_ts,
                         "auth_method": method if method in VALID_AUTH_METHODS else None,
+                        "credential_generation": cred_gen,
                         "last_verified_at": _validate_timestamp(data.get("last_verified_at")),
+                        "last_verified_source": data.get("last_verified_source") if data.get("last_verified_source") in {"publish_controls", "comment_controls", "keepalive"} else None,
+                        "last_keepalive_attempt_at": _validate_timestamp(data.get("last_keepalive_attempt_at")),
+                        "keepalive_retry_at": _validate_timestamp(data.get("keepalive_retry_at")),
+                        "keepalive_failure_count": min(4, max(0, data.get("keepalive_failure_count", 0))) if type(data.get("keepalive_failure_count", 0)) is int else 0,
                         "last_keepalive_at": _validate_timestamp(data.get("last_keepalive_at")),
                         "last_keepalive_status": last_status if last_status in VALID_KEEPALIVE_STATUSES else None,
                         "next_keepalive_scheduled_at": _validate_timestamp(data.get("next_keepalive_scheduled_at")),
+                        "last_scheduler_heartbeat_at": _validate_timestamp(data.get("last_scheduler_heartbeat_at")),
+                        "defer_reason": raw_defer if raw_defer in VALID_DEFER_REASONS else None,
+                        "defer_since_at": _validate_timestamp(data.get("defer_since_at")),
                         "last_auth_attempt_at": _validate_timestamp(data.get("last_auth_attempt_at")),
                         "last_auth_attempt_method": att_method if att_method in VALID_AUTH_METHODS else None,
                         "last_auth_attempt_status": att_status if att_status in {"SUCCESS", "FAILED"} else None,
@@ -224,6 +276,11 @@ def read_wechat_auth_state(state_path: str | Path) -> dict[str, Any]:
                             if data.get("last_auth_attempt_reason") and att_status == "FAILED"
                             else None
                         ),
+                        "relogin_failure_count": fail_cnt,
+                        "next_relogin_allowed_at": _validate_timestamp(data.get("next_relogin_allowed_at")),
+                        "login_recovery_requested_at": _validate_timestamp(data.get("login_recovery_requested_at")),
+                        "login_recovery_source": str(data.get("login_recovery_source") or "")[:32] or None,
+                        "login_recovery_generation": str(data.get("login_recovery_generation") or "")[:32] or None,
                         "last_failure": clean_fail,
                         "updated_at": str(data.get("updated_at") or ""),
                     }
@@ -242,20 +299,34 @@ def read_wechat_auth_state(state_path: str | Path) -> dict[str, Any]:
             except (OSError, ValueError):
                 legacy_auth_ts = None
 
+    cred_gen = (
+        compute_credential_generation(state_file, legacy_auth_ts)
+        if (legacy_auth_ts is not None or state_file.is_file())
+        else None
+    )
     return {
         "version": AUTH_STATE_VERSION,
         "canonical_state_path": canonical_state_path_str,
         "state_file": state_file.name,
         "authorized_at": legacy_auth_ts,
         "auth_method": "legacy" if legacy_auth_ts is not None else None,
+        "credential_generation": cred_gen,
         "last_verified_at": None,
         "last_keepalive_at": None,
         "last_keepalive_status": None,
         "next_keepalive_scheduled_at": None,
+        "last_scheduler_heartbeat_at": None,
+        "defer_reason": None,
+        "defer_since_at": None,
         "last_auth_attempt_at": legacy_auth_ts,
         "last_auth_attempt_method": "legacy" if legacy_auth_ts is not None else None,
         "last_auth_attempt_status": "SUCCESS" if legacy_auth_ts is not None else None,
         "last_auth_attempt_reason": None,
+        "relogin_failure_count": 0,
+        "next_relogin_allowed_at": None,
+        "login_recovery_requested_at": None,
+        "login_recovery_source": None,
+        "login_recovery_generation": None,
         "last_failure": None,
         "updated_at": (
             datetime.fromtimestamp(legacy_auth_ts, tz=timezone.utc).isoformat()
@@ -291,7 +362,7 @@ def record_wechat_authorization(
     """记录一次真实的重新授权/登录成功事件。
 
     仅在真实扫码或桌面快捷授权成功且通过全新独立上下文复用验证后调用。
-    更新 authorized_at、last_verified_at 与 last_auth_attempt_*，清除失败记录。
+    更新 authorized_at、last_verified_at 与 last_auth_attempt_*，清除失败记录与退避。
     绝不伪造或篡改 last_keepalive_at 与 last_keepalive_status。
     使用文件锁保护并发读改写。
     """
@@ -305,20 +376,30 @@ def record_wechat_authorization(
 
     with _auth_state_lock(auth_path):
         existing = read_wechat_auth_state(state_file)
+        new_gen = compute_credential_generation(state_file, now_ts)
         record = {
             "version": AUTH_STATE_VERSION,
             "canonical_state_path": str(state_file),
             "state_file": state_file.name,
             "authorized_at": now_ts,
             "auth_method": valid_method,
+            "credential_generation": new_gen,
             "last_verified_at": now_ts,
             "last_keepalive_at": existing.get("last_keepalive_at"),
             "last_keepalive_status": existing.get("last_keepalive_status"),
             "next_keepalive_scheduled_at": existing.get("next_keepalive_scheduled_at"),
+            "last_scheduler_heartbeat_at": existing.get("last_scheduler_heartbeat_at"),
+            "defer_reason": None,
+            "defer_since_at": None,
             "last_auth_attempt_at": now_ts,
             "last_auth_attempt_method": valid_method,
             "last_auth_attempt_status": "SUCCESS",
             "last_auth_attempt_reason": None,
+            "relogin_failure_count": 0,
+            "next_relogin_allowed_at": None,
+            "login_recovery_requested_at": None,
+            "login_recovery_source": None,
+            "login_recovery_generation": None,
             "last_failure": None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -349,11 +430,12 @@ def record_wechat_auth_attempt(
     success: bool,
     reason: str | None = None,
     timestamp: float | None = None,
+    expected_generation: str | None = None,
 ) -> dict[str, Any]:
     """记录一次微信授权尝试的执行证据（涵盖成功与失败）。
 
-    失败后可查最近自动授权尝试证据，白名单固定分类，绝不泄露敏感载荷或 URL 查询。
-    使用文件锁保护并发读改写。
+    失败后可查最近自动授权尝试证据，按指数退避 (30m -> 60m -> 120m) 设定下次允许重登时刻，
+    并具备 credential_generation CAS 迟到结果保护，防止旧尝试失败覆盖新凭证状态。
     """
     state_file = Path(state_path).expanduser().resolve(strict=False)
     auth_path = canonical_wechat_auth_state_path(state_file)
@@ -376,6 +458,32 @@ def record_wechat_auth_attempt(
 
     with _auth_state_lock(auth_path):
         existing = read_wechat_auth_state(state_file)
+        current_gen = existing.get("credential_generation")
+        existing_auth_at = existing.get("authorized_at")
+        if not success:
+            if expected_generation and current_gen and expected_generation != current_gen:
+                logger.warning(
+                    "Ignoring stale auth attempt failure (expected_generation=%s != current=%s)",
+                    expected_generation,
+                    current_gen,
+                )
+                return existing
+            if existing_auth_at is not None and now_ts < existing_auth_at:
+                logger.warning(
+                    "Ignoring stale auth attempt failure (timestamp=%s < authorized_at=%s)",
+                    now_ts,
+                    existing_auth_at,
+                )
+                return existing
+
+        if success:
+            fail_count = 0
+            next_relogin_at = None
+        else:
+            fail_count = int(existing.get("relogin_failure_count") or 0) + 1
+            backoff_sec = min(1800 * (2 ** (fail_count - 1)), 7200)
+            next_relogin_at = now_ts + float(backoff_sec)
+
         record = {
             **existing,
             "version": AUTH_STATE_VERSION,
@@ -385,8 +493,52 @@ def record_wechat_auth_attempt(
             "last_auth_attempt_method": valid_method,
             "last_auth_attempt_status": status,
             "last_auth_attempt_reason": clean_reason,
+            "relogin_failure_count": fail_count,
+            "next_relogin_allowed_at": next_relogin_at,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        _write_auth_state_atomic(auth_path, record)
+    return record
+
+
+def record_wechat_verified_evidence(state_path, *, source, expected_generation, timestamp=None):
+    """仅接收既有业务强控件证据；不改变授权时间、保活结果或凭证文件。"""
+    if source not in {"publish_controls", "comment_controls"} or not expected_generation:
+        return False
+    state_file = Path(state_path).expanduser().resolve(strict=False)
+    auth_path = canonical_wechat_auth_state_path(state_file)
+    now = _validate_timestamp(time.time() if timestamp is None else timestamp)
+    if now is None:
+        return False
+    with _auth_state_lock(auth_path):
+        existing = read_wechat_auth_state(state_file)
+        if (existing.get("credential_generation") != expected_generation
+                or now < (existing.get("authorized_at") or 0)
+                or now <= (existing.get("last_verified_at") or 0)):
+            return False
+        record = {**existing, "last_verified_at": now, "last_verified_source": source,
+                  "keepalive_failure_count": 0, "keepalive_retry_at": None,
+                  "defer_reason": None, "defer_since_at": None,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}
+        _write_auth_state_atomic(auth_path, record)
+    return True
+
+
+def record_wechat_keepalive_attempt(state_path, *, timestamp=None):
+    """先持久化下一次最早尝试时间，进程超时或重启也不能形成探测风暴。"""
+    from .wechat_keepalive_schedule import failure_delay
+    state_file = Path(state_path).expanduser().resolve(strict=False)
+    auth_path = canonical_wechat_auth_state_path(state_file)
+    now = _validate_timestamp(time.time() if timestamp is None else timestamp)
+    if now is None:
+        raise ValueError("Invalid attempt timestamp")
+    with _auth_state_lock(auth_path):
+        existing = read_wechat_auth_state(state_file)
+        count = min(4, int(existing.get("keepalive_failure_count") or 0) + 1)
+        record = {**existing, "canonical_state_path": str(state_file), "state_file": state_file.name,
+                  "last_keepalive_attempt_at": now, "keepalive_failure_count": count,
+                  "keepalive_retry_at": now + failure_delay(count),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}
         _write_auth_state_atomic(auth_path, record)
     return record
 
@@ -394,6 +546,8 @@ def record_wechat_auth_attempt(
 def record_wechat_keepalive_schedule(
     state_path: str | Path,
     scheduled_at: float,
+    *,
+    heartbeat_at: float | None = None,
 ) -> dict[str, Any]:
     """持久化记录下一次实际随机选定的计划保活时刻。使用文件锁保护并发读改写。"""
     state_file = Path(state_path).expanduser().resolve(strict=False)
@@ -401,12 +555,94 @@ def record_wechat_keepalive_schedule(
     valid_ts = _validate_timestamp(scheduled_at)
     if valid_ts is None:
         raise ValueError(f"Invalid scheduled_at timestamp: {scheduled_at}")
+    hb_ts = _validate_timestamp(heartbeat_at) if heartbeat_at is not None else _validate_timestamp(time.time())
 
     with _auth_state_lock(auth_path):
         existing = read_wechat_auth_state(state_file)
         record = {
             **existing,
             "next_keepalive_scheduled_at": valid_ts,
+            "last_scheduler_heartbeat_at": hb_ts or existing.get("last_scheduler_heartbeat_at"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_auth_state_atomic(auth_path, record)
+    return record
+
+
+def record_wechat_keepalive_defer(
+    state_path: str | Path,
+    *,
+    defer_reason: str | None,
+    timestamp: float | None = None,
+) -> dict[str, Any]:
+    """记录看门狗调度心跳及本轮推迟原因（不伪造保活验证成功时间）。"""
+    state_file = Path(state_path).expanduser().resolve(strict=False)
+    auth_path = canonical_wechat_auth_state_path(state_file)
+    now_ts = float(timestamp if timestamp is not None else time.time())
+    if not math.isfinite(now_ts):
+        raise ValueError(f"Invalid timestamp: {timestamp}")
+
+    clean_defer = str(defer_reason).upper().strip() if defer_reason else None
+    if clean_defer and clean_defer not in VALID_DEFER_REASONS:
+        clean_defer = "LOOP_EXCEPTION"
+
+    with _auth_state_lock(auth_path):
+        existing = read_wechat_auth_state(state_file)
+        if clean_defer:
+            defer_since = (
+                existing.get("defer_since_at")
+                if existing.get("defer_reason") == clean_defer and existing.get("defer_since_at") is not None
+                else now_ts
+            )
+        else:
+            defer_since = None
+
+        record = {
+            **existing,
+            "version": AUTH_STATE_VERSION,
+            "canonical_state_path": str(state_file),
+            "state_file": state_file.name,
+            "last_scheduler_heartbeat_at": now_ts,
+            "defer_reason": clean_defer,
+            "defer_since_at": defer_since,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_auth_state_atomic(auth_path, record)
+    return record
+
+
+def record_wechat_login_recovery_signal(
+    state_path: str | Path,
+    *,
+    source: str = "verify_only",
+    timestamp: float | None = None,
+) -> dict[str, Any]:
+    """在只读回查等外层流程释放会话锁后，登记去重的登录恢复信号。"""
+    state_file = Path(state_path).expanduser().resolve(strict=False)
+    auth_path = canonical_wechat_auth_state_path(state_file)
+    now_ts = float(timestamp if timestamp is not None else time.time())
+    if not math.isfinite(now_ts):
+        raise ValueError(f"Invalid timestamp: {timestamp}")
+
+    with _auth_state_lock(auth_path):
+        existing = read_wechat_auth_state(state_file)
+        cur_gen = existing.get("credential_generation") or compute_credential_generation(
+            state_file, existing.get("authorized_at")
+        )
+        prev_gen = existing.get("login_recovery_generation")
+        prev_req_at = existing.get("login_recovery_requested_at")
+        if prev_gen == cur_gen and prev_req_at is not None and (now_ts - prev_req_at) < 1800.0:
+            return existing
+
+        record = {
+            **existing,
+            "version": AUTH_STATE_VERSION,
+            "canonical_state_path": str(state_file),
+            "state_file": state_file.name,
+            "credential_generation": cur_gen,
+            "login_recovery_requested_at": now_ts,
+            "login_recovery_source": str(source or "verify_only")[:32],
+            "login_recovery_generation": cur_gen,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         _write_auth_state_atomic(auth_path, record)
@@ -419,11 +655,13 @@ def record_wechat_keepalive_result(
     status: str,
     failure: dict[str, Any] | None = None,
     timestamp: float | None = None,
+    expected_generation: str | None = None,
 ) -> dict[str, Any]:
     """记录保活执行结果。
 
     保活成功只更新 last_verified_at 与 last_keepalive_status，绝不伪造或覆盖 authorized_at。
     若失败，记录固定白名单失败证据（阶段、分类、脱敏摘要）。
+    具备 credential_generation CAS 保护，防止迟到失败覆盖新授权成功状态。
     使用文件锁保护并发读改写。
     """
     state_file = Path(state_path).expanduser().resolve(strict=False)
@@ -449,20 +687,50 @@ def record_wechat_keepalive_result(
 
     with _auth_state_lock(auth_path):
         existing = read_wechat_auth_state(state_file)
+        current_gen = existing.get("credential_generation")
+        existing_auth_at = existing.get("authorized_at")
+        if expected_generation and current_gen and expected_generation != current_gen:
+            logger.warning(
+                "Ignoring stale keepalive result (expected_generation=%s != current=%s)",
+                expected_generation,
+                current_gen,
+            )
+            return existing
+        if existing_auth_at is not None and now_ts < existing_auth_at:
+            logger.warning(
+                "Ignoring stale keepalive result (timestamp=%s < authorized_at=%s)",
+                now_ts,
+                existing_auth_at,
+            )
+            return existing
+
+        if now_ts < max(existing.get("last_verified_at") or 0, existing.get("last_keepalive_at") or 0):
+            return existing
+
+        new_gen = compute_credential_generation(state_file, existing_auth_at)
         record = {
+            **existing,
             "version": AUTH_STATE_VERSION,
             "canonical_state_path": str(state_file),
             "state_file": state_file.name,
-            "authorized_at": existing.get("authorized_at"),
+            "authorized_at": existing_auth_at,
             "auth_method": existing.get("auth_method"),
+            "credential_generation": new_gen,
             "last_verified_at": now_ts if valid_status == "SUCCESS" else existing.get("last_verified_at"),
+            "last_verified_source": "keepalive" if valid_status == "SUCCESS" else existing.get("last_verified_source"),
+            "keepalive_failure_count": 0 if valid_status == "SUCCESS" else existing.get("keepalive_failure_count", 0),
+            "keepalive_retry_at": None if valid_status == "SUCCESS" else existing.get("keepalive_retry_at"),
             "last_keepalive_at": now_ts,
             "last_keepalive_status": valid_status,
             "next_keepalive_scheduled_at": existing.get("next_keepalive_scheduled_at"),
+            "defer_reason": None,
+            "defer_since_at": None,
             "last_auth_attempt_at": existing.get("last_auth_attempt_at"),
             "last_auth_attempt_method": existing.get("last_auth_attempt_method"),
             "last_auth_attempt_status": existing.get("last_auth_attempt_status"),
             "last_auth_attempt_reason": existing.get("last_auth_attempt_reason"),
+            "relogin_failure_count": 0 if valid_status == "SUCCESS" else int(existing.get("relogin_failure_count") or 0),
+            "next_relogin_allowed_at": None if valid_status == "SUCCESS" else existing.get("next_relogin_allowed_at"),
             "last_failure": clean_failure if clean_failure else (None if valid_status == "SUCCESS" else existing.get("last_failure")),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -701,6 +969,9 @@ def evaluate_wechat_session_status(
     elif active_keepalive_status == "STORAGE_FAILED":
         status_label = "⚠️ 存储刷新失败"
         suggestions.append("会话刷新写入失败，等待下一轮重试。")
+    elif active_keepalive_status == "BROWSER_LAUNCH_FAILED":
+        status_label = "⚠️ 浏览器启动失败（环境异常）"
+        suggestions.append("最近一次检查浏览器启动或沙箱权限失败（非会话过期），等待环境恢复或重试。")
     elif active_keepalive_status == "UNKNOWN":
         status_label = "⚠️ 状态未知（检查未分类）"
         suggestions.append("最近一次检查状态未归类，未取得正向证据，平台真实状态未知。")
@@ -730,6 +1001,259 @@ def evaluate_wechat_session_status(
         status_label = "✅ 授权且已验证"
         suggestions.append("当前在授权维护期内且已通过正向验证，系统将按计划定期保活。")
 
+    wait_labels = {"BUDGET_WAIT": "保活额度等待", "ACCOUNT_WAIT": "账户准入等待",
+                   "LOCK_BUSY": "浏览器占用", "FAILURE_BACKOFF": "保活失败退避",
+                   "RECENT_VERIFIED": "近期已验证", "CLOCK_INVALID": "时间戳异常"}
+    summary["keepalive_wait_label"] = wait_labels.get(auth_state.get("defer_reason"))
     summary["status_label"] = status_label
     summary["suggestions"] = suggestions
     return summary
+
+
+def decide_keepalive_watchdog_action(
+    *,
+    auth_state: dict[str, Any],
+    state_file_exists: bool,
+    keepalive_enabled: bool | None = None,
+    auto_relogin_enabled: bool | None = None,
+    maintenance_state: str = "RUNNING",
+    session_locked: bool = False,
+    relogin_in_progress: bool = False,
+    now_ts: float | None = None,
+    warn_hours: float | None = None,
+) -> dict[str, Any]:
+    """看门狗纯决策函数（0 副作用，不启动进程，不读写文件）。
+
+    核心防饿死契约：
+    1. 只要 state_file_exists 为 True，绝不因 logged_in is False 或 authorized_at 缺失而跳过旧凭证探测；
+    2. 仅绑定当前凭证版本的明确 LOGIN_REQUIRED 才进入重登/等待人工策略；
+       UNKNOWN/STALE、PAGE_UNREADY、NETWORK_TIMEOUT、BROWSER_LAUNCH_FAILED、STORAGE_FAILED 均执行 RUN_KEEPALIVE；
+    3. 当达到 warn_hours 阈值但近期自动重登失败（处于指数退避窗口内，或失败后尚未对旧凭证执行过普通保活探测），
+       必须优先回退执行 RUN_KEEPALIVE 探测并刷新旧凭证，严禁饿死保活。
+    """
+    now = float(now_ts if now_ts is not None else time.time())
+    ka_enabled = (
+        keepalive_enabled if keepalive_enabled is not None
+        else bool(getattr(settings, "wechat_keepalive_enabled", False))
+    )
+    relogin_enabled = (
+        auto_relogin_enabled if auto_relogin_enabled is not None
+        else bool(getattr(settings, "wechat_auto_relogin_enabled", False))
+    )
+    threshold_h = float(warn_hours if warn_hours is not None else getattr(settings, "wechat_session_warn_hours", 10.0))
+
+    if not ka_enabled:
+        return {"action": "SKIP_DISABLED", "defer_reason": "DISABLED", "retry_delay_seconds": 300}
+    if str(maintenance_state or "RUNNING").upper() != "RUNNING":
+        return {"action": "DEFER_MAINTENANCE", "defer_reason": "MAINTENANCE", "retry_delay_seconds": 300}
+    if session_locked:
+        return {"action": "DEFER_LOCK_BUSY", "defer_reason": "LOCK_BUSY", "retry_delay_seconds": 300}
+    if relogin_in_progress:
+        return {"action": "DEFER_RELOGIN_IN_PROGRESS", "defer_reason": "RELOGIN_IN_PROGRESS", "retry_delay_seconds": 300}
+    if not state_file_exists:
+        return {"action": "SKIP_NO_CREDENTIAL", "defer_reason": "NO_CREDENTIAL_FILE", "retry_delay_seconds": 300}
+
+    authorized_at = auth_state.get("authorized_at")
+    last_verified_at = auth_state.get("last_verified_at")
+    last_keepalive_at = auth_state.get("last_keepalive_at")
+    last_status = auth_state.get("last_keepalive_status")
+    last_att_at = auth_state.get("last_auth_attempt_at")
+    last_att_status = auth_state.get("last_auth_attempt_status")
+    next_relogin_at = auth_state.get("next_relogin_allowed_at")
+
+    is_superseded = bool(
+        last_verified_at is not None
+        and (last_keepalive_at is None or last_verified_at > last_keepalive_at)
+    )
+    active_status = None if is_superseded else last_status
+
+    # 平台已明确拒绝当前代际凭证 (LOGIN_REQUIRED)
+    if active_status == "LOGIN_REQUIRED":
+        in_backoff = bool(next_relogin_at is not None and now < next_relogin_at)
+        if relogin_enabled and not in_backoff:
+            return {
+                "action": "TRIGGER_AUTO_RELOGIN",
+                "reason": "EXPLICIT_LOGIN_REQUIRED",
+                "defer_reason": None,
+            }
+        return {
+            "action": "WAIT_MANUAL_LOGIN",
+            "defer_reason": "LOGIN_REQUIRED_WAIT_MANUAL",
+            "retry_delay_seconds": 300,
+        }
+
+    # 检查是否达到 warn_hours 主动续期阈值
+    threshold_reached = bool(
+        authorized_at is not None
+        and authorized_at <= (now + 60.0)
+        and ((now - authorized_at) / 3600.0) >= threshold_h
+    )
+    if threshold_reached and relogin_enabled:
+        in_backoff = bool(next_relogin_at is not None and now < next_relogin_at)
+        needs_probe_after_failed_relogin = bool(
+            last_att_status == "FAILED"
+            and last_att_at is not None
+            and (last_keepalive_at is None or last_keepalive_at < last_att_at)
+        )
+        if in_backoff or needs_probe_after_failed_relogin:
+            return {
+                "action": "RUN_KEEPALIVE",
+                "reason": "FALLBACK_PROBE_DURING_RELOGIN_BACKOFF",
+                "defer_reason": None,
+            }
+        return {
+            "action": "TRIGGER_AUTO_RELOGIN",
+            "reason": "WARN_HOURS_THRESHOLD",
+            "defer_reason": None,
+        }
+
+    return {
+        "action": "RUN_KEEPALIVE",
+        "reason": "NORMAL_KEEPALIVE_PROBE",
+        "defer_reason": None,
+    }
+
+
+def evaluate_wechat_keepalive_overdue(
+    auth_state: dict[str, Any],
+    *,
+    state_file_exists: bool,
+    now_ts: float | None = None,
+    keepalive_enabled: bool | None = None,
+    keepalive_max_interval: int | None = None,
+    keepalive_dwell: int | None = None,
+    initial_delay_seconds: int | None = None,
+    maintenance_state: str = "RUNNING",
+    maintenance_duration_seconds: float = 0.0,
+    process_uptime_seconds: float | None = None,
+) -> dict[str, Any]:
+    """独立评估看门狗保活是否超期，供外部定时巡检（如每 15 分钟发布窗）告警使用。"""
+    now = float(now_ts if now_ts is not None else time.time())
+    ka_enabled = (
+        keepalive_enabled if keepalive_enabled is not None
+        else bool(getattr(settings, "wechat_keepalive_enabled", False))
+    )
+    max_interval_min = int(
+        keepalive_max_interval if keepalive_max_interval is not None
+        else getattr(settings, "wechat_keepalive_max_interval", 65)
+    )
+    dwell_sec = int(
+        keepalive_dwell if keepalive_dwell is not None
+        else getattr(settings, "wechat_keepalive_dwell", 15)
+    )
+    init_delay_sec = int(
+        initial_delay_seconds if initial_delay_seconds is not None
+        else getattr(settings, "wechat_keepalive_initial_delay_seconds", 60)
+    )
+
+    threshold_seconds = float(max_interval_min) * 60.0 * 2.0 + float(dwell_sec) + 120.0
+    if keepalive_max_interval is None:
+        threshold_seconds = max(threshold_seconds, settings.wechat_keepalive_idle_seconds * 2 + dwell_sec + 120)
+
+    if not ka_enabled:
+        return {
+            "alert_required": False,
+            "status": "DISABLED",
+            "threshold_seconds": threshold_seconds,
+            "reason": "自动保活已关闭 (wechat_keepalive_enabled=false)",
+        }
+
+    if str(maintenance_state or "RUNNING").upper() == "MAINTENANCE" and maintenance_duration_seconds < 7200.0:
+        return {
+            "alert_required": False,
+            "status": "MAINTENANCE_PLANNED",
+            "threshold_seconds": threshold_seconds,
+            "reason": "系统处于计划维护排空状态 (<2h)",
+        }
+
+    if process_uptime_seconds is not None and process_uptime_seconds < float(init_delay_sec + 180):
+        return {
+            "alert_required": False,
+            "status": "STARTUP_GRACE",
+            "threshold_seconds": threshold_seconds,
+            "reason": "看门狗宿主进程刚启动，处于初始宽限期",
+        }
+
+    defer_reason = auth_state.get("defer_reason")
+    defer_since_at = auth_state.get("defer_since_at")
+    if defer_reason == "LOCK_BUSY" and defer_since_at is not None and (now - defer_since_at) > 1800.0:
+        return {
+            "alert_required": True,
+            "status": "LOCK_CONTENTION_ALERT",
+            "threshold_seconds": threshold_seconds,
+            "defer_duration_seconds": now - defer_since_at,
+            "reason": f"会话锁连续占用超过 30 分钟 ({int((now - defer_since_at) // 60)}m)，保活持续被推迟",
+        }
+
+    authorized_at = auth_state.get("authorized_at")
+    last_verified_at = auth_state.get("last_verified_at")
+    last_keepalive_at = auth_state.get("last_keepalive_at")
+    last_hb_at = auth_state.get("last_scheduler_heartbeat_at")
+
+    if not state_file_exists:
+        return {
+            "alert_required": True,
+            "status": "CREDENTIAL_FILE_MISSING",
+            "threshold_seconds": threshold_seconds,
+            "reason": "微信会话凭证文件缺失",
+        }
+
+    if last_verified_at is None and last_keepalive_at is None:
+        if authorized_at is not None and (now - authorized_at) > threshold_seconds:
+            return {
+                "alert_required": True,
+                "status": "NO_BASELINE_OVERDUE",
+                "threshold_seconds": threshold_seconds,
+                "overdue_seconds": now - authorized_at,
+                "reason": f"授权后超过 {int(threshold_seconds // 60)} 分钟仍无任何保活尝试记录",
+            }
+        return {
+            "alert_required": False,
+            "status": "WAITING_FIRST_RUN",
+            "threshold_seconds": threshold_seconds,
+            "reason": "等待首次保活基线建立",
+        }
+
+    ref_ts = max(
+        ts for ts in (last_verified_at, last_keepalive_at) if ts is not None
+    )
+    elapsed = now - ref_ts
+    if elapsed > threshold_seconds:
+        return {
+            "alert_required": True,
+            "status": "KEEPALIVE_OVERDUE",
+            "threshold_seconds": threshold_seconds,
+            "overdue_seconds": elapsed,
+            "last_activity_at": ref_ts,
+            "last_verified_at": last_verified_at,
+            "last_keepalive_at": last_keepalive_at,
+            "last_scheduler_heartbeat_at": last_hb_at,
+            "defer_reason": defer_reason,
+            "reason": (
+                f"距离最近保活已达 {elapsed / 3600.0:.1f} 小时 "
+                f"（超过阈值 {threshold_seconds / 3600.0:.2f} 小时）"
+            ),
+        }
+
+    if last_verified_at is not None and (now - last_verified_at) > threshold_seconds:
+        return {
+            "alert_required": True,
+            "status": "VERIFICATION_OVERDUE",
+            "threshold_seconds": threshold_seconds,
+            "overdue_seconds": now - last_verified_at,
+            "last_verified_at": last_verified_at,
+            "last_keepalive_at": last_keepalive_at,
+            "last_keepalive_status": auth_state.get("last_keepalive_status"),
+            "reason": (
+                f"距离最近成功验证已达 {(now - last_verified_at) / 3600.0:.1f} 小时 "
+                f"（最近尝试状态: {auth_state.get('last_keepalive_status') or 'UNKNOWN'}）"
+            ),
+        }
+
+    return {
+        "alert_required": False,
+        "status": "HEALTHY",
+        "threshold_seconds": threshold_seconds,
+        "elapsed_seconds": elapsed,
+        "reason": "保活与验证均在正常周期内",
+    }

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| demand-keepalive-v1 | 2026-10-25 | Codex | 用户批准按需保活的滚动 24 小时上限 16，仅调整保活池。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 迁移原有校验器到配置层，供存储与执行者共用，不放宽边界。 |
 """
 # 这是本次用户逐项确认的批准边界，不是微信平台规则，也不是客户端可修改的审批凭据。
@@ -14,7 +15,7 @@ APPROVED = {
               "max_replies_per_video_lifetime": 20, "retry_policy": "write_actions"},
     "comment_scan": {"rolling_1h_limit": 1, "min_interval_seconds": 3600, "max_videos_per_run": 5},
     "post_match": {"rolling_24h_limit": 12, "same_batch_success_cooldown_seconds": 1800},
-    "keepalive": {"rolling_24h_limit": 4},
+    "keepalive": {"rolling_24h_limit": 16},
 }
 PURPOSES = {"发布": "publish", "首评": "first_comment", "评论": "first_comment", "回复": "reply",
             "评论扫描": "comment_scan", "作品匹配": "post_match", "保活": "keepalive"}

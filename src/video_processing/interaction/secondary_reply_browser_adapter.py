@@ -332,6 +332,12 @@ class SecondaryReplyBrowserAdapter:
             and scene_post_id != platform_post_id
         ):
             self._active_guard.expected_export_id = scene_post_id
+        from ..core.wechat_page_contract import is_official_wechat_origin, check_explicit_login_prompt
+        if is_official_wechat_origin(page.url):
+            is_login, dom_error = check_explicit_login_prompt(page)
+            if not is_login and not dom_error:
+                from ..core.wechat_session_lock import record_current_wechat_verified
+                record_current_wechat_verified("comment_controls")
         return True, None
 
     def _log_card_binding_diagnostic(self, page, post_id, title, description):

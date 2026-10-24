@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| demand-keepalive-v1 | 2026-10-25 | Codex | 当前受控业务会话复用强认证证据，不增加平台请求。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
@@ -61,6 +62,20 @@ def record_current_wechat_login_required():
         from .wechat_auth_state import record_wechat_keepalive_result
         record_wechat_keepalive_result(account_state_path(session.state_path), status="LOGIN_REQUIRED",
                                        expected_generation=getattr(session, "_credential_generation", None))
+
+
+def record_current_wechat_verified(source):
+    """复用已有的强控件校验；无许可、登录流程、保活或限流均不能补写业务成功。"""
+    session = _SESSION.get()
+    if (session is None or session.purpose not in {"发布", "评论", "首评", "回复", "评论扫描", "作品匹配"}
+            or not session._request_started or session._request_limited):
+        return False
+    from .wechat_auth_state import record_wechat_verified_evidence
+    try:
+        return record_wechat_verified_evidence(account_state_path(session.state_path), source=source,
+                                               expected_generation=getattr(session, "_credential_generation", None))
+    except OSError:
+        return False
 
 
 def guard_wechat_context(context):

@@ -527,7 +527,9 @@ class BrowserCommenter:
                 if dom_error:
                     last_error = "DOM_ERROR"
                 elif ready():
-                    return None if is_official_wechat_origin(page.url) else "INVALID_ORIGIN"
+                    if not is_official_wechat_origin(page.url):
+                        return "INVALID_ORIGIN"
+                    return None
                 else:
                     last_error = "PAGE_UNREADY"
             except Exception:
@@ -567,6 +569,8 @@ class BrowserCommenter:
             )
             if error:
                 return f"评论管理页未就绪 ({error})，未解析目标卡片或打开评论写入界面"
+            from ..core.wechat_session_lock import record_current_wechat_verified
+            record_current_wechat_verified("comment_controls")
             return None
         except Exception as exc:
             return f"评论页面导航异常 ({type(exc).__name__})，未打开评论写入界面"

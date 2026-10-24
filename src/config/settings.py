@@ -262,11 +262,12 @@ class Settings(BaseSettings):
     wechat_headless: bool = True  # [Gemini_3.5_Flash_planning]
 
     # [Claude_Sonnet_4.6_Thinking_planning] v2.7.0: WeChat Session 看门狗配置
-    # 看门狗会定期（每 min~max 分钟随机一次）在后台静默访问微信发布页，
+    # 看门狗仅在没有成功认证证据满 idle_seconds 后后台访问微信发布页，
     # 维持 Cookie 活跃，防止长时间无发布任务时 Session 闲置过期。
     wechat_keepalive_enabled: bool = False          # 默认关闭，需在 .env 中显式设置 WECHAT_KEEPALIVE_ENABLED=true
-    wechat_keepalive_min_interval: int = 50         # 最短触发间隔（分钟）
-    wechat_keepalive_max_interval: int = 65         # 最长触发间隔（分钟）
+    wechat_keepalive_idle_seconds: int = Field(default=7200, ge=7200, le=86400)  # 无成功认证证据满两小时才探测
+    wechat_keepalive_min_interval: int = 50         # 旧配置兼容字段，按需排期不再读取
+    wechat_keepalive_max_interval: int = 65         # 旧配置兼容字段，按需排期不再读取
     wechat_rate_limit_cooldown_seconds: int = Field(default=1800, ge=300, le=86400)
     wechat_account_scheduler_enabled: bool = True
     # 迁移引导项，不在普通后台提供“关闭风控”开关。启用后配置缺失必须闭锁。

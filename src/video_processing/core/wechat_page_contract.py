@@ -9,6 +9,7 @@ core/wechat_page_contract.py -> 标准库（0 外部业务依赖）。
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.5.0   | 2026-10-18 | Antigravity | 新增作品管理列表页强业务控件/原生接口/合法空列表/账号身份判据 (check_strong_list_page_controls / wait_for_list_ready_with_spa_guard)，拒绝空外壳乐观放行 |
 | 1.4.0   | 2026-09-28 | Antigravity | 精简正向控件：顶层优先+同源子frame、去除substring捷径、精确get_by_role与get_by_text祖先核验 |
 | 1.3.0   | 2026-09-28 | Antigravity | 扩展正向发布控件：支持官方同源视频号子 iframe 视频 input 与可见上传容器专属选择视频控件 |
 | 1.2.0   | 2026-09-28 | Antigravity | 新增 is_official_wechat_frame_origin，严格过滤 iframe 的非默认端口与 userinfo |
@@ -334,6 +335,172 @@ def wait_for_publish_ready_with_spa_guard(
         if controls_ok:
             # 找到控件后，二次核验 URL 未在渲染瞬间发生重定向
             if is_official_create_url(page.url):
+                return True, None
+            return False, "INVALID_ORIGIN" if not is_official_wechat_origin(page.url) else "PAGE_UNREADY"
+
+        last_err = "PAGE_UNREADY"
+        page.wait_for_timeout(int(poll_interval * 1000))
+
+    return False, last_err
+
+
+def check_strong_list_page_controls(
+    page: Any,
+    *,
+    expected_finder_id: str | None = None,
+    api_post_list_ok: bool = False,
+) -> tuple[bool, str | None]:
+    """检查作品管理列表页 (/platform/post/list) 是否具备强正向列表业务证据。
+
+    严格拒绝：
+    - 仅出现 .weui-desktop-layout__main、导航栏或 HTTP 200 空外壳；
+    - 账号身份 (finderUsername / finder_id) 与预期账号不匹配；
+    - 任何 DOM 探针异常统一返回 (False, "DOM_ERROR")。
+
+    正向通过必须满足：
+    1. 若配置了 expected_finder_id 且页面暴露了当前登录账号标识，必须严格一致（否则返回 ACCOUNT_MISMATCH）；
+    2. 满足以下列表业务证据之一：
+       a) 已捕获原生 /post/post_list 响应 (errCode == 0 且 data.list 为数组)；
+       b) 页面存在至少 1 个可见的 .post-feed-item 作品卡片且带有有效原生 objectId 或作品容器；
+       c) 页面在管理列表专属容器内明确展示合法空列表态（如“暂无作品”、“暂无数据”）且伴随列表筛选/搜索头控件。
+    """
+    try:
+        probe_script = """(expectedFinderId) => {
+            const queryAllDeep = (root, sel, out = []) => {
+                if (!root) return out;
+                try {
+                    if (root.querySelectorAll) {
+                        out.push(...Array.from(root.querySelectorAll(sel)));
+                        for (const el of Array.from(root.querySelectorAll('*'))) {
+                            if (el.shadowRoot) queryAllDeep(el.shadowRoot, sel, out);
+                        }
+                    }
+                } catch (_e) {}
+                return out;
+            };
+
+            const observedIds = [];
+            try {
+                const appEls = [document.querySelector('#app'), ...queryAllDeep(document, '#app')].filter(Boolean);
+                for (const appEl of appEls) {
+                    const storeState = appEl?.__vue__?.$store?.state;
+                    const candidates = [
+                        storeState?.user?.finderUsername,
+                        storeState?.user?.finderUser?.finderUsername,
+                        storeState?.finder?.finderUsername,
+                        window.__INITIAL_STATE__?.finderUsername,
+                    ].filter(v => typeof v === 'string' && v.trim());
+                    for (const c of candidates) observedIds.push(c.trim());
+                }
+            } catch (_e) {}
+
+            if (expectedFinderId && observedIds.length > 0 && !observedIds.includes(expectedFinderId)) {
+                return { status: 'ACCOUNT_MISMATCH', observedIds };
+            }
+
+            const items = queryAllDeep(document, '.post-feed-item');
+            let visibleCards = 0;
+            for (const item of items) {
+                const rect = item.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    visibleCards += 1;
+                }
+            }
+            if (visibleCards > 0) {
+                return { status: 'READY_CARDS', visibleCards };
+            }
+
+            const filterHeaders = queryAllDeep(
+                document,
+                "input[placeholder*='搜索'], input[placeholder*='标题'], input[placeholder*='作品'], .post-list-filter, .finder-post-list"
+            );
+            const hasListFilterHeader = filterHeaders.length > 0;
+            const listContainers = queryAllDeep(
+                document,
+                ".post-list, .finder-post-list, .post-feed-list, .weui-desktop-panel__bd"
+            );
+            const containerText = listContainers.map(c => (c?.innerText || '').trim()).join('\\n');
+            const hasExplicitEmpty = (
+                hasListFilterHeader
+                && listContainers.length > 0
+                && (
+                    containerText.includes('暂无作品')
+                    || containerText.includes('暂无数据')
+                    || containerText.includes('暂无内容')
+                )
+            );
+            if (hasExplicitEmpty) {
+                return { status: 'READY_EMPTY_LIST' };
+            }
+            return { status: 'PAGE_UNREADY', hasListFilterHeader };
+        }"""
+
+        clean_expected = (expected_finder_id or "").strip()
+        eval_res = page.evaluate(probe_script, clean_expected)
+        if isinstance(eval_res, dict):
+            st = eval_res.get("status")
+            if st == "ACCOUNT_MISMATCH":
+                return False, "ACCOUNT_MISMATCH"
+            if st in ("READY_CARDS", "READY_EMPTY_LIST"):
+                return True, None
+        if api_post_list_ok:
+            return True, None
+        return False, "PAGE_UNREADY"
+    except Exception as exc:
+        logger.warning("DOM probe for list page controls failed: %s", type(exc).__name__)
+        return False, "DOM_ERROR"
+
+
+def wait_for_list_ready_with_spa_guard(
+    page: Any,
+    timeout_seconds: float = 8.0,
+    poll_interval: float = 0.3,
+    *,
+    expected_finder_id: str | None = None,
+    api_post_list_ok_fn: Any = None,
+) -> tuple[bool, str | None]:
+    """有界等待作品管理列表页 (/platform/post/list) 渲染强业务证据，监控登录跳转、域名漂移、账号错配与 DOM 异常。
+
+    Returns:
+        (ready, error_category)
+        成功：(True, None)
+        失败：(False, "INVALID_ORIGIN" | "LOGIN_REQUIRED" | "ACCOUNT_MISMATCH" | "PAGE_UNREADY" | "DOM_ERROR")
+    """
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    last_err = "PAGE_UNREADY"
+    while time.monotonic() < deadline:
+        if not is_official_wechat_origin(page.url):
+            return False, "INVALID_ORIGIN"
+
+        is_login, dom_err = check_explicit_login_prompt(page)
+        if dom_err:
+            last_err = "DOM_ERROR"
+            page.wait_for_timeout(int(poll_interval * 1000))
+            continue
+
+        if is_login:
+            return False, "LOGIN_REQUIRED"
+
+        if not is_official_list_url(page.url):
+            last_err = "PAGE_UNREADY"
+            page.wait_for_timeout(int(poll_interval * 1000))
+            continue
+
+        api_ok = bool(api_post_list_ok_fn()) if callable(api_post_list_ok_fn) else False
+        controls_ok, ctrl_err = check_strong_list_page_controls(
+            page,
+            expected_finder_id=expected_finder_id,
+            api_post_list_ok=api_ok,
+        )
+        if ctrl_err == "ACCOUNT_MISMATCH":
+            return False, "ACCOUNT_MISMATCH"
+        if ctrl_err == "DOM_ERROR":
+            last_err = "DOM_ERROR"
+            page.wait_for_timeout(int(poll_interval * 1000))
+            continue
+
+        if controls_ok:
+            if is_official_list_url(page.url):
                 return True, None
             return False, "INVALID_ORIGIN" if not is_official_wechat_origin(page.url) else "PAGE_UNREADY"
 

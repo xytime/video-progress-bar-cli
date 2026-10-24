@@ -3121,6 +3121,8 @@ def run_uploader(
             ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
             if ready:
                 is_login_page = False
+                from video_processing.core.wechat_session_lock import record_current_wechat_verified
+                record_current_wechat_verified("publish_controls")
                 logger.info("Successfully authenticated via saved session (URL & positive controls confirmed).")
             elif err_cat == "LOGIN_REQUIRED":
                 is_login_page = True
