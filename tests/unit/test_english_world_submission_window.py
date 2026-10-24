@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-24 | Codex | 验证完整账户身份在领取前准入，旧窗口让出健康就绪执行者并保留故障兜底。 |
 | 1.5.0 | 2026-09-18 | Antigravity | 自动授权延后窗口改用 is_english_world_publish_window 判定。 |
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
 | 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
@@ -15,6 +16,49 @@ from datetime import datetime, timedelta, timezone
 import json
 
 from scripts import submit_english_world_review as submitter
+
+
+def test_automatic_submit_supplies_exact_frozen_mp4_to_full_account_admission(tmp_path, monkeypatch):
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    calls=[]
+    class DB:
+        def get_english_world_review_item(self, review_id):
+            return {'id':review_id,'state':'SUBMISSION_APPROVED','approval_source':'AUTO_POLICY','mp4_path':'/package/one/english_world.mp4'}
+        def claim_english_world_submission(self,*a,**k):
+            raise AssertionError('quota denial must precede any claim')
+    def denied(self,**kwargs):
+        calls.append(kwargs)
+        return {'allowed':False,'blockers':[{'code':'QUOTA_24H'}]}
+    monkeypatch.setattr(submitter,'PipelineDB',DB)
+    monkeypatch.setattr(WeChatRequestGuard,'evaluate',denied)
+    monkeypatch.setattr(type(submitter.settings),'is_english_world_publish_window',lambda _:True)
+    assert submitter.submit('a'*32)==submitter.EXIT_DEFERRED
+    assert calls==[{'task':'/package/one/english_world.mp4'}]
+
+
+def test_legacy_window_quota_denial_never_opens_database_or_launches_worker(monkeypatch):
+    from scripts import run_publication_window as window
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    monkeypatch.setattr(window.settings,'enable_english_world_auto_publish',True)
+    monkeypatch.setattr(window.settings,'wechat_publishing_paused',False)
+    monkeypatch.setattr(type(window.settings),'is_english_world_publish_window',lambda _:True)
+    monkeypatch.setattr(WeChatRequestGuard,'evaluate',lambda *a,**k:{'allowed':False})
+    monkeypatch.setattr(window,'PipelineDB',lambda:(_ for _ in ()).throw(AssertionError('must not touch DB while quota-blocked')))
+    assert window.dispatch_one_deferred_english_world_submission() is None
+
+
+def test_legacy_window_fallback_requires_missing_or_unhealthy_real_worker(tmp_path):
+    import os
+    from scripts.run_publication_window import _ready_worker_available
+    from video_processing.core.task_lease import TaskLease
+    status=tmp_path/'ready_publications_status.json'
+    status.write_text(json.dumps({'pid':os.getpid(),'heartbeat_at':100,'stage':'IDLE'}))
+    assert not _ready_worker_available(tmp_path,now=110)
+    with TaskLease(tmp_path/'ready_publications.lock'):
+        assert _ready_worker_available(tmp_path,now=110)
+        assert not _ready_worker_available(tmp_path,now=161)
+        status.write_text(json.dumps({'pid':os.getpid(),'heartbeat_at':100,'stage':'ERROR'}))
+        assert not _ready_worker_available(tmp_path,now=110)
 
 
 def test_manual_capability_is_active_only_before_utc_expiry():

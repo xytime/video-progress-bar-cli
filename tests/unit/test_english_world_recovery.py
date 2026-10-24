@@ -23,10 +23,10 @@ from video_processing.utils.wechat_product_execution import _wait_row_ready, pro
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 
 
-def item(db, number, authorization='AUTO_POLICY'):
+def item(db, number, authorization='AUTO_POLICY', *, package=None):
     digest = f'{number:064x}'
     row = db.create_english_world_review_item(
-        artifact_sha256=digest, title=f'英语学习 {number}', mp4_path=f'/{number}.mp4',
+        artifact_sha256=digest, title=f'英语学习 {number}', mp4_path=str(package/'english_world.mp4') if package else f'/{number}.mp4',
         manifest_path='/manifest.json', title_path='/title.txt', copy_path='/copy.txt',
         cover_path='/cover.jpg', cover_provenance_path='/provenance.json',
         manifest_sha256=digest, title_sha256=digest, copy_sha256=digest,
@@ -184,3 +184,66 @@ def test_quota_blocks_real_dispatch_before_any_candidate_or_turn_change(tmp_path
     monkeypatch.setattr(settings,'enable_english_world_auto_publish',True)
     assert ready.dispatch_ready_round(manager)==0
     assert not (tmp_path/'ready_publications.turn.json').exists()
+
+
+@pytest.mark.parametrize('finished', [True,False])
+def test_actual_click_receipt_is_distinct_from_acceptance_and_never_reopens_unknown(tmp_path, finished):
+    path=tmp_path/'pipeline.db';db=PipelineDB(str(path));package=tmp_path/'package'
+    row=item(db,29,package=package);evidence=package/'wechat_evidence'/'attempt';evidence.mkdir(parents=True)
+    claim=db.claim_english_world_submission(row['id'],evidence_dir=str(evidence));now=datetime.now(timezone.utc)
+    receipt={'video':str(package/'english_world.mp4'),'submit_click_returned':True,'draft_requested':False,
+             'automatic_result_queries':False,'platform_result':'UNVERIFIED','recorded_at':now.timestamp()}
+    (evidence/'submission_attempt.json').write_text(json.dumps(receipt))
+    if finished:
+        db.complete_english_world_submission(row['id'],state='UNCERTAIN',uploader_exit_code=3,
+                                            attempt_id=claim['_attempt_id'],evidence_dir=str(evidence))
+    result=delivery_health(path,now=now+timedelta(seconds=2))
+    assert result['state']=='RECENT_SUBMIT_ACTION' and result['last_submit_action_at']
+    assert result['last_accepted_receipt_at'] is None and result['public_visibility']=='NOT_VERIFIED'
+    restarted=PipelineDB(str(path))
+    assert restarted.get_next_auto_approved_english_world_submission() is None
+    assert restarted.claim_english_world_submission(row['id']) is None
+    assert restarted.get_english_world_review_item(row['id'])['state']==('UNCERTAIN' if finished else 'SUBMITTING')
+
+
+@pytest.mark.parametrize('change', [{'draft_requested':True},{'video':'/other/video.mp4'},
+                                    {'submit_click_returned':False},{'recorded_at':float('nan')}])
+def test_intent_draft_wrong_package_or_bad_timestamp_is_not_real_send_evidence(tmp_path,change):
+    path=tmp_path/'pipeline.db';db=PipelineDB(str(path));package=tmp_path/'package'
+    row=item(db,30,package=package);evidence=package/'wechat_evidence'/'attempt';evidence.mkdir(parents=True)
+    claim=db.claim_english_world_submission(row['id'],evidence_dir=str(evidence));now=datetime.now(timezone.utc)
+    (evidence/'submission_progress.json').write_text(json.dumps({'submit_intent':True}))
+    receipt={'video':str(package/'english_world.mp4'),'submit_click_returned':True,'draft_requested':False,
+             'automatic_result_queries':False,'recorded_at':now.timestamp(),**change}
+    (evidence/'submission_attempt.json').write_text(json.dumps(receipt))
+    db.complete_english_world_submission(row['id'],state='UNCERTAIN',uploader_exit_code=3,attempt_id=claim['_attempt_id'])
+    result=delivery_health(path,now=now+timedelta(seconds=2))
+    assert result['last_submit_action_at'] is None and result['last_accepted_receipt_at'] is None
+    assert result['state']=='AWAITING_FIRST_ACCEPTANCE'
+
+
+def test_real_click_notification_does_not_claim_platform_acceptance(tmp_path,monkeypatch):
+    from scripts import monitor_english_world_daily as monitor
+    import video_processing.telegram_delivery as telegram
+    paths=monitor.MonitorPaths(tmp_path,tmp_path/'english_world_daily',tmp_path/'lock',tmp_path/'python',tmp_path/'runner')
+    paths.log_dir.mkdir();PipelineDB(str(tmp_path/'pipeline.db'))
+    (paths.log_dir/'delivery_watch.json').write_text(json.dumps({'state':'DELIVERY_STALLED'}));calls=[]
+    def notify(**kwargs):
+        calls.append(kwargs);return telegram.TelegramDeliveryResult(state='ACCEPTED')
+    monkeypatch.setattr(telegram,'send_text',notify)
+    payload={'delivery_flow':{'state':'RECENT_SUBMIT_ACTION','last_submit_action_at':'2026-10-24T04:00:00Z'}}
+    monitor.report_delivery_progress(paths,payload)
+    assert '结果待确认' in calls[0]['text'] and '受理' not in calls[0]['text']
+
+
+def test_known_acceptance_is_not_downgraded_to_click_only(tmp_path):
+    path=tmp_path/'pipeline.db';db=PipelineDB(str(path));package=tmp_path/'package'
+    row=item(db,31,package=package);evidence=package/'wechat_evidence'/'attempt';evidence.mkdir(parents=True)
+    claim=db.claim_english_world_submission(row['id'],evidence_dir=str(evidence));now=datetime.now(timezone.utc)
+    (evidence/'submission_attempt.json').write_text(json.dumps({'video':str(package/'english_world.mp4'),
+        'submit_click_returned':True,'draft_requested':False,'automatic_result_queries':False,'recorded_at':now.timestamp()}))
+    db.complete_english_world_submission(row['id'],state='UNDER_REVIEW',uploader_exit_code=6,
+                                        attempt_id=claim['_attempt_id'],evidence_dir=str(evidence))
+    result=delivery_health(path,now=now+timedelta(seconds=2))
+    assert result['state']=='RECENT_LOCAL_ACCEPTANCE' and result['last_submit_action_at']
+    assert result['last_accepted_receipt_at'] and result['public_visibility']=='NOT_VERIFIED'

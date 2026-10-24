@@ -3,10 +3,25 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-24 | Codex | 不同英语冻结包不得共用文件名身份，同包仍拒绝重投且通用别名不变。 |
 | 1.0.0 | 2026-10-21 | Codex | 模拟时钟验证优先、总量、重启、旧查询关闭和防重发。 |
 """
 import json
 import pytest
+
+
+def test_english_packages_have_distinct_identity_but_same_package_remains_protected(monkeypatch):
+    from video_processing.core.wechat_account_schedule import evaluate,task_identity
+    from config.settings import settings
+    monkeypatch.setattr(settings,'wechat_account_scheduler_enabled',True)
+    monkeypatch.setattr(settings,'wechat_scheduler_priority_video','')
+    first='/frozen/package-a/english_world.mp4';second='/frozen/package-b/english_world.mp4'
+    row={'blocked_until':0,'next_session_at':0,'schedule':{'sessions':[],'queue':[],
+         'publications':{},'submit_intents':{first:{'at':100}}}}
+    assert task_identity(first)!=task_identity(second)
+    assert any(b['code']=='SUBMISSION_PROTECTED' for b in evaluate(row,1000,task=first)['blockers'])
+    assert not any(b['code']=='SUBMISSION_PROTECTED' for b in evaluate(row,1000,task=second)['blockers'])
+    assert task_identity('/out/abcdefghijk_vertical_interactive.mp4')==task_identity('abcdefghijk')
 from video_processing.core import wechat_request_guard as module
 from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
 from video_processing.core.wechat_account_schedule import admission

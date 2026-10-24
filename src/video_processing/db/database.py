@@ -9794,13 +9794,14 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ).fetchone()
             return int(row["cnt"]) if row else 0
 
-    def get_english_world_delivery_flow(self) -> Dict[str, Any]:
+    def get_english_world_delivery_flow(self, *, action_since: Optional[str] = None) -> Dict[str, Any]:
         """只读本地独立工作流；投稿尝试、受理与公开始终分别表达。
 
         # Modification History
         | Version | Date | Author | Description |
         | --- | --- | --- | --- |
         | 1.0.0 | 2026-10-24 | Codex | 现有窗口监测读取供给/待办及本地受理时间，不访问平台。 |
+        | 1.1.0 | 2026-10-24 | Codex | 列出当前观察窗口内的动作证据候选，未知提交仍保持原状态。 |
         """
         with self.get_connection() as conn:
             rows = conn.execute("""SELECT state, approval_source, count(*) AS count
@@ -9810,8 +9811,16 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                     THEN finished_at END) AS last_accepted_receipt_at
                 FROM english_world_submission_attempts""").fetchone()
             created = conn.execute("SELECT min(created_at), max(created_at) FROM english_world_review_items").fetchone()
+            candidates = conn.execute("""SELECT a.evidence_dir, r.mp4_path, a.state,
+                    a.started_at, a.finished_at FROM english_world_submission_attempts a
+                JOIN english_world_review_items r ON r.id=a.review_id
+                WHERE a.state IN ('SUBMITTING','UNCERTAIN','UNDER_REVIEW','PUBLISHED')
+                  AND a.evidence_dir IS NOT NULL
+                  AND datetime(COALESCE(a.finished_at,a.started_at)) >= datetime(?)
+                ORDER BY a.started_at DESC""", (action_since or '9999-01-01',)).fetchall()
             return {"states": [dict(row) for row in rows], "first_created_at": created[0], "last_created_at": created[1],
-                    **dict(attempts), "public_visibility": "NOT_VERIFIED"}
+                    **dict(attempts), "action_evidence_candidates": [dict(row) for row in candidates],
+                    "public_visibility": "NOT_VERIFIED"}
 
     def get_english_world_today_published_count(self) -> int:
         """统计今日已进入 SUBMITTING/UNDER_REVIEW/PUBLISHED 状态的成片数量（按 UTC+8 日期判定）。"""

@@ -1,4 +1,10 @@
-"""独立英语世界商品正式登记、清单传播及发布契约的真实 DAL 测试。"""
+"""独立英语世界商品正式登记、清单传播及发布契约的真实 DAL 测试。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-24 | Codex | 商品等待测试使用本用例登录态，消除与账户公平队列测试的顺序耦合。 |
+"""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -263,6 +269,8 @@ def test_programmatic_formal_registration_follows_safety_and_precedes_draft_with
 
 def test_product_wait_keeps_approval_and_backoff_prevents_another_upload(tmp_path, monkeypatch):
     db = PipelineDB(str(tmp_path / 'pipeline.db'))
+    # 本用例验商品退避；账户额度/排队由专门测试覆盖，不借用其他用例的共享队列。
+    monkeypatch.setattr(submitter.settings, 'wechat_account_scheduler_enabled', False)
     monkeypatch.setattr(submitter, '_PROJECT_ROOT', tmp_path)
     monkeypatch.setattr(submitter, 'PipelineDB', lambda: db)
     monkeypatch.setattr(submitter, '_post_status', lambda *_args: None)

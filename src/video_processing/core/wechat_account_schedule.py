@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-identity-v1 | 2026-10-24 | Codex | 英语学习卡同名成片按冻结包路径区分，保留同包提交去重和通用成片别名。 |
 | queue-preflight-v1 | 2026-10-24 | Codex | 新候选参与既有发布优先排序，预检不再被待冷却互动饿死。 |
 | recovery-console-v1 | 2026-10-23 | Codex | 统一只读准入、额度重置基线及单次恢复优先级，保留访问历史。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 冷却期间保留排队顺序，覆盖半小时回帖周期并避免首评饥饿。 |
@@ -21,6 +22,9 @@ DAY = 86400
 def task_identity(task):
     """发布路径与人工 ID 共用身份，成片变体不会绕过去重或自阻塞。"""
     stem = Path(task).stem if str(task).endswith(".mp4") else str(task)
+    if str(task).endswith('.mp4') and stem == 'english_world':
+        # 该工作流各包的文件名相同；不能把多个不同已批准内容合并成一个身份。
+        return str(Path(task).expanduser().resolve(strict=False))
     for suffix in ("_vertical_interactive", "_vertical", "_vocab", "_insight"):
         if stem.endswith(suffix):
             return stem[:-len(suffix)]

@@ -246,7 +246,7 @@ def report_delivery_progress(paths: MonitorPaths, payload: dict[str, Any]) -> No
     from video_processing.core.deployment import write_json
     watch_path = paths.log_dir / 'delivery_watch.json'
     previous = json.loads(watch_path.read_text()) if watch_path.exists() else {}
-    resumed = (flow.get('state') == 'RECENT_LOCAL_ACCEPTANCE'
+    resumed = (flow.get('state') in {'RECENT_LOCAL_ACCEPTANCE','RECENT_SUBMIT_ACTION'}
                and previous.get('state') in {'DELIVERY_STALLED', 'UNKNOWN'})
     if flow.get('state') not in {'DELIVERY_STALLED', 'UNKNOWN'} and not resumed:
         return
@@ -256,15 +256,19 @@ def report_delivery_progress(paths: MonitorPaths, payload: dict[str, Any]) -> No
         return
     blockers = '；'.join(item['reason'] for item in flow.get('account_blockers', []))
     text = (('英语世界自动巡检：读取交付账本失败，当前结果未知。' if flow.get('state') == 'UNKNOWN'
-             else '英语世界自动巡检：最近24小时未取得新的本地受理回执。')
+             else '英语世界自动巡检：最近24小时未取得新的真实提交动作或本地受理回执。')
             +
             f"可自动续投库存 {flow.get('automatic_inventory', '未知')}，"
             f"被商品条件阻塞 {flow.get('blocked_automatic_inventory', '未知')}。"
             + (f'当前等待：{blockers}。' if blockers else '')
             + '未查发布列表；不明提交不会重传。')
     if resumed:
-        text = ('英语世界自动巡检：已恢复，取得新的本地受理回执。'
-                f"回执时间（UTC）：{flow.get('last_accepted_receipt_at')}。未回查公开状态，不明提交仍不重传。")
+        if flow.get('state') == 'RECENT_SUBMIT_ACTION':
+            text = ('英语世界自动巡检：已执行新的提交动作，平台结果待确认。'
+                    f"动作时间（UTC）：{flow.get('last_submit_action_at')}。未查发布列表，不明提交仍不重传。")
+        else:
+            text = ('英语世界自动巡检：取得新的本地受理回执。'
+                    f"回执时间（UTC）：{flow.get('last_accepted_receipt_at')}。未回查公开状态，不明提交仍不重传。")
     sent = send_text(event_type='english_world.delivery_resumed' if resumed else 'english_world.delivery_stalled', priority='P1',
                      db=PipelineDB(str(paths.log_dir.parent / 'pipeline.db')), text=text,
                      dedupe_key='english-world-local-delivery', cooldown_seconds=21600)

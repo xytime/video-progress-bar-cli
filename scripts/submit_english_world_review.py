@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-admission-v1 | 2026-10-24 | Codex | 领取前纯计算完整账户资格，不排队、不消耗额度、不生成无效上传尝试。 |
 | english-all-v1 | 2026-10-21 | Codex | 每条英语世界必须绑定快捷英语，命令及受理回执拒绝无商品降级。 |
 | shared-backoff-v1 | 2026-10-20 | Codex | 所有投稿在领取前遵守账户共用退避，评论开关不再影响限流保护。 |
 | 1.20.0 | 2026-10-11 | Codex | 商品可选，接受同任务同版本的无商品清空回执，不把缺商品判为提交不明。 |
@@ -355,6 +356,18 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             "English World review %s uses its two-hour bounded capability outside the publish window source=%s",
             review_id, pending.get("approval_source"),
         )
+    if pending['state'] != 'SUBMISSION_APPROVED':
+        return 0
+    # 纯预检不得把尚未通过包/商品检查的任务登记到账号队首。
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        admission = WeChatRequestGuard(_PROJECT_ROOT/'output/wechat_state.json').evaluate(
+            task=str(pending.get('mp4_path') or ''))
+    except WeChatRequestDeferred:
+        return EXIT_DEFERRED
+    if not admission['allowed']:
+        logger.info('English World deferred before claim: %s', admission['blockers'])
+        return EXIT_DEFERRED
     pipeline_lock = _PROJECT_ROOT / "output" / "wechat_publish_priority.lock"
     pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
     with pipeline_lock.open("a+") as lock_file:

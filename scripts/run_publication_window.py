@@ -28,6 +28,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.8.1 | 2026-09-01 | Codex | 每轮输出抖音发布策略实效指纹，定位 cron 与源码载入偏差。 |
 | 1.8.2 | 2026-09-02 | Codex | 英语世界抖音管理页回查在领取账本前遵循持久阶段熔断，避免无效访问消耗回查窗口。 |
 | 1.8.3 | 2026-09-02 | Codex | 英语世界抖音同步恢复独立正数单轮上限；零值不领取，避免历史受理项被连续提交。 |
+| english-flow-v1 | 2026-10-24 | Codex | 旧窗口完整额度预检并让出健康就绪执行者；失活时保持原兜底，避免双入口空转。 |
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
@@ -233,6 +234,15 @@ def dispatch_one_deferred_english_world_submission() -> None:
         or not settings.is_english_world_publish_window()
     ):
         return
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        if not WeChatRequestGuard(PROJECT_ROOT/'output/wechat_state.json').evaluate(account_only=True)['allowed']:
+            return
+    except WeChatRequestDeferred:
+        return
+    if _ready_worker_available(PROJECT_ROOT/'output'):
+        # 正常就绪执行者统一轮换；只在它缺席/心跳失效时由旧窗口兜底。
+        return
     db = PipelineDB()
     db.restore_expired_english_world_operator_recoveries()
     from video_processing.utils.wechat_product_execution import blocked_product_task_keys
@@ -263,6 +273,19 @@ def dispatch_one_deferred_english_world_submission() -> None:
             review_id[:8],
             result.stderr[-500:],
         )
+
+
+def _ready_worker_available(output: Path, *, now=None) -> bool:
+    """真实持锁者与新鲜心跳必须一致；重启或故障时保留原窗口兜底。"""
+    from video_processing.core.task_lease import read_lease_owner
+    try:
+        owner = read_lease_owner(output/'ready_publications.lock')
+        status = json.loads((output/'ready_publications_status.json').read_text())
+        age = (time.time() if now is None else now) - float(status['heartbeat_at'])
+        return (bool(owner) and owner['pid'] == status['pid'] and 0 <= age < 60
+                and status.get('stage') != 'ERROR')
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 @entry
