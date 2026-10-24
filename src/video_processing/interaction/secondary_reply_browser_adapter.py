@@ -15,6 +15,7 @@
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | scan-timer-v1 | 2026-10-25 | Codex | 具名扫描仅遇5秒内已知时间门禁时先做一次本地等待，再走完整原生准入，避免cron秒级抖动多等半小时。 |
+| scan-binding-diagnostic | 2026-10-25 | Codex | 绑定失败只记录脱敏结构计数，保留严格绑定和原访问次数，不记录正文/原生ID/会话信息。 |
 | root-reply-scope-v1 | 2026-10-23 | Codex | 回复触发器限定父评论直属主体，排除已展开的观众子回复控件；仍拒绝主体内歧义。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | 1.6.3 | 2026-10-23 | Codex | 恢复具名作品只读会话；单条回复闭环共享账户许可，独立上下文保持写入守卫与请求预算。 |
@@ -301,6 +302,7 @@ class SecondaryReplyBrowserAdapter:
         """唯一定位作品卡片、点击并校验详情面板已绑定到目标原生 exportId。"""
         card = self._resolve_video_card(page, platform_post_id, video_title, published_description)
         if card is None:
+            self._log_card_binding_diagnostic(page, platform_post_id, video_title, published_description)
             return False, f"未找到作品卡片 (exportId: {platform_post_id})"
         scene_post_id = self._resolve_scene_post_id(platform_post_id, published_description) or platform_post_id
         self._bound_scene_post_id = scene_post_id
@@ -331,6 +333,26 @@ class SecondaryReplyBrowserAdapter:
         ):
             self._active_guard.expected_export_id = scene_post_id
         return True, None
+
+    def _log_card_binding_diagnostic(self, page, post_id, title, description):
+        """仅检查已加载DOM，不发请求；诊断失败不能覆盖原有闭锁结果。"""
+        import hashlib
+        try:
+            scene = self._resolve_scene_post_id(post_id, description)
+            hint = _normalized_text(self._post_descriptions.get(scene or post_id) or description or title or '')[:20]
+            data = {
+                'event': 'CARD_BINDING_DIAGNOSTIC',
+                'target_sha256': hashlib.sha256(post_id.encode()).hexdigest(),
+                'captured_post_count': len(self._post_descriptions),
+                'expected_id_captured': post_id in self._post_descriptions,
+                'scene_mapping_available': bool(scene),
+                'exact_visible_candidates': page.locator(f"[data-object-id='{post_id}']").filter(visible=True).count(),
+                'visible_cards': page.locator('.comment-feed-wrap:visible, .post-card:visible').count(),
+                'hint_visible_candidates': page.locator('.comment-feed-wrap:visible, .post-card:visible').filter(has_text=hint).count() if hint else 0,
+            }
+            logger.warning('[SecondaryReplyBrowser] %s', json.dumps(data, sort_keys=True))
+        except Exception as exc:
+            logger.warning('[SecondaryReplyBrowser] CARD_BINDING_DIAGNOSTIC_UNAVAILABLE %s', type(exc).__name__)
 
     def _locate_unique_visible_control(
         self,

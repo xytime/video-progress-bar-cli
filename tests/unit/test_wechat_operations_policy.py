@@ -214,6 +214,33 @@ def test_scan_local_wait_does_not_authorize_after_concurrent_policy_change(activ
             raise AssertionError('changed policy must reject before browser context')
     assert len(guard.snapshot()['schedule']['sessions'])==1
 
+
+def test_scan_binding_failure_diagnostic_has_counts_and_hash_without_identity_or_text(active,caplog):
+    from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplyBrowserAdapter
+    class Locator:
+        def __init__(self,n):self.n=n
+        def count(self):return self.n
+        def filter(self,**kwargs):return Locator(2 if 'has_text' in kwargs else self.n)
+    class Page:
+        def locator(self,selector):return Locator(0 if selector.startswith('[data-object-id=') else 6)
+    adapter=SecondaryReplyBrowserAdapter(state_path=active[1].parent/'state.json')
+    post='export/synthetic-never-log-native-identity';text='合成私密文案不得进入结构诊断'*4
+    adapter._post_descriptions={'synthetic-scene':text}
+    adapter._log_card_binding_diagnostic(Page(),post,'合成私密标题',text)
+    assert 'CARD_BINDING_DIAGNOSTIC' in caplog.text
+    assert '"visible_cards": 6' in caplog.text and '"hint_visible_candidates": 2' in caplog.text
+    assert post not in caplog.text and text not in caplog.text and '合成私密标题' not in caplog.text
+
+
+def test_scan_binding_diagnostic_error_keeps_original_fail_closed_path(active,caplog):
+    from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplyBrowserAdapter
+    class Page:
+        def locator(self,_):raise RuntimeError('synthetic-private-secret-not-for-log')
+    adapter=SecondaryReplyBrowserAdapter(state_path=active[1].parent/'state.json')
+    adapter._log_card_binding_diagnostic(Page(),'export/synthetic','合成','')
+    assert 'CARD_BINDING_DIAGNOSTIC_UNAVAILABLE RuntimeError' in caplog.text
+    assert 'synthetic-private-secret-not-for-log' not in caplog.text
+
 def _first_comment(db,tmp_path):
     db.add_video('synthetic-policy','synthetic','test',score=80)
     evidence=tmp_path/'synthetic.png';evidence.write_bytes(b'x')
