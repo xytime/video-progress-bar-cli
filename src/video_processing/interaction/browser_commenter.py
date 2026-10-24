@@ -519,6 +519,8 @@ class BrowserCommenter:
                 return "INVALID_ORIGIN"
             is_login, dom_error = check_explicit_login_prompt(page)
             if is_login:
+                from ..core.wechat_session_lock import record_current_wechat_login_required
+                record_current_wechat_login_required()
                 return "LOGIN_REQUIRED"
             try:
                 if dom_error:

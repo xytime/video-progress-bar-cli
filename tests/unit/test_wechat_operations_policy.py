@@ -248,3 +248,44 @@ def test_hot_policy_raise_cannot_renew_old_retry_chain(active,tmp_path):
     policy['retry_policies']['write_actions']['max_retries']=2;path.write_text(json.dumps(policy))
     assert db.claim_approved_reply_task(task_id=task,now_utc=now+dt.timedelta(seconds=61))
     assert not db.retry_secondary_reply_before_intent(task,error_message='timeout',now_utc=now+dt.timedelta(seconds=61))
+
+
+def test_legacy_queue_cannot_reserve_opportunity_without_new_worker_reaffirmation(active):
+    now=time.time();row=state()
+    row['schedule']['queue']=[{'at':now-30000,'seen':now,'purpose':'回复','task':'finished-old-target','key':'old'}]
+    assert evaluate(row,now,'发布','new-ready')['allowed']
+    assert admission(row,now,'首评','new-comment')==''
+    assert len(row['schedule']['queue'])==2
+    assert row['schedule']['queue'][-1]['policy_protocol']==1
+    assert row['schedule']['queue'][-1]['operation']=='first_comment'
+    assert not evaluate(row,now+1,'发布','new-ready')['allowed']
+    assert admission(row,now+1,'首评','new-comment',consume=True)==''
+    assert evaluate(row,now+2,'发布','new-ready')['allowed']
+    assert len(row['schedule']['sessions'])==1
+
+
+def test_explicit_login_failure_blocks_all_automatic_work_without_charge_and_new_authorization_clears(active):
+    from video_processing.core.wechat_auth_state import record_wechat_keepalive_result,record_wechat_authorization
+    state_file=active[1].parent/'wechat_state.json';state_file.write_text('{}')
+    now=time.time();record_wechat_authorization(state_file,method='interactive',timestamp=now-10)
+    record_wechat_keepalive_result(state_file,status='LOGIN_REQUIRED',timestamp=now-1)
+    guard=WeChatRequestGuard(state_file)
+    for purpose in ['发布','首评','回复','评论扫描','作品匹配','保活']:
+        view=guard.evaluate(purpose,account_only=True)
+        assert not view['allowed'] and any(b['code']=='AUTH_REQUIRED' for b in view['blockers'])
+    with pytest.raises(WeChatRequestDeferred):guard.admission('首评','synthetic')
+    assert guard.snapshot().get('schedule',{}).get('sessions',[])==[]
+    token=guard.issue_manual_login();manual=WeChatRequestGuard(state_file);manual.consume_manual_login(token);manual.check()
+    record_wechat_authorization(state_file,method='interactive',timestamp=now+1)
+    assert guard.evaluate('首评',account_only=True)['allowed']
+    assert guard.snapshot().get('schedule',{}).get('sessions',[])==[]
+
+
+def test_manual_login_does_not_override_true_platform_backoff(active):
+    from video_processing.core.wechat_auth_state import record_wechat_keepalive_result
+    state_file=active[1].parent/'wechat_state.json';state_file.write_text('{}')
+    record_wechat_keepalive_result(state_file,status='LOGIN_REQUIRED')
+    guard=WeChatRequestGuard(state_file);token=guard.issue_manual_login();guard.consume_manual_login(token)
+    row=guard.snapshot();row['blocked_until']=time.time()+300
+    guard.path.write_text(json.dumps(row))
+    with pytest.raises(WeChatRequestDeferred):guard.check()

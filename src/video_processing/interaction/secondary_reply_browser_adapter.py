@@ -634,6 +634,8 @@ class SecondaryReplyBrowserAdapter:
         """
         is_login, _ = check_explicit_login_prompt(page)
         if is_login:
+            from ..core.wechat_session_lock import record_current_wechat_login_required
+            record_current_wechat_login_required()
             return "FAILED", None, "LOGIN_REQUIRED"
 
         bound_ok, bind_err = self._select_and_bind_post_card(
@@ -1473,6 +1475,8 @@ class SecondaryReplyBrowserAdapter:
         """只读绑定指定作品卡片并返回捕获到的 comment_list 原始载荷。"""
         is_login, _ = check_explicit_login_prompt(page)
         if is_login:
+            from ..core.wechat_session_lock import record_current_wechat_login_required
+            record_current_wechat_login_required()
             return {"ok": False, "reason": "LOGIN_REQUIRED", "payload": None}
         bound_ok, bind_err = self._select_and_bind_post_card(
             page,

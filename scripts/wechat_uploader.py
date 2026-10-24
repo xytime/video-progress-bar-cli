@@ -4,6 +4,9 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                              |
+| 5.27.0 | 2026-10-18 | Antigravity | verify-only 接入列表页专属强控件契约（wait_for_list_ready_with_spa_guard），遇登录要求零授权/零扫码/零写回直接返回 2，并在浏览器关闭及会话锁释放后记录去重登录恢复信号。 |
+| scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
+| 5.26.0 | 2026-10-17 | Antigravity | 修复快捷登录按钮瞬时探测竞态：有界轮询等待可信 iframe 渲染“微信快捷登录”按钮，并在启动桌面监听前唤醒显示器防熄屏漏检。 |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
 | shared-backoff-v1 | 2026-10-20 | Codex | 首次导航即识别共享上下文捕获的原生限流，页面未就绪也保留限流证据并停止请求。 |
@@ -107,6 +110,7 @@
 | 5.9.0 | 2026-09-25 | Codex | 列表无短标题时以本次完整文案精确绑定唯一新增原生 ID；会话刷新不再伪装成重新登录。 |
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
+| 5.10.0 | 2026-10-15 | Antigravity | 管理页只读回查支持向下滚动/翻页加载更多卡片并提取原生与 DOM 核验的 6 项互动指标。 |
 """
 
 import os
@@ -189,7 +193,7 @@ MANAGEMENT_UNCERTAIN = "UNCERTAIN"
 
 # 仅用于已经绑定平台原生 ID 的只读核验。页面短暂加载异常不应触发上传重试，
 # 但也不应因一次 SPA 卡片延迟而把已有提交长期误留在不可判定状态。
-MANAGEMENT_VERIFY_ATTEMPTS = 2
+MANAGEMENT_VERIFY_ATTEMPTS = 1
 MANAGEMENT_VERIFY_RETRY_DELAY_MS = 1_500
 NO_LOCATION_TEXT = "不显示位置"
 
@@ -572,7 +576,16 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
                     native_create_time: post.createTime,
                     native_time_parts: (() => {const d = new Date(Number(post.createTime)*1000);
                         return [d.getFullYear(),d.getMonth()+1,d.getDate(),d.getHours(),d.getMinutes()];})(),
-                    export_id: typeof post.exportId === 'string' ? post.exportId : ''});
+                    export_id: typeof post.exportId === 'string' ? post.exportId : '',
+                    metrics: [post.readCount, post.likeCount, post.commentCount, post.forwardCount, post.favCount, post.followCount]
+                        .every(v => Number.isInteger(v) && v >= 0) ? {
+                            views: post.readCount,
+                            likes: post.likeCount,
+                            comments: post.commentCount,
+                            shares: post.forwardCount,
+                            favorites: post.favCount,
+                            follows: post.followCount,
+                        } : null});
             }
             const counts = new Map();
             for (const record of records) counts.set(record.post_id, (counts.get(record.post_id) || 0) + 1);
@@ -593,6 +606,7 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
             **({"posted_time_text": record["posted_time_text"], "native_create_time": record.get("native_create_time"),
                 "native_time_parts": record.get("native_time_parts")}
                if "posted_time_text" in record else {}),
+            **({"metrics": record["metrics"]} if isinstance(record.get("metrics"), dict) else {}),
         }
         for record in records
         if record.get("post_id")
@@ -819,6 +833,27 @@ def _read_management_product_detail(page, evidence_root: Path, record: dict) -> 
         return unknown
 
 
+def _extract_wechat_post_metrics(record: dict) -> dict[str, int] | None:
+    """从原生 post 记录提取 6 项只读互动指标；缺字段或非整数时返回 None。"""
+    if not isinstance(record, dict):
+        return None
+    mapping = {
+        "views": "readCount",
+        "likes": "likeCount",
+        "comments": "commentCount",
+        "shares": "forwardCount",
+        "favorites": "favCount",
+        "follows": "followCount",
+    }
+    metrics: dict[str, int] = {}
+    for target_key, source_key in mapping.items():
+        val = record.get(source_key)
+        if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+            return None
+        metrics[target_key] = val
+    return metrics
+
+
 class ManagementListRateLimited(RuntimeError):
     """平台 -360 限流；当前会话不得即时回退或继续投稿。"""
 
@@ -882,6 +917,8 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             str(desc.get("description") or "") if isinstance(desc, dict)
             else str(desc or "")
         )
+        article_obs = _management_article_observation(record)
+        metrics_obs = _extract_wechat_post_metrics(record)
         cards[post_id] = {
             "platform_post_id": post_id,
             **({"platform_export_id": record["exportId"]} if isinstance(record.get("exportId"), str) and record["exportId"] else {}),
@@ -892,7 +929,8 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "identity_source": "post_list_api",
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
             "product_observation": _management_product_observation(record),
-            "article_observation": _management_article_observation(record),
+            **({"article_observation": article_obs} if article_obs.get("state") != "UNVERIFIED" else {}),
+            **({"metrics": metrics_obs} if metrics_obs is not None else {}),
         }
     return cards
 
@@ -1195,6 +1233,43 @@ def _finalize_submission_attachments(
         return False, 1
 
 
+def _merge_dom_and_api_cards(
+    cards: dict[str, dict[str, Any]],
+    dom_cards: dict[str, dict[str, Any]],
+    api_payloads: list[object],
+) -> None:
+    """合并作品管理页 DOM 卡片与 post_list 原生响应，保留同 ID 的页面公开、时间与指标证据。"""
+    for post_id, dom_record in dom_cards.items():
+        existing = cards.get(post_id)
+        if existing and existing.get("identity_source") == "post_list_api":
+            existing["status_text"] = dom_record.get("status_text", dom_record.get("card_text", ""))
+            existing["platform_url"] = dom_record.get("platform_url", existing.get("platform_url", ""))
+            if "component_state" in dom_record:
+                existing["component_state"] = dom_record["component_state"]
+            for key in ("posted_time_text", "native_create_time", "native_time_parts", "metrics"):
+                if key in dom_record and (key != "metrics" or "metrics" not in existing):
+                    existing[key] = dom_record[key]
+        else:
+            cards[post_id] = dom_record
+
+    for payload in api_payloads:
+        api_cards = _collect_management_cards_from_post_list_payload(payload)
+        for post_id, api_record in api_cards.items():
+            dom_record = dom_cards.get(post_id) or cards.get(post_id)
+            if dom_record:
+                if dom_record.get("identity_source") != "post_list_api":
+                    api_record["status_text"] = dom_record.get("status_text", dom_record.get("card_text", ""))
+                elif "status_text" in dom_record:
+                    api_record["status_text"] = dom_record["status_text"]
+                api_record["platform_url"] = dom_record.get("platform_url", "")
+                if "component_state" in dom_record:
+                    api_record["component_state"] = dom_record["component_state"]
+                for key in ("posted_time_text", "native_create_time", "native_time_parts", "metrics"):
+                    if key in dom_record and (key != "metrics" or "metrics" not in api_record):
+                        api_record[key] = dom_record[key]
+            cards[post_id] = api_record
+
+
 def _load_management_cards(page, *, search_title: str | None = None) -> tuple[dict[str, dict[str, str]], bool]:
     """打开作品管理页并读取已加载卡片；失败返回 false，调用方必须拒绝绑定。"""
     post_list_responses = []
@@ -1237,39 +1312,25 @@ def _load_management_cards(page, *, search_title: str | None = None) -> tuple[di
         return {}, False
     if search_title:
         _search_management_title(page, search_title)
-    payloads = []
-    for response in post_list_responses:
-        try:
-            payloads.append(response.json())
-        except Exception as exc:
-            logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
+    dom_cards = _collect_management_cards(page)
+    cards: dict[str, dict[str, Any]] = {}
+    payloads: list[object] = []
+    if post_list_responses:
+        for resp in post_list_responses:
+            try:
+                payloads.append(resp.json())
+            except Exception as exc:
+                logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
+                _remove_post_list_listener()
+                return {}, False
+        if any(_post_list_rate_limited(payload) for payload in payloads):
+            _remove_post_list_listener()
+            raise ManagementListRateLimited("WeChat management business code -360; stop immediate retries")
+        if any(not _post_list_payload_usable(payload) for payload in payloads):
+            logger.warning("Native management list business error or malformed response; refusing an empty-baseline claim.")
             _remove_post_list_listener()
             return {}, False
-    if any(_post_list_rate_limited(payload) for payload in payloads):
-        _remove_post_list_listener()
-        raise ManagementListRateLimited("WeChat management business code -360; stop immediate retries")
-    if any(not _post_list_payload_usable(payload) for payload in payloads):
-        logger.warning("Native management list business error or malformed response; refusing an empty-baseline claim.")
-        _remove_post_list_listener()
-        return {}, False
-    cards = _collect_management_cards(page)
-    if post_list_responses:
-        try:
-            api_cards = _collect_management_cards_from_post_list_payload(post_list_responses[-1].json())
-            for post_id, api_record in api_cards.items():
-                # 接口 desc 是用户正文，只用于提交绑定；同 ID 的页面状态必须单独保留。
-                dom_record = cards.get(post_id)
-                if dom_record:
-                    api_record["status_text"] = dom_record.get("status_text", dom_record.get("card_text", ""))
-                    api_record["platform_url"] = dom_record.get("platform_url", "")
-                    if "component_state" in dom_record:
-                        api_record["component_state"] = dom_record["component_state"]
-                    for key in ('posted_time_text','native_create_time','native_time_parts'):
-                        if key in dom_record:
-                            api_record[key] = dom_record[key]
-                cards[post_id] = api_record
-        except Exception as exc:
-            logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
+    _merge_dom_and_api_cards(cards, dom_cards, payloads)
     _remove_post_list_listener()
     logger.info("Management readback: native_responses=%s cards=%s", len(post_list_responses), len(cards))
     return cards, True
@@ -1376,6 +1437,198 @@ def _management_public_time(record, state):
         return {}
     return {'platform_public_at': stamp, 'public_time_evidence': 'DOM_POSTED_INFO_AND_NATIVE_CREATE_TIME',
             'posted_time_text': record['posted_time_text']}
+
+
+def _management_metrics_observation(record: dict[str, Any], state: str) -> dict[str, Any]:
+    """提取已公开作品的原生 6 项互动指标，并与同卡片 DOM .posted-info 的 5 项显示值交叉核验。"""
+    metrics = record.get("metrics")
+    if state != MANAGEMENT_PUBLISHED or not isinstance(metrics, dict):
+        return {}
+    required = ("views", "likes", "comments", "shares", "favorites", "follows")
+    if not all(
+        isinstance(metrics.get(k), int) and not isinstance(metrics.get(k), bool) and metrics[k] >= 0
+        for k in required
+    ):
+        return {}
+    posted_text = str(record.get("posted_time_text") or "")
+    match = re.search(r"\d{4}年\s*\d{1,2}月\s*\d{1,2}日\s*\d{1,2}:\d{2}", posted_text)
+    ui_counts: list[int] = []
+    if match:
+        tail = posted_text[match.end():]
+        ui_counts = [int(line.strip()) for line in tail.splitlines() if line.strip().isdigit()]
+    expected_ui = [metrics["views"], metrics["likes"], metrics["comments"], metrics["shares"], metrics["favorites"]]
+    ui_verified = ui_counts == expected_ui
+    return {
+        "metrics": {k: metrics[k] for k in required},
+        "metrics_ui_counts": ui_counts,
+        "metrics_ui_verified": ui_verified,
+        "metrics_evidence": (
+            "POST_LIST_NATIVE_AND_DOM_POSTED_INFO_MATCH" if ui_verified else "POST_LIST_NATIVE_ONLY"
+        ),
+    }
+
+
+def _cards_has_target_identity(
+    cards: dict[str, dict[str, Any]],
+    normalized_post_id: str,
+    nonce: str,
+) -> bool:
+    return any(
+        normalized_post_id in {card.get("platform_post_id"), card.get("platform_export_id")}
+        or (nonce and card.get("platform_object_nonce") == nonce)
+        for card in cards.values()
+    )
+
+
+def _scroll_management_cards_for_identity(
+    page,
+    cards: dict[str, dict[str, Any]],
+    normalized_post_id: str,
+    nonce: str,
+    *,
+    max_scrolls: int = 1,
+) -> dict[str, dict[str, Any]]:
+    """只读向下滚动或翻页加载更多管理页作品，直到命中目标原生 ID / nonce 或无更多卡片。"""
+    if _cards_has_target_identity(cards, normalized_post_id, nonce):
+        return cards
+    has_locator = callable(getattr(page, "locator", None))
+    has_evaluate = callable(getattr(page, "evaluate", None))
+    if not has_locator and not has_evaluate:
+        return cards
+
+    merged: dict[str, dict[str, Any]] = dict(cards)
+    scroll_responses: list[Any] = []
+    add_listener = getattr(page, "on", None)
+    remove_listener = getattr(page, "remove_listener", None)
+
+    def _capture_scroll_response(response) -> None:
+        try:
+            if response.url.split("?", 1)[0].endswith("/post/post_list"):
+                scroll_responses.append(response)
+        except Exception:
+            pass
+
+    if callable(add_listener):
+        add_listener("response", _capture_scroll_response)
+
+    stagnant_rounds = 0
+    try:
+        for step in range(max(0, max_scrolls)):
+            if _cards_has_target_identity(merged, normalized_post_id, nonce):
+                break
+            prev_count = len(merged)
+            prev_resp_count = len(scroll_responses)
+            scroll_diag = None
+            try:
+                if has_locator:
+                    scroll_diag = page.locator(".post-feed-item").evaluate_all(
+                        """nodes => {
+                            if (!nodes || nodes.length === 0) return { count: 0 };
+                            const last = nodes[nodes.length - 1];
+                            last.scrollIntoView({ block: 'end' });
+                            const ancestors = [];
+                            let cur = last.parentElement;
+                            while (cur) {
+                                const sh = cur.scrollHeight || 0;
+                                const ch = cur.clientHeight || 0;
+                                if (sh > ch + 5) {
+                                    cur.scrollTop = sh;
+                                    cur.dispatchEvent(new Event('scroll', { bubbles: true }));
+                                    ancestors.push({
+                                        tag: cur.tagName,
+                                        cls: String(cur.className || '').slice(0, 60),
+                                        top: cur.scrollTop,
+                                        sh,
+                                        ch,
+                                    });
+                                }
+                                cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+                            }
+                            const docEl = document.scrollingElement || document.documentElement || document.body;
+                            if (docEl) {
+                                docEl.scrollTop = docEl.scrollHeight;
+                            }
+                            window.scrollTo(0, document.body.scrollHeight);
+                            window.dispatchEvent(new Event('scroll'));
+                            return { count: nodes.length, ancestors };
+                        }"""
+                    )
+                if has_evaluate and not has_locator:
+                    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            except Exception as exc:
+                logger.info("Management scroll evaluate failed on step %s: %s", step + 1, type(exc).__name__)
+                break
+
+            try:
+                if has_locator:
+                    last_item = page.locator(".post-feed-item").last
+                    if last_item.count() > 0:
+                        last_item.hover(timeout=2_000)
+                        page.mouse.wheel(0, 2400)
+            except Exception:
+                pass
+
+            try:
+                page.wait_for_timeout(1_800)
+            except Exception:
+                break
+
+            if len(scroll_responses) == prev_resp_count and has_locator:
+                try:
+                    clicked_next = page.locator(".post-feed-item").evaluate_all(
+                        """nodes => {
+                            const root = (nodes && nodes.length > 0 && nodes[0].getRootNode)
+                                ? nodes[0].getRootNode() : document;
+                            const candidates = root.querySelectorAll
+                                ? Array.from(root.querySelectorAll('.weui-desktop-pagination__nav, a, button, span, li'))
+                                : [];
+                            for (const el of candidates) {
+                                const text = (el.innerText || el.textContent || '').trim();
+                                const cls = String(el.className || '');
+                                if (text !== '下一页' && !/pagination.*next/i.test(cls)) continue;
+                                if (el.disabled || /disabled/i.test(cls) || el.getAttribute('aria-disabled') === 'true') continue;
+                                const rect = el.getBoundingClientRect();
+                                if (rect.width <= 0 || rect.height <= 0) continue;
+                                el.click();
+                                return true;
+                            }
+                            return false;
+                        }"""
+                    )
+                    if clicked_next:
+                        page.wait_for_timeout(1_800)
+                except Exception:
+                    pass
+
+            dom_cards = _collect_management_cards(page)
+            new_payloads = []
+            for resp in scroll_responses[prev_resp_count:]:
+                try:
+                    new_payloads.append(resp.json())
+                except Exception:
+                    pass
+            _merge_dom_and_api_cards(merged, dom_cards, new_payloads)
+            logger.info(
+                "Management scroll readback step=%s/%s: new_responses=%s total_cards=%s diag=%s",
+                step + 1,
+                max_scrolls,
+                len(new_payloads),
+                len(merged),
+                scroll_diag,
+            )
+            if _cards_has_target_identity(merged, normalized_post_id, nonce):
+                break
+            if len(merged) == prev_count and len(new_payloads) == 0:
+                stagnant_rounds += 1
+                if stagnant_rounds >= 2:
+                    break
+            else:
+                stagnant_rounds = 0
+    finally:
+        if callable(remove_listener):
+            remove_listener("response", _capture_scroll_response)
+
+    return merged
 
 
 def _search_management_title(page, expected_title: str) -> bool:
@@ -1486,14 +1739,12 @@ def verify_management_publication_by_id(
     normalized_post_id = (platform_post_id or "").strip()
     nonce = _submission_identity_nonce(identity_receipt, normalized_post_id)
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
-        # 标题搜索会过滤正文且可能清空同 ID 的 DOM；先按原生身份查当前页。
+        # 标题搜索会过滤正文且可能清空同 ID 的 DOM；先按原生身份查当前页及只读滚动加载。
         try:
             cards, loaded = _load_management_cards(page)
-            if expected_title and loaded and not any(
-                normalized_post_id in {card.get('platform_post_id'), card.get('platform_export_id')}
-                or (nonce and card.get('platform_object_nonce') == nonce) for card in cards.values()
-            ):
-                cards, loaded = _load_management_cards(page, search_title=expected_title)
+            if loaded and not _cards_has_target_identity(cards, normalized_post_id, nonce):
+                cards = _scroll_management_cards_for_identity(page, cards, normalized_post_id, nonce)
+            # 不为找不到的作品额外搜索、重载作品列表。
         except ManagementListRateLimited:
             _record_management_rate_limit(evidence_root, phase="READBACK")
             _capture_wechat_evidence(page, evidence_root, "management_rate_limited")
@@ -1554,6 +1805,7 @@ def verify_management_publication_by_id(
                     "article_observation": record.get("article_observation", {'state': 'UNVERIFIED'}),
                     "article_verification": _compare_management_article_receipt(record, identity_receipt),
                     **_management_public_time(record, state),
+                    **_management_metrics_observation(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)
@@ -2204,7 +2456,7 @@ def _notify_wechat_login_success(method: str, state_file: Path) -> None:
         )
         send_text(
             event_type="WECHAT_LOGIN_RENEWED",
-            priority="NORMAL",
+            priority="P1",
             text=text,
             cooldown_seconds=30,
         )
@@ -2391,6 +2643,21 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
     return False
 
 
+def _wait_and_click_quick_login_button(page, deadline: float, max_wait_seconds: float = 8.0) -> bool:
+    """在可信登录 iframe 异步探测本机微信期间，有界轮询等待并点击“微信快捷登录”按钮。"""
+    if _click_visible_frame_button(page, "微信快捷登录"):
+        return True
+    button_deadline = min(deadline, time.monotonic() + max(0.0, max_wait_seconds))
+    while time.monotonic() < button_deadline:
+        remaining_ms = int((button_deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            break
+        page.wait_for_timeout(min(500, remaining_ms))
+        if _click_visible_frame_button(page, "微信快捷登录"):
+            return True
+    return False
+
+
 def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
                             timeout_ms: int = 30_000,
                             state_file: Path | None = None) -> bool:
@@ -2398,9 +2665,18 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None 
     deadline = time.monotonic() + max(0, timeout_ms) / 1000
     approved_frames = set()
     try:
-        if not _click_visible_frame_button(page, "微信快捷登录"):
+        if not _wait_and_click_quick_login_button(page, deadline):
             return False
         if desktop_auth:
+            if isinstance(desktop_auth, WeChatDesktopAuthWatcher):
+                try:
+                    subprocess.Popen(
+                        ["caffeinate", "-u", "-t", "5"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
             desktop_auth.start()
 
         from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
@@ -2515,6 +2791,92 @@ def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
     return False
 
 
+def _emit_verify_only_recovery_after_unlock(fn):
+    """在浏览器已关闭、会话锁已释放之后，为 verify-only 返回 2 记录去重登录恢复信号。"""
+    import functools
+    import inspect
+
+    @functools.wraps(fn)
+    def _outer(*args, **kwargs):
+        code = fn(*args, **kwargs)
+        bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        if (
+            bound.arguments.get("verify_only")
+            and not bound.arguments.get("login_only")
+            and code == 2
+        ):
+            try:
+                from video_processing.core.wechat_auth_state import (
+                    record_wechat_login_recovery_signal,
+                )
+
+                record_wechat_login_recovery_signal(
+                    bound.arguments.get("state_path") or "output/wechat_state.json",
+                    source="verify_only",
+                )
+            except Exception as exc:
+                logger.warning("Failed to record verify_only login recovery signal after unlock: %s", exc)
+        return code
+
+    return _outer
+
+
+def _disable_post_submit_result_requests(context, evidence_root: Path) -> None:
+    """提交前阻止自动跳转带出的列表请求；响应监听仅保留既有提交请求的证据。"""
+    from urllib.parse import urlsplit
+    blocked = re.compile(
+        r"^https://channels\.weixin\.qq\.com/"
+        r"(?:platform/post/list|cgi-bin/mmfinderassistant-bin/post/post_list)(?:[/?#]|$)"
+    )
+    context.route(blocked, lambda route: route.abort())
+    sequence = 0
+
+    def record_response(response):
+        nonlocal sequence
+        try:
+            endpoint = urlsplit(response.url)
+            if (endpoint.hostname != "channels.weixin.qq.com"
+                    or response.request.method != "POST"
+                    or not endpoint.path.startswith("/cgi-bin/mmfinderassistant-bin/post/")
+                    or endpoint.path.endswith("/post_list")):
+                return
+            payload = response.json()
+            # 只保存原始响应中的业务码/消息；不持久化 URL 参数、请求头或会话凭据。
+            fields = ("errCode", "errcode", "ret", "errmsg", "errMsg", "message")
+            result = {key: payload[key] for key in fields if key in payload}
+            base = payload.get("baseResp") or payload.get("base_resp")
+            if isinstance(base, dict):
+                result["baseResp"] = {key: base[key] for key in fields if key in base}
+            sequence += 1
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            (evidence_root / f"submission_response_{sequence}.json").write_text(json.dumps({
+                "endpoint": endpoint.path, "http_status": response.status,
+                "response_fields": result, "observed_at": time.time(),
+                "platform_result": "UNVERIFIED",
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Unable to preserve submission response: %s", type(exc).__name__)
+
+    # response 事件触发时响应体可能尚未完成；等既有请求完成再落证据，不另发请求。
+    context.on("requestfinished", lambda request: record_response(request.response()))
+
+
+def _record_manual_confirmation_attempt(evidence_root: Path, video_path: str, *, draft: bool) -> None:
+    """记录点击已返回，绝不把本地动作视为平台受理、公开或失败。"""
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    target = evidence_root / "submission_attempt.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({
+        "video": str(Path(video_path).resolve()), "submit_click_returned": True,
+        "draft_requested": draft, "platform_result": "UNVERIFIED",
+        "manual_confirmation_required": True, "automatic_result_queries": False,
+        "recorded_at": time.time(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(target)
+
+
+@_emit_verify_only_recovery_after_unlock
 @guarded_wechat_browser_session(
     enabled=lambda: True,
     purpose="发布",
@@ -2792,13 +3154,57 @@ def run_uploader(
                 is_login_page = True
                 logger.warning("Explicit login detected on management page redirect.")
             elif is_official_list_url(page.url):
-                is_login_page = False
-                logger.info("Successfully authenticated via saved session (management list page confirmed).")
+                if verify_only and not login_only:
+                    from video_processing.core.wechat_page_contract import (
+                        wait_for_list_ready_with_spa_guard,
+                    )
+
+                    list_ready, list_err = wait_for_list_ready_with_spa_guard(
+                        page, timeout_seconds=8.0
+                    )
+                    if list_ready:
+                        is_login_page = False
+                        logger.info(
+                            "Successfully authenticated via saved session (management list page and strong controls confirmed)."
+                        )
+                    elif list_err == "LOGIN_REQUIRED":
+                        is_login_page = True
+                        logger.warning(
+                            "Explicit login detected during management list page SPA guard."
+                        )
+                    elif list_err == "DOM_ERROR":
+                        logger.error(
+                            "DOM error occurred while inspecting management list controls: DOM_ERROR"
+                        )
+                        raise RuntimeError(
+                            "DOM error during management list controls inspection; refusing to fail open."
+                        )
+                    elif list_err == "INVALID_ORIGIN":
+                        logger.error("Untrusted origin for management page: INVALID_ORIGIN")
+                        raise RuntimeError("Untrusted origin for management page")
+                    else:
+                        logger.error(
+                            "Management list page unready: positive controls missing: %s",
+                            list_err,
+                        )
+                        raise RuntimeError(
+                            f"Management list page unready ({list_err}); refusing to fail open."
+                        )
+                else:
+                    is_login_page = False
+                    logger.info("Successfully authenticated via saved session (management list page confirmed).")
             else:
                 logger.error("Unexpected route for management page: PAGE_UNREADY")
                 raise RuntimeError("Unexpected route for management page; refusing to fail open.")
 
         if is_login_page:
+            if verify_only and not login_only:
+                logger.error(
+                    "Login required in verify-only mode; refusing quick-login, QR wait, or state write-back."
+                )
+                browser.close()
+                return 2  # LOGIN_REQUIRED（只读回查零授权、零扫码、零写回）
+
             qr_path = state_file.parent / "login_qr.png"
             page.wait_for_timeout(2000)  # 等登录 iframe 渲染
 
@@ -2822,6 +3228,8 @@ def run_uploader(
                     login_completed = True
 
             if not login_completed and fail_fast_login and not login_only:
+                from video_processing.core.wechat_session_lock import record_current_wechat_login_required
+                record_current_wechat_login_required()
                 logger.error("Login required; bounded desktop quick-login failed and fail-fast mode refuses QR wait.")
                 browser.close()
                 return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
@@ -2832,39 +3240,38 @@ def run_uploader(
             elif not login_completed:
                 _capture_wechat_login_qr(page, qr_path)
 
-            if not login_completed and headless:
-                # [Claude_Sonnet_4.6_Thinking_fast] P1: Telegram QR 推送登录
-                # headless 无弹窗，但可截图 QR 发 Telegram，等扫码后继续上传
+            if not login_completed:
+                # 无论 headless 还是有头模式，一旦桌面快捷登录未完成而回退二维码，均向 Telegram 推送兜底扫码图
                 tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
                 tg_chat_id = (
                     os.environ.get("TELEGRAM_CHAT_ID", "").strip() or
                     os.environ.get("TELEGRAM_ADMIN_IDS", "").split(",")[0].strip()
                 )
 
-                if tg_token and tg_chat_id and _requests:
-                    if qr_path.exists():
-                        logger.info("Headless login required. Sending QR code to Telegram...")
-                        try:
-                            caption = (
-                                "微信视频号登录\n"
-                                "请用微信扫码授权；若已通过快捷登录授权，脚本会自动继续。\n"
-                                "登录成功后会保存会话并继续任务。"
+                if tg_token and tg_chat_id and _requests and qr_path.exists():
+                    logger.info("Login QR fallback required. Sending QR code to Telegram...")
+                    try:
+                        caption = (
+                            "微信视频号登录\n"
+                            "请用微信扫码授权；若已通过快捷登录授权，脚本会自动继续。\n"
+                            "登录成功后会保存会话并继续任务。"
+                        )
+                        with open(qr_path, "rb") as f:
+                            resp = _requests.post(
+                                f"https://api.telegram.org/bot{tg_token}/sendPhoto",
+                                data={"chat_id": tg_chat_id, "caption": caption},
+                                files={"photo": ("qr.png", f, "image/png")},
+                                timeout=15,
                             )
-                            with open(qr_path, "rb") as f:
-                                resp = _requests.post(
-                                    f"https://api.telegram.org/bot{tg_token}/sendPhoto",
-                                    data={"chat_id": tg_chat_id, "caption": caption},
-                                    files={"photo": ("qr.png", f, "image/png")},
-                                    timeout=15,
-                                )
-                            if resp.ok:
-                                logger.info("QR code sent to Telegram. Waiting for scan/authorization...")
-                            else:
-                                logger.warning("Telegram sendPhoto failed: HTTP %s", resp.status_code)
-                        except Exception as exc:
-                            # requests 异常可能包含带 Token 的 URL，日志中只保留错误类别。
-                            logger.error("Failed to send QR to Telegram: %s", type(exc).__name__)
+                        if resp.ok:
+                            logger.info("QR code sent to Telegram. Waiting for scan/authorization...")
+                        else:
+                            logger.warning("Telegram sendPhoto failed: HTTP %s", resp.status_code)
+                    except Exception as exc:
+                        # requests 异常可能包含带 Token 的 URL，日志中只保留错误类别。
+                        logger.error("Failed to send QR to Telegram: %s", type(exc).__name__)
 
+            if not login_completed and headless:
                 # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
                 logger.info("Waiting for WeChat login authorization (Web UI / Telegram / App)...")
                 try:
@@ -2906,10 +3313,6 @@ def run_uploader(
                 page, evidence_root, platform_post_id, expected_title=expected_title,
                 **({"identity_receipt": Path(identity_receipt)} if identity_receipt else {}),
             )
-            try:
-                context.storage_state(path=str(state_file))
-            except Exception as exc:
-                logger.warning("精确平台 ID 回查后保存会话失败: %s", exc)
             browser.close()
             if state == MANAGEMENT_PUBLISHED:
                 return 0
@@ -2920,16 +3323,8 @@ def run_uploader(
             logger.warning("作品管理页未找到已绑定 ID 或未能判定状态: post_id=%s", platform_post_id)
             return EXIT_MANAGEMENT_UNCERTAIN
 
-        try:
-            identity_baseline, identity_baseline_ready = capture_submission_identity_baseline(context, page)
-        except ManagementListRateLimited:
-            _record_management_rate_limit(evidence_root, phase="PRE_UPLOAD")
-            _capture_wechat_evidence(page, evidence_root, "management_rate_limited_pre_upload")
-            logger.error("Platform management list rate limited (-360); refusing upload or submission in this run.")
-            browser.close()
-            return 1
-        if not identity_baseline_ready:
-            logger.warning("Pre-submit platform-ID baseline unavailable; submission may proceed but will remain unbound.")
+        # 管理列表基线仅用于发布后身份差集绑定，随结果回查一并停用。
+        # 内容、封面、商品和提交意图等上传前安全检查保持执行。
 
         # 2. 上传视频文件 ─ 三段式容错策略
         logger.info(f"Uploading video: {video_abs}")
@@ -4083,6 +4478,9 @@ def run_uploader(
         # 5. 执行提交或存草稿
         from video_processing.utils.submission_progress import write_progress
         # 必须在第一个外部提交动作前持久化；写入失败时绝不点击。
+        from video_processing.core.wechat_session_lock import mark_current_wechat_submit_intent
+        _disable_post_submit_result_requests(context, evidence_root)
+        mark_current_wechat_submit_intent()
         write_progress(evidence_root, video_path, submit_intent=True)
         if draft:
             logger.info("Saving as draft...")
@@ -4107,51 +4505,15 @@ def run_uploader(
                 browser.close()
                 return 1
                 
-        # 6. 确认提交/保存结果
-        # 跳转作品列表仅代表平台接收；严禁在这里声称公开视频已发布。
-        page.wait_for_timeout(5000)
-        if not draft and not declare_original:
-            if _confirm_no_original_interceptor(page, evidence_root):
-                logger.info("Confirmed direct submission without original declaration; awaiting platform receipt.")
-        redirected, page_content = False, ""
+        # 仅完成本次提交所需的原创提醒，不读取结果页或判断平台成功。
         try:
-            # 成功发布后视频号网页通常跳转到 /post/list（最可靠信号）
-              page.wait_for_url("**/post/list**", timeout=15000)
-              redirected = True
-              logger.info("Submission accepted: navigated to post list; awaiting platform processing/review.")
-              page.wait_for_timeout(5000)
-              _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
-              if identity_baseline_ready:
-                  receipt = resolve_submission_platform_identity_after_publish(
-                      page, identity_baseline, submitted_short_title,
-                      expected_description=copy_text,
-                  )
-                  if receipt:
-                      _write_submission_receipt(evidence_root, receipt, expected_attachment=expected_attachment)
-                      logger.info(
-                          "Captured exact WeChat platform post identity for this submission: %s",
-                          receipt["platform_post_id"],
-                      )
-                  else:
-                      _write_submission_receipt(
-                          evidence_root,
-                          {
-                              "matched_by": "unbound",
-                              "reason": "No unique before/after platform-ID delta with exact title or description",
-                          },
-                          expected_attachment=expected_attachment,
-                      )
-        except Exception:
-            page_content = page.content()  # 未跳转 → 取页面文本走降级判据
-
-        accepted = redirected or classify_publish_result(False, page_content, draft=draft)
-        browser.close()
-        if accepted and not draft:
-            logger.info("Submission accepted but not platform-published; returning review state.")
-            return EXIT_SUBMITTED_FOR_REVIEW
-        if accepted:
-            return 0
-        logger.warning("Publish could NOT be confirmed — returning UNCONFIRMED(3) so pipeline will NOT mark PUBLISHED/GC.")
+            page.wait_for_timeout(5000)
+            if not draft and not declare_original:
+                _confirm_no_original_interceptor(page, evidence_root)
+            _record_manual_confirmation_attempt(evidence_root, video_path, draft=draft)
+        finally:
+            browser.close()
+        logger.info("提交动作已执行，结果由用户手工确认；不访问作品列表、不自动重投。")
         return 3
 
 @single_script

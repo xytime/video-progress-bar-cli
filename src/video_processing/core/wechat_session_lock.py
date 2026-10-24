@@ -52,6 +52,16 @@ def current_wechat_session():
     return _SESSION.get()
 
 
+def record_current_wechat_login_required():
+    """只记录业务页面已明确出现的登录提示；当前许可代际 CAS，绝不额外发起探测。"""
+    from config.settings import settings
+    session = _SESSION.get()
+    if session is not None and settings.wechat_operations_enabled:
+        from .wechat_auth_state import record_wechat_keepalive_result
+        record_wechat_keepalive_result(account_state_path(session.state_path), status="LOGIN_REQUIRED",
+                                       expected_generation=getattr(session, "_credential_generation", None))
+
+
 def guard_wechat_context(context):
     """在任何页面导航前挂监听；临时复用上下文沿用当前同一账户的请求预算。"""
     session = _SESSION.get()
@@ -63,6 +73,8 @@ def guard_wechat_context(context):
     if session._request_limited:
         raise WeChatSessionLockBusy("当前视频号会话已收到限流，禁止创建后续上下文")
     if not session._request_started:
+        from .wechat_auth_state import read_wechat_auth_state
+        session._credential_generation = read_wechat_auth_state(account_state_path(session.state_path)).get("credential_generation")
         try:
             session.request_guard.start_session(session.purpose)
         except WeChatRequestDeferred as exc:

@@ -122,6 +122,11 @@ def admission(row, now, purpose, task, *, consume=False, bypass_cooldown=False):
         found["seen"] = now
     else:
         queue.append({"key": key, "purpose": purpose, "task": task, "at": now, "seen": now})
+        found = queue[-1]
+    if settings.wechat_operations_enabled:
+        # 旧宽用途队列不是正在执行的许可。由新执行者实际重申后才参与新策略排序；
+        # 只标记排队协议，不删除或重新计费任何历史会话。
+        found.update(policy_protocol=1, operation=PURPOSES.get(purpose))
     info = evaluate(row, now, purpose, task, bypass_cooldown=bypass_cooldown)
     if info["blockers"]:
         return "；".join(b["reason"] for b in info["blockers"]) + (f"，最早满足已知时间门禁 {info['until']:.0f}（不保证执行）" if info["until"] else "；执行时间仍取决于其他门禁")
@@ -167,6 +172,8 @@ def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False)
         blockers.append({"code": code, "reason": reason, "until": until})
     if row.get("blocked_until", 0) > now:
         block("PLATFORM_BACKOFF", "视频号返回限流，本地退避中", row["blocked_until"])
+    if row.get("requires_manual_login") and purpose != "登录":
+        block("AUTH_REQUIRED", "当前凭证已明确失效，等待人工重新登录；不以后台轮询探测恢复")
     if purpose == "状态核对":
         block("READBACK_DISABLED", "发布后自动查询已停用；由用户手工确认")
     if operation is None and purpose != "登录":
@@ -201,7 +208,8 @@ def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False)
         if priorities and task_identity(task) != task_identity(priorities[0]["task"]):
             block("RECOVERY_RESERVED", "已有明确恢复任务保留下一次机会", priorities[0]["expires_at"])
         # 只比较当前可执行的排队项；额度已满的某一用途不能堵住其他用途。
-        eligible = [q for q in queue if PURPOSES.get(q["purpose"]) and
+        eligible = [q for q in queue if q.get("policy_protocol") == 1 and
+                    q.get("operation") == PURPOSES.get(q["purpose"]) and PURPOSES.get(q["purpose"]) and
                     not _operation_blocks(actual, now, PURPOSES[q["purpose"]], policy)[0]]
         if eligible and task_identity(min(eligible, key=lambda q: q["at"])["task"]) != task_identity(task):
             block("QUEUE_ORDER", "另一个当前可执行的待办在前，等待浏览器串行机会")

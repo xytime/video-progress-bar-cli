@@ -170,7 +170,7 @@ class WeChatRequestGuard:
 
     def _check_session(self, row, now):
         if settings.wechat_operations_enabled:
-            return self._check(row, now)
+            return self._check(row, now, allow_login=self._manual_login)
         if self._has_override(row):
             return
         self._check(row, now)
@@ -184,7 +184,7 @@ class WeChatRequestGuard:
 
     def _read(self):
         if not self.path.exists():
-            return {"version": 1, "blocked_until": 0, "next_session_at": 0, "failure_streak": 0}
+            return self._with_auth_gate({"version": 1, "blocked_until": 0, "next_session_at": 0, "failure_streak": 0})
         try:
             row = json.loads(self.path.read_text(encoding="utf-8"))
             if (row.get("version") != 1 or type(row.get("failure_streak")) is not int
@@ -217,9 +217,19 @@ class WeChatRequestGuard:
                         raise ValueError(name)
                     if not isinstance(value.get("task"), str) or (name != "recovery_priority" and not isinstance(value.get("purpose"), str)):
                         raise ValueError(name)
-            return row
+            return self._with_auth_gate(row)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise WeChatRequestDeferred("视频号共享退避记录不可验证，停止请求") from exc
+
+    def _with_auth_gate(self, row):
+        """只读当前代际的明确登录失效事实；成功重新授权后自然解除，绝不消耗额度探测。"""
+        if settings.wechat_operations_enabled:
+            from .wechat_auth_state import read_wechat_auth_state
+            auth = read_wechat_auth_state(settings.default_output_dir / "wechat_state.json")
+            failed_at = auth.get("last_keepalive_at") or 0
+            verified_at = auth.get("last_verified_at") or 0
+            row["requires_manual_login"] = auth.get("last_keepalive_status") == "LOGIN_REQUIRED" and verified_at <= failed_at
+        return row
 
     def _save(self, row, event):
         temporary = self.path.with_suffix(".tmp")
@@ -229,8 +239,10 @@ class WeChatRequestGuard:
             audit.write(json.dumps(dict(event, at=time.time(), pid=os.getpid()), ensure_ascii=False) + "\n")
 
     @staticmethod
-    def _check(row, now):
+    def _check(row, now, *, allow_login=False):
         policy = load_policy()
+        if policy is not None and row.get("requires_manual_login") and not allow_login:
+            raise WeChatRequestDeferred("当前凭证已明确失效，等待人工重新登录；本轮不打开后台、不消耗额度")
         until = row["blocked_until"] if policy is not None else max(row["blocked_until"], row["next_session_at"])
         if now < until:
             raise WeChatCooldownDeferred(f"视频号账户冷却中，最早 {until:.0f}，禁止平台请求")
