@@ -29,6 +29,7 @@ def active(tmp_path, monkeypatch):
     monkeypatch.setattr(type(settings),'default_output_dir',property(lambda _self: tmp_path))
     monkeypatch.setattr(settings,'wechat_account_scheduler_enabled',True)
     monkeypatch.setattr(settings,'wechat_scheduler_priority_video','')
+    monkeypatch.setattr(settings,'wechat_reply_policy_path',tmp_path/'isolated-legacy-reply-policy.json')
     # 旧策略同步会改写单例；本测试必须完整归还这些内存字段，不能污染其他测试。
     for key in ('wechat_reply_min_interval_seconds','wechat_reply_hourly_quota','wechat_reply_max_per_video',
                 'wechat_reply_window_start_shanghai','wechat_reply_window_end_shanghai','wechat_reply_approval_mode'):

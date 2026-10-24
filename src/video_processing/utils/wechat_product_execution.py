@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| cleanup-timeout-v1 | 2026-10-24 | Codex | 清空单步超时以明确未确认原因闭锁，回执附固定动作阶段，不放宽商品准入。 |
 | 1.5.0 | 2026-10-24 | Codex | 仅未提交的清理预算超时按既有次数/退避重检，兼容旧BLOCKED回执且不解除身份冲突。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界商品失败不得无商品继续，发表前再次强制绑定核验。 |
 | 1.4.0 | 2026-10-12 | Antigravity | 最终核验时清理竞争的旧文章与无挂接回读，防止证据目录复用时相互污染。 |
@@ -18,7 +19,7 @@ import time
 import hashlib
 from video_processing.utils.wechat_product_config import atomic_json, record_adoption
 from video_processing.utils.wechat_product_task import selection_from_task
-from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline
+from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline, picker_diagnostic_stage
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 from video_processing.core.wechat_product_attachment import requires_bound_product
 from video_processing.core.wechat_product_wait_policy import RECHECKABLE_CLEANUP_TIMEOUT
@@ -198,6 +199,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
                        requested_product_id=result.requested.product_id, requested_title=result.requested.title,
                        attempts=result.attempts, fallback_reason=result.fallback_reason,
                        attempt_records=list(result.attempt_records), elapsed_seconds=result.elapsed_seconds,
+                       adapter_stage=picker_diagnostic_stage(picker),
                        config_version=policy.version, config_digest=policy.digest,
                        task_id=payload['task_id'], attachment_reason=payload['reason'])
         atomic_json(evidence_dir / 'product_selection_receipt.json', receipt)

@@ -4,6 +4,8 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| cleanup-timeout-v1 | 2026-10-24 | Codex | 英语卡已证明未提交的清理技术失败纳入冻结写入重试链，达到上限在本地停止，不改用量。 |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
@@ -8376,6 +8378,14 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 "SELECT * FROM english_world_review_items WHERE id = ?", (review_id,),
             ).fetchone())
 
+    def _english_cleanup_failures_conn(self, conn, review_id):
+        return int(conn.execute("""SELECT COUNT(*) FROM english_world_submission_attempts
+            WHERE review_id=? AND state='FAILED' AND uploader_exit_code=14
+              AND platform_post_id IS NULL AND finished_at IS NOT NULL
+              AND (error_message LIKE '%商品等待：PRODUCT_CLEANUP_BUDGET_EXHAUSTED%'
+                   OR error_message LIKE '%商品等待：PRODUCT_CLEANUP_OPERATION_TIMEOUT%')""",
+            (str(review_id),)).fetchone()[0])
+
     def claim_english_world_submission(
         self, review_id: str, *, evidence_dir: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -8386,6 +8396,14 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             retry = conn.execute("SELECT next_attempt_at FROM wechat_write_retry_chains WHERE kind='english_world' AND task_id=?", (clean_id,)).fetchone()
             if retry and retry[0] and retry[0] > datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
                 return None
+            if settings.wechat_operations_enabled:
+                eligible = conn.execute("SELECT id FROM english_world_review_items WHERE id=? AND state='SUBMISSION_APPROVED'", (clean_id,)).fetchone()
+                if eligible is None:
+                    return None
+                cap = self._freeze_wechat_retry_chain_conn(conn, "english_world", clean_id)
+                generic = conn.execute("SELECT failure_count FROM wechat_write_retry_chains WHERE kind='english_world' AND task_id=?", (clean_id,)).fetchone()
+                if self._english_cleanup_failures_conn(conn, clean_id) + int(generic[0]) >= cap + 1:
+                    return None
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMITTING', submission_started_at = CURRENT_TIMESTAMP,
@@ -8640,6 +8658,8 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
 
     def get_next_auto_approved_english_world_submission(self, *, excluded_product_tasks: Collection[str] = ()) -> Optional[Dict[str, Any]]:
         """读取下一条等待公共窗口的自动授权项；只读且不领取投稿。"""
+        from ..utils.wechat_operations_policy import retry_policy
+        retry_cap = retry_policy()["max_retries"] + 1 if settings.wechat_operations_enabled else None
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT * FROM english_world_review_items
@@ -8650,7 +8670,17 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                        WHERE pd.task_id IN (SELECT value FROM json_each(?))
                          AND (json_extract(pd.payload, '$.context.review_id')=english_world_review_items.id
                               OR json_extract(pd.payload, '$.context.legacy_review_id')=english_world_review_items.id))
-                   ORDER BY approved_at ASC, id ASC LIMIT 1""", (json.dumps(list(excluded_product_tasks)),)
+                     AND (? IS NULL OR (
+                       (SELECT COUNT(*) FROM english_world_submission_attempts a
+                        WHERE a.review_id=english_world_review_items.id AND a.state='FAILED'
+                          AND a.uploader_exit_code=14 AND a.platform_post_id IS NULL AND a.finished_at IS NOT NULL
+                          AND (a.error_message LIKE '%商品等待：PRODUCT_CLEANUP_BUDGET_EXHAUSTED%'
+                               OR a.error_message LIKE '%商品等待：PRODUCT_CLEANUP_OPERATION_TIMEOUT%'))
+                       + COALESCE((SELECT failure_count FROM wechat_write_retry_chains r
+                         WHERE r.kind='english_world' AND r.task_id=english_world_review_items.id),0)
+                     ) < MIN(?,COALESCE((SELECT initial_max_retries+1 FROM wechat_write_retry_chains r
+                       WHERE r.kind='english_world' AND r.task_id=english_world_review_items.id),?)))
+                   ORDER BY approved_at ASC, id ASC LIMIT 1""", (json.dumps(list(excluded_product_tasks)),retry_cap,retry_cap,retry_cap)
             ).fetchone()
             return dict(row) if row else None
 
@@ -10090,7 +10120,6 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         # Modification History
         | Version | Date | Author | Description |
         | --- | --- | --- | --- |
-| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
         | 1.1.0 | 2026-10-24 | Codex | 库存资格与自动投稿保持一致，排除商品等待及人工恢复项。 |
         """
         with self.get_connection() as conn:

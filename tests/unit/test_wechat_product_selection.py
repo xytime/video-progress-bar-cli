@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| cleanup-timeout-v1 | 2026-10-24 | Codex | 可选挂接的单步清理超时不再误报总时限，诊断只接受固定白名单。 |
 | 1.1.0 | 2026-10-11 | Codex | 验证可选挂接失败后清空放行，残留、未知表单及超时仍阻断。 |
 | 1.0.0 | 2026-10-10 | Codex | 覆盖默认回退、身份冲突、取消失败及共享时间预算；不访问平台。 |
 """
@@ -445,3 +446,25 @@ def test_adapter_overrun_of_candidate_budget_stops_without_unsafe_fallback():
     assert result.reason == "PRODUCT_OPERATION_TIMEOUT"
     assert not result.binding_confirmed
     assert not any(action in {"clear", "find:" + DEFAULT.product_id} for action, _ in picker.calls)
+
+
+def test_optional_cleanup_local_timeout_does_not_claim_total_deadline_exhausted():
+    class LocalCleanupTimeout(FakePicker):
+        def cancel_and_clear(self, **kwargs):
+            self.clock.now += 3
+            raise TimeoutError('synthetic local cleanup limit')
+    picker=LocalCleanupTimeout()
+    result=select_optional_product(decision=choose_product_role(category='财经'),catalog=catalog(),picker=picker,
+        timeout_seconds=30,clock=picker.clock,selection_block_reason='TARGET_UNAVAILABLE')
+    assert result.state=='BLOCKED' and not result.submission_allowed
+    assert result.reason=='PRODUCT_CLEANUP_OPERATION_TIMEOUT'
+    assert result.elapsed_seconds==3
+    assert result.fallback_reason=='TARGET_UNAVAILABLE'
+
+
+def test_adapter_diagnostic_only_accepts_fixed_stage_names():
+    from video_processing.utils.wechat_product_selection import picker_diagnostic_stage
+    class Picker:diagnostic_stage='VERIFY_PRODUCT_CLEARED'
+    assert picker_diagnostic_stage(Picker())=='VERIFY_PRODUCT_CLEARED'
+    Picker.diagnostic_stage='private URL or credential must not enter receipt'
+    assert picker_diagnostic_stage(Picker()) is None

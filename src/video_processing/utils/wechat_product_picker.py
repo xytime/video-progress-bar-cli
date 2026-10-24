@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| cleanup-timeout-v1 | 2026-10-24 | Codex | 记录固定白名单动作阶段以定位选品/清空超时，不改变选择器或超时上限。 |
 | 1.3.0 | 2026-10-12 | Codex | 同一实际选中行分别保留商家商品 ID 与视频号挂载 ID，禁止用名称或列表序号映射。 |
 | 1.2.0 | 2026-10-12 | Codex | 修复隐藏 iframe/Shadow DOM 定位；无 ID 卡片仅接受平台实际选中行及未变化表单证据。 |
 | 1.1.0 | 2026-10-10 | Antigravity | 自动确认‘选择商品出现时机’弹窗，确保遮罩完全关闭且发表按钮无阻碍。 |
@@ -110,6 +111,7 @@ class PlaywrightProductPicker:
         self.page = page
         self.clock = clock
         self._binding_attestation = None
+        self.diagnostic_stage = None
         self.binding_identity_source = "FINAL_FORM_READBACK"
         self.binding_platform_product_id = None
         # catalog 仅保留调用兼容，不用于身份回读。
@@ -167,20 +169,25 @@ class PlaywrightProductPicker:
             self.page.wait_for_timeout(min(50, self._remaining(end)))
 
     def _open(self, end: float):
+        self.diagnostic_stage = "CHECK_PRODUCT_DIALOG"
         if self._eval("return productDialogs().length > 0;", end):
             return
         ctx = self._get_content_frame()
         try:
             if not self._eval("return Array.from(scope.querySelectorAll('.choosen-link-wrap')).some(e => visible(e) && text(e).includes('商品'));", end):
+                self.diagnostic_stage = "SELECT_LINK_TYPE"
                 ctx.get_by_text("选择链接", exact=True).click(timeout=self._remaining(end))
                 ctx.get_by_text("商品", exact=True).click(timeout=self._remaining(end))
+            self.diagnostic_stage = "OPEN_PRODUCT_DIALOG"
             ctx.get_by_text("选择需要添加的商品", exact=True).click(timeout=self._remaining(end))
         except PlaywrightTimeoutError as exc:
             raise TimeoutError("PRODUCT_OPERATION_TIMEOUT") from exc
+        self.diagnostic_stage = "WAIT_PRODUCT_DIALOG"
         self._poll("return productDialogs().length > 0;", end)
 
     def read_binding(self, *, timeout_ms: int) -> ProductIdentity | None:
         end = self._end(timeout_ms)
+        self.diagnostic_stage = "READ_PRODUCT_BINDING"
         info = self._eval("return binding();", end)
         self.binding_identity_source = "FINAL_FORM_READBACK"
         self.binding_platform_product_id = None
@@ -212,6 +219,7 @@ class PlaywrightProductPicker:
         if search.count() == 1 and search.is_visible():
             # 平台公开控件：用精确商品编码跨分页筛选，再回读真实行的 ID 和完整名。
             try:
+                self.diagnostic_stage = "SEARCH_PRODUCT"
                 search.fill(product.product_id, timeout=self._remaining(end))
                 filtered = ctx.locator('[ml-key="filter_btn"]').filter(has_text='筛选')
                 if filtered.count() != 1:
@@ -219,8 +227,10 @@ class PlaywrightProductPicker:
                 filtered.click(timeout=self._remaining(end))
             except PlaywrightTimeoutError as exc:
                 raise TimeoutError('PRODUCT_OPERATION_TIMEOUT') from exc
+            self.diagnostic_stage = "WAIT_PRODUCT_SEARCH_RESULTS"
             # 真实异步列表必须结束 loading，空列表也需要明确空态；不能用旧行推测缺货。
             self._poll("return productDialogs().some(d => !Array.from(d.querySelectorAll('[aria-busy=true], .ant-spin-spinning, .weui-desktop-loading')).some(visible) && (lookup(arg).status !== 'UNAVAILABLE' || lookup(arg).matched || Array.from(d.querySelectorAll('.ant-empty, .weui-desktop-empty')).some(visible)));", end, vars(product))
+        self.diagnostic_stage = "WAIT_PRODUCT_ROWS"
         # 等到数据行或明确空列表出现，避免把加载中误判成缺货。
         self._poll("return productDialogs().some(d => Array.from(d.querySelectorAll('tr input[type=radio], .ant-empty, .weui-desktop-empty')).some(visible));", end)
         return ProductLookup(self._eval("return lookup(arg).status;", end, vars(product)))
@@ -275,8 +285,11 @@ class PlaywrightProductPicker:
     def cancel_and_clear(self, *, timeout_ms: int) -> bool:
         self._clear_attestation()
         end = self._end(timeout_ms, 3000)
+        self.diagnostic_stage = "CANCEL_PRODUCT_DIALOGS"
         self._eval("for (const d of dialogs()) { const b = button(d, /^取消$/); if (b) b.click(); }", end)
+        self.diagnostic_stage = "CLEAR_PRODUCT_CARD"
         self._eval("const name = scope.querySelector('.post-component-choose-wrap .choose-content .name'); const b = scope.querySelector('.post-component-choose-wrap .close-icon'); if (visible(name) && text(name) && visible(b)) b.click();", end)
+        self.diagnostic_stage = "VERIFY_PRODUCT_CLEARED"
         return bool(self._poll("return !dialogs().length && binding().unbound === true;", end))
 
     def ready_to_submit(self, *, timeout_ms: int) -> bool:

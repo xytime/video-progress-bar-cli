@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| cleanup-timeout-v1 | 2026-10-24 | Codex | 区分清理单步超时与总时限耗尽；未确认清空继续闭锁，不增加任何预算。 |
 | 1.1.0 | 2026-10-11 | Codex | 商品挂接改为可选；失败后在总预算内核实清空与就绪，允许无商品继续。 |
 | 1.0.0 | 2026-10-10 | Codex | 两次尝试共享总预算；身份冲突或绑定不明阻止发表；默认回退保留原因。 |
 """
@@ -20,6 +21,16 @@ from typing import Callable, Protocol
 from video_processing.core.wechat_product_policy import (
     ProductCatalog, ProductDecision, ProductIdentity, ProductLookup,
 )
+
+
+DIAGNOSTIC_STAGES = frozenset({"CHECK_PRODUCT_DIALOG", "SELECT_LINK_TYPE", "OPEN_PRODUCT_DIALOG",
+    "WAIT_PRODUCT_DIALOG", "READ_PRODUCT_BINDING", "SEARCH_PRODUCT", "WAIT_PRODUCT_SEARCH_RESULTS",
+    "WAIT_PRODUCT_ROWS", "CANCEL_PRODUCT_DIALOGS", "CLEAR_PRODUCT_CARD", "VERIFY_PRODUCT_CLEARED"})
+
+
+def picker_diagnostic_stage(picker):
+    value = getattr(picker, "diagnostic_stage", None)
+    return value if isinstance(value, str) and value in DIAGNOSTIC_STAGES else None
 
 
 class ProductPicker(Protocol):
@@ -182,6 +193,7 @@ def select_required_product(
                 else:
                     return result("BLOCKED", "INVALID_LOOKUP_RESULT")
             except TimeoutError:
+                record["failure_stage"] = picker_diagnostic_stage(picker)
                 # 单个动作先超时、总预算仍有余量时，可以核实清空后尝试默认商品。
                 budget.remaining_ms()
                 failure = "TARGET_OPERATION_TIMEOUT"
@@ -255,6 +267,11 @@ def select_optional_product(
             return result("BLOCKED", "BINDING_CHANGED_BEFORE_SUBMIT", actual)
         return result("UNBOUND", "OPTIONAL_PRODUCT_NOT_BOUND")
     except TimeoutError:
-        return result("BLOCKED", "PRODUCT_CLEANUP_BUDGET_EXHAUSTED")
+        try:
+            budget.remaining_ms()
+        except TimeoutError:
+            return result("BLOCKED", "PRODUCT_CLEANUP_BUDGET_EXHAUSTED")
+        # 内层适配器的短超时不代表30秒总时限耗尽；清空未确认时禁止盲目重检。
+        return result("BLOCKED", "PRODUCT_CLEANUP_OPERATION_TIMEOUT")
     except Exception as exc:
         return result("BLOCKED", "PRODUCT_CLEANUP_ERROR:" + type(exc).__name__)
