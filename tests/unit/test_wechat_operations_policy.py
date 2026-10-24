@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 验证独立预算、滚动边界、原子扣次、保守旧记录、重试和坏配置闭锁。 |
+| scan-timer-v1 | 2026-10-25 | Codex | 小幅定时抖动只等待已知时间；账号/未知门禁不等待放行，原生扣次及配置保持。 |
 """
 import copy
 import datetime as dt
@@ -152,6 +153,65 @@ def test_five_video_scan_batch_charges_once_with_empty_scan_skipped(active):
     assert not guard.evaluate('评论扫描',account_only=True)['allowed']
     with pytest.raises(Exception):
         with adapter.scan_workflow([]):pass
+    assert len(guard.snapshot()['schedule']['sessions'])==1
+
+
+@pytest.mark.parametrize('codes,until,expected',[
+    (['OPERATION_ROLLING_1H_LIMIT','OPERATION_INTERVAL'],10002,2),
+    (['OPERATION_INTERVAL'],10005,5),
+    (['OPERATION_INTERVAL'],10005.1,0),
+    (['OPERATION_INTERVAL'],9999,0),
+    (['OPERATION_INTERVAL'],None,0),
+    (['OPERATION_INTERVAL'],float('nan'),0),
+    (['OPERATION_INTERVAL'],float('inf'),0),
+    (['AUTH_REQUIRED'],10002,0),
+    (['PLATFORM_BACKOFF','OPERATION_INTERVAL'],10002,0),
+    (['QUEUE_TURN','OPERATION_INTERVAL'],10002,0),
+])
+def test_scan_near_due_wait_only_known_short_time_gates(codes,until,expected):
+    from video_processing.interaction.secondary_reply_browser_adapter import _near_scan_release_delay
+    assert _near_scan_release_delay({'allowed':False,'until':until,'blockers':[{'code':c} for c in codes]},10000)==expected
+
+
+def test_scan_cron_jitter_waits_locally_then_charges_after_hour(active,monkeypatch):
+    from video_processing.interaction import secondary_reply_browser_adapter as adapter_module
+    from video_processing.core.wechat_session_lock import guard_wechat_context
+    clock=[time.time()];slept=[]
+    guard=WeChatRequestGuard(active[1].parent/'state.json')
+    guard.path.write_text(json.dumps(state([event(clock[0]-3598,'comment_scan','previous-synthetic-batch')])))
+    monkeypatch.setattr(adapter_module.time,'time',lambda:clock[0])
+    def local_wait(seconds):
+        slept.append(seconds);clock[0]+=seconds
+    monkeypatch.setattr(adapter_module.time,'sleep',local_wait)
+    class Context:
+        def on(self,*_args):pass
+        def route(self,*_args):pass
+    adapter=adapter_module.SecondaryReplyBrowserAdapter(state_path=active[1].parent/'state.json')
+    with adapter.scan_workflow(['synthetic-known-target']):
+        guard_wechat_context(Context())
+    sessions=guard.snapshot()['schedule']['sessions']
+    assert slept==[2.0] and len(sessions)==2
+    assert sessions[-1]['at']-sessions[0]['at']>=3600
+    assert sessions[-1]['operation']=='comment_scan'
+    assert load_policy()==active[0]
+
+
+def test_scan_local_wait_does_not_authorize_after_concurrent_policy_change(active,monkeypatch):
+    from video_processing.interaction import secondary_reply_browser_adapter as adapter_module
+    from video_processing.core.wechat_session_lock import guard_wechat_context,WeChatSessionLockBusy
+    clock=[time.time()]
+    guard=WeChatRequestGuard(active[1].parent/'state.json')
+    guard.path.write_text(json.dumps(state([event(clock[0]-3598,'comment_scan','previous-synthetic-batch')])))
+    monkeypatch.setattr(adapter_module.time,'time',lambda:clock[0])
+    def local_wait(seconds):
+        clock[0]+=seconds
+        tightened=copy.deepcopy(active[0]);tightened['operations']['comment_scan']['min_interval_seconds']=7200
+        active[1].write_text(json.dumps(tightened))
+    monkeypatch.setattr(adapter_module.time,'sleep',local_wait)
+    adapter=adapter_module.SecondaryReplyBrowserAdapter(state_path=active[1].parent/'state.json')
+    with pytest.raises(WeChatSessionLockBusy):
+        with adapter.scan_workflow(['synthetic-known-target']):
+            raise AssertionError('changed policy must reject before browser context')
     assert len(guard.snapshot()['schedule']['sessions'])==1
 
 def _first_comment(db,tmp_path):

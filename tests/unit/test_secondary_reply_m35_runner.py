@@ -14,6 +14,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| scan-timer-regression | 2026-10-25 | Codex | 审批回调与场景共用合成时钟，避免固定日期七天后测试被宿主时间误判过期。 |
 | 1.0.0 | 2026-10-17 | Antigravity | 初始创建：覆盖 M3.5 全部核心模块与 SR-01~SR-04 / CR-01~CR-04 回归测试 |
 """
 
@@ -420,6 +421,10 @@ def test_tick_runner_phases_watermark_anti_reentrancy_night_window_and_backoff(t
     # --- 审批人在凌晨 02:36 点击 Telegram 批准按钮 ---
     from video_processing.interaction import secondary_reply_ops as ops
 
+    consume_at = db.consume_reply_task_approval
+    def consume_at_scenario_time(**kwargs):
+        return consume_at(**kwargs, now_utc_iso=clock_box[0].strftime("%Y-%m-%d %H:%M:%S"))
+    monkeypatch.setattr(db, "consume_reply_task_approval", consume_at_scenario_time)
     app_res = ops.approve_callback(
         db,
         callback_data=cb_data,

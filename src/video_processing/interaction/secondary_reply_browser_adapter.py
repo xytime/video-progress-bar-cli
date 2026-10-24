@@ -14,6 +14,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
+| scan-timer-v1 | 2026-10-25 | Codex | 具名扫描仅遇5秒内已知时间门禁时先做一次本地等待，再走完整原生准入，避免cron秒级抖动多等半小时。 |
 | root-reply-scope-v1 | 2026-10-23 | Codex | 回复触发器限定父评论直属主体，排除已展开的观众子回复控件；仍拒绝主体内歧义。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | 1.6.3 | 2026-10-23 | Codex | 恢复具名作品只读会话；单条回复闭环共享账户许可，独立上下文保持写入守卫与请求预算。 |
@@ -44,6 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+
 from playwright.sync_api import sync_playwright
 
 from video_processing.core.wechat_browser_context import create_wechat_context
@@ -64,6 +66,21 @@ from video_processing.interaction.secondary_reply_contract import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _near_scan_release_delay(info, now):
+    """技术定时容差，不是额度或授权；完整准入仍在等待后执行。"""
+    blockers = info.get('blockers') or []
+    if info.get('allowed') or not blockers:
+        return 0.0
+    if any(b.get('code') not in {'OPERATION_ROLLING_1H_LIMIT', 'OPERATION_INTERVAL'} for b in blockers):
+        return 0.0
+    until = info.get('until')
+    if type(until) not in (int, float):
+        return 0.0
+    delay = until - now
+    return delay if 0 < delay <= 5 else 0.0
+
 
 WECHAT_COMMENT_URL = "https://channels.weixin.qq.com/platform/interaction/comment"
 COMMENT_POST_LIST_PATH = "/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list"
@@ -822,6 +839,12 @@ class SecondaryReplyBrowserAdapter:
             raise WeChatSessionLockBusy("扫描工作流不允许嵌套")
         import hashlib
         identity = "scan-batch:" + hashlib.sha256("\n".join(ids).encode()).hexdigest()[:24]
+        from video_processing.core.wechat_request_guard import WeChatRequestGuard
+        hint = WeChatRequestGuard(self.state_path).evaluate(purpose="评论扫描", account_only=True)
+        delay = _near_scan_release_delay(hint, time.time())
+        if delay:
+            logger.info("[SecondaryReplyBrowser] 具名扫描等待本地时间门禁 %.3f 秒；之后仍完整核验", delay)
+            time.sleep(delay)  # 不持浏览器锁，不访问平台；配置/锁/队列在原生准入时重新判断。
         with self._session_scope(identity, purpose="评论扫描") as session:
             self._workflow_session = session
             self._scan_post_ids = frozenset(ids)
