@@ -1,8 +1,9 @@
-"""所有英语世界强制绑定快捷英语的隔离回归。
+"""英语世界优先快捷英语、系统默认兜底及安全无商品降级的隔离回归。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 用户更正为优先挂载并接受系统默认兜底，替代强制绑定断言。 |
 | 1.0.0 | 2026-10-21 | Codex | 覆盖跳过、手选、次序、唯一候选、不可售及最终绑定门禁。 |
 """
 import json
@@ -23,18 +24,19 @@ def policy(tmp_path):
 
 @pytest.mark.parametrize('intent', ['AUTO','NONE','PRODUCT'])
 @pytest.mark.parametrize('first', [True,False])
-def test_all_intents_and_production_orders_are_mandatory(intent,first):
+def test_all_intents_and_production_orders_attempt_preferred_product(intent,first):
     identity = dict(product_id='wrong',product_title='另一件商品') if intent == 'PRODUCT' else {}
     decision=attachment_decision(dict(content_type='ENGLISH_WORLD_SHORT',product_intent=intent,
         **identity,view_count=0,like_count=0),dict(is_first=first))
-    assert decision['require_product'] and decision['reason']=='ATTACH_ENGLISH_ALL'
-    assert decision['attachment_version']=='wechat-english-all-v1'
+    assert decision['require_product'] and decision['reason']=='ATTACH_ENGLISH_PREFERRED'
+    assert decision['attachment_version']=='wechat-english-preferred-v1'
 
 
-def test_only_kuaijie_candidate_and_invalid_profile_stops(tmp_path):
+def test_kuaijie_first_then_configured_default_and_invalid_profile_stops(tmp_path):
     data,_=policy(tmp_path)
     decision=parse_product_policy(data).decide(content_type='ENGLISH_WORLD_SHORT')
-    assert len(decision.candidates)==1
+    parsed=parse_product_policy(data)
+    assert decision.candidates==parsed.chain(('kuaijie_english',))
     assert decision.candidates[0].product_id=='10000006971274'
     data['profiles']['english_world']['candidates']=['default']
     with pytest.raises(ValueError):parse_product_policy(data).decide(content_type='ENGLISH_WORLD_SHORT')
@@ -57,22 +59,23 @@ class Picker:
 
 
 @pytest.mark.parametrize('available',[True,False])
-def test_selection_and_final_readback_cannot_downgrade(tmp_path,available):
+def test_selection_and_final_readback_allow_confirmed_empty_form(tmp_path,available):
     _,active=policy(tmp_path)
     database=PipelineDB(str(tmp_path/'db.sqlite'))
     context=dict(content_type='ENGLISH_WORLD_SHORT',product_intent='NONE',youtube_id='youtube1234')
     task=freeze_task_product_decision(database,'english:test',context,active)
     assert task['require_product']
-    assert [p['product_id'] for p in task['product_decision']['candidates']]==['10000006971274']
+    assert task['product_decision']['candidates'][0]['product_id']=='10000006971274'
+    assert len(task['product_decision']['candidates'])>=2
     args=write_product_task_arguments(task,tmp_path/'task')
     assert read_product_task_decision(Path(args[1]))==task
     picker=Picker(available)
     evidence=tmp_path/'e'
-    assert execute_product_task(task,picker,evidence,tmp_path/'status') is available
-    assert finalize_product_before_submit(task,picker,evidence) is available
+    assert execute_product_task(task,picker,evidence,tmp_path/'status')
+    assert finalize_product_before_submit(task,picker,evidence)
     if available:
         picker.binding=None
         assert not finalize_product_before_submit(task,picker,evidence)
     else:
         receipt=json.loads((evidence/'product_selection_receipt.json').read_text())
-        assert receipt['state']=='BLOCKED' and receipt['binding_required']
+        assert receipt['state']=='UNBOUND' and not receipt['binding_required']

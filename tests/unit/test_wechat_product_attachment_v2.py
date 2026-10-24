@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 新英语世界任务使用优先挂载规则，保留已冻结旧版本兼容用例。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | 1.2.0 | 2026-10-12 | Codex | 验证逐次失败证据保留，显式挂商品验收拒绝无绑定，日常降级保持。 |
 | 1.1.0 | 2026-10-11 | Codex | 缺商品可继续，覆盖旧等待释放、身份清理、两入口回执及已提交保护。 |
@@ -42,7 +43,7 @@ def test_daily_atomic_scope_retry_and_cross_day(tmp_path):
     second=next(r for r in rows if not r['is_first'])
     assert attachment_decision(dict(low,like_count=99),second)['require_product']
     assert attachment_decision(dict(low,product_intent='NONE'))['require_product']
-    assert attachment_decision(dict(low,product_intent='PRODUCT',product_id='123',product_title='指定商品'))['reason']=='ATTACH_ENGLISH_ALL'
+    assert attachment_decision(dict(low,product_intent='PRODUCT',product_id='123',product_title='指定商品'))['reason']=='ATTACH_ENGLISH_PREFERRED'
 
 
 def test_migration_auto_and_new_manual_none_slices(tmp_path):
@@ -441,7 +442,7 @@ def test_legacy_cutover_once_concurrent_restart_hash_bound_and_no_daily_slot(tmp
     context=dict(content_type='ENGLISH_WORLD_SHORT',legacy_pre_cutover=True,legacy_review_id=old['id'],legacy_manifest_sha256='a'*64)
     active=product_fixture(tmp_path)
     decision=freeze_task_product_decision(again,'legacy-review:'+old['id'],context,active)
-    assert decision['reason']=='ATTACH_ENGLISH_ALL' and decision['require_product']
+    assert decision['reason']=='ATTACH_ENGLISH_PREFERRED' and decision['require_product']
     assert again.get_product_production(decision['task_id']) is None
     with pytest.raises(ValueError,match='首次迁移'):
         freeze_task_product_decision(again,'legacy-review:'+new['id'],dict(context,legacy_review_id=new['id']),active)

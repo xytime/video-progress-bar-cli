@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-25 | Codex | 就绪分发桩补充输出目录，覆盖账户门禁下的异常队列公平性。 |
 | 1.2.0 | 2026-10-12 | Codex | 双 ID 挂载核验；旧回执补充凭据必须精确绑定哈希、作品 nonce 与原生商品记录。 |
 | 1.1.0 | 2026-10-12 | Codex | 覆盖实际选中行与未变化表单证据的同作品商品精确核对。 |
 """
@@ -69,7 +70,7 @@ def test_uncleared_high_priority_task_does_not_starve_ready_following_video(tmp_
         db.mark_video_ready_for_publication(yid)
     calls=[]
     class Manager:
-        def __init__(self): self.db=db
+        def __init__(self): self.db=db;self._OUT_DIR=out
         def _process_single_video(self,row,**kwargs):
             calls.append(row['youtube_id'])
             if row['youtube_id']=='bad-form-01':

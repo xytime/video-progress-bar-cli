@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 英语世界优先挂载规则单独版本化；保留旧冻结版本以防篡改历史决定。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 区分英语世界专属选品与发表绑定要求，保留冻结候选规则。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界所有任务必须挂载，覆盖首条、旧包及人工跳过意图。 |
 """
@@ -11,12 +12,15 @@ from decimal import Decimal, InvalidOperation
 import math
 
 ATTACHMENT_VERSION = 'wechat-product-attachment-v2'
+ENGLISH_PREFERRED_VERSION = 'wechat-english-preferred-v1'
+ENGLISH_LEGACY_VERSION = 'wechat-english-all-v1'
+ENGLISH_ATTACHMENT_VERSIONS = frozenset({ENGLISH_PREFERRED_VERSION, ENGLISH_LEGACY_VERSION})
 INTENTS = {'AUTO', 'NONE', 'PRODUCT'}
 STOP_STATES = {'PUBLISHED', 'UNDER_REVIEW', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'UNCERTAIN', 'PUBLISHING'}
 
 
 def uses_english_world_product(payload: dict) -> bool:
-    """英语世界专属选品身份；表示应尝试的商品，不要求最终绑定成功。"""
+    """英语世界优先选品身份；允许系统默认兜底及安全无商品降级。"""
     return payload.get('context', {}).get('content_type') == 'ENGLISH_WORLD_SHORT'
 
 
@@ -54,7 +58,7 @@ def attachment_decision(context: dict, production: dict | None = None, *, previe
     source = metrics(context.get('view_count'), context.get('like_count'))
     english_world = context.get('content_type') == 'ENGLISH_WORLD_SHORT'
     if english_world:
-        required, reason = True, 'ATTACH_ENGLISH_ALL'
+        required, reason = True, 'ATTACH_ENGLISH_PREFERRED'
     elif intent == 'NONE':
         required, reason = False, 'SKIP_MANUAL_NONE'
     elif intent == 'PRODUCT':
@@ -66,6 +70,6 @@ def attachment_decision(context: dict, production: dict | None = None, *, previe
     else:
         required = source['meets_threshold']
         reason = 'ATTACH_THRESHOLD' if required else 'SKIP_BELOW_THRESHOLD'
-    return {'attachment_version': 'wechat-english-all-v1' if english_world else ATTACHMENT_VERSION, 'product_intent': intent,
+    return {'attachment_version': ENGLISH_PREFERRED_VERSION if english_world else ATTACHMENT_VERSION, 'product_intent': intent,
             'require_product': required, 'reason': reason, 'threshold_percent': 10,
             'metrics': source, 'production': production, 'preview_only': preview}

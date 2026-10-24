@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 英语世界受理回执接受优先挂载新版冻结候选，默认兜底同样核对精确身份。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 取消英语世界强制绑定；无商品受理须有同任务同策略及最终清空实读证据。 |
 | operations-v1 | 2026-10-24 | Codex | 仅已证明未提交的技术失败接入两次重试；不重置授权或重复已受理项。 |
 | english-admission-v1 | 2026-10-24 | Codex | 领取前纯计算完整账户资格，不排队、不消耗额度、不生成无效上传尝试。 |
@@ -54,6 +55,7 @@ import requests
 
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.core.wechat_product_attachment import ENGLISH_ATTACHMENT_VERSIONS
 from video_processing.core.wechat_session_lock import (
     EXIT_WECHAT_SESSION_BUSY, WeChatSessionLock, WeChatSessionLockBusy,
 )
@@ -287,7 +289,7 @@ def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
             return False
         if required:
             identities = {(item['product_id'], item['title']) for item in decision['product_decision']['candidates']}
-            if decision.get('attachment_version') != 'wechat-english-all-v1':
+            if decision.get('attachment_version') not in ENGLISH_ATTACHMENT_VERSIONS:
                 return False
             if receipt.get('binding_confirmed') is True and receipt.get('unbound_confirmed') is False:
                 return (receipt.get('actual_product_id'), receipt.get('actual_title')) in identities

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 增加默认兜底后仍核验首选商品及未知清理闭锁。 |
 | 1.0.0 | 2026-10-25 | Codex | 验证无限日额仍防重，以及英语世界正向清空证据链。 |
 """
 import copy
@@ -47,7 +48,7 @@ def test_english_optional_attempt_and_final_receipt(tmp_path,failure):
     task=freeze_task_product_decision(db,'english:optional',dict(content_type='ENGLISH_WORLD_SHORT',product_intent='AUTO'),active_policy)
     class Picker(EmptyPicker):
         def find(self,product,**kwargs):
-            self.target=product
+            self.targets=getattr(self,'targets',[])+[product]
             return ProductLookup.UNAVAILABLE
         def cancel_and_clear(self,**kwargs):
             if failure=='unknown_cleanup':return False
@@ -57,7 +58,7 @@ def test_english_optional_attempt_and_final_receipt(tmp_path,failure):
     picker=Picker();evidence=tmp_path/'evidence'
     allowed=execute_product_task(task,picker,evidence,tmp_path/'status')
     assert allowed is (failure=='unavailable')
-    assert picker.target.product_id==task['product_decision']['candidates'][0]['product_id']
+    assert picker.targets[0].product_id==task['product_decision']['candidates'][0]['product_id']
     assert not _product_receipt_is_confirmed(evidence,task)
     if allowed:
         assert finalize_product_before_submit(task,picker,evidence)

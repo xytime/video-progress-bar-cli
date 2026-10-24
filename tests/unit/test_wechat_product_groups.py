@@ -1,4 +1,10 @@
-"""五类选品、上下文传递与控制台 API 的隔离验收。"""
+"""五类选品、上下文传递与控制台 API 的隔离验收。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 英语世界优先快捷英语并继承默认候选。 |
+"""
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -35,7 +41,7 @@ def test_group_priority(data, context, group, alias):
     manual=p.decide(**context,product_alias='news')
     assert manual.video_group==group
     if group == 'english_world':
-        assert manual.reason=='ENGLISH_WORLD_REQUIRED'
+        assert manual.reason=='ENGLISH_WORLD_PREFERRED'
         assert manual.candidates[0]==p.products['kuaijie_english'].identity
     else:
         assert manual.reason=='MANUAL'

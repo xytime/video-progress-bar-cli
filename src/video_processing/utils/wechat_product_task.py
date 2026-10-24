@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 新任务冻结优先商品及默认兜底；旧任务精确重放原单候选，不改写已冻结身份。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界拒绝旧冻结规则，人工商品意图不能覆盖专属快捷英语候选。 |
 """
@@ -13,7 +14,10 @@ import json
 import hashlib
 import math
 from pathlib import Path
-from video_processing.core.wechat_product_attachment import attachment_decision, STOP_STATES, uses_english_world_product
+from video_processing.core.wechat_product_attachment import (
+    attachment_decision, STOP_STATES, uses_english_world_product,
+    ENGLISH_LEGACY_VERSION, ENGLISH_ATTACHMENT_VERSIONS,
+)
 from video_processing.core.wechat_product_policy import ProductIdentity, parse_product_policy
 from video_processing.utils.wechat_product_config import load_policy, decision_payload, atomic_json
 from video_processing.utils.wechat_product_catalog import catalog_view
@@ -98,6 +102,9 @@ def selection_from_task(payload: dict):
     context = payload['context']
     keys = ('category', 'source_channel_id', 'content_type', 'product_topic')
     decision = policy.decide(**{k: context.get(k) for k in keys})
+    if uses_english_world_product(payload) and payload.get('attachment_version') == ENGLISH_LEGACY_VERSION:
+        # 原冻结策略仅含快捷英语，不能因代码升级悄悄扩大历史任务的候选身份。
+        decision = replace(decision, reason='ENGLISH_WORLD_REQUIRED', candidates=decision.candidates[:1])
     if payload['product_intent'] == 'PRODUCT' and not uses_english_world_product(payload):
         identity = ProductIdentity(context['product_id'], context['product_title'])
         decision = replace(decision, reason='MANUAL_EXACT', candidates=(identity,))
@@ -109,8 +116,8 @@ def selection_from_task(payload: dict):
 def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: Path, *, now=None) -> dict:
     old = db.get_product_task_decision(task_id)
     if old:
-        if uses_english_world_product(old) and old.get('attachment_version') != 'wechat-english-all-v1':
-            raise ValueError('英语世界旧冻结决定不符合每条绑定快捷英语的新规则，须重新审核，禁止直接投稿')
+        if uses_english_world_product(old) and old.get('attachment_version') not in ENGLISH_ATTACHMENT_VERSIONS:
+            raise ValueError('英语世界冻结决定版本未知，须重新审核，禁止直接投稿')
         return old
     if context.get('status') in STOP_STATES:
         raise ValueError('已上传/受理或结果不明任务禁止为商品规则重传')
@@ -161,6 +168,8 @@ def read_product_task_decision(path: Path) -> dict:
     if not isinstance(payload, dict) or payload.get('publisher_capability') != PUBLISHER_CAPABILITY:
         raise ValueError('商品任务契约未知')
     expected = attachment_decision(payload['context'], payload.get('production'))
+    if uses_english_world_product(payload) and payload.get('attachment_version') == ENGLISH_LEGACY_VERSION:
+        expected.update(attachment_version=ENGLISH_LEGACY_VERSION, reason='ATTACH_ENGLISH_ALL')
     for key in ('attachment_version', 'product_intent', 'require_product', 'reason', 'threshold_percent', 'metrics'):
         if payload.get(key) != expected[key]:
             raise ValueError('商品任务决定与冻结输入不一致')

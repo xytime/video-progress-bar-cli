@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| english-preferred-v1 | 2026-10-25 | Codex | 新英语世界任务使用优先挂载规则，保留已冻结旧版本兼容用例。 |
 | 1.1.0 | 2026-10-24 | Codex | 商品等待测试使用本用例登录态，消除与账户公平队列测试的顺序耦合。 |
 """
 from copy import deepcopy
@@ -121,7 +122,7 @@ def test_first_and_later_publishers_receive_frozen_decision_independent_of_like_
     db = PipelineDB(str(tmp_path / 'pipeline.db'))
     monkeypatch.setattr(submitter.settings, 'wechat_product_policy_path', policy(tmp_path / 'products.json'))
     now = datetime(2026, 10, 11, 2, tzinfo=timezone.utc)
-    for index, expected in enumerate(('ATTACH_ENGLISH_ALL', 'ATTACH_ENGLISH_ALL')):
+    for index, expected in enumerate(('ATTACH_ENGLISH_PREFERRED', 'ATTACH_ENGLISH_PREFERRED')):
         timeline = source(index * 40, (index + 1) * 40)
         if index:
             timeline['source_provenance']['like_count'] = 200
@@ -166,7 +167,7 @@ def test_legacy_whitelist_is_exact_review_and_manifest_without_retroactive_slot(
                         lambda review_id, sha: (review_id, sha) == ('legacy-item', digest), raising=False)
     item = {'id': 'legacy-item', 'manifest_path': str(manifest), 'manifest_sha256': digest}
     decision = submitter._product_task_decision(db, item)
-    assert decision['require_product'] is True and decision['reason'] == 'ATTACH_ENGLISH_ALL'
+    assert decision['require_product'] is True and decision['reason'] == 'ATTACH_ENGLISH_PREFERRED'
     assert decision['task_id'] == 'legacy-review:legacy-item'
     assert manifest.read_bytes() == raw and db.get_product_production(production_task_id(source())) is None
     # 只有清单缺 context 才允许白名单；已存在但登记缺失的上下文不可降级。
@@ -207,6 +208,8 @@ def test_shadow_cli_and_prompt_do_not_occupy_formal_production(tmp_path, monkeyp
     prompt = coordinator._product_production_prompt(product_intent='NONE')
     assert '首次翻译或词汇富化之前' in prompt and 'register_english_world_product.py' in prompt
     assert '"product_intent": "NONE"' in prompt
+    assert '优先绑定《快捷英语》' in prompt and '系统默认商品候选兜底' in prompt
+    assert '允许无商品继续' in prompt and '必须绑定快捷英语' not in prompt
 
 
 @pytest.mark.parametrize('shadow,reject_preflight,intent', [
