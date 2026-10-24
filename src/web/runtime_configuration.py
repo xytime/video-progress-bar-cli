@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | 复用本机真实对端/会话/CSRF边界，放宽超批准基线无普通批准接口。 |
+| runtime-center-v1.1 | 2026-10-24 | Codex | 回复时段显示下一次开放下界，并与额度门禁取较晚值；不改变允许时段。 |
 """
 from __future__ import annotations
 import datetime as dt
@@ -50,6 +51,23 @@ def differences(before,after,prefix=''):
     return out
 
 
+def reply_window_blocker(now,start,end):
+    """已知时段门禁有确定的下一开放下界，不能冒充无限期阻塞。"""
+    from video_processing.utils.secondary_reply_policy import is_within_shanghai_window
+    if is_within_shanghai_window(now.strftime('%H:%M'),start,end):
+        return None
+    hour,minute=map(int,start.split(':'))
+    days,hour=divmod(hour,24)
+    opening=now.replace(hour=hour,minute=minute,second=0,microsecond=0)+dt.timedelta(days=days)
+    if opening<=now:opening+=dt.timedelta(days=1)
+    return {'code':'REPLY_TIME_WINDOW','reason':'当前不在既有回复时段内；下一次开放 '+start+'（北京时间）','until':opening.timestamp()}
+
+
+def blocking_until(blockers):
+    if not blockers or any(b['until'] is None for b in blockers):return None
+    return max(b['until'] for b in blockers)
+
+
 def worker_state(current):
     records=[];directory=settings.default_output_dir/'runtime_config_workers'
     for role in ['dashboard','ready-worker','secondary-reply']:
@@ -91,14 +109,12 @@ def gates(db):
         reply['blockers'].append({'code':'REPLY_FEATURE_DISABLED','reason':'观众留言自动回复未启用','until':None})
     if not settings.enable_wechat_secondary_reply_live_submission:
         reply['blockers'].append({'code':'REPLY_SENDING_DISABLED','reason':'观众留言实际发送未启用','until':None})
-    from video_processing.utils.secondary_reply_policy import is_within_shanghai_window
     from zoneinfo import ZoneInfo
-    current_hhmm=dt.datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%H:%M')
-    if not is_within_shanghai_window(current_hhmm,settings.wechat_reply_window_start_shanghai,settings.wechat_reply_window_end_shanghai):
-        reply['blockers'].append({'code':'REPLY_TIME_WINDOW','reason':'当前不在既有回复时段内','until':None})
+    window=reply_window_blocker(dt.datetime.now(ZoneInfo('Asia/Shanghai')),settings.wechat_reply_window_start_shanghai,settings.wechat_reply_window_end_shanghai)
+    if window:reply['blockers'].append(window)
     if reply['blockers']:
         reply['allowed']=False
-        if any(b['until'] is None for b in reply['blockers']):reply['until']=None
+        reply['until']=blocking_until(reply['blockers'])
     return {'operations':views,'waits':waits,
             'additional_gates':[{'name':'观众回复功能','value':'已启用' if settings.enable_wechat_secondary_reply else '关闭（配额不是启用授权）'},
                                 {'name':'观众回复实际发送','value':'已启用' if settings.enable_wechat_secondary_reply_live_submission else '关闭'},

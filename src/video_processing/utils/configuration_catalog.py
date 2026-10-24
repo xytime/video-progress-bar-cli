@@ -124,7 +124,7 @@ def catalog(current):
                       'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'mode':'domain-editor' if url else 'readonly'})
     files.extend([{'name':'.env','path':'.env','title':'启动与凭据','editor':'','boundary':'只显示字段来源；不读取或返回秘密内容。修改需受控重启','mode':'secret'},
                   {'name':'runtime_configuration/active.json','path':'output/runtime_configuration/active.json','title':'活动版本包','editor':'/runtime-configuration',
-                   'boundary':'四领域原子切换；来源与审计由服务端维护','mode':'managed'},
+                   'boundary':'五领域原子切换；来源与审计由服务端维护','mode':'managed'},
                   {'name':'专题/预筛选数据库配置','path':'DAL领域配置','title':'采集规则与预筛选','editor':'/topic-candidates',
                    'boundary':'专用本机会话、CAS和阶段合同；不从文件编辑恢复搜索或准入','mode':'domain-editor'}])
     return {'fields':rows,'files':files,'groups':[{'id':key,'name':name,'count':sum(r['group']==key for r in rows)} for key,name in GROUPS],

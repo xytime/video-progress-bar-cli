@@ -29,9 +29,30 @@ from video_processing.core.wechat_request_guard import WeChatRequestGuard
 from video_processing.db.database import PipelineDB
 from tests.unit.test_wechat_operations_policy import active,state,event
 from tests.unit.test_wechat_interaction_state import _published_target
-from web.runtime_configuration import create_runtime_configuration_router
+from web.runtime_configuration import create_runtime_configuration_router,reply_window_blocker,blocking_until
 
 ORIGIN='http://127.0.0.1:9100'
+
+
+@pytest.mark.parametrize('now,start,end,expected',[
+    ('2026-10-25T00:20:00+08:00','05:30','21:00','2026-10-25T05:30:00+08:00'),
+    ('2026-10-25T21:00:00+08:00','05:30','21:00','2026-10-26T05:30:00+08:00'),
+    ('2026-10-25T12:00:00+08:00','21:00','05:30','2026-10-25T21:00:00+08:00'),
+    ('2026-10-25T05:30:00+08:00','05:30','21:00',None),
+    ('2026-10-25T00:20:00+08:00','21:00','05:30',None),
+    ('2026-10-25T12:00:00+08:00','00:00','24:00',None),
+    ('2026-10-25T12:00:00+08:00','05:30','05:30',None),
+])
+def test_reply_window_known_opening_boundary(now,start,end,expected):
+    result=reply_window_blocker(dt.datetime.fromisoformat(now),start,end)
+    assert (None if result is None else result['until'])==(None if expected is None else dt.datetime.fromisoformat(expected).timestamp())
+
+
+def test_reply_window_combines_later_quota_and_unknown_safety_gate():
+    window=reply_window_blocker(dt.datetime.fromisoformat('2026-10-25T00:20:00+08:00'),'05:30','21:00')
+    quota={'code':'ROLLING_QUOTA','until':window['until']+3600}
+    assert blocking_until([window,quota])==quota['until']
+    assert blocking_until([window,{'code':'FEATURE_OFF','until':None}]) is None
 
 
 @pytest.fixture
