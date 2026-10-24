@@ -9774,14 +9774,44 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def get_english_world_inventory_count(self) -> int:
-        """读取当前待发布池（READY_FOR_REVIEW 或 SUBMISSION_APPROVED）的合格成片数量。"""
+    def get_english_world_inventory_count(self, *, excluded_product_tasks: Collection[str] = ()) -> int:
+        """只计可由现有自动链消费的库存，人工/冻结项不阻断新的有界备货。
+
+        # Modification History
+        | Version | Date | Author | Description |
+        | --- | --- | --- | --- |
+        | 1.1.0 | 2026-10-24 | Codex | 库存资格与自动投稿保持一致，排除商品等待及人工恢复项。 |
+        """
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT COUNT(*) AS cnt FROM english_world_review_items
-                   WHERE state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED')"""
+                   WHERE state = 'SUBMISSION_APPROVED' AND approval_source = 'AUTO_POLICY'
+                     AND NOT EXISTS (SELECT 1 FROM product_task_decisions pd
+                       WHERE pd.task_id IN (SELECT value FROM json_each(?))
+                         AND (json_extract(pd.payload, '$.context.review_id')=english_world_review_items.id
+                              OR json_extract(pd.payload, '$.context.legacy_review_id')=english_world_review_items.id))""",
+                (json.dumps(list(excluded_product_tasks)),),
             ).fetchone()
             return int(row["cnt"]) if row else 0
+
+    def get_english_world_delivery_flow(self) -> Dict[str, Any]:
+        """只读本地独立工作流；投稿尝试、受理与公开始终分别表达。
+
+        # Modification History
+        | Version | Date | Author | Description |
+        | --- | --- | --- | --- |
+        | 1.0.0 | 2026-10-24 | Codex | 现有窗口监测读取供给/待办及本地受理时间，不访问平台。 |
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute("""SELECT state, approval_source, count(*) AS count
+                FROM english_world_review_items GROUP BY state, approval_source""").fetchall()
+            attempts = conn.execute("""SELECT max(started_at) AS last_attempt_at,
+                max(CASE WHEN state IN ('UNDER_REVIEW','PUBLISHED') AND uploader_exit_code IN (0,6)
+                    THEN finished_at END) AS last_accepted_receipt_at
+                FROM english_world_submission_attempts""").fetchone()
+            created = conn.execute("SELECT min(created_at), max(created_at) FROM english_world_review_items").fetchone()
+            return {"states": [dict(row) for row in rows], "first_created_at": created[0], "last_created_at": created[1],
+                    **dict(attempts), "public_visibility": "NOT_VERIFIED"}
 
     def get_english_world_today_published_count(self) -> int:
         """统计今日已进入 SUBMITTING/UNDER_REVIEW/PUBLISHED 状态的成片数量（按 UTC+8 日期判定）。"""

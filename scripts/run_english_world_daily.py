@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """每日英语世界短视频生产协调器：制作、质检并提交审计回执。
 
+# Modification History (recovery)
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-10-24 | Codex | 库存复用自动投稿资格和商品退避排除，人工等待不再伪装满仓。 |
+
 本入口由 LaunchAgent 直接以 Python 程序执行，避免 launchd 通过 shell 读取外接盘
 脚本时受 macOS 文件访问策略拦截。
 
@@ -1178,7 +1183,9 @@ def run(
                 _release_lock(paths.lock_dir)
                 return 0
             check_db = PipelineDB()
-            inventory_count = check_db.get_english_world_inventory_count()
+            from video_processing.utils.wechat_product_execution import blocked_product_task_keys
+            excluded = blocked_product_task_keys(paths.project_root / 'output', settings.wechat_product_policy_path)
+            inventory_count = check_db.get_english_world_inventory_count(excluded_product_tasks=excluded)
             stock_target = getattr(settings, "english_world_stock_target", 2)
             if inventory_count >= stock_target:
                 with run_log.open("a", encoding="utf-8") as stream:

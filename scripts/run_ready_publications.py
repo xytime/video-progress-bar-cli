@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-10-24 | Codex | 复用就绪巡检轮换两个工作流，持久保存下一顺序，阻止通用队列耗尽英语世界机会。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | 1.6.0 | 2026-10-18 | AGY | 心跳记录加载时源码与模块指纹，并在派生子 worker 与认领任务前执行空白浏览器能力预检与有界退避 |
 | 1.5.0 | 2026-10-10 | Codex | 心跳回读当前 TED 原片清理开关和配方，验证独立执行者运行采用。 |
@@ -100,6 +101,26 @@ def dispatch_english_world_once(manager: PipelineManager) -> int:
     return 1
 
 
+def dispatch_ready_round(manager: PipelineManager) -> int:
+    """同一账户每轮只执行一个工作流；忙/额度仍由原准入控制，崩溃后沿用顺序。"""
+    from video_processing.core.deployment import write_json
+    path = manager._OUT_DIR / 'ready_publications.turn.json'
+    if path.exists():
+        value = json.loads(path.read_text())
+        if value.get('next') not in {'english_world', 'general'}:
+            raise ValueError('发布轮次记录损坏，保留现场')
+        first = value['next']
+    else:
+        first = 'english_world'
+    dispatchers = {'english_world': dispatch_english_world_once, 'general': dispatch_once}
+    second = 'general' if first == 'english_world' else 'english_world'
+    for domain, following in ((first, second), (second, first)):
+        if dispatchers[domain](manager):
+            write_json(path, {'schema': 1, 'next': following})
+            return 1
+    return 0
+
+
 @entry
 @registered("ready-worker")
 def main(argv=None) -> int:
@@ -176,8 +197,7 @@ def main(argv=None) -> int:
                         ensure_delivery_recovery_worker(manager.db, ROOT)
                         from video_processing.utils.publishing_recovery_worker import ensure_publishing_recovery_worker
                         ensure_publishing_recovery_worker(manager.db, ROOT)
-                        attempted = dispatch_once(manager)
-                        attempted += dispatch_english_world_once(manager)
+                        attempted = dispatch_ready_round(manager)
                         report({"stage": "IDLE", "current_video": None})
                     except Exception:
                         logging.exception("成片发布巡检失败；保留状态供下一轮恢复")

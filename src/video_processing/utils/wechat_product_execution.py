@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-24 | Codex | 仅未提交的清理预算超时按既有次数/退避重检，兼容旧BLOCKED回执且不解除身份冲突。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界商品失败不得无商品继续，发表前再次强制绑定核验。 |
 | 1.4.0 | 2026-10-12 | Antigravity | 最终核验时清理竞争的旧文章与无挂接回读，防止证据目录复用时相互污染。 |
 | 1.3.0 | 2026-10-12 | Codex | 最终实读回执保留平台选中行的挂载 ID，拒绝前后身份变化。 |
@@ -20,6 +21,7 @@ from video_processing.utils.wechat_product_task import selection_from_task
 from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 from video_processing.core.wechat_product_attachment import requires_bound_product
+from video_processing.core.wechat_product_wait_policy import RECHECKABLE_CLEANUP_TIMEOUT
 
 
 def _wait_row_ready(row: dict, now: float, generation: str | None) -> bool:
@@ -28,6 +30,12 @@ def _wait_row_ready(row: dict, now: float, generation: str | None) -> bool:
         return False
     if row['reason'] in {'PRODUCT_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'LOGIN_REQUIRED'}:
         return True
+    if row['reason'] == RECHECKABLE_CLEANUP_TIMEOUT:
+        changed = generation is not None and generation != row.get('observed_generation')
+        if not changed and row['checks'] >= row['wait_policy']['max_checks']:
+            return False
+        # 旧 BLOCKED 保留原件和次数，仅允许新的完整表单核验；不认定已清空或可发表。
+        return changed or row['next_check_at'] <= now
     if row['state'] == 'BLOCKED':
         return False
     if row['state'] == 'READY_FOR_EXISTING_GATES':

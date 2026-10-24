@@ -8,6 +8,7 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 1.4.0 | 2026-10-24 | Codex | 原窗口监测区分库存与真实本地受理，停滞沿既有通知留痕，不新增调度。 |
 # | 1.3.4 | 2026-09-18 | Antigravity | 缺席自愈子进程接入统一环境工厂 build_subprocess_env，保障 cron 下凭证与 PATH 完备 |
 # | 1.3.3 | 2026-09-18 | Antigravity | 识别正常库存满仓与限额达成的跳过状态，不误报为未交付。 |
 # | 1.3.2 | 2026-09-17 | Codex | 缺席窗口恢复显式沿用 AGY 协调器参数，避免监控补跑回退到 Codex。 |
@@ -224,9 +225,53 @@ def _write_health(log_dir: Path, day: datetime, slot: time, payload: dict[str, A
     target = log_dir / f"monitor_{day.strftime('%F')}_{slot.strftime('%H%M')}.json"
     temporary = target.with_suffix(".tmp")
     payload["evidence_layers"] = _five_layer_evidence(payload)
+    database = log_dir.parent / 'pipeline.db'
+    if database.is_file() and 'delivery_flow' not in payload:
+        try:
+            from video_processing.english_world.delivery_health import delivery_health
+            payload['delivery_flow'] = delivery_health(database, now=day)
+        except Exception as exc:
+            payload['delivery_flow'] = {'state': 'UNKNOWN', 'reason': type(exc).__name__, 'public_visibility': 'NOT_VERIFIED'}
+    if (payload.get('state') == 'STOCK_TARGET_SATISFIED'
+            and payload.get('delivery_flow', {}).get('state') == 'DELIVERY_STALLED'):
+        payload['state'] = 'STOCK_WAITING_FOR_DELIVERY'
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(target)
     return target
+
+
+def report_delivery_progress(paths: MonitorPaths, payload: dict[str, Any]) -> None:
+    """只在既有监测触发时报告给用户；通知失败不伪造成已交付或新生图。"""
+    flow = payload.get('delivery_flow', {})
+    from video_processing.core.deployment import write_json
+    watch_path = paths.log_dir / 'delivery_watch.json'
+    previous = json.loads(watch_path.read_text()) if watch_path.exists() else {}
+    resumed = (flow.get('state') == 'RECENT_LOCAL_ACCEPTANCE'
+               and previous.get('state') in {'DELIVERY_STALLED', 'UNKNOWN'})
+    if flow.get('state') not in {'DELIVERY_STALLED', 'UNKNOWN'} and not resumed:
+        return
+    from video_processing.telegram_delivery import send_text
+    from video_processing.db.database import PipelineDB
+    if not (paths.log_dir.parent / 'pipeline.db').is_file():
+        return
+    blockers = '；'.join(item['reason'] for item in flow.get('account_blockers', []))
+    text = (('英语世界自动巡检：读取交付账本失败，当前结果未知。' if flow.get('state') == 'UNKNOWN'
+             else '英语世界自动巡检：最近24小时未取得新的本地受理回执。')
+            +
+            f"可自动续投库存 {flow.get('automatic_inventory', '未知')}，"
+            f"被商品条件阻塞 {flow.get('blocked_automatic_inventory', '未知')}。"
+            + (f'当前等待：{blockers}。' if blockers else '')
+            + '未查发布列表；不明提交不会重传。')
+    if resumed:
+        text = ('英语世界自动巡检：已恢复，取得新的本地受理回执。'
+                f"回执时间（UTC）：{flow.get('last_accepted_receipt_at')}。未回查公开状态，不明提交仍不重传。")
+    sent = send_text(event_type='english_world.delivery_resumed' if resumed else 'english_world.delivery_stalled', priority='P1',
+                     db=PipelineDB(str(paths.log_dir.parent / 'pipeline.db')), text=text,
+                     dedupe_key='english-world-local-delivery', cooldown_seconds=21600)
+    payload['delivery_notification'] = {'state': sent.state, 'suppressed': sent.suppressed}
+    # 未取得通知回执时保留原状态，下个既有窗口仍可重试；不伪造通知成功。
+    if sent.state == 'ACCEPTED':
+        write_json(watch_path, {'state': flow['state'], 'last_accepted_receipt_at': flow.get('last_accepted_receipt_at')})
 
 
 def _run_missing_window_recovery(paths: MonitorPaths) -> int:
@@ -389,6 +434,11 @@ def main(argv: list[str] | None = None) -> int:
     exit_code, payload = monitor_slot(
         paths, slot=slot, now=observed_at, recover_missing=args.recover_missing,
     )
+    report_delivery_progress(paths, payload)
+    if payload.get('delivery_flow', {}).get('state') in {'DELIVERY_STALLED', 'UNKNOWN'}:
+        exit_code = 1
+    # 通知结论也保留在原健康记录中，刷新不触发通知。
+    _write_health(paths.log_dir, observed_at, slot, payload)
     print(json.dumps(payload, ensure_ascii=False))
     return exit_code
 

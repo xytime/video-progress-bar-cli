@@ -1,6 +1,14 @@
-"""等待参数契约；不推断平台每日额度或恢复时刻。"""
+"""等待参数契约；不推断平台每日额度或恢复时刻。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-24 | Codex | 明确未提交的商品清理预算超时可有界重新核验；身份冲突仍闭锁。 |
+"""
 DEFAULT_WAIT_POLICY = dict(base_seconds=300, max_seconds=21600, max_checks=8, lease_seconds=120)
-WAIT_REASONS = {'PRODUCT_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'LOGIN_REQUIRED', 'AVAILABILITY_UNVERIFIED'}
+RECHECKABLE_CLEANUP_TIMEOUT = 'PRODUCT_CLEANUP_BUDGET_EXHAUSTED'
+WAIT_REASONS = {'PRODUCT_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'LOGIN_REQUIRED', 'AVAILABILITY_UNVERIFIED',
+                RECHECKABLE_CLEANUP_TIMEOUT}
 
 
 def validate_wait_policy(value):
