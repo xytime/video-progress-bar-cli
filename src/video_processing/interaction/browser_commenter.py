@@ -333,7 +333,8 @@ class BrowserCommenter:
                 attempt_dir,
                 "DEFERRED",
                 str(exc),
-                details={"lock_error": str(exc), "clicked": False},
+                details={"lock_error": str(exc), "clicked": False,
+                         "admission": getattr(exc, 'admission', None)},
             )
 
     def discover_publications(self, anchor_post_id: str, evidence_dir: Path) -> BrowserResult:

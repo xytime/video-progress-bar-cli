@@ -124,3 +124,17 @@
 | Navigation / Scrollbar | console_navigation.js / dashboard.css | DESIGN.md / URL | 主列表失败和待发布入口，自然滚动 | test_publishing_recovery_browser.py |
 
 预览结果分页20条，操作历史分页10条；窗口、预览页和当前批次保存在URL。全部匹配仅选择可恢复且非估算项，估算项允许显式逐条选择。改变筛选后重新预览才替换旧结果并清空选择；读取失败保留旧结果并标记过期，禁用执行。正常轮询不覆盖选择或打开的确认。恢复操作显示全部选中身份、账号、实际作用与剩余保护，不能称已解冻或已发布。提交超时保留同一操作ID和请求，先核对原操作，可幂等重放同一请求，禁止创建第二操作。批次展示等待原因、下一时间或未知、逐项结果与取消未启动项；不清理真实锁、不触发平台结果回查。
+
+## 运行配置中心（2026-10-24）
+
+业务与权限来源：`docs/specs/runtime-configuration-center.md`。复用既有本机真实对端/会话/CSRF、原生select/dialog及页面status反馈；本页是有版本的策略编辑变体，不复用商品选择业务逻辑。
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Select/Listbox | native select | runtime_configuration.html | 组/方式筛选，接受系统popup几何 | tests/browser/test_runtime_configuration_browser.py |
+| Form | src/web/static/js/runtime_configuration.js | 服务端字段归属/严格Schema | 草稿、字段错误、结构化影响预览、CAS冲突 | tests/unit/test_runtime_configuration.py |
+| Scrollbar | src/web/static/css/dashboard.css | DESIGN.md | 自然页面滚动、dialog内部滚动 | tests/browser/test_runtime_configuration_browser.py |
+| Toast | feedback / apply-feedback / state-feedback | 页面status与live region | 读状态失败不清除保存冲突或草稿 | tests/browser/test_runtime_configuration_browser.py |
+| CRUD | src/web/runtime_configuration.py | config/runtime_policy.py | 应用与回滚生成新版本，不删除事实 | tests/unit/test_runtime_configuration.py |
+
+搜索/组/管理方式/页码/视图保存在URL，中文输入完成后过滤；每页20项。预览期间改草稿使旧预览失效。网络结果不确定不自动重提交，保留operation_id和草稿供核对；并发版本冲突不覆盖。离开或重新载入的丢弃确认初始焦点在继续编辑，Escape保留草稿并恢复焦点。版本、加载、在途和离线定时执行者分别展示，不假报全部生效。开启观众回复需要核对既有时段和内容/审批规则；安全旁路不可编辑。

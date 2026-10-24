@@ -110,6 +110,7 @@
 """
 import hashlib
 import logging
+import asyncio
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
 import secrets
@@ -182,6 +183,8 @@ async def reject_untrusted_browser_origins(request, call_next):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
     origin = request.headers.get("origin")
+    if settings.runtime_configuration_enabled and request.method=='PUT' and request.url.path=='/api/secondary-reply-settings':
+        return JSONResponse(status_code=409,content={'detail':'额度已迁移到运行配置中心；时段与审批保持既有批准值，调整需专门批准'})
     if origin:
         port = settings.dashboard_port
         trusted_origins = {
@@ -235,6 +238,32 @@ app.include_router(
         active=settings.wechat_scheduler_policy_path,
     )
 )
+
+from web.runtime_configuration import create_runtime_configuration_router
+app.include_router(create_runtime_configuration_router(db,port=settings.dashboard_port))
+
+
+@app.on_event('startup')
+async def runtime_configuration_ack_loop():
+    """只核验本地版本；不启动或探测平台工作。"""
+    async def loop():
+        from video_processing.utils.runtime_configuration import acknowledge
+        while True:
+            try:
+                await asyncio.to_thread(acknowledge,'dashboard')
+            except Exception:
+                logging.getLogger(__name__).warning('配置加载确认不可写，界面将显示待加载')
+            await asyncio.sleep(5)
+    app.state.runtime_configuration_task=asyncio.create_task(loop())
+
+
+@app.on_event('shutdown')
+async def runtime_configuration_ack_stop():
+    task=getattr(app.state,'runtime_configuration_task',None)
+    if task:
+        task.cancel()
+        try:await task
+        except asyncio.CancelledError:pass
 
 
 @app.get("/api/wechat-operations-policy")

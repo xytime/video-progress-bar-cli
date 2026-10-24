@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | english-identity-v1 | 2026-10-24 | Codex | 英语学习卡同名成片按冻结包路径区分，保留同包提交去重和通用成片别名。 |
 | queue-preflight-v1 | 2026-10-24 | Codex | 新候选参与既有发布优先排序，预检不再被待冷却互动饿死。 |
@@ -35,7 +36,7 @@ def task_identity(task):
 
 def evaluate(row, now, purpose="发布", task="", *, bypass_cooldown=False, account_only=False):
     """页面、调度和最终上传共同使用的纯准入计算；不排队、不消耗预算。"""
-    policy = load_policy()
+    policy = load_policy(fresh=True)
     if policy is not None:
         return _evaluate_operations(row, now, purpose, task, policy, account_only=account_only)
     state = row.get("schedule", {})
@@ -114,8 +115,11 @@ def admission(row, now, purpose, task, *, consume=False, bypass_cooldown=False):
     if any(b["code"] in hard for b in initial["blockers"]):
         return next(b["reason"] for b in initial["blockers"] if b["code"] in hard)
     sessions = state["sessions"] = [s for s in state["sessions"] if s["at"] > now - DAY]
+    from ..utils.runtime_configuration import value
     queue = state["queue"] = [q for q in state["queue"]
-                              if q["seen"] > now - (2700 if q["purpose"] == "回复" else 600)]
+                              if q["seen"] > now - value('task_scheduling',
+                                  'reply_queue_seen_seconds' if q['purpose']=='回复' else 'queue_seen_seconds',
+                                  2700 if q['purpose']=='回复' else 600)]
     key = hashlib.sha256((purpose + '\n' + task).encode()).hexdigest()
     found = next((q for q in queue if q["key"] == key), None)
     if found:
@@ -203,7 +207,10 @@ def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False)
         current, used = _operation_blocks(actual, now, operation, policy)
         blockers.extend(current)
     if not account_only and operation:
-        queue = [q for q in state.get("queue", []) if q["seen"] > now - (2700 if q["purpose"] == "回复" else 600)]
+        from ..utils.runtime_configuration import value
+        queue = [q for q in state.get("queue", []) if q["seen"] > now - value('task_scheduling',
+                 'reply_queue_seen_seconds' if q['purpose']=='回复' else 'queue_seen_seconds',
+                 2700 if q['purpose']=='回复' else 600)]
         priorities = [p for p in state.get("recovery_priority", []) if p["expires_at"] > now]
         if priorities and task_identity(task) != task_identity(priorities[0]["task"]):
             block("RECOVERY_RESERVED", "已有明确恢复任务保留下一次机会", priorities[0]["expires_at"])

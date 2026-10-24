@@ -1,0 +1,2212 @@
+[
+  {
+    "path": "src/bot/api_client.py",
+    "line": 131,
+    "name": "get_highlight_sources.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 147,
+    "name": "create_highlight_job.min_duration_sec",
+    "value": 35,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 148,
+    "name": "create_highlight_job.max_duration_sec",
+    "value": 90,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 170,
+    "name": "get_highlight_jobs.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 209,
+    "name": "get_english_world_jobs.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 264,
+    "name": "get_english_world_review_items.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 416,
+    "name": "get_manual_publish_lease_jobs.limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/bot/api_client.py",
+    "line": 437,
+    "name": "create_manual_publish_lease.ttl_minutes",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/bot/formatter.py",
+    "line": 442,
+    "name": "_short_error.limit",
+    "value": 72,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/bot/pipeline_agent.py",
+    "line": 109,
+    "name": "_GEMINI_MAX_ATTEMPTS",
+    "value": 3,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/maintenance_runtime.py",
+    "line": 82,
+    "name": "verify_browser_launch_capability.timeout_seconds",
+    "value": 15.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/maintenance_runtime.py",
+    "line": 354,
+    "name": "stop_worker.timeout",
+    "value": 15,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/maintenance_runtime.py",
+    "line": 383,
+    "name": "stop_ui.timeout",
+    "value": 15,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/topic_candidates.py",
+    "line": 124,
+    "name": "eligibility.min_duration",
+    "value": 180,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/wechat_auth_state.py",
+    "line": 1070,
+    "name": "evaluate_wechat_keepalive_overdue.maintenance_duration_seconds",
+    "value": 0.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/wechat_page_contract.py",
+    "line": 291,
+    "name": "wait_for_publish_ready_with_spa_guard.timeout_seconds",
+    "value": 6.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/wechat_page_contract.py",
+    "line": 292,
+    "name": "wait_for_publish_ready_with_spa_guard.poll_interval",
+    "value": 0.3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/wechat_page_contract.py",
+    "line": 456,
+    "name": "wait_for_list_ready_with_spa_guard.timeout_seconds",
+    "value": 8.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/wechat_page_contract.py",
+    "line": 457,
+    "name": "wait_for_list_ready_with_spa_guard.poll_interval",
+    "value": 0.3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/wechat_session_lock.py",
+    "line": 46,
+    "name": "EXIT_WECHAT_COOLDOWN",
+    "value": 15,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/wechat_session_lock.py",
+    "line": 306,
+    "name": "guarded_wechat_browser_session.timeout_seconds",
+    "value": 0.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/wechat_session_lock.py",
+    "line": 202,
+    "name": "__init__.timeout_seconds",
+    "value": 0.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/core/wechat_session_lock.py",
+    "line": 203,
+    "name": "__init__.poll_interval_seconds",
+    "value": 0.05,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/core/wechat_upload_recovery.py",
+    "line": 13,
+    "name": "PRE_SUBMIT_UPLOAD_TIMEOUT",
+    "value": 7,
+    "kind": "named_constant",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/daily_brief.py",
+    "line": 18,
+    "name": "_text.limit",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 2511,
+    "name": "get_ai_audit_for_video.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 2601,
+    "name": "get_censorship_incidents.limit",
+    "value": 50,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 2947,
+    "name": "get_product_preview_videos.limit",
+    "value": 100,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 3863,
+    "name": "requeue_recent_text_provider_failure.max_retry_count",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 3937,
+    "name": "requeue_transient_pre_submission_failure.max_retry_count",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 4102,
+    "name": "get_source_cache_evictable_ids.ttl_days",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 4947,
+    "name": "list_manual_publish_lease_candidates.limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 4997,
+    "name": "list_active_manual_publish_leases.limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5046,
+    "name": "issue_manual_publish_lease.ttl_minutes",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5048,
+    "name": "issue_manual_publish_lease.hard_ttl_minutes",
+    "value": 360,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5415,
+    "name": "recover_orphaned_pre_submission_task.max_retry_count",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5846,
+    "name": "get_high_score_pending_videos.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5849,
+    "name": "get_high_score_pending_videos.source_subtitle_retry_hours",
+    "value": 6,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5939,
+    "name": "get_high_score_preparation_candidates.limit",
+    "value": 1,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5940,
+    "name": "get_high_score_preparation_candidates.retry_hours",
+    "value": 6,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 5993,
+    "name": "get_rescore_candidates.limit",
+    "value": 50,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 6301,
+    "name": "get_quality_report_snapshot.item_limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 6944,
+    "name": "get_recent_confirmed_published_videos.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 7660,
+    "name": "list_highlight_source_videos.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 7690,
+    "name": "create_highlight_job.min_duration_sec",
+    "value": 35,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 7691,
+    "name": "create_highlight_job.max_duration_sec",
+    "value": 90,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 7852,
+    "name": "list_highlight_jobs.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 8121,
+    "name": "list_english_world_jobs.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 9043,
+    "name": "claim_next_english_world_reconciliation.min_interval_minutes",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 9045,
+    "name": "claim_next_english_world_reconciliation.failure_limit",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 9258,
+    "name": "list_english_world_submission_attempts.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10055,
+    "name": "claim_next_english_world_douyin_reconciliation.min_interval_minutes",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10055,
+    "name": "claim_next_english_world_douyin_reconciliation.failure_limit",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10085,
+    "name": "list_english_world_douyin_attempts.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10112,
+    "name": "list_english_world_review_items.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10317,
+    "name": "claim_pending_wechat_review_notifications.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 10906,
+    "name": "get_unqueued_kuaishou_history_videos.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 11703,
+    "name": "get_douyin_upstream_shadow_snapshot.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 11779,
+    "name": "get_unqueued_douyin_history_videos.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 11804,
+    "name": "get_unqueued_douyin_new_videos.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 12104,
+    "name": "record_platform_ui_failure.recording_threshold",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 12380,
+    "name": "get_platform_backfill_preview_candidates.limit",
+    "value": 500,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 12632,
+    "name": "queue_wechat_interaction.max_attempts",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 12792,
+    "name": "claim_due_wechat_interaction.lease_seconds",
+    "value": 180,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13372,
+    "name": "get_recent_wechat_posts_without_interaction.limit",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13407,
+    "name": "get_recent_published_wechat_posts_without_interaction.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13409,
+    "name": "get_recent_published_wechat_posts_without_interaction.max_attempts",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13461,
+    "name": "get_pending_review_wechat_interactions.max_attempts",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13461,
+    "name": "get_pending_review_wechat_interactions.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 13971,
+    "name": "get_approved_secondary_reply_tasks.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 14015,
+    "name": "claim_approved_reply_task.lease_seconds",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G01",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 14634,
+    "name": "get_due_uncertain_secondary_reply_tasks.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 14890,
+    "name": "get_due_comment_scan_posts.limit",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/database.py",
+    "line": 14942,
+    "name": "list_secondary_reply_history.limit",
+    "value": 500,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/delivery_recovery.py",
+    "line": 47,
+    "name": "list_delivery_recoveries.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/publishing_recovery.py",
+    "line": 168,
+    "name": "list_publishing_recovery_operations.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/db/wallstreet_experiment.py",
+    "line": 258,
+    "name": "claim_wallstreet_render.lease_seconds",
+    "value": 7200,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/wallstreet_experiment.py",
+    "line": 258,
+    "name": "claim_wallstreet_render.max_auto_attempts",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/wallstreet_experiment.py",
+    "line": 370,
+    "name": "recover_wallstreet_wechat_login_exit.retry_after_seconds",
+    "value": 1800,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/db/wallstreet_experiment.py",
+    "line": 505,
+    "name": "list_due_wallstreet_metric_targets.limit",
+    "value": 4,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/dubbing/minimax_client.py",
+    "line": 36,
+    "name": "__init__.request_interval_sec",
+    "value": 1.1,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/dubbing/volc_speech_client.py",
+    "line": 41,
+    "name": "__init__.request_interval_sec",
+    "value": 0.2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/english_world/research.py",
+    "line": 202,
+    "name": "_rank_candidates.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/follow_along/alignment.py",
+    "line": 27,
+    "name": "__init__.timeout",
+    "value": 600,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/follow_along/audio.py",
+    "line": 20,
+    "name": "__init__.timeout",
+    "value": 600,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/follow_along/whisperx_adapter.py",
+    "line": 53,
+    "name": "__init__.timeout",
+    "value": 600,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/highlight/service.py",
+    "line": 40,
+    "name": "list_sources.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/interaction/agy_provider.py",
+    "line": 48,
+    "name": "__init__.timeout_seconds",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/browser_commenter.py",
+    "line": 273,
+    "name": "__init__.response_timeout_ms",
+    "value": 5000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/browser_commenter.py",
+    "line": 274,
+    "name": "__init__.dom_timeout_ms",
+    "value": 6000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/browser_commenter.py",
+    "line": 275,
+    "name": "__init__.page_ready_timeout_ms",
+    "value": 45000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/browser_commenter.py",
+    "line": 276,
+    "name": "__init__.poll_interval_ms",
+    "value": 100,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/interaction/browser_commenter.py",
+    "line": 277,
+    "name": "__init__.lock_timeout_seconds",
+    "value": 0.25,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_browser_adapter.py",
+    "line": 134,
+    "name": "__init__.lock_timeout_seconds",
+    "value": 10.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_browser_platform.py",
+    "line": 57,
+    "name": "__init__.lookup_max_attempts",
+    "value": 1,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_browser_platform.py",
+    "line": 58,
+    "name": "__init__.lookup_retry_delay_seconds",
+    "value": 0.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_contract.py",
+    "line": 91,
+    "name": "MAX_INPUT_COMMENT_BUDGET",
+    "value": 300,
+    "kind": "named_constant",
+    "suggested_review_group": "G13",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_ops.py",
+    "line": 216,
+    "name": "request_approval.ttl_minutes",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/interaction/secondary_reply_ops.py",
+    "line": 316,
+    "name": "approve_local.ttl_minutes",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 297,
+    "name": "_MAX_TRANSIENT_PRE_SUBMISSION_RETRIES",
+    "value": 2,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 327,
+    "name": "_CAPTION_HEARTBEAT_TIMEOUT_SEC",
+    "value": 90,
+    "kind": "named_constant",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 868,
+    "name": "wait_for_review_notifications.timeout",
+    "value": 30.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 877,
+    "name": "drain_pending_review_notifications.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 1773,
+    "name": "process_high_score_videos.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 1876,
+    "name": "prepare_high_score_videos.limit",
+    "value": 1,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/pipeline_manager.py",
+    "line": 2136,
+    "name": "_evict_original_video_dir.ttl_days",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/chapters_extractor.py",
+    "line": 103,
+    "name": "_fallback_mechanical_segmenting.duration_sec",
+    "value": 600.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/chapters_extractor.py",
+    "line": 103,
+    "name": "_fallback_mechanical_segmenting.total_duration",
+    "value": 1800.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/interaction_overlay.py",
+    "line": 368,
+    "name": "build_overlay_frame.duration",
+    "value": 8.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/interaction_overlay.py",
+    "line": 500,
+    "name": "compute_triggers.min_video_duration",
+    "value": 22.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/outro_vocab_card.py",
+    "line": 136,
+    "name": "__init__.duration",
+    "value": 2.5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/processors/progress_bar.py",
+    "line": 207,
+    "name": "__init__.title_fade_duration",
+    "value": 0.5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/quality_report.py",
+    "line": 197,
+    "name": "_join_or_none.limit",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/scoring.py",
+    "line": 22,
+    "name": "HEAT_VIEW_THRESHOLD",
+    "value": 1500,
+    "kind": "named_constant",
+    "suggested_review_group": "G09",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/scoring.py",
+    "line": 23,
+    "name": "HEAT_LIKE_RATE_THRESHOLD",
+    "value": 3.0,
+    "kind": "named_constant",
+    "suggested_review_group": "G09",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/audio_qa.py",
+    "line": 79,
+    "name": "repair_final_word_boundary.minimum_duration_seconds",
+    "value": 30.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/study_cards/language_review_service.py",
+    "line": 222,
+    "name": "review.timeout",
+    "value": 180,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/publication_qa.py",
+    "line": 60,
+    "name": "review_publication.timeout",
+    "value": 180,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/renderer.py",
+    "line": 63,
+    "name": "_PRODUCTION_MIN_DURATION",
+    "value": 30.0,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/renderer.py",
+    "line": 64,
+    "name": "_PRODUCTION_MAX_DURATION",
+    "value": 300.0,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/renderer.py",
+    "line": 65,
+    "name": "_MP4_CONTAINER_VALIDATION_ATTEMPTS",
+    "value": 3,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/renderer.py",
+    "line": 66,
+    "name": "_MP4_CONTAINER_VALIDATION_RETRY_SECONDS",
+    "value": 0.2,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/study_cards/template_a.py",
+    "line": 72,
+    "name": "RIGHT_VOCABULARY_LIMIT",
+    "value": 5,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/telegram_delivery.py",
+    "line": 144,
+    "name": "send_text.cooldown_seconds",
+    "value": 0,
+    "kind": "function_default",
+    "suggested_review_group": "G12",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/telegram_delivery.py",
+    "line": 145,
+    "name": "send_text.timeout_seconds",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": "G12",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/telegram_delivery.py",
+    "line": 180,
+    "name": "send_document.timeout_seconds",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G12",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/telegram_delivery.py",
+    "line": 207,
+    "name": "send_video.timeout_seconds",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G12",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/telegram_delivery.py",
+    "line": 239,
+    "name": "send_photo.timeout_seconds",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": "G12",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/topic_tracker/service.py",
+    "line": 265,
+    "name": "wait.timeout",
+    "value": 25,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_subtitle_provider.py",
+    "line": 72,
+    "name": "build_codex_subtitle_candidate.request_timeout",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_subtitle_provider.py",
+    "line": 73,
+    "name": "build_codex_subtitle_candidate.total_timeout",
+    "value": 600,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_subtitle_provider.py",
+    "line": 73,
+    "name": "build_codex_subtitle_candidate.batch_size",
+    "value": 50,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_subtitle_provider.py",
+    "line": 73,
+    "name": "build_codex_subtitle_candidate.max_attempts",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_text_provider.py",
+    "line": 125,
+    "name": "_run_codex_structured.timeout_sec",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/codex_text_provider.py",
+    "line": 35,
+    "name": "__init__.retry_at",
+    "value": 0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/utils/deepseek_translation.py",
+    "line": 39,
+    "name": "_VOCAB_BATCH_SIZE",
+    "value": 25,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/monitor_translation_queue.py",
+    "line": 38,
+    "name": "drain.limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/provider_circuit.py",
+    "line": 11,
+    "name": "__init__.threshold",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": "G06",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/provider_circuit.py",
+    "line": 11,
+    "name": "__init__.cooldown",
+    "value": 900,
+    "kind": "function_default",
+    "suggested_review_group": "G06",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/retry_policy.py",
+    "line": 8,
+    "name": "backoff_seconds.retry_after",
+    "value": 0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/video_processing/utils/source_subtitle_screening.py",
+    "line": 56,
+    "name": "screen_youtube_source_subtitles.timeout_sec",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/translation_entity_guard.py",
+    "line": 42,
+    "name": "extract_protected_entities.limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/translation_model_pool.py",
+    "line": 77,
+    "name": "_COOLDOWN_SECONDS",
+    "value": {
+      "rate_limit": 900,
+      "auth_or_permission": 3600,
+      "billing": 86400,
+      "region_restricted": 21600,
+      "budget_exhausted": 180,
+      "network": 180,
+      "invalid_response": 300,
+      "quality_blocked": 600,
+      "unknown": 180
+    },
+    "kind": "named_constant",
+    "suggested_review_group": "G06",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/translation_quality_evaluator.py",
+    "line": 98,
+    "name": "blocking_summary.limit",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/vocab_helper.py",
+    "line": 59,
+    "name": "_BATCH_SIZE",
+    "value": 25,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/vocab_helper.py",
+    "line": 61,
+    "name": "_GENAI_HTTP_TIMEOUT_MS",
+    "value": 90000,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/vocab_helper.py",
+    "line": 64,
+    "name": "_INITIAL_RETRY_DELAY_S",
+    "value": 2,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/vocab_helper.py",
+    "line": 65,
+    "name": "_MAX_RETRY_DELAY_S",
+    "value": 8,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/vocab_helper.py",
+    "line": 66,
+    "name": "_MAX_RETRIES_PER_MODEL",
+    "value": 3,
+    "kind": "named_constant",
+    "suggested_review_group": "G07",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/wechat_article_execution.py",
+    "line": 30,
+    "name": "execute_article_task.timeout_seconds",
+    "value": 30.0,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/wechat_product_selection.py",
+    "line": 101,
+    "name": "select_required_product.timeout_seconds",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/wechat_product_selection.py",
+    "line": 228,
+    "name": "select_optional_product.timeout_seconds",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/youtube_access.py",
+    "line": 63,
+    "name": "probe_youtube_media_access.timeout_seconds",
+    "value": 45,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/youtube_auth.py",
+    "line": 44,
+    "name": "validate_youtube_cookie_file.timeout_seconds",
+    "value": 45,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/youtube_auth.py",
+    "line": 92,
+    "name": "refresh_youtube_cookie_file.timeout_seconds",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/youtube_catalog.py",
+    "line": 62,
+    "name": "fetch_video_statistics.timeout_sec",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/video_processing/utils/youtube_catalog.py",
+    "line": 89,
+    "name": "fetch_channel_catalog.timeout_sec",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 1692,
+    "name": "get_ai_audit_video.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 1768,
+    "name": "platform_backfill_preview.wechat_daily_limit",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 1769,
+    "name": "platform_backfill_preview.wechat_max_daily_limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 1770,
+    "name": "platform_backfill_preview.douyin_daily_limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 1771,
+    "name": "platform_backfill_preview.limit",
+    "value": 500,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 2148,
+    "name": "list_highlight_sources.limit",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 2203,
+    "name": "list_highlight_jobs.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 2256,
+    "name": "list_english_world_jobs.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 2346,
+    "name": "list_english_world_review_items.limit",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "src/web/app.py",
+    "line": 2817,
+    "name": "list_manual_publish_lease_candidates.limit",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G15",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_independent_preflight.py",
+    "line": 92,
+    "name": "inspect_independent_candidates.limit",
+    "value": 50,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 198,
+    "name": "DOUYIN_QUICK_CHECK_TIMEOUT_SECONDS",
+    "value": 120,
+    "kind": "named_constant",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 464,
+    "name": "wait_for_management_content.timeout_ms",
+    "value": 15000,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1083,
+    "name": "wait_for_video_upload_input.timeout_seconds",
+    "value": 15,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1147,
+    "name": "wait_for_upload_completion.timeout_seconds",
+    "value": 900,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1389,
+    "name": "_find_visible_element.timeout_ms",
+    "value": 1000,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1843,
+    "name": "_accept_horizontal_cover_recommendation.timeout_seconds",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1914,
+    "name": "_continue_saved_horizontal_to_vertical_cover.timeout_seconds",
+    "value": 8,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1965,
+    "name": "_click_cover_confirm.timeout_seconds",
+    "value": 90,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 1990,
+    "name": "_wait_for_cover_editor_closed.timeout_seconds",
+    "value": 30,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 2087,
+    "name": "wait_for_cover_validation.timeout_seconds",
+    "value": 120,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 2163,
+    "name": "_wait_for_initial_cover_slots.timeout_seconds",
+    "value": 90,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 2182,
+    "name": "_wait_for_cover_slot_source_change.timeout_seconds",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 2561,
+    "name": "wait_for_publish_submission.timeout_seconds",
+    "value": 180,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/douyin_uploader.py",
+    "line": 2712,
+    "name": "wait_until_logged_in.timeout_seconds",
+    "value": 300,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/english_world_programmatic_daily.py",
+    "line": 182,
+    "name": "_run.timeout",
+    "value": 900,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/english_world_programmatic_daily.py",
+    "line": 951,
+    "name": "_script.timeout",
+    "value": 1200,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/human_mouse.py",
+    "line": 94,
+    "name": "human_click.retries",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/human_mouse.py",
+    "line": 163,
+    "name": "find_and_human_click_text.timeout_polls",
+    "value": 15,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 73,
+    "name": "KUAISHOU_COVER_SETTLE_MS",
+    "value": 8000,
+    "kind": "named_constant",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 191,
+    "name": "wait_for_video_upload_input.timeout_seconds",
+    "value": 15,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 320,
+    "name": "wait_for_upload_completion.timeout_seconds",
+    "value": 900,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 387,
+    "name": "wait_for_publish_confirmation.timeout_seconds",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 661,
+    "name": "wait_for_management_submission_state.timeout_seconds",
+    "value": 60,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 781,
+    "name": "_find_visible_element.timeout_ms",
+    "value": 1000,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/kuaishou_uploader.py",
+    "line": 899,
+    "name": "_confirm_cover_upload.timeout_seconds",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/notify_english_world_review.py",
+    "line": 58,
+    "name": "_MIN_REVIEW_DURATION_SECONDS",
+    "value": 30.0,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/notify_english_world_review.py",
+    "line": 59,
+    "name": "_MAX_REVIEW_DURATION_SECONDS",
+    "value": 300.0,
+    "kind": "named_constant",
+    "suggested_review_group": "G14",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/render_baiju_guoxi_video.py",
+    "line": 244,
+    "name": "render_video.intro_duration",
+    "value": 3.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/render_baiju_guoxi_video.py",
+    "line": 245,
+    "name": "render_video.person_duration",
+    "value": 7.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/render_baiju_guoxi_video.py",
+    "line": 246,
+    "name": "render_video.outro_duration",
+    "value": 4.5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_ai_tr_002.py",
+    "line": 47,
+    "name": "MAX_BUDGET_USD",
+    "value": 0.05,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_ai_tr_003.py",
+    "line": 61,
+    "name": "MAX_BUDGET_USD",
+    "value": 0.01,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_english_world_daily.py",
+    "line": 877,
+    "name": "_notify_failure.max_attempts",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_english_world_daily.py",
+    "line": 878,
+    "name": "_notify_failure.retry_delay_seconds",
+    "value": 10,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_publication_window.py",
+    "line": 79,
+    "name": "_HEARTBEAT_INTERVAL_SEC",
+    "value": 60,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_publication_window.py",
+    "line": 651,
+    "name": "_trim_log_to_recent_days.throttle_hours",
+    "value": 12.0,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_publication_window.py",
+    "line": 722,
+    "name": "KEEPALIVE_ALERT_COOLDOWN_SEC",
+    "value": 14400.0,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/run_wallstreet_ab.py",
+    "line": 448,
+    "name": "collect_metrics.limit",
+    "value": 4,
+    "kind": "function_default",
+    "suggested_review_group": "G18",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/verify_wechat_session_reuse.py",
+    "line": 53,
+    "name": "verify_session_reuse.timeout_ms",
+    "value": 25000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/verify_wechat_session_reuse.py",
+    "line": 61,
+    "name": "_verify_session_reuse.timeout_ms",
+    "value": 25000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/wechat_commenter.py",
+    "line": 44,
+    "name": "DEFAULT_WORKER_TIMEOUT_SECONDS",
+    "value": 240,
+    "kind": "named_constant",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/wechat_commenter.py",
+    "line": 45,
+    "name": "MAX_MANUAL_INTERACTION_BATCH_SIZE",
+    "value": 10,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_desktop_auth.py",
+    "line": 296,
+    "name": "_vision_command.timeout",
+    "value": 3,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/wechat_desktop_auth.py",
+    "line": 443,
+    "name": "__init__.poll_interval_seconds",
+    "value": 0.5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_desktop_auth.py",
+    "line": 445,
+    "name": "__init__.max_visual_attempts",
+    "value": 2,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 196,
+    "name": "MANAGEMENT_VERIFY_ATTEMPTS",
+    "value": 1,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 197,
+    "name": "MANAGEMENT_VERIFY_RETRY_DELAY_MS",
+    "value": 1500,
+    "kind": "named_constant",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 1006,
+    "name": "resolve_submission_platform_identity_after_publish.attempts",
+    "value": 5,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 1007,
+    "name": "resolve_submission_platform_identity_after_publish.retry_delay_ms",
+    "value": 1500,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 1848,
+    "name": "_wait_for_wechat_cover_dialog_to_close.attempts",
+    "value": 20,
+    "kind": "function_default",
+    "suggested_review_group": null,
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "先保留代码；可能是分页/展示/兼容/实验默认值，不建议批量提取"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 2630,
+    "name": "_click_visible_frame_button.timeout",
+    "value": 3000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  },
+  {
+    "path": "scripts/wechat_uploader.py",
+    "line": 2662,
+    "name": "_try_wechat_quick_login.timeout_ms",
+    "value": 30000,
+    "kind": "function_default",
+    "suggested_review_group": "G04",
+    "evidence_level": "静态声明值；函数默认值可能被调用方覆盖，未证明运行实值",
+    "disposition": "仅登记候选，需调用链核验后决定"
+  }
+]

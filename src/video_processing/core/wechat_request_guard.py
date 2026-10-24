@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | recovery-console-v1 | 2026-10-23 | Codex | 公开纯准入快照与有版本、幂等、原生互斥保护的本地额度／冷却恢复。 |
 | 1.1.0 | 2026-10-22 | Antigravity | 接入视频号调度策略 mtime 热加载，并支持绑定任务的单次跳过凭据穿过会话间隔与配额等待。 |
@@ -347,7 +348,7 @@ class WeChatRequestGuard:
             self._save(row, {"event": "QUEUED" if not reason else "DEFERRED",
                              "purpose": purpose, "task": task, "caller": caller, "reason": reason})
             if reason:
-                raise WeChatRequestDeferred(reason)
+                raise WeChatRequestDeferred(reason, admission=evaluate(row, now, purpose, task))
 
     def bind_publication(self, native_id, receipt_path=""):
         if not (settings.wechat_account_scheduler_enabled or settings.wechat_operations_enabled) or not native_id or self.purpose != "发布":
@@ -393,8 +394,15 @@ class WeChatRequestGuard:
 
     def start_session(self, purpose):
         sync_wechat_scheduler_settings()
-        with self._locked():
+        from ..utils.runtime_configuration import policy_read_lock, snapshot
+        with self._locked(), policy_read_lock():
             row, now = self._read(), time.time()
+            existing = next((s for s in row.get('schedule',{}).get('sessions',[])
+                             if s.get('attempt_id')==self.attempt_id),None)
+            if existing is not None:
+                if existing.get('task')!=self.task or existing.get('purpose')!=purpose:
+                    raise WeChatRequestDeferred('同一attempt_id不能用于不同任务或用途')
+                return  # 同一流程重复登记不重复扣次，也不改写原采用版本。
             self._check_session(row, now)
             if self._manual_login:
                 if purpose != "登录":
@@ -408,7 +416,7 @@ class WeChatRequestGuard:
                 reason = admission(row, now, purpose, self.task, consume=True, bypass_cooldown=bypass)
                 if reason:
                     self._save(row, {"event": "DEFERRED", "reason": reason, "task": self.task})
-                    raise WeChatRequestDeferred(reason)
+                    raise WeChatRequestDeferred(reason, admission=evaluate(row, now, purpose, self.task))
             row["last_session_at"] = now
             policy = load_policy()
             if policy is None:
@@ -419,6 +427,9 @@ class WeChatRequestGuard:
                 self._override_generation = self._generation(row)
             self._save(row, {"event": "SESSION_STARTED", "purpose": purpose, "task": self.task, "caller": self.caller,
                              "attempt_id": self.attempt_id, "policy_revision": revision(policy) if policy else None})
+            current = snapshot(fresh=True)
+            self.runtime_revision = current.revision if current else None
+            self.runtime_snapshot = current
 
     def record_limited(self, *, endpoint, code=-360, evidence="native_response"):
         sync_wechat_scheduler_settings()

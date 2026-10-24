@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 具名单次恢复入口和严格的单作品操作上限。 |
 | 1.7.0 | 2026-10-17 | Antigravity | 接入 M3.5 tick 定时周期子命令、默认 TelegramApprovalTransport、持久化证据目录与 DB 作品标题回填 (CR-01/CR-02/CR-04) |
 | 1.6.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 PipelineDB.delete_secondary_reply_task；拆分 request-approval 与 approve-callback 审批入口 |
@@ -408,6 +409,8 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_T
     if args.command == "status":
         return show(ops.status_summary(db))
     if args.command == "tick":
+        from video_processing.utils.runtime_configuration import acknowledge
+        acknowledge('secondary-reply')
         if not settings.enable_wechat_secondary_reply:
             return show({
                 "ok": False,
@@ -416,20 +419,22 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_T
             })
         if not finder:
             return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
-        return show(run_secondary_reply_tick(
-            db,
-            platform=factory(args),
-            approval_transport=resolved_transport,
-            account_key=account_key,
-            finder_id=finder,
-            evidence_dir=args.evidence_dir or ops.DEFAULT_EVIDENCE_DIR,
-            max_reconcile_per_tick=args.max_reconcile,
-            max_submit_per_tick=args.max_submit,
-            scan_posts_per_tick=args.scan_posts,
-            max_drafts_per_tick=args.max_drafts,
-            platform_post_id=args.post_id,
-            video_title_hint=args.video_title or "",
-        ))
+        from video_processing.utils.runtime_configuration import presence
+        with presence('secondary-reply'):
+            return show(run_secondary_reply_tick(
+                db,
+                platform=factory(args),
+                approval_transport=resolved_transport,
+                account_key=account_key,
+                finder_id=finder,
+                evidence_dir=args.evidence_dir or ops.DEFAULT_EVIDENCE_DIR,
+                max_reconcile_per_tick=args.max_reconcile,
+                max_submit_per_tick=args.max_submit,
+                scan_posts_per_tick=args.scan_posts,
+                max_drafts_per_tick=args.max_drafts,
+                platform_post_id=args.post_id,
+                video_title_hint=args.video_title or "",
+            ))
     if args.command == "import-draft":
         need("post-id", "comment-id", "comment-text", "zh", "en")
         return show(ops.import_manual_draft(

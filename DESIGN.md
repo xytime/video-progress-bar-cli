@@ -70,3 +70,7 @@ omitted:
 共享计算、DOM 与每分钟本地刷新由 `src/web/static/js/source_publication.js` 维护；来源精确时间必须含时区，只有日期时标“约”（UTC 日期估算），缺失和无效/未来时间使用中性色并显示未知/异常。入库、任务更新和平台发布时间不应用此分级。
 
 唯一色板 owner 为 `src/web/static/css/dashboard.css` 的 `--source-age-*`：不足 1 天 #15803D、1–2 天 #4D7C0F、2–3 天 #A16207、3–7 天 #B45309、7–10 天 #9A3412、10 天以上 #6B4F43，区间左闭右开。搭配浅色底、细边框和加粗时间；暗/亮主题保持同一识别顺序，高对比主题加强边框。验证由 `tests/browser/test_source_publication_browser.py` 覆盖六档边界、刷新、全部主列表及分集、候选与预筛选的实际 DOM、三主题对比度、手机溢出和截图。
+
+## 运行配置中心
+
+2026-10-24 用户要求实施并上线。`/runtime-configuration` 复用现有主题、系统中文字体、原生select/dialog与自然滚动。特征是活动版本与执行者/在途版本并列的版本条；六类操作卡片按发布、首评、回复、扫描、匹配、保活排序。手机转纵向卡片，不将等待下界表述成保证执行时间。主题token不变；布局所有者为 `runtime_configuration.css`，不复制色板。

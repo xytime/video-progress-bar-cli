@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 心跳公开实际读取的分用途配置摘要；不访问平台。 |
 | 1.7.0 | 2026-10-24 | Codex | 复用就绪巡检轮换两个工作流，持久保存下一顺序，阻止通用队列耗尽英语世界机会。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
@@ -171,6 +172,7 @@ def main(argv=None) -> int:
     status_path = out / "ready_publications_status.json"
     browser_capability_verified = False
     browser_capability_failures = 0
+    last_runtime_revision = None
 
     def report(update):
         with state_lock:
@@ -179,6 +181,7 @@ def main(argv=None) -> int:
             state.update(update)
 
     def heartbeat():
+        nonlocal last_runtime_revision
         while not stopped.is_set():
             with state_lock:
                 snapshot = dict(state, heartbeat_at=time.time(), **config_status(), **product_configuration_status())
@@ -189,6 +192,15 @@ def main(argv=None) -> int:
                                                    "loaded_at": time.time(), "error": None}
             except Exception as exc:
                 snapshot["wechat_operations"] = {"enabled": True, "loaded_revision": None, "loaded_at": time.time(), "error": type(exc).__name__}
+            try:
+                from video_processing.utils.runtime_configuration import acknowledge, snapshot as runtime_snapshot, recompute_waits
+                current_policy = runtime_snapshot(fresh=True)
+                if current_policy and current_policy.revision != last_runtime_revision:
+                    recompute_waits(manager.db, current_policy)
+                    last_runtime_revision = current_policy.revision
+                snapshot['runtime_configuration'] = acknowledge('ready-worker')
+            except Exception as exc:
+                snapshot['runtime_configuration'] = {'error':type(exc).__name__,'loaded_revision':None}
             temp = status_path.with_suffix(".tmp")
             temp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
             temp.replace(status_path)

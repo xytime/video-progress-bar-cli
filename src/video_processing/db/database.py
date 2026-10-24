@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| runtime-center-v1 | 2026-10-24 | Codex | 结构化门禁等待、版本变更重算及年龄配置；不更改历史次数和提交事实。 |
 | cleanup-timeout-v1 | 2026-10-24 | Codex | 英语卡已证明未提交的清理技术失败纳入冻结写入重试链，达到上限在本地停止，不改用量。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
@@ -2218,6 +2219,11 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                     for _, index_sql in legacy_indices:
                         cursor.execute(index_sql)
                     cursor.execute("RELEASE SAVEPOINT migrate_wechat_interactions")
+            interaction_cols = {r[1] for r in cursor.execute("PRAGMA table_info(wechat_interactions)")}
+            for name, kind in (("policy_wait_revision", "TEXT"), ("policy_wait_codes", "TEXT"), ("policy_wait_until", "REAL")):
+                if name not in interaction_cols:
+                    cursor.execute(f"ALTER TABLE wechat_interactions ADD COLUMN {name} {kind}")
+
 
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_wechat_interactions_status
@@ -12720,6 +12726,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         now_text: str,
     ) -> None:
         """在领取写事务中恢复过期 lease；提交意图后只能进 UNCERTAIN。"""
+        from ..utils.runtime_configuration import value
         conn.execute(
             '''
             UPDATE wechat_interactions
@@ -12759,14 +12766,14 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             UPDATE wechat_interactions
             SET status = 'FAILED', lease_token = NULL, lease_expires_at = NULL,
                 next_attempt_at = NULL, updated_at = ?,
-                error_message = COALESCE(error_message, '作品发布超期（>3天），终止自动重试')
+                error_message = COALESCE(error_message, '作品发布超期（超过配置允许年龄），终止自动重试')
             WHERE status IN ('RETRY_WAIT', 'QUEUED')
               AND publication_id IN (
                   SELECT id FROM wechat_publications
-                  WHERE created_at < datetime(?, '-3 days')
+                  WHERE created_at < datetime(?, ?)
               )
             ''',
-            (now_text, now_text),
+            (now_text, now_text, '-%d days' % value('task_scheduling','first_comment_max_age_days',3)),
         )
 
     def recover_expired_wechat_interactions(
@@ -12928,6 +12935,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         evidence_path: Optional[str] = None,
         error_message: Optional[str] = None,
         now: Optional[datetime.datetime] = None,
+        admission: Optional[dict] = None,
     ) -> dict:
         """收口当次尝试；提交意图后失败以及 UNCERTAIN 永不转普通重试。"""
         normalized = str(result_status or "FAILED").upper()
@@ -12939,6 +12947,11 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         if now_value.tzinfo is None:
             now_value = now_value.replace(tzinfo=datetime.timezone.utc)
         now_text = self._wechat_interaction_timestamp(now_value)
+        from ..utils.runtime_configuration import value, snapshot
+        current_policy = snapshot(fresh=True)
+        wait_revision = current_policy.revision if current_policy else None
+        wait_codes = [b.get('code') for b in (admission or {}).get('blockers', [])]
+        wait_until = (admission or {}).get('until')
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -12985,7 +12998,9 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 )
                 final_status = "RETRY_WAIT"
                 next_attempt_at = self._wechat_interaction_timestamp(
-                    now_value + datetime.timedelta(seconds=300)
+                    datetime.datetime.fromtimestamp(wait_until, datetime.timezone.utc)
+                    if isinstance(wait_until, (float, int)) and wait_until > now_value.timestamp()
+                    else now_value + datetime.timedelta(seconds=value('task_scheduling', 'local_defer_fallback_seconds', 300))
                 )
             else:
                 exhausted = int(current["attempt_count"]) >= int(current["max_attempts"])
@@ -13007,18 +13022,44 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                     lease_expires_at = NULL,
                     evidence_path = COALESCE(?, evidence_path),
                     error_message = ?, commented_at = COALESCE(?, commented_at),
-                    updated_at = ?
+                    updated_at = ?, policy_wait_revision = ?, policy_wait_codes = ?, policy_wait_until = ?
                 WHERE id = ?
                 ''',
                 (
                     final_status, next_attempt_at, evidence_path, error_message,
-                    commented_at, now_text, int(interaction_id),
+                    commented_at, now_text,
+                    wait_revision if final_status=='RETRY_WAIT' and normalized=='DEFERRED' else None,
+                    json.dumps(wait_codes) if final_status=='RETRY_WAIT' and normalized=='DEFERRED' else None,
+                    wait_until if final_status=='RETRY_WAIT' and normalized=='DEFERRED' else None,
+                    int(interaction_id),
                 ),
             )
             updated = conn.execute(
                 "SELECT * FROM wechat_interactions WHERE id = ?", (int(interaction_id),)
             ).fetchone()
             return dict(updated)
+
+    def runtime_configuration_waits(self) -> List[dict]:
+        """只返回可证明未启动的本地等待，不返回FAILED/UNKNOWN或已提交任务。"""
+        with self.get_connection() as conn:
+            return [dict(r) for r in conn.execute("""SELECT id, platform_post_id, updated_at,
+                next_attempt_at, policy_wait_revision FROM wechat_interactions
+                WHERE status='RETRY_WAIT' AND submit_intent_at IS NULL AND lease_token IS NULL
+                  AND (policy_wait_revision IS NOT NULL OR (attempt_count=0 AND
+                    (error_message LIKE 'first_comment %' OR error_message LIKE '%本轮只等待%'
+                     OR error_message LIKE '%本轮不访问%' OR error_message LIKE '%另一个当前可执行%'
+                     OR error_message LIKE 'wechat session lock busy%')))
+                ORDER BY id""")]
+
+    def reschedule_runtime_configuration_wait(self, row, *, next_at, revision, codes, until):
+        """CAS更新等待时间；不领取、不增加次数、不复活终态。"""
+        with self.get_connection() as conn:
+            result = conn.execute("""UPDATE wechat_interactions SET next_attempt_at=?,
+                policy_wait_revision=?,policy_wait_codes=?,policy_wait_until=?
+                WHERE id=? AND status='RETRY_WAIT' AND submit_intent_at IS NULL
+                  AND lease_token IS NULL AND updated_at=?""",
+                (next_at,revision,json.dumps(codes),until,int(row['id']),row['updated_at']))
+            return result.rowcount == 1
 
     def reset_wechat_interaction(self, interaction_id: int) -> dict:
         """重置指定互动记录状态为 QUEUED，清除租约和错误计数，供纠错后重新调度。"""
@@ -13987,6 +14028,8 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
 
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if settings.runtime_configuration_enabled and not settings.enable_wechat_secondary_reply:
+                return None  # 总开关关闭只阻止新领取，保留原任务/租约/提交事实。
             query = "SELECT * FROM wechat_secondary_reply_tasks WHERE "
             params: List[Any] = []
             if task_id is not None:

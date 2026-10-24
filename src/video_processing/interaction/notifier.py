@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | 1.1.0 | 2026-09-19 | Codex | 区分不确定及待重试状态，转义动态字段，不将 JSON 回执作为照片 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现互动引导结果与证据截图的图文汇报 |
 """
@@ -81,7 +82,7 @@ class InteractionNotifier:
         text = "\n".join(lines)
         photo_path = Path(evidence_path) if evidence_path else None
 
-        if photo_path and photo_path.is_file() and photo_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+        if status != 'RETRY_WAIT' and photo_path and photo_path.is_file() and photo_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
             res = send_photo(
                 event_type="interaction.wechat_comment",
                 priority="P1",
@@ -91,10 +92,15 @@ class InteractionNotifier:
             )
             return res.state == "ACCEPTED"
 
+        from video_processing.utils.runtime_configuration import value, enabled
+        wait_options = ({'cooldown_seconds':value('observability','wait_notice_cooldown_seconds',3600),
+                         'dedupe_key':'wait:' + platform_post_id + ':' + str(error_message or '')}
+                        if status == 'RETRY_WAIT' and enabled() else {})
         res = send_text(
             event_type="interaction.wechat_comment",
             priority="P1",
             text=text,
             db=self.db,
+            **wait_options,
         )
         return res.state == "ACCEPTED"

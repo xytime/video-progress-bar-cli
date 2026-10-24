@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 声明每浏览器上下文的有界作品列表请求预算。 |
 | 3.78.0 | 2026-10-22 | Antigravity | 新增 wechat_scheduler_policy_path 放宽视频号账户调度参数上下限并支持后台管理界面热加载与平台解冻确认（默认保留 900s/20次 等安全值）。 |
@@ -154,6 +155,41 @@ class Settings(BaseSettings):
     应用全局配置。
     字段来源优先级：环境变量 > .env 文件 > 字段默认值。
     """
+
+    runtime_configuration_enabled: bool = False
+    runtime_configuration_path: Path = _PROJECT_ROOT / 'output' / 'runtime_configuration'
+
+    def __getattribute__(self, name):
+        # 只覆盖已注册的非秘密运行字段；环境变量仍仅由本模块读取。
+        from config.runtime_registry import SETTING_FIELDS,REPLY_CONTROL_SETTING_NAMES
+        if name in SETTING_FIELDS or name in REPLY_CONTROL_SETTING_NAMES:
+            raw = object.__getattribute__(self, '__dict__')
+            if raw.get('runtime_configuration_enabled', False):
+                from config.runtime_policy import PolicyStore, ATTEMPT
+                active = ATTEMPT.get()
+                root = raw.get('runtime_configuration_path', _PROJECT_ROOT / 'output' / 'runtime_configuration')
+                snapshot = active[1] if name not in REPLY_CONTROL_SETTING_NAMES and active and active[0] == str(root) else PolicyStore(root).read()
+                if name in REPLY_CONTROL_SETTING_NAMES:
+                    return snapshot.domains()['interaction_controls']['automatic_replies_enabled']
+                return snapshot.domains()['runtime_settings'][name]
+        return super().__getattribute__(name)
+
+    def configuration_source(self, name):
+        """只返回来源标签，不返回环境文件内容或秘密值。"""
+        key = name.upper()
+        if key in os.environ:
+            return '环境变量'
+        env = _PROJECT_ROOT / '.env'
+        if env.exists():
+            raw = object.__getattribute__(self,'__dict__')
+            signature = env.stat().st_mtime_ns
+            if raw.get('_source_keys_mtime') != signature:
+                raw['_source_keys'] = {line.strip().removeprefix('export ').split('=',1)[0].strip().upper()
+                                       for line in env.read_text().splitlines() if '=' in line and not line.lstrip().startswith('#')}
+                raw['_source_keys_mtime'] = signature
+            if key in raw['_source_keys']:
+                return '.env 启动覆盖'
+        return 'settings 默认值'
 
     model_config = SettingsConfigDict(
         # [Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 使用绝对路径

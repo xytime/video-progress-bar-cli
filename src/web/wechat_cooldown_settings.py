@@ -167,6 +167,8 @@ def create_wechat_cooldown_settings_router(
     @router.put("/api/wechat-cooldown-settings")
     def save(body: WeChatCooldownSaveRequest, request: Request) -> dict[str, Any]:
         origin_check(request)
+        if settings.runtime_configuration_enabled:
+            raise HTTPException(409,'额度已迁移到运行配置中心；此旧接口不能覆盖活动策略')
         try:
             saved = save_policy(active, body.config, body.expected_digest)
             return view(saved)
@@ -180,6 +182,8 @@ def create_wechat_cooldown_settings_router(
     @router.post("/api/wechat-cooldown-settings/unfreeze")
     def unfreeze(body: UnfreezeRequest, request: Request) -> dict[str, Any]:
         origin_check(request)
+        if settings.runtime_configuration_enabled:
+            raise HTTPException(403,'真实退避和恢复保护不能由普通配置按钮清除；需要单独核实与批准')
         try:
             config = load_policy(active)
             guard = WeChatRequestGuard(resolved_state)

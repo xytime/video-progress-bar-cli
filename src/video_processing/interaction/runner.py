@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | 1.1.0 | 2026-09-20 | Antigravity | 传递 copy_path 到 post_comment 门面以支持 English World 作品定位与文案。 |
 | 1.0.0 | 2026-09-19 | Codex | 建立有界 tick、提交意图 callback 与 UNCERTAIN 只读回查协议。 |
@@ -213,6 +214,7 @@ def run_interaction_tick(
         evidence_path=evidence_path,
         error_message=error_message,
         now=clock(),
+        admission=_deferred_admission(status, evidence_path),
     )
     try:
         services.notify_result(target, claimed, final_record)
@@ -224,3 +226,15 @@ def run_interaction_tick(
         interaction_id=interaction_id,
         detail=error_message,
     )
+
+
+def _deferred_admission(status, evidence_path):
+    """仅消费本轮本地拒绝回执；不从面向用户的错误文字反解析时间。"""
+    if status != 'DEFERRED' or not evidence_path or Path(evidence_path).suffix != '.json':
+        return None
+    import json
+    try:
+        data = json.loads(Path(evidence_path).read_text())
+        return data.get('admission') if data.get('clicked') is False else None
+    except (ValueError, OSError):
+        return None

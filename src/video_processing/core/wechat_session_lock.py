@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 按上下文与闭环双层约束列表预算，保留原生限流即停。 |
@@ -78,8 +79,16 @@ def guard_wechat_context(context):
         try:
             session.request_guard.start_session(session.purpose)
         except WeChatRequestDeferred as exc:
-            raise WeChatAccountDeferred(str(exc)) from exc
+            raise WeChatAccountDeferred(str(exc), admission=exc.admission) from exc
         session._request_started = True
+        from ..utils.runtime_configuration import freeze_attempt
+        session._policy_token = freeze_attempt(getattr(session.request_guard, 'runtime_snapshot', None))
+        if session._handle is not None:
+            session._handle.seek(0)
+            owner = json.load(session._handle)
+            owner['active_attempt_revision'] = getattr(session.request_guard, 'runtime_revision', None)
+            session._handle.seek(0); session._handle.truncate()
+            json.dump(owner, session._handle, ensure_ascii=False); session._handle.flush()
     context._wechat_rate_limit_seen = False
     context._wechat_list_request_count = 0
     context_list_requests = 0
@@ -147,6 +156,9 @@ class SessionLockStatus:
 
 class WeChatSessionLockBusy(RuntimeError):
     """同一份视频号登录态当前正由另一个浏览器会话占用。"""
+    def __init__(self, reason, *, admission=None):
+        super().__init__(reason)
+        self.admission = admission
 
 
 class WeChatSessionCooldown(WeChatSessionLockBusy):
@@ -209,6 +221,7 @@ class WeChatSessionLock:
         self._list_request_count = 0
         self._request_limited = False
         self._context_token = None
+        self._policy_token = None
 
     def acquire(self) -> "WeChatSessionLock":
         """在截止时间内尝试获取锁，超时即抛出可识别的 busy 异常。"""
@@ -239,7 +252,7 @@ class WeChatSessionLock:
                 except WeChatCooldownDeferred as exc:
                     raise WeChatSessionCooldown(str(exc)) from exc
                 except WeChatRequestDeferred as exc:
-                    raise WeChatAccountDeferred(str(exc)) from exc
+                    raise WeChatAccountDeferred(str(exc), admission=exc.admission) from exc
                 self._handle = handle
                 self._request_started = False
                 self._request_limited = False
@@ -270,6 +283,9 @@ class WeChatSessionLock:
             if self._context_token is not None:
                 _SESSION.reset(self._context_token)
                 self._context_token = None
+            from ..utils.runtime_configuration import finish_attempt
+            finish_attempt(self._policy_token)
+            self._policy_token = None
             if self._request_started:
                 self.request_guard.end_session(self._request_count, self._list_request_count)
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
