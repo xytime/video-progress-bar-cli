@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "operations": {
+    "publish": {
+      "rolling_24h_limit": 20,
+      "min_interval_seconds": 180,
+      "retry_policy": "write_actions"
+    },
+    "first_comment": {
+      "rolling_24h_limit": 50,
+      "rolling_1h_limit": 10,
+      "min_interval_seconds": 60,
+      "retry_policy": "write_actions"
+    },
+    "reply": {
+      "rolling_24h_limit": 1000,
+      "rolling_1h_limit": 50,
+      "min_interval_seconds": 60,
+      "max_replies_per_video_lifetime": 20,
+      "retry_policy": "write_actions"
+    },
+    "comment_scan": {
+      "rolling_1h_limit": 1,
+      "min_interval_seconds": 3600,
+      "max_videos_per_run": 5
+    },
+    "post_match": {
+      "rolling_24h_limit": 12,
+      "same_batch_success_cooldown_seconds": 1800
+    },
+    "keepalive": {
+      "rolling_24h_limit": 4
+    }
+  },
+  "retry_policies": {
+    "write_actions": {
+      "max_retries": 2,
+      "interval_seconds": 60
+    }
+  }
+}

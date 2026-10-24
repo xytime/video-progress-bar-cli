@@ -12,7 +12,9 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | 1.3.2 | 2026-10-23 | Codex | 为扫描、作者复核和独立回读传入作品身份；单条发送闭环共享账户许可。 |
+| 1.3.1 | 2026-10-18 | Antigravity | author_reply_state 识别 WeChatSessionLockBusy 返回 SESSION_BUSY，避免与视频发布锁冲突时误标任务 FAILED |
 | 1.3.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments 端口方法与 lookup_reply 可选短退避重试，吸收平台异步索引延迟 (CR-01 / M3.5) |
 | 1.2.0 | 2026-10-17 | Antigravity | 移除对适配器私有方法 (_interact_with_page / _new_evidence_dir) 的直接调用，改为使用公开接口并从契约层导入 SecondaryReplySubmissionGuard |
 | 1.1.0 | 2026-10-17 | Codex | 新增 calibrate_controls 与 calibrate_and_verify 只读控件校准及平台状态验证 (R1/R2) |
@@ -28,6 +30,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Dict, Optional, Tuple
 
+from video_processing.core.wechat_session_lock import WeChatSessionLockBusy
 from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplyBrowserAdapter
 from video_processing.interaction.secondary_reply_contract import SecondaryReplySubmissionGuard
 from video_processing.interaction.secondary_reply_orchestrator import LookupResult, PlatformSendResult
@@ -61,6 +64,7 @@ class BrowserSecondaryReplyPlatform:
         self._hints = post_hints or (lambda _post_id: ("", ""))
         self._session = session_factory or adapter.open_session
         self.submission_scope = (lambda post_id: nullcontext()) if session_factory else adapter.reply_workflow
+        self.scan_scope = (lambda post_ids: nullcontext()) if session_factory else adapter.scan_workflow
         self._readonly_session = (
             (lambda post_id: self._session(None)) if session_factory
             else (lambda post_id: adapter.open_session(readonly_post_id=post_id))
@@ -86,7 +90,19 @@ class BrowserSecondaryReplyPlatform:
                     attempt_dir=self.adapter.create_evidence_dir(self._evidence_dir),
                     guard=self.make_guard(post_id, root_id, "-"), verify_only=True,
                 )
+        except WeChatSessionLockBusy as exc:
+            logger.info("作者回复状态复核因浏览器会话锁忙暂缓: %s", exc)
+            return "SESSION_BUSY"
         except Exception as exc:
+            exc_lower = str(exc).lower()
+            if (
+                "wechat session lock busy" in exc_lower
+                or "待发布任务优先" in str(exc)
+                or "spawn eperm" in exc_lower
+                or "browsertype.launch" in exc_lower
+            ):
+                logger.info("作者回复状态复核因浏览器会话锁忙或启动受限暂缓: %s", exc)
+                return "SESSION_BUSY"
             logger.warning("作者回复状态复核异常，按 UNKNOWN 处理: %s", exc)
             return "UNKNOWN"
         if status == "VERIFIED_ABSENT":
@@ -167,13 +183,15 @@ class BrowserSecondaryReplyPlatform:
         title = video_title or hint_title
         desc = published_description or hint_desc
         try:
-            with self._readonly_session(post_id) as page:
-                return self.adapter.discover_comments_on_page(
-                    page,
-                    platform_post_id=post_id,
-                    video_title=title,
-                    published_description=desc,
-                )
+            scope = nullcontext() if getattr(self.adapter, "scan_active", False) else self.scan_scope([post_id])
+            with scope:
+                with self._readonly_session(post_id) as page:
+                    return self.adapter.discover_comments_on_page(
+                        page,
+                        platform_post_id=post_id,
+                        video_title=title,
+                        published_description=desc,
+                    )
         except Exception as exc:
             logger.warning("[BrowserSecondaryReplyPlatform] 只读评论扫描异常: %s", exc)
             return {"ok": False, "reason": f"DISCOVER_COMMENTS_EXCEPTION: {exc}", "payload": None}

@@ -1,4 +1,9 @@
-"""具名恢复动作和不可变事件账本；SQL 仅由 PipelineDB 混入使用。"""
+"""具名恢复动作和不可变事件账本；SQL 仅由 PipelineDB 混入使用。
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -161,9 +166,14 @@ class DeliveryRecoveryDAL:
                 return None
             count = c.execute('SELECT count(*) FROM wechat_upload_retries WHERE video_id=?', (video['id'],)).fetchone()[0]
             # 现有上传恢复表允许两次重试，加上原始上传共三次。
-            if count >= 2:
+            from config.settings import settings
+            from ..utils.wechat_operations_policy import retry_policy
+            policy = retry_policy() if settings.wechat_operations_enabled else None
+            cap = self._freeze_wechat_retry_chain_conn(c, "publish", video["id"]) if policy else 2
+            if count >= cap:
                 return None
-            due = stamp(datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds(count+1)))
+            delay = policy["interval_seconds"] if policy else backoff_seconds(count+1)
+            due = stamp(datetime.now(timezone.utc) + timedelta(seconds=delay))
             c.execute('INSERT INTO wechat_upload_retries(video_id,evidence_path,attempt_number,next_attempt_at) VALUES(?,?,?,?)',
                       (video['id'], evidence, count+1, due))
             c.execute("""UPDATE processed_videos SET status='PENDING',preparation_ready=1,process_pid=NULL,

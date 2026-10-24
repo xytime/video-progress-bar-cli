@@ -4,7 +4,6 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
-| 3.102.0 | 2026-10-22 | Antigravity | 优化 finish_wechat_interaction_attempt：在遇到 wechat session lock busy 且无提交意图时扣减 attempt_count 恢复 RETRY_WAIT，避免因调度器与发布锁避让耗尽重试预算。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
@@ -13,6 +12,9 @@
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | preupload-rate-limit-v1 | 2026-10-20 | Codex | 具名一次性恢复单次上传前 -360，核验原包和负面提交证据并保留不可变尝试。 |
+| 3.102.0 | 2026-10-22 | Antigravity | 优化 finish_wechat_interaction_attempt：在遇到 wechat session lock busy 且无提交意图时扣减 attempt_count 恢复 RETRY_WAIT，避免因调度器与发布锁避让耗尽重试预算。 |
+| 3.101.0 | 2026-10-18 | Antigravity | 升级 manual_publish_leases 两阶段状态机（ISSUED/CONSUMED_PREP/CONSUMED_SUBMIT/EXPIRED_HARD）、硬期限推进、产物清单哈希绑定与有界锁忙退回（rearm_count<=3），允许就绪队列按有效 lease 放行低分任务且不改写 score。 |
+| 3.100.0 | 2026-10-18 | Antigravity | 新增 list_secondary_reply_history DAL 查询方法，供 Web 控制台二级回复页面展示任务与自动回复历史账本 |
 | 3.99.0 | 2026-10-17 | Antigravity | M3.5: 新增 wechat_comment_scan_state 扫描水位表、二级回复对账指数退避字段与审批消息 ID 字段，新增认领释放、到期对账查询与扫描水位推进 DAL 方法。 |
 | 3.98.0 | 2026-10-17 | Antigravity | 收回二级回复观众评论查询与任务物理删除至 PipelineDB 具名方法，并在审批绑定/消费/提交意图事务内拒绝 local_operator 与 local-cli 伪身份。 |
 | 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
@@ -1143,10 +1145,21 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ''')
             cursor.execute("PRAGMA table_info(manual_publish_leases)")
             lease_columns = {row[1] for row in cursor.fetchall()}
-            if "revoked_by" not in lease_columns:
-                cursor.execute(
-                    "ALTER TABLE manual_publish_leases ADD COLUMN revoked_by TEXT DEFAULT NULL"
-                )
+            additive_lease_cols = {
+                "revoked_by": "TEXT DEFAULT NULL",
+                "lease_state": "TEXT DEFAULT 'ISSUED'",
+                "prep_deadline_at": "TIMESTAMP DEFAULT NULL",
+                "hard_expires_at": "TIMESTAMP DEFAULT NULL",
+                "artifact_manifest_sha256": "TEXT DEFAULT NULL",
+                "rearm_count": "INTEGER DEFAULT 0",
+                "last_attempt_id": "TEXT DEFAULT NULL",
+                "consumed_submit_at": "TIMESTAMP DEFAULT NULL",
+            }
+            for col_name, col_def in additive_lease_cols.items():
+                if col_name not in lease_columns:
+                    cursor.execute(
+                        f"ALTER TABLE manual_publish_leases ADD COLUMN {col_name} {col_def}"
+                    )
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_manual_publish_leases_active
                 ON manual_publish_leases(video_id, platform, expires_at, claimed_at, revoked_at)
@@ -2375,6 +2388,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 )
             ''')
             
+            cursor.execute('''CREATE TABLE IF NOT EXISTS wechat_write_retry_chains (
+                kind TEXT NOT NULL, task_id TEXT NOT NULL, initial_max_retries INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
+                last_error TEXT, PRIMARY KEY(kind,task_id))''')
             cursor.execute('CREATE TABLE IF NOT EXISTS product_contract_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
             cursor.execute('CREATE TABLE IF NOT EXISTS product_legacy_reviews (review_id TEXT PRIMARY KEY, manifest_sha256 TEXT NOT NULL)')
             conn.commit()
@@ -3950,9 +3967,12 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             count = conn.execute(
                 "SELECT count(*) FROM wechat_upload_retries WHERE video_id = ?", (video["id"],),
             ).fetchone()[0]
-            if count >= 2:
+            from ..utils.wechat_operations_policy import retry_policy
+            policy = retry_policy() if settings.wechat_operations_enabled else None
+            cap = self._freeze_wechat_retry_chain_conn(conn, "publish", video["id"]) if policy else 2
+            if count >= cap:
                 return None
-            delay_minutes = (10, 30)[count]
+            delay_minutes = policy["interval_seconds"] / 60 if policy else (10, 30)[count]
             conn.execute('''
                 INSERT INTO wechat_upload_retries (video_id, evidence_path, attempt_number, next_attempt_at)
                 VALUES (?, ?, ?, datetime('now', ?))
@@ -4026,6 +4046,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
     def claim_video_for_publication(self, youtube_id: str, owner_pid: int, slice_index: int = 0) -> bool:
         """发布前原子领取；拒绝审核闸、提交账本、墓碑、退避及已有领取。"""
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute("""UPDATE processed_videos SET status = 'PUBLISH_PRECHECK',
                 process_pid = ?, publication_last_attempt_at = CURRENT_TIMESTAMP,
                 publication_wait_reason = '正在校验成片与发布内容', updated_at = CURRENT_TIMESTAMP
@@ -4040,6 +4061,9 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                   AND NOT EXISTS (SELECT 1 FROM recommended_channels c WHERE c.channel_id = processed_videos.channel_id AND c.status = 'BLACKLISTED')
                   AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
                 """, (owner_pid, youtube_id, slice_index))
+            if cursor.rowcount == 1:
+                record = conn.execute("SELECT id FROM processed_videos WHERE youtube_id=? AND slice_index=?", (youtube_id,slice_index)).fetchone()
+                self._freeze_wechat_retry_chain_conn(conn, "publish", int(record[0]))
             conn.commit()
             return cursor.rowcount == 1
 
@@ -4873,10 +4897,51 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def expire_manual_publish_leases(self, *, conn=None) -> int:
+        """推进超时未消费或超过硬上限的 lease 至 EXPIRED_HARD；绝不降级已进入平台提交边界的任务。"""
+        def _run(c) -> int:
+            cur = c.execute(
+                '''UPDATE manual_publish_leases
+                   SET lease_state = 'EXPIRED_HARD'
+                   WHERE revoked_at IS NULL
+                     AND claimed_at IS NULL
+                     AND COALESCE(lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND (
+                         expires_at <= CURRENT_TIMESTAMP
+                         OR (prep_deadline_at IS NOT NULL AND prep_deadline_at <= CURRENT_TIMESTAMP)
+                         OR (hard_expires_at IS NOT NULL AND hard_expires_at <= CURRENT_TIMESTAMP)
+                     )'''
+            )
+            expired_count = cur.rowcount or 0
+            if expired_count > 0:
+                c.execute(
+                    '''UPDATE processed_videos
+                       SET publication_wait_reason = '人工发布 lease 已硬过期，等待重新显式签发',
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id IN (
+                           SELECT video_id FROM manual_publish_leases WHERE lease_state = 'EXPIRED_HARD'
+                       )
+                         AND status IN ('PENDING', 'PUBLISH_PRECHECK', 'WECHAT_DEFERRED')
+                         AND COALESCE(score, 0) < 75
+                         AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
+                         AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
+                         AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = processed_videos.id)'''
+                )
+            return expired_count
+
+        if conn is not None:
+            return _run(conn)
+        with self.get_connection() as c:
+            count = _run(c)
+            c.commit()
+            return count
+
     def list_manual_publish_lease_candidates(self, limit: int = 8) -> List[Dict[str, Any]]:
         """列出可由管理员签发单任务微信 lease 的候选；不改变队列或发布状态。"""
         bounded_limit = max(1, min(20, int(limit)))
         with self.get_connection() as conn:
+            self.expire_manual_publish_leases(conn=conn)
+            conn.commit()
             rows = conn.execute(
                 '''SELECT pv.*
                    FROM processed_videos pv
@@ -4900,7 +4965,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                          SELECT 1 FROM manual_publish_leases lease
                          WHERE lease.video_id = pv.id AND lease.platform = 'wechat'
                            AND lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                           AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
                            AND lease.expires_at > CURRENT_TIMESTAMP
+                           AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                           AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
                      )
                      AND (
                          pv.slice_index = 0 OR NOT EXISTS (
@@ -4922,18 +4990,43 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         """返回尚未消费且未过期的单任务 lease，供手机端审计展示。"""
         bounded_limit = max(1, min(20, int(limit)))
         with self.get_connection() as conn:
+            self.expire_manual_publish_leases(conn=conn)
+            conn.commit()
             rows = conn.execute(
                 '''SELECT lease.*, pv.youtube_id, pv.slice_index, pv.title, pv.zh_title,
                           pv.status, pv.score, pv.preparation_ready
                    FROM manual_publish_leases lease
                    JOIN processed_videos pv ON pv.id = lease.video_id
                    WHERE lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                     AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
                      AND lease.expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                     AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
                    ORDER BY lease.expires_at ASC, lease.issued_at ASC
                    LIMIT ?''',
                 (bounded_limit,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def has_active_manual_publish_lease(self, youtube_id: str, *, slice_index: int = 0) -> bool:
+        """判断指定视频是否存在未过期、未撤销的有效单任务发布 lease。"""
+        with self.get_connection() as conn:
+            self.expire_manual_publish_leases(conn=conn)
+            conn.commit()
+            row = conn.execute(
+                '''SELECT 1 FROM manual_publish_leases lease
+                   JOIN processed_videos pv ON pv.id = lease.video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND lease.platform = 'wechat'
+                     AND lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                     AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND lease.expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                     AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
+                   LIMIT 1''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            return row is not None
 
     def issue_manual_publish_lease(
         self,
@@ -4944,6 +5037,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         issued_via: str,
         ttl_minutes: int = 120,
         claim_video: bool = False,
+        hard_ttl_minutes: int = 360,
     ) -> Dict[str, Any]:
         """签发单任务一次性 lease；可在同一写事务中领取任务，但不接触平台。"""
         from uuid import uuid4
@@ -4951,6 +5045,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         clean_issued_by = (issued_by or "").strip()
         clean_issued_via = (issued_via or "").strip()
         bounded_ttl = max(1, min(120, int(ttl_minutes)))
+        bounded_hard_ttl = max(bounded_ttl, min(360, int(hard_ttl_minutes)))
         if not clean_issued_by or not clean_issued_via:
             raise ValueError("issued_by and issued_via are required")
 
@@ -4958,6 +5053,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             # 锁住“候选复核 → 签发 → 可选任务领取”的完整决策，避免 lease 已落库但
             # PENDING 被另一个调度器抢走，形成悬空授权。
             conn.execute("BEGIN IMMEDIATE")
+            self.expire_manual_publish_leases(conn=conn)
             video = conn.execute(
                 '''SELECT pv.* FROM processed_videos pv
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
@@ -4993,7 +5089,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 '''SELECT * FROM manual_publish_leases
                    WHERE video_id = ? AND platform = 'wechat'
                      AND claimed_at IS NULL AND revoked_at IS NULL
+                     AND COALESCE(lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
                      AND expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(hard_expires_at, expires_at) > CURRENT_TIMESTAMP
+                     AND (prep_deadline_at IS NULL OR prep_deadline_at > CURRENT_TIMESTAMP)
                    ORDER BY issued_at DESC LIMIT 1''',
                 (video["id"],),
             ).fetchone()
@@ -5003,10 +5102,17 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 lease_id = uuid4().hex
                 conn.execute(
                     '''INSERT INTO manual_publish_leases (
-                           lease_id, video_id, platform, issued_by, issued_via, expires_at
-                       ) VALUES (?, ?, 'wechat', ?, ?, datetime('now', ?))''',
-                    (lease_id, video["id"], clean_issued_by, clean_issued_via,
-                     f"+{bounded_ttl} minutes"),
+                           lease_id, video_id, platform, issued_by, issued_via,
+                           expires_at, hard_expires_at, lease_state, rearm_count
+                       ) VALUES (?, ?, 'wechat', ?, ?, datetime('now', ?), datetime('now', ?), 'ISSUED', 0)''',
+                    (
+                        lease_id,
+                        video["id"],
+                        clean_issued_by,
+                        clean_issued_via,
+                        f"+{bounded_ttl} minutes",
+                        f"+{bounded_hard_ttl} minutes",
+                    ),
                 )
             if claim_video:
                 claimed = conn.execute(
@@ -5026,30 +5132,121 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             return {**dict(lease), "youtube_id": video["youtube_id"],
                     "slice_index": video["slice_index"], "title": video["title"]}
 
-    def claim_manual_publish_lease(
-        self, youtube_id: str, *, slice_index: int = 0, platform: str = "wechat",
+    def mark_manual_publish_lease_prep_ready(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        artifact_manifest_sha256: str,
+        prep_window_minutes: int = 240,
     ) -> Optional[Dict[str, Any]]:
-        """在平台上传器启动前原子消费一次 lease；已领取、撤销或过期后永不复用。"""
+        """预提交加工就绪后推进 lease 至 CONSUMED_PREP，绑定四件套清单摘要并设置受硬上限约束的 prep_deadline_at。"""
+        clean_manifest = (artifact_manifest_sha256 or "").strip()
+        if not clean_manifest:
+            raise ValueError("artifact_manifest_sha256 is required")
+        bounded_prep = max(5, min(240, int(prep_window_minutes)))
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self.expire_manual_publish_leases(conn=conn)
+            row = conn.execute(
+                '''SELECT lease.* FROM manual_publish_leases lease
+                   JOIN processed_videos pv ON pv.id = lease.video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND lease.platform = 'wechat'
+                     AND lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                     AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                   ORDER BY lease.issued_at DESC LIMIT 1''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not row:
+                conn.rollback()
+                return None
+            conn.execute(
+                '''UPDATE manual_publish_leases
+                   SET lease_state = 'CONSUMED_PREP',
+                       artifact_manifest_sha256 = ?,
+                       prep_deadline_at = MIN(
+                           datetime('now', ?),
+                           COALESCE(hard_expires_at, datetime('now', '+360 minutes'))
+                       ),
+                       expires_at = MAX(
+                           expires_at,
+                           MIN(
+                               datetime('now', ?),
+                               COALESCE(hard_expires_at, datetime('now', '+360 minutes'))
+                           )
+                       )
+                   WHERE lease_id = ?''',
+                (
+                    clean_manifest,
+                    f"+{bounded_prep} minutes",
+                    f"+{bounded_prep} minutes",
+                    row["lease_id"],
+                ),
+            )
+            conn.commit()
+            updated = conn.execute(
+                "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (row["lease_id"],)
+            ).fetchone()
+            return dict(updated) if updated else None
+
+    def consume_manual_publish_lease_for_submission(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        expected_manifest_sha256: Optional[str] = None,
+        current_manifest_sha256: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+        platform: str = "wechat",
+    ) -> Optional[Dict[str, Any]]:
+        """在平台上传器启动前原子核验期限与产物清单摘要并消费 lease 为 CONSUMED_SUBMIT。"""
         if platform != "wechat":
             return None
+        clean_expected = (expected_manifest_sha256 or current_manifest_sha256 or "").strip() or None
+        clean_attempt = (attempt_id or "").strip() or None
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self.expire_manual_publish_leases(conn=conn)
             row = conn.execute(
                 '''SELECT lease.* FROM manual_publish_leases lease
                    JOIN processed_videos pv ON pv.id = lease.video_id
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
                      AND keyword_allowed(pv.source,pv.youtube_id)
                      AND lease.platform = ? AND lease.claimed_at IS NULL
-                     AND lease.revoked_at IS NULL AND lease.expires_at > CURRENT_TIMESTAMP
+                     AND lease.revoked_at IS NULL
+                     AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND lease.expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                     AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
                    ORDER BY lease.issued_at DESC LIMIT 1''',
                 (youtube_id, slice_index, platform),
             ).fetchone()
             if not row:
+                conn.commit()
+                return None
+            bound_manifest = str(row["artifact_manifest_sha256"] or "").strip()
+            if bound_manifest and clean_expected and bound_manifest != clean_expected:
+                conn.execute(
+                    "UPDATE manual_publish_leases SET lease_state = 'EXPIRED_HARD' WHERE lease_id = ?",
+                    (row["lease_id"],),
+                )
+                conn.commit()
                 return None
             cursor = conn.execute(
-                '''UPDATE manual_publish_leases SET claimed_at = CURRENT_TIMESTAMP
+                '''UPDATE manual_publish_leases
+                   SET claimed_at = CURRENT_TIMESTAMP,
+                       consumed_submit_at = CURRENT_TIMESTAMP,
+                       lease_state = 'CONSUMED_SUBMIT',
+                       artifact_manifest_sha256 = COALESCE(artifact_manifest_sha256, ?),
+                       last_attempt_id = COALESCE(?, last_attempt_id)
                    WHERE lease_id = ? AND claimed_at IS NULL AND revoked_at IS NULL
-                     AND expires_at > CURRENT_TIMESTAMP''',
-                (row["lease_id"],),
+                     AND COALESCE(lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(hard_expires_at, expires_at) > CURRENT_TIMESTAMP
+                     AND (prep_deadline_at IS NULL OR prep_deadline_at > CURRENT_TIMESTAMP)''',
+                (clean_expected, clean_attempt, row["lease_id"]),
             )
             if cursor.rowcount != 1:
                 conn.rollback()
@@ -5059,6 +5256,65 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (row["lease_id"],)
             ).fetchone()
             return dict(claimed) if claimed else None
+
+    def claim_manual_publish_lease(
+        self, youtube_id: str, *, slice_index: int = 0, platform: str = "wechat",
+    ) -> Optional[Dict[str, Any]]:
+        """在平台上传器启动前原子消费一次 lease；已领取、撤销或过期后永不复用。"""
+        return self.consume_manual_publish_lease_for_submission(
+            youtube_id, slice_index=slice_index, platform=platform
+        )
+
+    def rearm_manual_publish_lease_on_busy(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        attempt_id: str,
+        exit_code: int,
+        browser_started: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """仅当本次投递尝试在浏览器启动前因会话锁忙（exit_code=11）退出且无任何提交回执时，有界退回 CONSUMED_PREP（rearm_count < 3）。"""
+        clean_attempt = (attempt_id or "").strip()
+        if exit_code != 11 or browser_started or not clean_attempt:
+            return None
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                '''SELECT lease.* FROM manual_publish_leases lease
+                   JOIN processed_videos pv ON pv.id = lease.video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND lease.platform = 'wechat'
+                     AND lease.revoked_at IS NULL
+                     AND lease.lease_state = 'CONSUMED_SUBMIT'
+                     AND lease.last_attempt_id = ?
+                     AND COALESCE(lease.rearm_count, 0) < 3
+                     AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                     AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
+                     AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = pv.id)
+                     AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = pv.id)
+                   ORDER BY lease.issued_at DESC LIMIT 1''',
+                (youtube_id, slice_index, clean_attempt),
+            ).fetchone()
+            if not row:
+                conn.rollback()
+                return None
+            cur = conn.execute(
+                '''UPDATE manual_publish_leases
+                   SET lease_state = 'CONSUMED_PREP',
+                       claimed_at = NULL,
+                       rearm_count = COALESCE(rearm_count, 0) + 1
+                   WHERE lease_id = ? AND lease_state = 'CONSUMED_SUBMIT' AND last_attempt_id = ?''',
+                (row["lease_id"], clean_attempt),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+            updated = conn.execute(
+                "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (row["lease_id"],)
+            ).fetchone()
+            return dict(updated) if updated else None
 
     def revoke_manual_publish_lease(
         self, lease_id: str, *, revoked_by: str,
@@ -5071,9 +5327,11 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         with self.get_connection() as conn:
             cursor = conn.execute(
                 '''UPDATE manual_publish_leases
-                   SET revoked_at = CURRENT_TIMESTAMP, revoked_by = ?
+                   SET revoked_at = CURRENT_TIMESTAMP, revoked_by = ?, lease_state = 'REVOKED'
                    WHERE lease_id = ? AND claimed_at IS NULL AND revoked_at IS NULL
-                     AND expires_at > CURRENT_TIMESTAMP''',
+                     AND COALESCE(lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                     AND expires_at > CURRENT_TIMESTAMP
+                     AND COALESCE(hard_expires_at, expires_at) > CURRENT_TIMESTAMP''',
                 (clean_revoked_by, clean_lease_id),
             )
             if cursor.rowcount != 1:
@@ -5595,6 +5853,20 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         for channel_id, channel_min_score in (channel_min_scores or {}).items():
             threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
             threshold_params.extend([channel_id, channel_min_score])
+        if ready_only is True:
+            threshold_clauses.append(
+                """EXISTS (
+                    SELECT 1 FROM manual_publish_leases lease
+                    WHERE lease.video_id = pv.id
+                      AND lease.platform = 'wechat'
+                      AND lease.claimed_at IS NULL
+                      AND lease.revoked_at IS NULL
+                      AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
+                      AND lease.expires_at > CURRENT_TIMESTAMP
+                      AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
+                      AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
+                )"""
+            )
         threshold_sql = " OR ".join(threshold_clauses)
         rate_sql, rate_params = self._ted_like_rate_filter()
         terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED", "HISTORICAL_ARCHIVED"]
@@ -5641,6 +5913,9 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ORDER BY COALESCE(pv.preparation_ready, 0) DESC, pv.score DESC LIMIT ?
         """
         with self.get_connection() as conn:
+            if ready_only is True:
+                self.expire_manual_publish_leases(conn=conn)
+                conn.commit()
             cursor = conn.execute(
                 query,
                 (*threshold_params, json.dumps(list(excluded_product_tasks)), *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
@@ -8107,6 +8382,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         """专用投稿器原子领取仍有效的批准项；重复或过期授权不能二次投稿。"""
         clean_id = (review_id or "").strip()
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            retry = conn.execute("SELECT next_attempt_at FROM wechat_write_retry_chains WHERE kind='english_world' AND task_id=?", (clean_id,)).fetchone()
+            if retry and retry[0] and retry[0] > datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
+                return None
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMITTING', submission_started_at = CURRENT_TIMESTAMP,
@@ -8129,6 +8408,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 "cover_sha256", "cover_provenance_sha256",
             )):
                 raise ValueError("English World submission requires an immutable package hash set")
+            self._freeze_wechat_retry_chain_conn(conn, "english_world", clean_id)
             from uuid import uuid4
             attempt_id = uuid4().hex
             conn.execute(
@@ -8144,6 +8424,34 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 ),
             )
             return {**dict(row), "_attempt_id": attempt_id}
+
+    def retry_english_world_proven_pre_submit(self, review_id, *, attempt_id, evidence_dir, video_path):
+        """只消费本次未提交证明安排两次技术重试；保留原授权、冻结包及尝试历史。"""
+        from ..utils.wechat_operations_policy import retry_policy
+        from ..utils.submission_progress import proven_pre_submit
+        from ..core.wechat_upload_recovery import valid_timeout_receipt
+        evidence = Path(evidence_dir)
+        if not settings.wechat_operations_enabled or not (proven_pre_submit(evidence, video_path) or valid_timeout_receipt(evidence, video_path)):
+            return False
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute("SELECT * FROM english_world_review_items WHERE id=? AND state='SUBMITTING' AND platform_post_id IS NULL AND platform_state IS NULL", (str(review_id),)).fetchone()
+            attempt = conn.execute("SELECT * FROM english_world_submission_attempts WHERE attempt_id=? AND review_id=? AND state='SUBMITTING' AND platform_post_id IS NULL AND evidence_dir=?", (attempt_id,review_id,str(evidence_dir))).fetchone()
+            if not task or not attempt or str(task['mp4_path']) != str(video_path):
+                return False
+            if conn.execute("SELECT 1 FROM wechat_publications WHERE subject_id=?", ('english_world:'+str(review_id),)).fetchone():
+                return False
+            cap = self._freeze_wechat_retry_chain_conn(conn, "english_world", str(review_id))
+            row = conn.execute("SELECT failure_count FROM wechat_write_retry_chains WHERE kind='english_world' AND task_id=?", (str(review_id),)).fetchone()
+            failures = int(row[0])+1
+            if failures > cap:
+                return False
+            due=(now+datetime.timedelta(seconds=retry_policy()['interval_seconds'])).strftime('%Y-%m-%d %H:%M:%S')
+            conn.execute("UPDATE wechat_write_retry_chains SET failure_count=?,next_attempt_at=?,last_error='已证明未提交的技术故障' WHERE kind='english_world' AND task_id=?", (failures,due,str(review_id)))
+            conn.execute("UPDATE english_world_submission_attempts SET state='FAILED',uploader_exit_code=15,error_message='已证明未提交，保留原授权等待技术重试',finished_at=CURRENT_TIMESTAMP WHERE attempt_id=?", (attempt_id,))
+            conn.execute("UPDATE english_world_review_items SET state='SUBMISSION_APPROVED',submission_started_at=NULL,error_message=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='SUBMITTING'", ('已证明未提交，最早 UTC '+due,str(review_id)))
+            return True
 
     def defer_english_world_session_busy(
         self, review_id: str, *, attempt_id: str, evidence_dir: str,
@@ -8336,6 +8644,8 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             row = conn.execute(
                 """SELECT * FROM english_world_review_items
                    WHERE state = 'SUBMISSION_APPROVED' AND approval_source = 'AUTO_POLICY'
+                     AND NOT EXISTS (SELECT 1 FROM wechat_write_retry_chains r WHERE r.kind='english_world'
+                       AND r.task_id=english_world_review_items.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
                      AND NOT EXISTS (SELECT 1 FROM product_task_decisions pd
                        WHERE pd.task_id IN (SELECT value FROM json_each(?))
                          AND (json_extract(pd.payload, '$.context.review_id')=english_world_review_items.id
@@ -9780,6 +10090,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         # Modification History
         | Version | Date | Author | Description |
         | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
         | 1.1.0 | 2026-10-24 | Codex | 库存资格与自动投稿保持一致，排除商品等待及人工恢复项。 |
         """
         with self.get_connection() as conn:
@@ -12291,6 +12602,9 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         if not clean_post_id or not clean_comment:
             raise ValueError("platform_post_id and comment_text are required")
         bounded_attempts = max(1, min(5, int(max_attempts)))
+        if settings.wechat_operations_enabled:
+            from ..utils.wechat_operations_policy import retry_policy
+            bounded_attempts = min(bounded_attempts, retry_policy()["max_retries"] + 1)
         now_text = self._wechat_interaction_timestamp(now)
         with self.get_connection() as conn:
             conn.execute(
@@ -12340,13 +12654,13 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             ).fetchone()
             if (
                 current is None
-                or current["status"] not in {"QUEUED", "RETRY_WAIT"}
+                or current["status"] not in {"QUEUED", "RETRY_WAIT", "FAILED"}
                 or current["submit_intent_at"] is not None
                 or current["lease_token"] is not None
             ):
                 return None
             previous_comment = str(current["comment_text"])
-            if previous_comment == clean_comment:
+            if previous_comment == clean_comment and current["status"] != "FAILED":
                 return dict(current)
             conn.execute(
                 """INSERT INTO wechat_interaction_draft_revisions (
@@ -12357,8 +12671,8 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             conn.execute(
                 """UPDATE wechat_interactions
                    SET interaction_type = ?, provider = ?, comment_text = ?, status = 'QUEUED',
-                       next_attempt_at = ?, updated_at = ?
-                   WHERE id = ? AND status IN ('QUEUED', 'RETRY_WAIT')
+                       attempt_count = 0, error_message = NULL, next_attempt_at = ?, updated_at = ?
+                   WHERE id = ? AND status IN ('QUEUED', 'RETRY_WAIT', 'FAILED')
                      AND submit_intent_at IS NULL AND lease_token IS NULL""",
                 (
                     str(interaction_type or "").strip(), str(provider or "").strip(), clean_comment,
@@ -12443,6 +12757,7 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         platform_post_id: Optional[str] = None,
         video_id: Optional[int] = None,
         verify_only_only: bool = False,
+        include_uncertain: bool = True,
     ) -> Optional[dict]:
         """原子领取一条到期任务；显式目标不会回退领取其他作品。"""
         if platform_post_id and video_id is not None:
@@ -12465,9 +12780,16 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             params.append(int(video_id))
         if verify_only_only:
             target_clause += " AND i.status = 'UNCERTAIN'"
+        if not include_uncertain:
+            target_clause += " AND i.status != 'UNCERTAIN'"
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._recover_expired_wechat_interactions_conn(conn, now_text=now_text)
+            if settings.wechat_operations_enabled:
+                from ..utils.wechat_operations_policy import retry_policy
+                cap = retry_policy()["max_retries"] + 1
+                conn.execute("UPDATE wechat_interactions SET max_attempts = MIN(max_attempts, ?) WHERE status IN ('QUEUED','RETRY_WAIT') AND submit_intent_at IS NULL", (cap,))
+                conn.execute("UPDATE wechat_interactions SET status='FAILED', error_message='安全重试预算已用尽，需人工处理' WHERE status IN ('QUEUED','RETRY_WAIT') AND submit_intent_at IS NULL AND attempt_count >= max_attempts")
             row = conn.execute(
                 f'''
                 SELECT i.id, i.status
@@ -12638,8 +12960,13 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 )
             else:
                 exhausted = int(current["attempt_count"]) >= int(current["max_attempts"])
-                final_status = "FAILED" if exhausted else "RETRY_WAIT"
                 delay = min(3600, 60 * (2 ** max(0, int(current["attempt_count"]) - 1)))
+                if settings.wechat_operations_enabled:
+                    from ..utils.wechat_operations_policy import retry_policy, is_retryable_before_intent
+                    retry = retry_policy()
+                    exhausted = exhausted or int(current["attempt_count"]) >= retry["max_retries"] + 1 or not is_retryable_before_intent(error_message)
+                    delay = retry["interval_seconds"]
+                final_status = "FAILED" if exhausted else "RETRY_WAIT"
                 next_attempt_at = None if exhausted else self._wechat_interaction_timestamp(
                     now_value + datetime.timedelta(seconds=delay)
                 )
@@ -13127,6 +13454,32 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             evidence_path=evidence_path, error_message=error_message,
         )
 
+    def bind_observed_wechat_publication(self, publication_id: int, platform_post_id: str,
+                                         evidence_path: str) -> Optional[dict]:
+        """仅补齐未绑定的既有投稿；CAS 防止覆盖其他会话或已绑定的作品身份。"""
+        if not platform_post_id.strip() or not Path(evidence_path).is_file():
+            raise ValueError('作品绑定需要原生 ID 和已落盘证据')
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conflict = conn.execute(
+                'SELECT id FROM wechat_publications WHERE platform_post_id = ? AND id != ?',
+                (platform_post_id, publication_id),
+            ).fetchone()
+            if conflict:
+                return None
+            changed = conn.execute(
+                '''UPDATE wechat_publications SET platform_post_id = ?, state = 'SUBMITTED_BOUND',
+                   evidence_path = ?, last_reconciled_at = CURRENT_TIMESTAMP,
+                   updated_at = CURRENT_TIMESTAMP, last_error_message = NULL
+                   WHERE id = ? AND platform_post_id IS NULL
+                   AND state IN ('SUBMITTED_UNBOUND', 'UNCERTAIN')''',
+                (platform_post_id, evidence_path, publication_id),
+            ).rowcount
+            if not changed:
+                return None
+            return dict(conn.execute('SELECT * FROM wechat_publications WHERE id = ?',
+                                     (publication_id,)).fetchone())
+
     def bind_wechat_publication_platform_post_id(
         self,
         *,
@@ -13541,33 +13894,6 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             conn.commit()
             return True, new_status
 
-    def bind_observed_wechat_publication(self, publication_id: int, platform_post_id: str,
-                                         evidence_path: str) -> Optional[dict]:
-        """仅补齐未绑定的既有投稿；CAS 防止覆盖其他会话或已绑定的作品身份。"""
-        if not platform_post_id.strip() or not Path(evidence_path).is_file():
-            raise ValueError('作品绑定需要原生 ID 和已落盘证据')
-        with self.get_connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            conflict = conn.execute(
-                'SELECT id FROM wechat_publications WHERE platform_post_id = ? AND id != ?',
-                (platform_post_id, publication_id),
-            ).fetchone()
-            if conflict:
-                return None
-            changed = conn.execute(
-                '''UPDATE wechat_publications SET platform_post_id = ?, state = 'SUBMITTED_BOUND',
-                   evidence_path = ?, last_reconciled_at = CURRENT_TIMESTAMP,
-                   updated_at = CURRENT_TIMESTAMP, last_error_message = NULL
-                   WHERE id = ? AND platform_post_id IS NULL
-                   AND state IN ('SUBMITTED_UNBOUND', 'UNCERTAIN')''',
-                (platform_post_id, evidence_path, publication_id),
-            ).rowcount
-            if not changed:
-                return None
-            return dict(conn.execute('SELECT * FROM wechat_publications WHERE id = ?',
-                                     (publication_id,)).fetchone())
-
-
     def get_approved_secondary_reply_tasks(
         self,
         *,
@@ -13603,10 +13929,12 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 WHERE (? IS NULL OR account_key = ?)
                   AND (? IS NULL OR platform_post_id = ?)
                   AND (status = 'APPROVED' OR (status = 'CLAIMED' AND lease_expires_at < ?))
+                  AND NOT EXISTS (SELECT 1 FROM wechat_write_retry_chains r
+                      WHERE r.kind='reply' AND r.task_id=wechat_secondary_reply_tasks.id AND r.next_attempt_at > ?)
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-                (account_key, account_key, platform_post_id, platform_post_id, now_iso, max(1, int(limit))),
+                (account_key, account_key, platform_post_id, platform_post_id, now_iso, now_iso, max(1, int(limit))),
             ).fetchall()
             conn.commit()
             return [dict(r) for r in rows]
@@ -13644,6 +13972,10 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 return None
 
             tid = int(row["id"])
+            retry = conn.execute("SELECT next_attempt_at FROM wechat_write_retry_chains WHERE kind='reply' AND task_id=?", (tid,)).fetchone()
+            if retry and retry[0] and retry[0] > now_iso:
+                return None
+            self._freeze_wechat_retry_chain_conn(conn, "reply", tid)
             cur = conn.execute(
                 """
                 UPDATE wechat_secondary_reply_tasks
@@ -13721,17 +14053,29 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
         if now_utc.tzinfo is None:
             now_utc = now_utc.replace(tzinfo=datetime.timezone.utc)
 
-        # 1. 上海时间窗口核查 (原子事务内必须核验)
+        from video_processing.utils.secondary_reply_policy import (
+            is_within_shanghai_window,
+            sync_secondary_reply_settings,
+        )
+        sync_secondary_reply_settings()
+
+        if settings.wechat_operations_enabled and not is_secondary_reply:
+            return True, "OK: 首评有独立账户预算"
+
+        # 1. 上海时间窗口核查 (原子事务内必须核验，支持 00:00-24:00 全天与跨午夜窗口)
         shanghai_tz = datetime.timezone(datetime.timedelta(hours=8))
         now_sh = now_utc.astimezone(shanghai_tz)
         current_time_str = now_sh.strftime("%H:%M")
-        win_start = getattr(settings, "wechat_reply_window_start_shanghai", "08:30")
-        win_end = getattr(settings, "wechat_reply_window_end_shanghai", "23:00")
-        if not (win_start <= current_time_str < win_end):
+        win_start = getattr(settings, "wechat_reply_window_start_shanghai", "00:00")
+        win_end = getattr(settings, "wechat_reply_window_end_shanghai", "24:00")
+        if not is_within_shanghai_window(current_time_str, win_start, win_end):
             return False, f"Outside Shanghai submission window ({win_start}-{win_end}): currently {current_time_str}"
 
         # 2. 单视频累计上限（仅二级回复受限，首评不占此额度，且永不午夜重置）
         max_per_vid = getattr(settings, "wechat_reply_max_per_video", 3)
+        if settings.wechat_operations_enabled:
+            from ..utils.wechat_operations_policy import load_policy
+            max_per_vid = load_policy()["operations"]["reply"]["max_replies_per_video_lifetime"]
         if is_secondary_reply:
             row = conn.execute(
                 """
@@ -13743,6 +14087,9 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             video_count = row[0] if row else 0
             if video_count >= max_per_vid:
                 return False, f"Single video secondary reply limit reached ({video_count} >= {max_per_vid})"
+
+        if settings.wechat_operations_enabled:
+            return True, "OK: 独立滚动预算已由账户原子准入核验"
 
         # 3. 账号滚动 60 分钟上限（首评 + 二级回复共计）
         hourly_limit = getattr(settings, "wechat_reply_hourly_quota", 10)
@@ -13775,31 +14122,32 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
             return False, f"Account rolling 60m submission limit reached ({total_rolling} >= {hourly_limit}: {initial_count} initial + {secondary_count} secondary)"
 
         # 4. 最小提交间隔
-        min_interval = getattr(settings, "wechat_reply_min_interval_seconds", 15)
-        interval_start_utc = (now_utc - datetime.timedelta(seconds=min_interval)).strftime("%Y-%m-%d %H:%M:%S")
-        row_recent_init = conn.execute(
-            """
-            SELECT 1 FROM wechat_interactions
-            WHERE status IN ('COMMENTED', 'SUBMIT_INTENT', 'UNCERTAIN')
-              AND datetime(COALESCE(submit_intent_at, commented_at, updated_at, created_at)) >= datetime(?)
-            LIMIT 1
-            """,
-            (interval_start_utc,),
-        ).fetchone()
-        if row_recent_init:
-            return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent initial comment"
+        min_interval = int(getattr(settings, "wechat_reply_min_interval_seconds", 3600))
+        if min_interval > 0:
+            interval_start_utc = (now_utc - datetime.timedelta(seconds=min_interval)).strftime("%Y-%m-%d %H:%M:%S")
+            row_recent_init = conn.execute(
+                """
+                SELECT 1 FROM wechat_interactions
+                WHERE status IN ('COMMENTED', 'SUBMIT_INTENT', 'UNCERTAIN')
+                  AND datetime(COALESCE(submit_intent_at, commented_at, updated_at, created_at)) >= datetime(?)
+                LIMIT 1
+                """,
+                (interval_start_utc,),
+            ).fetchone()
+            if row_recent_init:
+                return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent initial comment"
 
-        row_recent_sec = conn.execute(
-            """
-            SELECT 1 FROM wechat_secondary_reply_idempotency_ledger
-            WHERE status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
-              AND datetime(created_at) >= datetime(?)
-            LIMIT 1
-            """,
-            (interval_start_utc,),
-        ).fetchone()
-        if row_recent_sec:
-            return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent secondary reply"
+            row_recent_sec = conn.execute(
+                """
+                SELECT 1 FROM wechat_secondary_reply_idempotency_ledger
+                WHERE status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
+                  AND datetime(created_at) >= datetime(?)
+                LIMIT 1
+                """,
+                (interval_start_utc,),
+            ).fetchone()
+            if row_recent_sec:
+                return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent secondary reply"
 
         return True, "OK"
 
@@ -14053,6 +14401,48 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 """,
                 (evidence_path, int(task_id)),
             )
+            conn.commit()
+            return True
+
+    def _freeze_wechat_retry_chain_conn(self, conn, kind, task_id):
+        """重试预算在链开始时冻结；后续提高配置、进程重启或回滚不能扩充旧链。"""
+        if not settings.wechat_operations_enabled:
+            return None
+        from ..utils.wechat_operations_policy import retry_policy
+        current = retry_policy()
+        conn.execute("INSERT OR IGNORE INTO wechat_write_retry_chains(kind,task_id,initial_max_retries) VALUES(?,?,?)",
+                     (kind,str(task_id),current["max_retries"]))
+        row = conn.execute("SELECT initial_max_retries FROM wechat_write_retry_chains WHERE kind=? AND task_id=?", (kind,str(task_id))).fetchone()
+        return min(int(row[0]),current["max_retries"])
+
+    def retry_secondary_reply_before_intent(self, task_id, *, error_message, now_utc=None):
+        """只给已证明没有意图/出站的技术失败重试；不复活 FAILED、UNCERTAIN 或过期审批。"""
+        from ..utils.wechat_operations_policy import is_retryable_before_intent, retry_policy
+        if not settings.wechat_operations_enabled or not is_retryable_before_intent(error_message):
+            return False
+        now = now_utc or datetime.datetime.now(datetime.timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=datetime.timezone.utc)
+        now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute("SELECT * FROM wechat_secondary_reply_tasks WHERE id=?", (int(task_id),)).fetchone()
+            if (not task or task["status"] != "CLAIMED" or task["submit_intent_at"] is not None
+                    or (task["approval_expires_at"] and task["approval_expires_at"] < now_iso)
+                    or conn.execute("SELECT 1 FROM wechat_secondary_reply_idempotency_ledger WHERE account_key=? AND platform_post_id=? AND root_comment_id=?",
+                                    (task["account_key"],task["platform_post_id"],task["comment_id"])).fetchone()):
+                return False
+            cap = self._freeze_wechat_retry_chain_conn(conn, "reply", int(task_id))
+            row = conn.execute("SELECT failure_count FROM wechat_write_retry_chains WHERE kind='reply' AND task_id=?", (int(task_id),)).fetchone()
+            failures = int(row[0]) + 1
+            conn.execute("UPDATE wechat_write_retry_chains SET failure_count=?,last_error=? WHERE kind='reply' AND task_id=?", (failures,error_message,int(task_id)))
+            if failures > cap:
+                conn.commit()
+                return False
+            due = (now + datetime.timedelta(seconds=retry_policy()["interval_seconds"])).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute("UPDATE wechat_write_retry_chains SET next_attempt_at=? WHERE kind='reply' AND task_id=?", (due,int(task_id)))
+            conn.execute("UPDATE wechat_secondary_reply_tasks SET status='APPROVED',lease_token=NULL,lease_expires_at=NULL,error_message=?,updated_at=? WHERE id=? AND status='CLAIMED'",
+                         (error_message,now_iso,int(task_id)))
             conn.commit()
             return True
 
@@ -14471,6 +14861,74 @@ class PipelineDB(PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, 
                 LIMIT ?
                 """,
                 (account_key, now_iso, int(max_age_days), now_iso, max(1, int(limit))),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_secondary_reply_history(
+        self,
+        *,
+        limit: int = 500,
+        account_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """返回二级回复任务与观众评论关联历史列表，默认严格按最新任务 ID 倒序（最新在最上）排列。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    t.id AS task_id,
+                    t.account_key,
+                    t.platform_post_id,
+                    t.comment_id,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(NULLIF(p.zh_title, ''), NULLIF(p.title, ''), NULLIF(ew.title, ''), NULLIF(ew.source_title, ''), '') AS video_title,
+                    COALESCE(NULLIF(p.title, ''), NULLIF(ew.source_title, ''), '') AS video_en_title,
+                    COALESCE(w.confirmed_at, w.created_at, '') AS video_published_at,
+                    COALESCE(c.nickname, '') AS nickname,
+                    COALESCE(c.content, '') AS comment_content,
+                    COALESCE(c.createtime, '') AS comment_createtime,
+                    COALESCE(c.like_count, 0) AS comment_like_count,
+                    COALESCE(c.created_at, '') AS comment_discovered_at,
+                    t.intent,
+                    t.style,
+                    t.status,
+                    t.chinese_reply,
+                    t.english_reply,
+                    t.reason_code,
+                    COALESCE(t.evidence_refs, '[]') AS evidence_refs,
+                    t.provider,
+                    t.approver_id,
+                    t.platform_reply_comment_id,
+                    t.approval_message_id,
+                    t.approved_at,
+                    t.submit_intent_at,
+                    t.verified_at,
+                    t.evidence_path,
+                    t.error_message,
+                    t.created_at,
+                    t.updated_at
+                FROM wechat_secondary_reply_tasks t
+                LEFT JOIN wechat_audience_comments c
+                    ON c.account_key = t.account_key
+                   AND c.platform_post_id = t.platform_post_id
+                   AND c.comment_id = t.comment_id
+                LEFT JOIN wechat_publications w
+                    ON w.platform_post_id = t.platform_post_id
+                    OR (
+                        t.platform_post_id = 'export/UzFfBgAAxOClNFsoN2Spk8zT4DCaVikQXENps3YeyGFwg_SlGQ'
+                        AND w.video_id = 5757
+                    )
+                LEFT JOIN processed_videos p
+                    ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps
+                    ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew
+                    ON ew.id = ps.english_world_review_id
+                WHERE (? IS NULL OR ? = '' OR t.account_key = ?)
+                ORDER BY t.id DESC
+                LIMIT ?
+                """,
+                (account_key, account_key, account_key, max(1, min(2000, int(limit)))),
             ).fetchall()
             return [dict(r) for r in rows]
 

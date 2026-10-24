@@ -3,6 +3,8 @@
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
 
+| 3.57.0 | 2026-10-18 | Antigravity | 修复看门狗空字典恒真判锁 Bug；新增重登失败指数退避与回退探测防饿死机制；整轮异常保护与调度心跳记录。 |
+| 3.56.0 | 2026-10-17 | Antigravity | 自动重登遵循 settings.wechat_headless；重登未确认时清理冷却 flag；看门狗联动跨进程会话锁并在繁忙/预热重登后 5 分钟快速复检。 |
 | evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
 | cover-source-v1 | 2026-10-15 | Codex | 列表返回统一封面来源，缩略图读取投稿冻结文件。 |
 | maintenance-v1 | 2026-10-12 | Codex | 共用持久化准入、调度角色互斥、单项线程归属和资源等待；维护启动保留本地候选管理。 |
@@ -33,6 +35,7 @@
 | 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 历史审核标签不再提供当前复核入口，展示真实字幕阶段与复用结果。 |
 | 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
 | 3.24.0 | 2026-08-21 | Codex | 回收无存活进程的预提交孤儿任务；提交后状态继续 fail-closed，且待绑定提交进入待核验而非加工队列 |
@@ -219,10 +222,42 @@ def _create_topic_tracker():
 
 
 app.include_router(create_topic_candidates_router(_create_topic_tracker, port=settings.dashboard_port))
-
-
+from web.secondary_reply_settings import create_secondary_reply_settings_router
+app.include_router(
+    create_secondary_reply_settings_router(
+        active=settings.wechat_reply_policy_path,
+        history_lookup=lambda limit: db.list_secondary_reply_history(limit=limit),
+    )
+)
 from web.wechat_cooldown_settings import create_wechat_cooldown_settings_router
-app.include_router(create_wechat_cooldown_settings_router(active=settings.wechat_scheduler_policy_path))
+app.include_router(
+    create_wechat_cooldown_settings_router(
+        active=settings.wechat_scheduler_policy_path,
+    )
+)
+
+
+@app.get("/api/wechat-operations-policy")
+def wechat_operations_policy_status():
+    """紧急参数上线的只读实际生效视图；不是完整 G1 配置后台。"""
+    from video_processing.utils.wechat_operations_policy import load_policy, revision
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    try:
+        policy = load_policy()
+        if policy is None:
+            return {"enabled": False}
+        guard = WeChatRequestGuard(settings.default_output_dir / "wechat_state.json")
+        purpose_names = {"publish":"发布", "first_comment":"首评", "reply":"回复", "comment_scan":"评论扫描", "post_match":"作品匹配", "keepalive":"保活"}
+        views = {}
+        for key, purpose in purpose_names.items():
+            info = guard.evaluate(purpose=purpose, account_only=True)
+            views[key] = {name: info.get(name) for name in ("allowed", "blockers", "until", "sessions_24h_count", "sessions_1h_count", "daily_limit", "hourly_limit", "interval_seconds", "policy_revision")}
+        return {"enabled": True, "loaded_revision": revision(policy), "config": policy, "admission": views,
+                "meaning": "until 是账号已知时间门禁下界，不保证任务已经具备其他资格；旧共享额度界面字段不再用于正常分用途准入"}
+    except WeChatRequestDeferred as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
 from web.publishing_recovery import create_publishing_recovery_router
 from video_processing.utils.publishing_recovery_worker import ensure_publishing_recovery_worker
 app.include_router(create_publishing_recovery_router(
@@ -498,12 +533,14 @@ def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
 
 
 @guarded("wechat-login")
-def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
+def _start_wechat_login_flow(*, headless: bool | None = None, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
     # 固定时钟重登与账户统一调度互斥；在删标记/建线程之前退出。
     if settings.wechat_account_scheduler_enabled and reason != "manual":
         return {"success": False, "deferred": True, "message": "账户统一调度已停用自动保活及预热重登"}
     from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
+    if headless is None:
+        headless = bool(settings.wechat_headless)
     prj_root = Path(__file__).parent.parent.parent
     python = str(prj_root / ".venv" / "bin" / "python")
     script = str(prj_root / "scripts" / "wechat_uploader.py")
@@ -556,9 +593,13 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
             pass
 
     start_ts = time.time()
-    from video_processing.core.wechat_auth_state import read_wechat_auth_state
+    from video_processing.core.wechat_auth_state import (
+        read_wechat_auth_state,
+        record_wechat_auth_attempt,
+    )
     pre_auth = read_wechat_auth_state(state) if state.exists() else {}
     pre_auth_at = float(pre_auth.get("authorized_at") or 0.0)
+    pre_gen = pre_auth.get("credential_generation")
 
     def _run():
         try:
@@ -574,11 +615,36 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
                 _restore_login_required_after_wechat_login()
                 _resume_eligible_english_world_after_wechat_login()
             elif not auth_succeeded_this_run:
+                if preserve_marker:
+                    try:
+                        auto_flag.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                # 若非会话锁占用 (returncode != 11) 且子进程未写入本次失败尝试，补记失败退避以防死循环饿死保活
+                if result.returncode != 11 and state.exists():
+                    post_att_at = float(post_auth.get("last_auth_attempt_at") or 0.0)
+                    post_att_status = post_auth.get("last_auth_attempt_status")
+                    if post_att_status != "FAILED" or post_att_at < (start_ts - 2.0):
+                        try:
+                            record_wechat_auth_attempt(
+                                state,
+                                method="auto",
+                                success=False,
+                                reason="PAGE_UNREADY" if result.returncode == 1 else "LOGIN_REQUIRED",
+                                expected_generation=pre_gen,
+                            )
+                        except Exception:
+                            pass
                 import logging
                 logging.getLogger(__name__).warning(
                     f"WeChat login subprocess finished (code={result.returncode}) but fresh authorization was not confirmed (pre={pre_auth_at}, post={post_auth_at}, start={start_ts})."
                 )
         except Exception as exc:
+            if preserve_marker:
+                try:
+                    auto_flag.unlink(missing_ok=True)
+                except Exception:
+                    pass
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
 
@@ -588,7 +654,7 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
 
 
 def _wechat_session_needs_auto_relogin() -> bool:
-    """判断是否已接近服务端绝对会话上限，且当前没有进行中的自动重登。"""
+    """判断是否已接近服务端绝对会话上限，且当前没有进行中的自动重登或重登失败退避。"""
     if (settings.wechat_account_scheduler_enabled or not settings.wechat_auto_relogin_enabled
             or not settings.wechat_keepalive_enabled):
         return False
@@ -597,14 +663,29 @@ def _wechat_session_needs_auto_relogin() -> bool:
     state_file = prj_root / "output" / "wechat_state.json"
     auto_flag = prj_root / "output" / _WECHAT_AUTO_RELOGIN_FLAG
     try:
-        if auto_flag.exists() and time.time() - auto_flag.stat().st_mtime < 15 * 60:
+        now_ts = time.time()
+        if auto_flag.exists() and now_ts - auto_flag.stat().st_mtime < 15 * 60:
             return False
         from video_processing.core.wechat_auth_state import read_wechat_auth_state
         auth_state = read_wechat_auth_state(state_file)
+        # 防饿死保护：若上次重登失败且处于指数退避窗口，或重登失败后尚未对旧凭证执行过普通保活探测，
+        # 优先让出给普通 keepalive 探测刷新旧凭证，严禁每 5 分钟连续触发重登而饿死保活。
+        next_relogin_at = auth_state.get("next_relogin_allowed_at")
+        if next_relogin_at is not None and now_ts < next_relogin_at:
+            return False
+        last_att_status = auth_state.get("last_auth_attempt_status")
+        last_att_at = auth_state.get("last_auth_attempt_at")
+        last_ka_at = auth_state.get("last_keepalive_at")
+        if (
+            last_att_status == "FAILED"
+            and last_att_at is not None
+            and (last_ka_at is None or last_ka_at < last_att_at)
+        ):
+            return False
         stamp = auth_state.get("authorized_at")
         if stamp is None:
             stamp = int(login_at.read_text(encoding="utf-8").strip())
-        return (time.time() - stamp) / 3600.0 >= settings.wechat_session_warn_hours
+        return (now_ts - stamp) / 3600.0 >= settings.wechat_session_warn_hours
     except (OSError, ValueError):
         # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
         return state_file.is_file()
@@ -994,96 +1075,154 @@ def _wechat_keepalive_loop(stop=None):
     import subprocess as _sp
     import threading as _threading
 
+    retry_interval_seconds: int | None = None
+    first_iteration = True
     while not stop.is_set():
-        # 随机等待 min~max 分钟
-        min_s = settings.wechat_keepalive_min_interval * 60
-        max_s = settings.wechat_keepalive_max_interval * 60
-        interval = random.randint(min_s, max_s)
-        next_ts = time.time() + interval
+        waited_this_round = False
         try:
-            from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
-            if running():
-                record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
-        except Exception as _exc:
-            log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
-        log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
-        stop.wait(interval)
-
-        # 开关检查（sleep 后判断，支持运行时热更新配置）
-        if not running() or not settings.wechat_keepalive_enabled:
-            log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
-            continue
-
-        # 互斥检测：若有微信上传相关线程正在运行，跳过本轮 keepalive
-        # [Claude_Sonnet_4.6_Thinking_planning] 防止两个 Playwright 进程并发读写
-        # wechat_state.json 产生 Cookie 竞态（两个进程同时 storage_state() 相互覆盖）
-        active_threads = _threading.enumerate()
-        upload_running = any(
-            "wechat-uploader" in t.name or "upload" in t.name.lower()
-            for t in active_threads
-        )
-        if upload_running:
-            log.info("[Keepalive] Upload in progress, skipping keepalive this round.")
-            continue
-
-        # 微信服务端会话存在约 24 小时绝对寿命；在临期窗口提前推送二维码，
-        # 保留旧 state 直到扫码成功，避免发布时才被动发现 LOGIN_REQUIRED。
-        # 必须在上传互斥之后执行，避免登录成功写回 state 与上传并发。
-        if _wechat_session_needs_auto_relogin():
-            started = _start_wechat_login_flow(
-                headless=True,
-                preserve_marker=True,
-                reason="automatic pre-expiry relogin",
-            )
-            log.warning(f"[Keepalive] Automatic pre-expiry relogin triggered: {started}")
-            continue
-
-        log.info("[Keepalive] Triggering WeChat session keepalive...")
-
-        # 构建子进程环境：不注入代理（与 wechat_uploader 一致），注入 Telegram 凭据
-        _proxy_keys = frozenset({
-            'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
-            'http_proxy', 'https_proxy', 'all_proxy'
-        })
-        env = {k: v for k, v in os.environ.items() if k not in _proxy_keys}
-        if settings.telegram_bot_token:
-            env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
-        if settings.active_telegram_chat_id:
-            env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
-        if settings.telegram_admin_ids:
-            env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
-
-        try:
-            result = run_admitted(
-                [
-                    python, keepalive_script,
-                    "--state", state_file,
-                    "--dwell", str(settings.wechat_keepalive_dwell),
-                ],
-                env=env,
-                timeout=120,  # 子进程最大 120 秒超时保护
-            )
-            if result.returncode == 0:
-                log.info("[Keepalive] WeChat session refreshed successfully.")
-            elif result.returncode == 2:
-                log.warning("[Keepalive] WeChat session expired (LOGIN_REQUIRED). Telegram alert sent.")
-                if settings.wechat_auto_relogin_enabled:
-                    started = _start_wechat_login_flow(
-                        headless=True,
-                        preserve_marker=True,
-                        reason="expired keepalive session",
-                    )
-                    log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
-            elif result.returncode == 11:
-                log.info("[Keepalive] WeChat session lock busy (upload or other operation running), skipping this round.")
+            # 首次启动等待 wechat_keepalive_initial_delay_seconds（默认 60s），其后按 min~max 随机或 5m 重试
+            if retry_interval_seconds is not None:
+                interval = retry_interval_seconds
+                retry_interval_seconds = None
+            elif first_iteration:
+                interval = max(5, int(getattr(settings, "wechat_keepalive_initial_delay_seconds", 60)))
             else:
-                log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
-        except _sp.TimeoutExpired:
-            log.error("[Keepalive] Keepalive subprocess timed out after 120s.")
-        except FileNotFoundError:
-            log.error(f"[Keepalive] Keepalive script not found: {keepalive_script}")
-        except Exception as e:
-            log.error(f"[Keepalive] Unexpected error: {e}")
+                min_s = settings.wechat_keepalive_min_interval * 60
+                max_s = settings.wechat_keepalive_max_interval * 60
+                interval = random.randint(min_s, max_s)
+            first_iteration = False
+            next_ts = time.time() + interval
+            try:
+                from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
+                if running():
+                    record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
+            except Exception as _exc:
+                log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
+            log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
+            stop.wait(interval)
+            waited_this_round = True
+            if stop.is_set():
+                break
+
+            # 开关与维护状态检查（sleep 后判断，支持运行时热更新配置）
+            if not running():
+                log.debug("[Keepalive] System in maintenance, skipping keepalive.")
+                continue
+            if (settings.wechat_account_scheduler_enabled and not settings.wechat_operations_enabled) or not settings.wechat_keepalive_enabled:
+                try:
+                    from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                    record_wechat_keepalive_defer(state_file, defer_reason="DISABLED")
+                except Exception:
+                    pass
+                log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
+                continue
+
+            # 互斥检测：若有微信上传相关线程或跨进程浏览器锁正在运行，5 分钟后快速重试
+            # 使用 inspect_wechat_session_lock(state_file).locked 显式布尔判锁，杜绝空字典 {} is not None 恒真陷阱
+            active_threads = _threading.enumerate()
+            upload_running = any(
+                "wechat-uploader" in t.name or "upload" in t.name.lower()
+                for t in active_threads
+            )
+            from video_processing.core.wechat_session_lock import inspect_wechat_session_lock
+            lock_status = inspect_wechat_session_lock(state_file)
+            if upload_running or lock_status.locked:
+                try:
+                    from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                    record_wechat_keepalive_defer(state_file, defer_reason="LOCK_BUSY")
+                except Exception:
+                    pass
+                log.info("[Keepalive] Upload or browser session lock busy, retrying in 5m.")
+                retry_interval_seconds = 300
+                continue
+
+            # 微信服务端会话存在约 24 小时绝对寿命；在达到阈值窗口（默认 10 小时）提前自动重登，
+            # 保留旧 state 直到授权成功，避免发布时才被动发现 LOGIN_REQUIRED。
+            # 若重登刚失败处于指数退避窗口或需先探测旧凭证，_wechat_session_needs_auto_relogin() 返回 False，
+            # 自动回退到下方普通 keepalive 探测，严禁饿死保活。
+            if _wechat_session_needs_auto_relogin():
+                started = _start_wechat_login_flow(
+                    headless=bool(settings.wechat_headless),
+                    preserve_marker=True,
+                    reason="automatic pre-expiry relogin",
+                )
+                try:
+                    from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                    record_wechat_keepalive_defer(state_file, defer_reason="RELOGIN_IN_PROGRESS")
+                except Exception:
+                    pass
+                log.warning(f"[Keepalive] Automatic pre-expiry relogin triggered: {started}")
+                retry_interval_seconds = 300
+                continue
+
+            try:
+                from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                record_wechat_keepalive_defer(state_file, defer_reason=None)
+            except Exception:
+                pass
+            log.info("[Keepalive] Triggering WeChat session keepalive...")
+
+            # 构建子进程环境：不注入代理（与 wechat_uploader 一致），注入 Telegram 凭据
+            _proxy_keys = frozenset({
+                'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+                'http_proxy', 'https_proxy', 'all_proxy'
+            })
+            env = {k: v for k, v in os.environ.items() if k not in _proxy_keys}
+            if settings.telegram_bot_token:
+                env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
+            if settings.active_telegram_chat_id:
+                env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+            if settings.telegram_admin_ids:
+                env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
+
+            try:
+                result = run_admitted(
+                    [
+                        python, keepalive_script,
+                        "--state", state_file,
+                        "--dwell", str(settings.wechat_keepalive_dwell),
+                    ],
+                    env=env,
+                    timeout=120,  # 子进程最大 120 秒超时保护
+                )
+                if result.returncode == 0:
+                    log.info("[Keepalive] WeChat session refreshed successfully.")
+                elif result.returncode == 2:
+                    log.warning("[Keepalive] WeChat session expired (LOGIN_REQUIRED). Telegram alert sent.")
+                    if settings.wechat_auto_relogin_enabled:
+                        started = _start_wechat_login_flow(
+                            headless=bool(settings.wechat_headless),
+                            preserve_marker=True,
+                            reason="expired keepalive session",
+                        )
+                        log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
+                        retry_interval_seconds = 300
+                elif result.returncode == 11:
+                    try:
+                        from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                        record_wechat_keepalive_defer(state_file, defer_reason="LOCK_BUSY")
+                    except Exception:
+                        pass
+                    log.info("[Keepalive] WeChat session lock busy (upload or other operation running), retrying in 5m.")
+                    retry_interval_seconds = 300
+                else:
+                    log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
+            except _sp.TimeoutExpired:
+                log.error("[Keepalive] Keepalive subprocess timed out after 120s.")
+            except FileNotFoundError:
+                log.error(f"[Keepalive] Keepalive script not found: {keepalive_script}")
+            except Exception as e:
+                log.error(f"[Keepalive] Unexpected error: {e}")
+        except Exception as loop_exc:
+            log.exception("[Keepalive] Unhandled exception in watchdog loop iteration: %s", loop_exc)
+            try:
+                from video_processing.core.wechat_auth_state import record_wechat_keepalive_defer
+                record_wechat_keepalive_defer(state_file, defer_reason="LOOP_EXCEPTION")
+            except Exception:
+                pass
+            retry_interval_seconds = 300
+            if not waited_this_round and not stop.is_set():
+                stop.wait(60)
 
 
 @app.on_event("startup")
@@ -1818,6 +1957,7 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
         detail = details.get(video.get("id"), {})
         reason = video.get("publication_wait_reason") or "等待发布执行者领取"
+        cooldown_waiting = False
         if video.get("publication_review_required"):
             reason = "成片已就绪，等待人工复核通过"
         elif settings.wechat_publishing_paused:
@@ -1836,9 +1976,9 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             reason = "发布执行者心跳缺失，等待恢复；成片已保留"
         elif runtime.get("current_video") and runtime['current_video'] != video['youtube_id']:
             reason = f"发布执行者正在处理 {runtime['current_video']}（{runtime.get('stage', '发布中')}）"
-        video.update(display_status="READY_TO_PUBLISH", publication_wait_reason=reason,
+        video.update(display_status="READY_COOLDOWN" if cooldown_waiting else "READY_TO_PUBLISH", publication_wait_reason=reason,
                      publication_next_attempt_at=detail.get("next_attempt_at"), publication_owner=owner,
-                     publication_target="视频号")
+                     publication_target="视频号", wechat_cooldown=cooldown)
 
 
 @app.get("/api/videos")

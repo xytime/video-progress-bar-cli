@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 按上下文与闭环双层约束列表预算，保留原生限流即停。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
@@ -56,7 +57,7 @@ def guard_wechat_context(context):
     session = _SESSION.get()
     if session is None:
         from config.settings import settings
-        if settings.wechat_account_scheduler_enabled:
+        if settings.wechat_account_scheduler_enabled or settings.wechat_operations_enabled:
             raise WeChatSessionLockBusy("没有账户调度许可，禁止打开视频号页面")
         return
     if session._request_limited:
@@ -91,8 +92,12 @@ def guard_wechat_context(context):
         if path.endswith("/post/post_list"):
             from config.settings import settings
             budget = (settings.wechat_interaction_list_request_budget
-                      if session.purpose in {"评论", "回复"} else 2)
-            contexts = {"评论": 2, "回复": 3}.get(session.purpose, 1)
+                      if session.purpose in {"评论", "首评", "回复", "评论扫描", "作品匹配"} else 2)
+            contexts = {"评论": 2, "首评": 2, "回复": 3}.get(session.purpose, 1)
+            if session.purpose == "评论扫描":
+                from ..utils.wechat_operations_policy import load_policy
+                policy = load_policy()
+                contexts = policy["operations"]["comment_scan"]["max_videos_per_run"] if policy else 1
             if context_list_requests >= budget or session._list_request_count >= budget * contexts:
                 route.abort()
                 return

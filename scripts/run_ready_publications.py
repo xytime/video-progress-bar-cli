@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 心跳公开实际读取的分用途配置摘要；不访问平台。 |
 | 1.7.0 | 2026-10-24 | Codex | 复用就绪巡检轮换两个工作流，持久保存下一顺序，阻止通用队列耗尽英语世界机会。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入发布恢复控制台，复用统一准入并保留任务和投稿保护。 |
 | 1.6.0 | 2026-10-18 | AGY | 心跳记录加载时源码与模块指纹，并在派生子 worker 与认领任务前执行空白浏览器能力预检与有界退避 |
@@ -41,7 +42,13 @@ from video_processing.core.wechat_product_attachment import ATTACHMENT_VERSION
 
 from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
 from video_processing.core.maintenance_child import child_continuation
-from video_processing.core.maintenance_runtime import registered
+from video_processing.core.maintenance_runtime import (
+    LOADED_SOURCE_HASH,
+    compute_browser_capability_backoff_seconds,
+    loaded_modules_hash,
+    registered,
+    verify_browser_launch_capability,
+)
 
 def product_configuration_status():
     from video_processing.utils.wechat_product_config import load_policy
@@ -140,6 +147,9 @@ def main(argv=None) -> int:
     from video_processing.processors.ted_source_cleanup import RECIPE as cleanup_recipe
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
+             "loaded_source_hash": LOADED_SOURCE_HASH,
+             "loaded_modules_hash": loaded_modules_hash(),
+             "browser_capability": {"ok": None, "checked_at": None, "reason": None},
              "product_publisher_capability": PUBLISHER_CAPABILITY,
              "product_attachment_version": ATTACHMENT_VERSION,
              "product_internal_profile_scope": product_profile_scope(out / 'wechat_state.json'),
@@ -159,6 +169,8 @@ def main(argv=None) -> int:
     stopped = threading.Event()
     state_lock = threading.Lock()
     status_path = out / "ready_publications_status.json"
+    browser_capability_verified = False
+    browser_capability_failures = 0
 
     def report(update):
         with state_lock:
@@ -170,6 +182,13 @@ def main(argv=None) -> int:
         while not stopped.is_set():
             with state_lock:
                 snapshot = dict(state, heartbeat_at=time.time(), **config_status(), **product_configuration_status())
+            from video_processing.utils.wechat_operations_policy import load_policy, revision
+            try:
+                policy = load_policy()
+                snapshot["wechat_operations"] = {"enabled": policy is not None, "loaded_revision": revision(policy) if policy else None,
+                                                   "loaded_at": time.time(), "error": None}
+            except Exception as exc:
+                snapshot["wechat_operations"] = {"enabled": True, "loaded_revision": None, "loaded_at": time.time(), "error": type(exc).__name__}
             temp = status_path.with_suffix(".tmp")
             temp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
             temp.replace(status_path)
@@ -191,6 +210,32 @@ def main(argv=None) -> int:
                                 return 0
                             time.sleep(15)
                             continue
+                        if not browser_capability_verified:
+                            cap = verify_browser_launch_capability()
+                            if not cap.get("ok"):
+                                browser_capability_failures += 1
+                                backoff_sec = compute_browser_capability_backoff_seconds(browser_capability_failures)
+                                logging.error(
+                                    "[ReadyPublication] 浏览器能力预检未通过（第 %d 次，退避 %ds），阻止业务认领与子 worker 派生: %s",
+                                    browser_capability_failures,
+                                    backoff_sec,
+                                    cap.get("reason"),
+                                )
+                                report({
+                                    "stage": "BROWSER_CAPABILITY_UNAVAILABLE",
+                                    "current_video": None,
+                                    "browser_capability": cap,
+                                })
+                                if args.once:
+                                    return 1
+                                for _ in range(backoff_sec):
+                                    time.sleep(1)
+                                    if not running():
+                                        break
+                                continue
+                            browser_capability_verified = True
+                            browser_capability_failures = 0
+                            report({"browser_capability": cap})
                         report({"stage": "POLLING", "current_video": None})
                         ensure_wallstreet_worker()
                         from video_processing.utils.delivery_recovery_worker import ensure_delivery_recovery_worker

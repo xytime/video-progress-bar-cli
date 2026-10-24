@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | 1.1.0 | 2026-09-20 | Antigravity | 传递 copy_path 到 post_comment 门面以支持 English World 作品定位与文案。 |
 | 1.0.0 | 2026-09-19 | Codex | 建立有界 tick、提交意图 callback 与 UNCERTAIN 只读回查协议。 |
 
@@ -107,7 +108,7 @@ def run_interaction_tick(
     # 的情形把历史 UNCERTAIN/退避任务永久饥饿。
     if not explicit_target and not dry_run:
         claimed = db.claim_due_wechat_interaction(
-            now=clock(), verify_only_only=reconcile_only
+            now=clock(), verify_only_only=reconcile_only, include_uncertain=not settings.wechat_operations_enabled
         )
         if reconcile_only and claimed is None:
             return InteractionTickResult(
@@ -167,7 +168,7 @@ def run_interaction_tick(
 
     if claimed is None:
         claimed = db.claim_due_wechat_interaction(
-            now=clock(), platform_post_id=post_id
+            now=clock(), platform_post_id=post_id, include_uncertain=not settings.wechat_operations_enabled
         )
     if not claimed:
         current = db.get_wechat_interaction_by_post_id(post_id)

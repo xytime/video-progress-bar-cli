@@ -9,10 +9,12 @@
 - 任何已持久化提交意图之后的不明确结果一律进入 UNCERTAIN/只读对账，绝不重发。
 
 # Modification History
-| interaction-recovery-v1 | 2026-10-23 | Codex | 意图前作者状态未知暂缓重查，批准有效期与去重账本保持约束。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 未提交技术故障接入持久有界重试；未知提交不重发。 |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 意图前作者状态未知暂缓重查，批准有效期与去重账本保持约束。 |
 | 1.2.1 | 2026-10-23 | Codex | 单条回复复核/发送/回读共用平台账户许可，准入等待保留 APPROVED，意图后异常仅对账。 |
+| 1.2.0 | 2026-10-18 | Antigravity | 提交前遇到浏览器会话锁忙 (SESSION_BUSY) 时调用 release_claimed_secondary_reply_task 退回 APPROVED，不误标 FAILED |
 | 1.1.0 | 2026-10-17 | Antigravity | 移除对 secondary_reply_browser_adapter 的直接依赖，从契约层导入 SecondaryReplySubmissionGuard 并纳入平台端口协议 |
 | 1.0.0 | 2026-10-13 | Antigravity | 新增：统一编排服务，演示 CLI 与测试共用；终审、意图、守卫、回读、对账同一路径 |
 """
@@ -237,6 +239,9 @@ class SecondaryReplyOrchestrator:
         if state == "REPLIED":
             self.db.record_secondary_reply_skipped(task_id, reason="AUTHOR_ALREADY_REPLIED")
             return SubmitOutcome("SKIPPED_ALREADY_REPLIED", "作者已回复", task_id)
+        if state == "SESSION_BUSY":
+            self.db.release_claimed_secondary_reply_task(task_id, lease)
+            return SubmitOutcome("DEFERRED_SESSION_BUSY", "浏览器会话锁忙，保留 APPROVED 等待下一周期", task_id)
         if state != "NOT_REPLIED":
             self.db.release_claimed_secondary_reply_task(task_id, lease)
             return SubmitOutcome("DEFERRED_AUTHOR_STATE_UNKNOWN", "无法完整判断是否已回复；保持批准状态，在有效期内重新核查", task_id)
@@ -263,14 +268,25 @@ class SecondaryReplyOrchestrator:
         except Exception as exc:
             after = self.db.get_secondary_reply_task(task_id)
             if after and after["status"] == "SUBMIT_INTENT":
-                self.db.record_secondary_reply_uncertain(task_id, error_message=f"发送过程异常: {exc}")
+                self.db.record_secondary_reply_uncertain(task_id, error_message=f"发送过程异常: {exc}", now_utc=now_dt)
                 return SubmitOutcome("UNCERTAIN", f"发送过程异常: {exc}", task_id)
+            if "wechat session lock busy" in str(exc).lower() or "待发布任务优先" in str(exc):
+                self.db.release_claimed_secondary_reply_task(task_id, lease)
+                return SubmitOutcome("DEFERRED_SESSION_BUSY", str(exc), task_id)
+            if self.db.retry_secondary_reply_before_intent(task_id, error_message=str(exc), now_utc=now_dt):
+                return SubmitOutcome("RETRY_WAIT", "已确认尚未提交，技术故障按有界策略等待重试", task_id)
             self.db.record_secondary_reply_failed(task_id, error_message=f"PRE_INTENT_EXCEPTION: {exc}")
             return SubmitOutcome("REJECTED_BEFORE_INTENT", str(exc), task_id)
 
         if not result.intent_persisted:
-            self.db.record_secondary_reply_failed(task_id, error_message=f"INTENT_REJECTED: {intent_msgs[-1:]}")
-            return SubmitOutcome("REJECTED_BEFORE_INTENT", "; ".join(intent_msgs), task_id)
+            exc_text = str(result.exception or "")
+            if not intent_msgs and ("wechat session lock busy" in exc_text.lower() or "待发布任务优先" in exc_text):
+                self.db.release_claimed_secondary_reply_task(task_id, lease)
+                return SubmitOutcome("DEFERRED_SESSION_BUSY", exc_text, task_id)
+            if not intent_msgs and self.db.retry_secondary_reply_before_intent(task_id, error_message=exc_text, now_utc=now_dt):
+                return SubmitOutcome("RETRY_WAIT", "已确认尚未提交，技术故障按有界策略等待重试", task_id)
+            self.db.record_secondary_reply_failed(task_id, error_message=f"INTENT_REJECTED: {intent_msgs[-1:] or exc_text}")
+            return SubmitOutcome("REJECTED_BEFORE_INTENT", "; ".join(intent_msgs) or exc_text, task_id)
 
         if not guard.requests:
             # 意图已落盘，但守卫在网络前拦截了所有写请求：有明确“未出站”证据
@@ -280,21 +296,27 @@ class SecondaryReplyOrchestrator:
             if guard.mismatched_requests:
                 self.db.reconcile_secondary_reply_uncertain(
                     task_id, verified=False, outcome="CONFIRMED_NOT_SENT",
-                    not_sent_evidence=evidence, reason=evidence,
+                    not_sent_evidence=evidence, reason=evidence, now_utc=now_dt,
                 )
                 return SubmitOutcome("BLOCKED_BY_GUARD", evidence, task_id)
-            self.db.record_secondary_reply_uncertain(task_id, error_message="意图已落盘但无出站/拦截记录，转对账")
+            self.db.record_secondary_reply_uncertain(
+                task_id, error_message="意图已落盘但无出站/拦截记录，转对账", now_utc=now_dt
+            )
             return SubmitOutcome("UNCERTAIN", "no outbound evidence", task_id)
 
         ok, reply_id, reason = guard.validate_success_response()
         if not ok:
-            self.db.record_secondary_reply_uncertain(task_id, error_message=f"无关联的业务成功回执: {reason}")
+            self.db.record_secondary_reply_uncertain(
+                task_id, error_message=f"无关联的业务成功回执: {reason}", now_utc=now_dt
+            )
             return SubmitOutcome("UNCERTAIN", reason, task_id)
 
         # 刷新后独立回读（全新会话读取服务器数据）
         look = self.platform.lookup_reply(post_id=post_id, root_id=root_id, text=final_text)
         if not (look.found and look.reply_id == reply_id):
-            self.db.record_secondary_reply_uncertain(task_id, error_message="平台回执成功但刷新后回读未确认")
+            self.db.record_secondary_reply_uncertain(
+                task_id, error_message="平台回执成功但刷新后回读未确认", now_utc=now_dt
+            )
             return SubmitOutcome("UNCERTAIN", "readback_not_confirmed", task_id)
         evidence_ref = self._save_receipt(
             task_id=task_id, account_key=self.account_key, attempt_id=lease, post_id=post_id, root_id=root_id,
@@ -302,12 +324,16 @@ class SecondaryReplyOrchestrator:
         )
         if not evidence_ref:
             # 已读到回复但证据无法保存：不得无证据成功；保留意图转只读对账，绝不重发
-            self.db.record_secondary_reply_uncertain(task_id, error_message="回读确认但成功证据保存失败，转只读对账")
+            self.db.record_secondary_reply_uncertain(
+                task_id, error_message="回读确认但成功证据保存失败，转只读对账", now_utc=now_dt
+            )
             return SubmitOutcome("UNCERTAIN", "EVIDENCE_NOT_SAVED", task_id)
         if not self.db.record_secondary_reply_success(
             task_id, platform_reply_comment_id=reply_id, evidence_path=evidence_ref,
         ):
-            self.db.record_secondary_reply_uncertain(task_id, error_message="成功落库被拒绝")
+            self.db.record_secondary_reply_uncertain(
+                task_id, error_message="成功落库被拒绝", now_utc=now_dt
+            )
             return SubmitOutcome("UNCERTAIN", "success_persist_rejected", task_id)
         return SubmitOutcome("VERIFIED", reply_id, task_id, {"reply_id": reply_id, "evidence": evidence_ref})
 

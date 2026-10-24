@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.16.0 | 2026-10-15 | Antigravity | 覆盖首屏后作品只读滚动加载匹配与原生/DOM 6 项互动指标交叉核验。 |
 | 1.15.0 | 2026-10-10 | Codex | 覆盖原提交 nonce 精确关联、缺失与错回执拒绝、歧义及原 ID 冲突。 |
 | 1.14.0 | 2026-10-03 | Codex | 新版结构化短标题只接受唯一项；原生 exportId 回查精确关联并拒绝歧义。 |
 | 1.13.0 | 2026-09-25 | Codex | 覆盖 post_list 仅返回长描述时的精确文案绑定与错配拒绝。 |
@@ -466,7 +467,7 @@ class TestExactSubmissionIdentity:
         assert ready is True
         assert actual == expected_cards
 
-    def test_bound_id_readback_retries_once_before_staying_uncertain(self, monkeypatch, tmp_path):
+    def test_bound_id_readback_does_not_restore_disabled_management_polling(self, monkeypatch, tmp_path):
         waits = []
 
         class Page:
@@ -488,9 +489,11 @@ class TestExactSubmissionIdentity:
             Page(), tmp_path, "native-post",
         )
 
-        assert state == MANAGEMENT_UNDER_REVIEW
-        assert platform_url == "https://example.test/post/native-post"
-        assert len(waits) == 1
+        assert state == MANAGEMENT_UNCERTAIN
+        assert platform_url == ""
+        assert waits == []
+        # 禁止为了通过旧测试恢复作品列表轮询；合成第二页数据必须未被消费。
+        assert next(delayed_cards)[1] is True
 
 
 def test_submission_ledger_prevents_post_submit_exception_downgrade(temp_db):
@@ -640,3 +643,103 @@ def test_api_merge_preserves_same_native_dom_public_time(monkeypatch):
     for key in ('posted_time_text','native_create_time','native_time_parts'):
         assert actual['native'][key]==dom[key]
     assert actual['native']['identity_source']=='post_list_api'
+
+
+def test_scroll_readback_finds_older_card_and_verifies_native_dom_metrics(monkeypatch, tmp_path):
+    import json
+    evidence = dict(
+        has_posted=True, process_success=True, posted_info_visible=True,
+        public_visibility=True, processing=False, scheduled=False,
+    )
+    initial_cards = {
+        "newer-post": {
+            "platform_post_id": "newer-post",
+            "identity_source": "post_list_api",
+            "platform_status": "1",
+            "status_text": "",
+            "component_state": evidence,
+        }
+    }
+    scrolled_dom = {
+        "older-post": {
+            "platform_post_id": "older-post",
+            "platform_object_nonce": "16209975033920480679",
+            "status_text": "已声明原创",
+            "component_state": evidence,
+            "posted_time_text": "原创审核中\n2026年10月10日 21:21\n42\n5\n2\n3\n1",
+            "native_create_time": 1791638490,
+            "native_time_parts": [2026, 10, 10, 21, 21],
+        }
+    }
+
+    class ScrollResponse:
+        url = "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/post/post_list"
+
+        def json(self):
+            return {
+                "data": {
+                    "list": [
+                        {
+                            "objectId": "older-post",
+                            "objectNonce": "16209975033920480679",
+                            "status": 1,
+                            "createTime": 1791638490,
+                            "readCount": 42,
+                            "likeCount": 5,
+                            "commentCount": 2,
+                            "forwardCount": 3,
+                            "favCount": 1,
+                            "followCount": 0,
+                            "desc": {"shortTitle": [{"shortTitle": "社保上调幻觉"}], "description": "正文"},
+                        }
+                    ]
+                }
+            }
+
+    class ScrollPage:
+        def __init__(self):
+            self.listener = None
+            self.scrolled = 0
+
+        def on(self, _event, cb):
+            self.listener = cb
+
+        def remove_listener(self, *_args):
+            self.listener = None
+
+        def evaluate(self, _script):
+            self.scrolled += 1
+            if self.listener:
+                self.listener(ScrollResponse())
+
+        def wait_for_timeout(self, _ms):
+            pass
+
+    receipt = tmp_path / "submission_receipt.json"
+    receipt.write_text(
+        json.dumps({
+            "platform_post_id": "export/original-older-id",
+            "platform_object_nonce": "16209975033920480679",
+            "matched_by": "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("wechat_uploader._load_management_cards", lambda _page, **_kw: (initial_cards, True))
+    monkeypatch.setattr("wechat_uploader._collect_management_cards", lambda _page: scrolled_dom)
+    monkeypatch.setattr("wechat_uploader._capture_wechat_evidence", lambda *_args: None)
+
+    page = ScrollPage()
+    state, _ = verify_management_publication_by_id(
+        page, tmp_path / "out", "export/original-older-id", identity_receipt=receipt
+    )
+    assert state == MANAGEMENT_PUBLISHED
+    assert page.scrolled == 1
+    proof = json.loads((tmp_path / "out" / "management_readback.json").read_text(encoding="utf-8"))
+    assert proof["matched_by"] == "EXACT_SUBMISSION_NONCE"
+    assert proof["platform_public_at"] == 1791638490
+    assert proof["metrics"] == {
+        "views": 42, "likes": 5, "comments": 2, "shares": 3, "favorites": 1, "follows": 0,
+    }
+    assert proof["metrics_ui_verified"] is True
+    assert proof["metrics_evidence"] == "POST_LIST_NATIVE_AND_DOM_POSTED_INFO_MATCH"
+

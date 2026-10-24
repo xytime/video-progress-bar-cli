@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 仅已证明未提交的技术失败接入两次重试；不重置授权或重复已受理项。 |
 | english-admission-v1 | 2026-10-24 | Codex | 领取前纯计算完整账户资格，不排队、不消耗额度、不生成无效上传尝试。 |
 | english-all-v1 | 2026-10-21 | Codex | 每条英语世界必须绑定快捷英语，命令及受理回执拒绝无商品降级。 |
 | shared-backoff-v1 | 2026-10-20 | Codex | 所有投稿在领取前遵守账户共用退避，评论开关不再影响限流保护。 |
@@ -444,6 +445,13 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                     and _defer_product_wait(db, review_id, attempt_id, evidence_dir, product_decision)):
                 logger.info('English World product wait preserved original task and authorization: %s', review_id)
                 return EXIT_DEFERRED
+            if settings.wechat_operations_enabled:
+                from video_processing.utils.submission_progress import PRE_SUBMIT_BROWSER_CLOSED
+                from video_processing.core.wechat_upload_recovery import PRE_SUBMIT_UPLOAD_TIMEOUT
+                if result.returncode in {PRE_SUBMIT_BROWSER_CLOSED, PRE_SUBMIT_UPLOAD_TIMEOUT} and db.retry_english_world_proven_pre_submit(
+                    review_id, attempt_id=attempt_id, evidence_dir=str(evidence_dir), video_path=str(item["mp4_path"]),
+                ):
+                    return EXIT_DEFERRED
             state, message = _record_submission_result(
                 db, review_id, attempt_id=attempt_id, code=result.returncode,
                 evidence_dir=evidence_dir, require_original_declaration=require_original,

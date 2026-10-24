@@ -10,9 +10,12 @@
    调用沙箱 ``AgySecondaryReplyProvider`` 生成双语草稿、落库 ``PENDING_REVIEW`` 并通过 ``TelegramApprovalTransport`` 推送审批卡片。
 
 # Modification History
-| interaction-recovery-v1 | 2026-10-23 | Codex | 所有阶段限定显式作品，零上限不执行，未知作者状态保留批准。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 所有阶段限定显式作品，零上限不执行，未知作者状态保留批准。 |
+| 1.3.0 | 2026-10-18 | Antigravity | 支持携带双语参考草稿的 MANUAL 意图落库 PENDING_REVIEW 并推送 Telegram 人工审批卡片 |
+| 1.2.0 | 2026-10-18 | Antigravity | 接入 secondary_reply_policy 热加载、hybrid_auto 自动批准入队与发送成功后 Telegram 事后通告 |
 | 1.1.0 | 2026-10-17 | Antigravity | 新增 resolve_published_copy_text 解析落盘文案文件用于评论页场景 ID 绑定与草稿背景摘要 |
 | 1.0.0 | 2026-10-17 | Antigravity | 初始创建：实现 M3.5 四阶段有界 Tick 调度器与防重入/非破坏性配额预检 (SR-01~SR-04) |
 """
@@ -24,6 +27,7 @@ import hashlib
 import logging
 import unicodedata
 from pathlib import Path
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional
 
 from config.settings import settings
@@ -33,8 +37,10 @@ from video_processing.interaction.secondary_reply_agy_provider import (
     build_verified_video_context,
 )
 from video_processing.interaction.secondary_reply_approval import (
+    auto_approve_and_bind_task,
     build_default_approval_transport,
     dispatch_approval_request,
+    dispatch_post_reply_notification,
 )
 from video_processing.interaction.secondary_reply_contract import (
     AudienceCommentRecord,
@@ -53,6 +59,7 @@ from video_processing.interaction.secondary_reply_service import (
     SecondaryReplyCensor,
     SecondaryReplyService,
 )
+from video_processing.utils.secondary_reply_policy import sync_secondary_reply_settings
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +117,9 @@ def run_secondary_reply_tick(
     video_title_hint: str = "",
 ) -> Dict[str, Any]:
     """执行一次有界二级回复 Tick 周期。"""
+    sync_secondary_reply_settings()
+    from ..utils.wechat_operations_policy import load_policy
+    operations_policy = load_policy()
     if not settings.enable_wechat_secondary_reply:
         return {
             "ok": False,
@@ -136,6 +146,10 @@ def run_secondary_reply_tick(
         if scan_posts_per_tick is not None
         else getattr(settings, "wechat_reply_scan_posts_per_tick", 3)
     )
+    if operations_policy is not None:
+        configured_scan_limit = operations_policy["operations"]["comment_scan"]["max_videos_per_run"]
+        scan_limit = min(max(0, scan_limit), configured_scan_limit) if scan_posts_per_tick is not None else configured_scan_limit
+        max_reconcile_per_tick = 0  # 旧 UNCERTAIN 不因新配额恢复自动回查。
     draft_limit = int(
         max_drafts_per_tick
         if max_drafts_per_tick is not None
@@ -175,12 +189,14 @@ def run_secondary_reply_tick(
 
     now_dt = _utc_now(clock)
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    approval_mode = str(getattr(settings, "wechat_reply_approval_mode", "manual") or "manual")
 
     report: Dict[str, Any] = {
         "ok": True,
         "status": "COMPLETED",
         "account_key": acct,
         "now_utc": now_str,
+        "approval_mode": approval_mode,
         "reconciled": [],
         "submitted": [],
         "submit_deferred": [],
@@ -208,7 +224,7 @@ def run_secondary_reply_tick(
         )
 
     # =========================================================================
-    # Phase 1: 已获人工批准 (APPROVED) 任务单条发送（非破坏性配额/时段预检 SR-01）
+    # Phase 1: 已获批准 (APPROVED) 任务单条发送（非破坏性配额/时段预检 SR-01）
     # =========================================================================
     if settings.enable_wechat_secondary_reply_live_submission:
         approved_tasks = db.get_approved_secondary_reply_tasks(
@@ -236,7 +252,7 @@ def run_secondary_reply_tick(
                         {"task_id": tid, "action": "SKIPPED", "reason": quota_reason}
                     )
                 else:
-                    # 夜间窗口、滚动 60m 配额或 15s 最小间隔未到：保持 APPROVED 等待下一 Tick
+                    # 提交窗口外、滚动 60m 配额或最小间隔未到：保持 APPROVED 等待下一 Tick
                     report["submit_deferred"].append(
                         {"task_id": tid, "action": "DEFERRED_KEEP_APPROVED", "reason": quota_reason}
                     )
@@ -248,12 +264,22 @@ def run_secondary_reply_tick(
                     {"task_id": tid, "action": "DEFERRED_KEEP_APPROVED", "reason": sub_out.detail}
                 )
                 break
+            notified = False
+            if sub_out.status == "VERIFIED" and approval_mode == "hybrid_auto" and ident and transport is not None:
+                notified, _ = dispatch_post_reply_notification(
+                    db=db,
+                    task_id=tid,
+                    transport=transport,
+                    chat_id=approver_chat_id,
+                    reply_id=sub_out.detail,
+                )
             report["submitted"].append(
                 {
                     "task_id": tid,
                     "outcome": sub_out.status,
                     "detail": sub_out.detail,
                     "extra": sub_out.extra,
+                    "post_reply_notified": notified,
                 }
             )
             sent_count += 1
@@ -283,104 +309,112 @@ def run_secondary_reply_tick(
         str(p["platform_post_id"]): p for p in due_posts if p.get("platform_post_id")
     }
 
-    if callable(discover_fn) and scan_limit > 0:
-        for post_row in due_posts:
-            post_id = str(post_row["platform_post_id"])
-            vtitle = str(
-                video_title_hint
-                or post_row.get("video_title")
-                or post_row.get("zh_title")
-                or post_row.get("title")
-                or ""
-            )
-            vdesc = resolve_published_copy_text(post_row)
-            if vdesc and not post_row.get("published_description"):
-                post_row["published_description"] = vdesc
-                if not post_row.get("description"):
-                    post_row["description"] = vdesc
-            pub_at = str(post_row.get("publication_created_at") or post_row.get("published_at") or "")
-            scan_now_dt = _utc_now(clock)
-            disc = discover_fn(post_id=post_id, video_title=vtitle, published_description=vdesc)
-            if not isinstance(disc, dict) or not disc.get("ok") or not isinstance(disc.get("payload"), dict):
-                err_reason = str((disc or {}).get("reason") or "DISCOVER_FAILED")
-                db.record_comment_scan_state(
-                    account_key=acct,
-                    platform_post_id=post_id,
-                    top_level_status="INCOMPLETE",
-                    observed_comment_count=0,
-                    complete=False,
-                    last_error=err_reason,
-                    published_at_utc=pub_at,
-                    now_utc=scan_now_dt,
-                )
-                report["scanned_posts"].append(
-                    {"post_id": post_id, "ok": False, "reason": err_reason}
-                )
-                if err_reason == "LOGIN_REQUIRED":
-                    report["ok"] = False
-                    report["status"] = "LOGIN_REQUIRED"
-                    return report
-                continue
+    if callable(discover_fn) and scan_limit > 0 and due_posts:
+        try:
+            with getattr(platform, "scan_scope", lambda _ids: nullcontext())([str(p["platform_post_id"]) for p in due_posts]):
+                for post_row in due_posts:
+                    post_id = str(post_row["platform_post_id"])
+                    vtitle = str(
+                        video_title_hint
+                        or post_row.get("video_title")
+                        or post_row.get("zh_title")
+                        or post_row.get("title")
+                        or ""
+                    )
+                    vdesc = resolve_published_copy_text(post_row)
+                    if vdesc and not post_row.get("published_description"):
+                        post_row["published_description"] = vdesc
+                        if not post_row.get("description"):
+                            post_row["description"] = vdesc
+                    pub_at = str(post_row.get("publication_created_at") or post_row.get("published_at") or "")
+                    scan_now_dt = _utc_now(clock)
+                    disc = discover_fn(post_id=post_id, video_title=vtitle, published_description=vdesc)
+                    if not isinstance(disc, dict) or not disc.get("ok") or not isinstance(disc.get("payload"), dict):
+                        err_reason = str((disc or {}).get("reason") or "DISCOVER_FAILED")
+                        db.record_comment_scan_state(
+                            account_key=acct,
+                            platform_post_id=post_id,
+                            top_level_status="INCOMPLETE",
+                            observed_comment_count=0,
+                            complete=False,
+                            last_error=err_reason,
+                            published_at_utc=pub_at,
+                            now_utc=scan_now_dt,
+                        )
+                        report["scanned_posts"].append(
+                            {"post_id": post_id, "ok": False, "reason": err_reason}
+                        )
+                        if err_reason == "LOGIN_REQUIRED":
+                            report["ok"] = False
+                            report["status"] = "LOGIN_REQUIRED"
+                            return report
+                        continue
 
-            try:
-                parsed = parse_wechat_comment_list_payload(
-                    disc["payload"],
-                    platform_post_id=post_id,
-                    author_username=finder,
-                    strict_schema=False,
-                )
-            except Exception as exc:
-                err_msg = f"PARSE_ERROR: {exc}"
-                db.record_comment_scan_state(
-                    account_key=acct,
-                    platform_post_id=post_id,
-                    top_level_status="INVALID",
-                    observed_comment_count=0,
-                    complete=False,
-                    last_error=err_msg,
-                    published_at_utc=pub_at,
-                    now_utc=scan_now_dt,
-                )
-                report["scanned_posts"].append(
-                    {"post_id": post_id, "ok": False, "reason": err_msg}
-                )
-                continue
+                    try:
+                        parsed = parse_wechat_comment_list_payload(
+                            disc["payload"],
+                            platform_post_id=post_id,
+                            author_username=finder,
+                            strict_schema=False,
+                        )
+                    except Exception as exc:
+                        err_msg = f"PARSE_ERROR: {exc}"
+                        db.record_comment_scan_state(
+                            account_key=acct,
+                            platform_post_id=post_id,
+                            top_level_status="INVALID",
+                            observed_comment_count=0,
+                            complete=False,
+                            last_error=err_msg,
+                            published_at_utc=pub_at,
+                            now_utc=scan_now_dt,
+                        )
+                        report["scanned_posts"].append(
+                            {"post_id": post_id, "ok": False, "reason": err_msg}
+                        )
+                        continue
 
-            db.save_discovered_audience_comments(
-                post_id,
-                [
-                    {
-                        "comment_id": c.comment_id,
-                        "nickname": c.nickname,
-                        "content": c.content,
-                        "createtime": c.createtime,
-                        "like_count": c.like_count,
-                        "is_author": c.is_author,
-                        "has_author_reply": c.has_author_reply,
-                    }
-                    for c in parsed.comments
-                ],
-                account_key=acct,
-            )
-            is_complete = parsed.top_level_status.value == "COMPLETE"
-            db.record_comment_scan_state(
-                account_key=acct,
-                platform_post_id=post_id,
-                top_level_status=parsed.top_level_status.value,
-                observed_comment_count=len(parsed.comments),
-                complete=is_complete,
-                last_error=None,
-                published_at_utc=pub_at,
-                now_utc=scan_now_dt,
-            )
-            report["scanned_posts"].append(
-                {
-                    "post_id": post_id,
-                    "ok": True,
-                    "top_level_status": parsed.top_level_status.value,
-                    "discovered_count": len(parsed.comments),
-                }
-            )
+                    db.save_discovered_audience_comments(
+                        post_id,
+                        [
+                            {
+                                "comment_id": c.comment_id,
+                                "nickname": c.nickname,
+                                "content": c.content,
+                                "createtime": c.createtime,
+                                "like_count": c.like_count,
+                                "is_author": c.is_author,
+                                "has_author_reply": c.has_author_reply,
+                            }
+                            for c in parsed.comments
+                        ],
+                        account_key=acct,
+                    )
+                    is_complete = parsed.top_level_status.value == "COMPLETE"
+                    db.record_comment_scan_state(
+                        account_key=acct,
+                        platform_post_id=post_id,
+                        top_level_status=parsed.top_level_status.value,
+                        observed_comment_count=len(parsed.comments),
+                        complete=is_complete,
+                        last_error=None,
+                        published_at_utc=pub_at,
+                        now_utc=scan_now_dt,
+                    )
+                    report["scanned_posts"].append(
+                        {
+                            "post_id": post_id,
+                            "ok": True,
+                            "top_level_status": parsed.top_level_status.value,
+                            "discovered_count": len(parsed.comments),
+                        }
+                    )
+
+        except Exception as exc:
+            from ..core.wechat_session_lock import WeChatSessionLockBusy
+            if not isinstance(exc, WeChatSessionLockBusy):
+                raise
+            report["scan_deferred"] = str(exc)
 
     # =========================================================================
     # Phase 3: 无浏览器锁状态下生成新草稿并推送 Telegram 审批卡片 (SR-03)
@@ -439,7 +473,10 @@ def run_secondary_reply_tick(
                 )
                 continue
 
-            if draft.intent != SecondaryReplyIntent.REPLY:
+            has_suggested_draft = bool(draft.chinese_reply.strip() and draft.english_reply.strip())
+            if draft.intent == SecondaryReplyIntent.SKIP or (
+                draft.intent == SecondaryReplyIntent.MANUAL and not has_suggested_draft
+            ):
                 non_reply_status = "MANUAL" if draft.intent == SecondaryReplyIntent.MANUAL else "SKIPPED"
                 tid = db.create_or_update_secondary_reply_task(
                     platform_post_id=post_id,
@@ -472,12 +509,29 @@ def run_secondary_reply_tick(
             )
             dispatched = False
             dispatch_msg = "APPROVER_OR_TRANSPORT_NOT_READY"
-            if ident and transport is not None:
+            final_draft_status = "PENDING_REVIEW"
+            if approval_mode == "hybrid_auto" and draft.intent == SecondaryReplyIntent.REPLY and ident:
+                auto_ok, auto_msg = auto_approve_and_bind_task(
+                    db=db,
+                    task_id=tid,
+                    approver_telegram_id=approver_id,
+                    approver_chat_id=approver_chat_id,
+                    admin_ids_override=admin_ids_override,
+                    expected_account_key=acct,
+                    allow_fixture_drafts=bool(allow_fixture_drafts),
+                    expiry_hours=168,
+                    now_utc=_utc_now(clock),
+                )
+                dispatched = auto_ok
+                dispatch_msg = f"HYBRID_AUTO:{auto_msg}"
+                if auto_ok:
+                    final_draft_status = "APPROVED"
+            elif ident and transport is not None:
                 dispatched, dispatch_msg = dispatch_approval_request(
                     db=db,
                     task_id=tid,
                     transport=transport,
-                    expiry_hours=24,
+                    expiry_hours=168,
                     approver_telegram_id=approver_id,
                     approver_chat_id=approver_chat_id,
                     admin_ids_override=admin_ids_override,
@@ -487,7 +541,7 @@ def run_secondary_reply_tick(
                 {
                     "task_id": tid,
                     "comment_id": cid,
-                    "status": "PENDING_REVIEW",
+                    "status": final_draft_status,
                     "approval_dispatched": dispatched,
                     "dispatch_detail": dispatch_msg,
                 }

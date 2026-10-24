@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 有界翻页、独立精确回读及只读目录发现；等待不消耗重试。 |
 | 3.2.0 | 2026-10-23 | Codex | 会话准入延迟返回具体原因，不再将账户冷却伪装为锁占用。 |
 | 3.1.0 | 2026-10-03 | Codex | 有界等待首页与评论卡片就绪，只采集评论场景作品 ID，避免初始化竞态和跨场景污染。 |
@@ -317,7 +318,7 @@ class BrowserCommenter:
         attempt_dir = self._new_attempt_dir(evidence_dir)
         try:
             with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                                   purpose="评论", video=post_id, cooldown_override=cooldown_override):
+                                   purpose="首评", video=post_id, cooldown_override=cooldown_override):
                 return self._run_browser(
                     comment_text=comment_text,
                     platform_post_id=post_id,
@@ -340,7 +341,7 @@ class BrowserCommenter:
         attempt_dir = self._new_attempt_dir(evidence_dir)
         try:
             with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                                   purpose="评论", video=anchor_post_id):
+                                   purpose="作品匹配", video=anchor_post_id):
                 return self._run_browser(
                     comment_text="", platform_post_id=anchor_post_id, video_title=None,
                     attempt_dir=attempt_dir, before_submit=None, verify_only=True,

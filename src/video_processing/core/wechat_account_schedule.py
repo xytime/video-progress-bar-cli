@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | english-identity-v1 | 2026-10-24 | Codex | 英语学习卡同名成片按冻结包路径区分，保留同包提交去重和通用成片别名。 |
 | queue-preflight-v1 | 2026-10-24 | Codex | 新候选参与既有发布优先排序，预检不再被待冷却互动饿死。 |
 | recovery-console-v1 | 2026-10-23 | Codex | 统一只读准入、额度重置基线及单次恢复优先级，保留访问历史。 |
@@ -15,6 +16,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from config.settings import settings
+from ..utils.wechat_operations_policy import load_policy, revision, PURPOSES, operation_candidates
 
 DAY = 86400
 
@@ -33,6 +35,9 @@ def task_identity(task):
 
 def evaluate(row, now, purpose="发布", task="", *, bypass_cooldown=False, account_only=False):
     """页面、调度和最终上传共同使用的纯准入计算；不排队、不消耗预算。"""
+    policy = load_policy()
+    if policy is not None:
+        return _evaluate_operations(row, now, purpose, task, policy, account_only=account_only)
     state = row.get("schedule", {})
     actual = sorted((s for s in state.get("sessions", []) if s["at"] > now - DAY), key=lambda s: s["at"])
     epoch = state.get("quota_epoch", "legacy")
@@ -105,7 +110,7 @@ def admission(row, now, purpose, task, *, consume=False, bypass_cooldown=False):
     """返回拒绝原因；即使未准入也保存排队次序，纯本地检查不消耗额度。"""
     state = row.setdefault("schedule", {"queue": [], "sessions": [], "publications": {}})
     initial = evaluate(row, now, purpose, task, bypass_cooldown=bypass_cooldown)
-    hard = {"READBACK_DISABLED", "KEEPALIVE_DISABLED", "TASK_REQUIRED", "RESERVED_PRIORITY", "SUBMISSION_PROTECTED"}
+    hard = {"READBACK_DISABLED", "KEEPALIVE_DISABLED", "TASK_REQUIRED", "RESERVED_PRIORITY", "SUBMISSION_PROTECTED", "OPERATION_REQUIRED"}
     if any(b["code"] in hard for b in initial["blockers"]):
         return next(b["reason"] for b in initial["blockers"] if b["code"] in hard)
     sessions = state["sessions"] = [s for s in state["sessions"] if s["at"] > now - DAY]
@@ -119,18 +124,95 @@ def admission(row, now, purpose, task, *, consume=False, bypass_cooldown=False):
         queue.append({"key": key, "purpose": purpose, "task": task, "at": now, "seen": now})
     info = evaluate(row, now, purpose, task, bypass_cooldown=bypass_cooldown)
     if info["blockers"]:
-        first = info["blockers"][0]
-        return first["reason"] + (f"，最早 {first['until']:.0f}" if first["until"] else "")
+        return "；".join(b["reason"] for b in info["blockers"]) + (f"，最早满足已知时间门禁 {info['until']:.0f}（不保证执行）" if info["until"] else "；执行时间仍取决于其他门禁")
     if consume:
         queue[:] = [q for q in queue if q["key"] != key]
         state["recovery_priority"] = [p for p in state.get("recovery_priority", []) if task_identity(p["task"]) != task_identity(task) and p["expires_at"] > now]
         sessions.append({"at": now, "purpose": purpose, "task": task,
                          "quota_epoch": state.get("quota_epoch", "legacy")})
+        if settings.wechat_operations_enabled:
+            sessions[-1].update(operation=PURPOSES[purpose], policy_revision=info["policy_revision"])
         if info["recovering"] and state.get("recovery_started") is None:
             state["recovery_started"] = now
-        if purpose == "状态核对":
-            state["publications"][task]["checks"] = attempts + 1
-        elif purpose not in {"发布", "登录"}:
+        if purpose not in {"发布", "登录"}:
             state["last_interaction_at"] = now
-        row["next_session_at"] = max(row["next_session_at"], now + info["interval_seconds"])
+        if not settings.wechat_operations_enabled:
+            row["next_session_at"] = max(row["next_session_at"], now + info["interval_seconds"])
     return ""
+
+
+def _operation_blocks(sessions, now, operation, policy):
+    values = sorted((s for s in sessions if operation in operation_candidates(s)), key=lambda s: s["at"])
+    config = policy["operations"][operation]
+    blockers = []
+    for key, seconds, label in (("rolling_24h_limit", DAY, "过去24小时"), ("rolling_1h_limit", 3600, "过去60分钟")):
+        recent = [s for s in values if s["at"] > now - seconds]
+        if key in config and len(recent) >= config[key]:
+            blockers.append({"code": "OPERATION_" + key.upper(), "reason": f"{operation} {label}额度已满",
+                             "until": recent[-config[key]]["at"] + seconds})
+    interval = config.get("min_interval_seconds", 0)
+    if values and values[-1]["at"] + interval > now:
+        blockers.append({"code": "OPERATION_INTERVAL", "reason": f"{operation} 操作间隔未到",
+                         "until": values[-1]["at"] + interval})
+    return blockers, values
+
+
+def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False):
+    """稳定期按操作独立；真实原生退避、恢复保护、投稿去重与物理锁继续有效。"""
+    state = row.get("schedule", {})
+    actual = [s for s in state.get("sessions", []) if s["at"] > now - DAY]
+    operation = PURPOSES.get(purpose)
+    blockers = []
+    def block(code, reason, until=None):
+        blockers.append({"code": code, "reason": reason, "until": until})
+    if row.get("blocked_until", 0) > now:
+        block("PLATFORM_BACKOFF", "视频号返回限流，本地退避中", row["blocked_until"])
+    if purpose == "状态核对":
+        block("READBACK_DISABLED", "发布后自动查询已停用；由用户手工确认")
+    if operation is None and purpose != "登录":
+        block("OPERATION_REQUIRED", "必须明确操作类型；禁止未分类后台访问")
+    if not account_only and not task:
+        block("TASK_REQUIRED", "缺少具体待办身份，不允许空探测")
+    priority = settings.wechat_scheduler_priority_video
+    if priority and not state.get("priority_bound") and task_identity(task) != task_identity(priority):
+        block("RESERVED_PRIORITY", "既有保留任务尚未完成")
+    if not account_only and purpose == "发布" and any(task_identity(t) == task_identity(task)
+            for t in [*state.get("submit_intents", {}), *(p.get("task", "") for p in state.get("publications", {}).values())]):
+        block("SUBMISSION_PROTECTED", "已有提交意图或原生回执，禁止重新上传")
+    recovery = state.get("recovery_started")
+    recovering = bool(row.get("last_limited_at")) and (recovery is None or now < recovery + DAY)
+    if recovering:
+        if purpose not in {"发布", "状态核对", "登录"}:
+            block("RECOVERY_PURPOSE", "真实限流后的恢复保护仍有效", recovery + DAY if recovery is not None else None)
+        if actual:
+            until = max(s["at"] for s in actual) + settings.wechat_scheduler_recovery_interval_seconds
+            if until > now:
+                block("RECOVERY_INTERVAL", "真实限流恢复期访问间隔未到", until)
+        if len(actual) >= settings.wechat_scheduler_recovery_limit:
+            limit = settings.wechat_scheduler_recovery_limit
+            block("RECOVERY_QUOTA", "真实限流恢复期总额度已满", sorted(s["at"] for s in actual)[-limit] + DAY)
+    used = []
+    if operation:
+        current, used = _operation_blocks(actual, now, operation, policy)
+        blockers.extend(current)
+    if not account_only and operation:
+        queue = [q for q in state.get("queue", []) if q["seen"] > now - (2700 if q["purpose"] == "回复" else 600)]
+        priorities = [p for p in state.get("recovery_priority", []) if p["expires_at"] > now]
+        if priorities and task_identity(task) != task_identity(priorities[0]["task"]):
+            block("RECOVERY_RESERVED", "已有明确恢复任务保留下一次机会", priorities[0]["expires_at"])
+        # 只比较当前可执行的排队项；额度已满的某一用途不能堵住其他用途。
+        eligible = [q for q in queue if PURPOSES.get(q["purpose"]) and
+                    not _operation_blocks(actual, now, PURPOSES[q["purpose"]], policy)[0]]
+        if eligible and task_identity(min(eligible, key=lambda q: q["at"])["task"]) != task_identity(task):
+            block("QUEUE_ORDER", "另一个当前可执行的待办在前，等待浏览器串行机会")
+    untils = [b["until"] for b in blockers if b["until"] is not None]
+    config = policy["operations"].get(operation, {})
+    return {"allowed": not blockers, "blockers": blockers,
+            "until": None if any(b["until"] is None for b in blockers) else max(untils, default=now),
+            "operation": operation, "policy_revision": revision(policy),
+            "sessions_24h_count": len(used), "actual_sessions_24h_count": len(actual),
+            "daily_limit": config.get("rolling_24h_limit"),
+            "hourly_limit": config.get("rolling_1h_limit"),
+            "sessions_1h_count": len([s for s in used if s["at"] > now - 3600]),
+            "interval_seconds": config.get("min_interval_seconds", 0), "recovering": recovering,
+            "quota_reset_at": None, "recent_sessions": sorted(actual, key=lambda s: s["at"])[-8:]}

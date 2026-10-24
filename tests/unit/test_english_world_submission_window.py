@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 测试独立账户状态，防止旧测试间预算/损坏状态串扰；生产准入不豁免。 |
 | 1.6.0 | 2026-10-24 | Codex | 验证完整账户身份在领取前准入，旧窗口让出健康就绪执行者并保留故障兜底。 |
 | 1.5.0 | 2026-09-18 | Antigravity | 自动授权延后窗口改用 is_english_world_publish_window 判定。 |
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
@@ -16,6 +17,14 @@ from datetime import datetime, timedelta, timezone
 import json
 
 from scripts import submit_english_world_review as submitter
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def isolated_account_output(tmp_path, monkeypatch):
+    # 两个旧假 DB 测试同样必须拥有独立账号账本，不能受其他测试的准入记录影响。
+    monkeypatch.setattr(type(submitter.settings), "default_output_dir", property(lambda _self: tmp_path / "output"))
+
 
 
 def test_automatic_submit_supplies_exact_frozen_mp4_to_full_account_admission(tmp_path, monkeypatch):

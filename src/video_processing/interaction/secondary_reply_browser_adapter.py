@@ -11,11 +11,14 @@
 - 故障注入安全：提交意图落盘后任何异常仅转入 UNCERTAIN 只读对账
 
 # Modification History
-| root-reply-scope-v1 | 2026-10-23 | Codex | 回复触发器限定父评论直属主体，排除已展开的观众子回复控件；仍拒绝主体内歧义。 |
-| interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
+| root-reply-scope-v1 | 2026-10-23 | Codex | 回复触发器限定父评论直属主体，排除已展开的观众子回复控件；仍拒绝主体内歧义。 |
+| interaction-recovery-v1 | 2026-10-23 | Codex | 绑定单作品的人工一次性恢复许可，平台限流继续阻断。 |
 | 1.6.3 | 2026-10-23 | Codex | 恢复具名作品只读会话；单条回复闭环共享账户许可，独立上下文保持写入守卫与请求预算。 |
+| scheduler-v1 | 2026-10-21 | Codex | 真实浏览器访问纳入账户统一准入；无绑定任务不扫描。 |
+| 1.6.2 | 2026-10-18 | Antigravity | 修复含微信方括号表情（如 [捂脸]）的一级评论在 DOM 中转渲染为 img 导致文本唯一探针未命中的问题 |
 | 1.6.1 | 2026-10-17 | Antigravity | 修复 post/post_list HTTP 201 响应捕获，支持通过 >=30 字符唯一已发布文案跨场景绑定 exportId 并在滚动分页时动态重算探针 |
 | 1.6.0 | 2026-10-17 | Antigravity | 新增只读 discover_comments_on_page 接口与 comment_list 原始载荷捕获，供 M3.5 Tick 扫描复用 |
 | 1.5.0 | 2026-10-17 | Antigravity | 统一校准与发送的卡片绑定、父评论与回复控件唯一定位逻辑；从契约层导入 SecondaryReplySubmissionGuard；公开 create_evidence_dir 与 execute_page_reply_flow；收紧 calibrate_page_controls 身份与文本证据要求 |
@@ -145,7 +148,7 @@ class SecondaryReplyBrowserAdapter:
         self._manual_retry_consumed = False
 
     @contextlib.contextmanager
-    def _session_scope(self, post_id: str):
+    def _session_scope(self, post_id: str, purpose: str = "回复"):
         """显式人工恢复最多签发一个绑定作品的许可，平台限流仍停止。"""
         from video_processing.core.wechat_request_guard import WeChatRequestGuard
         token = ''
@@ -160,12 +163,11 @@ class SecondaryReplyBrowserAdapter:
             self._manual_retry_consumed = True
         try:
             with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds,
-                                   purpose='回复', video=post_id, cooldown_override=token) as session:
+                                   purpose=purpose, video=post_id, cooldown_override=token) as session:
                 yield session
         finally:
             if token:
                 request_guard.revoke_override(token)
-
 
     def _setup_page_listeners(self, page, guard: Optional[SecondaryReplySubmissionGuard] = None) -> None:
         """注册页面网络监听：捕获 comment_list 响应数据、折叠/分页标志与活跃作品 ID。"""
@@ -799,6 +801,34 @@ class SecondaryReplyBrowserAdapter:
 
     _interact_with_page = execute_page_reply_flow
 
+    @property
+    def scan_active(self):
+        return bool(getattr(self, "_scan_post_ids", ()))
+
+    @contextlib.contextmanager
+    def scan_workflow(self, post_ids):
+        """一批具名目标共用一次只读预算；浏览器仍串行，禁止借批次访问其他作品。"""
+        from ..utils.wechat_operations_policy import load_policy
+        policy = load_policy()
+        ids = tuple(dict.fromkeys(str(p).strip() for p in post_ids if str(p).strip()))
+        if policy is None:
+            yield
+            return
+        if not ids or len(ids) > policy["operations"]["comment_scan"]["max_videos_per_run"]:
+            raise WeChatSessionLockBusy("扫描批次目标数量无效")
+        if getattr(self, "_workflow_session", None) is not None:
+            raise WeChatSessionLockBusy("扫描工作流不允许嵌套")
+        import hashlib
+        identity = "scan-batch:" + hashlib.sha256("\n".join(ids).encode()).hexdigest()[:24]
+        with self._session_scope(identity, purpose="评论扫描") as session:
+            self._workflow_session = session
+            self._scan_post_ids = frozenset(ids)
+            try:
+                yield
+            finally:
+                self._workflow_session = None
+                self._scan_post_ids = frozenset()
+
     @contextlib.contextmanager
     def reply_workflow(self, post_id: str):
         """同一回复的复核、发送、独立回读共享一次有界账户许可。"""
@@ -824,7 +854,8 @@ class SecondaryReplyBrowserAdapter:
         if not post_id:
             raise WeChatSessionLockBusy("缺少具体作品身份，禁止评论扫描或回复")
         session = getattr(self, "_workflow_session", None)
-        if session is not None and (session.video != post_id or current_wechat_session() is not session):
+        allowed_post = session is not None and (session.video == post_id or post_id in getattr(self, "_scan_post_ids", ()))
+        if session is not None and (not allowed_post or current_wechat_session() is not session):
             raise WeChatSessionLockBusy("回复工作流作品身份不匹配")
         scope = contextlib.nullcontext() if session is not None else self._session_scope(post_id)
         with scope:
@@ -1013,6 +1044,14 @@ class SecondaryReplyBrowserAdapter:
                 candidates = page.locator(".comment-item:visible").filter(has_text=info["content_prefix"])
                 same_text = [c for c in self._captured_comments.values()
                              if c.get("content_prefix") == info["content_prefix"]]
+                if candidates.count() == 0:
+                    clean_probe = _normalized_text(re.sub(r"\[[^\[\]\s]{1,10}\]", "", info["content_prefix"]))
+                    if clean_probe:
+                        candidates = page.locator(".comment-item:visible").filter(has_text=clean_probe)
+                        same_text = [
+                            c for c in self._captured_comments.values()
+                            if _normalized_text(re.sub(r"\[[^\[\]\s]{1,10}\]", "", c.get("content_prefix") or "")) == clean_probe
+                        ]
                 if candidates.count() == 1 and len(same_text) == 1:
                     parent_node = candidates.first
                 elif candidates.count() > 1 or len(same_text) > 1:

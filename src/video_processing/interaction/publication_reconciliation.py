@@ -84,11 +84,15 @@ def reconcile_observed_publications(db, receipt_path: Path, output_dir: Path) ->
 def recover_idle_publications(db, browser, output_dir: Path) -> list[dict]:
     """无首评任务时仍发现待绑定作品；同一待办集合最多半小时读取一次目录。"""
     now = datetime.now(timezone.utc)
+    from ..utils.wechat_operations_policy import load_policy
+    policy = load_policy()
+    cooldown_seconds = policy["operations"]["post_match"]["same_batch_success_cooldown_seconds"] if policy else 1800
     cutoff = (now - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
     rows = db.get_wechat_publications_by_states([
         'SUBMITTED_UNBOUND', 'UNCERTAIN', 'SUBMITTED_BOUND', 'PUBLISHED'])
     pending = sorted(int(row['id']) for row in rows
-                     if not row.get('platform_post_id') and str(row.get('created_at') or '') >= cutoff)
+                     if not row.get('platform_post_id') and str(row.get('created_at') or '') >= cutoff
+                     and (policy is None or row.get('state') != 'UNCERTAIN'))
     anchors = [row for row in rows if row.get('platform_post_id')]
     if not pending or not anchors:
         return []
@@ -97,7 +101,7 @@ def recover_idle_publications(db, browser, output_dir: Path) -> list[dict]:
         try:
             previous = json.loads(marker.read_text(encoding='utf-8'))
             age = now - datetime.fromisoformat(previous['checked_at'])
-            if previous.get('pending') == pending and age < timedelta(minutes=30):
+            if previous.get('pending') == pending and age < timedelta(seconds=cooldown_seconds):
                 return []
         except (ValueError, KeyError, OSError, TypeError):
             pass

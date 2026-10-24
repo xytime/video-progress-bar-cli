@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| operations-v1 | 2026-10-24 | Codex | 老的按 state 路径判锁测试显式关闭账户归一；子进程同样隔离。 |
 | 1.4.0 | 2026-10-03 | Codex | 覆盖首页与评论场景列表隔离、来源校验及唯一全文场景绑定。 |
 | 1.3.0 | 2026-09-26 | Codex | 全页置顶测试迁移至真实浏览器，缺少唯一作者时停止。 |
 | 1.2.0 | 2026-09-23 | Antigravity | 增加处理中作品未上架 Fail-Closed 熔断、列表索引漂移正确选择与提交作品ID不匹配拦截单元测试。 |
@@ -32,7 +33,17 @@ from video_processing.interaction.browser_commenter import (
 )
 
 
+@pytest.fixture(autouse=True)
+def legacy_lock_scope(monkeypatch):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setattr(settings, "wechat_operations_enabled", False)
+
+
 def _hold_lock_until_stopped(state_path: str, ready, stop) -> None:
+    from config.settings import settings
+    settings.wechat_account_scheduler_enabled = False
+    settings.wechat_operations_enabled = False
     with WeChatSessionLock(state_path):
         ready.set()
         stop.wait(10)
