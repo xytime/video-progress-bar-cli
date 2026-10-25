@@ -1,6 +1,7 @@
 """本机配置中心：预览、受控编辑、CAS审计回滚与执行者实际加载状态。
 
 # Modification History
+| reply-linkage-v1 | 2026-10-25 | Codex | 每日额度联动与持久手动覆盖；校验实际检查节拍。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 提取共用本机写入权限边界，保持原配置中心校验。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -28,6 +29,11 @@ class PreviewBody(BaseModel):
     domains:dict|None=None
     rollback_version:str|None=None
     reason:str=Field(min_length=3,max_length=200)
+
+
+class RecommendationBody(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    config:dict
 
 
 class ApplyBody(BaseModel):
@@ -145,7 +151,10 @@ def create_runtime_configuration_router(db, *, port):
         def action():
             current=snapshot(fresh=True)
             if current is None:raise ConfigurationError('配置中心尚未显式迁移启用；当前只允许旧入口，不自动创建新基线')
+            from video_processing.utils.reply_linked_policy import capacity_view, editor_config
             return {'revision':current.revision,'version':current.version,'domains':current.domains(),'catalog':catalog(current),
+                    'reply_capacity':capacity_view(editor_config(current.domains())),
+                    'reply_editor':{'schema_version':1, 'max_per_video':current.domains()['wechat_operations']['operations']['reply']['max_replies_per_video_lifetime'], **editor_config(current.domains())},
                     'access':{'role':'本机运营编辑','relaxation_approval_available':False,'restriction':'超批准边界需专门批准与受控更新；客户端不能自称风险审批人'},
                     **worker_state(current)}
         return call(action)
@@ -158,6 +167,15 @@ def create_runtime_configuration_router(db, *, port):
     def history(actor=Depends(authorized)):
         return call(lambda:{'versions':[{'revision':s.revision,**s.manifest} for s in store().history(limit=30)],'limit':30})
 
+    @router.post('/api/runtime-configuration/reply-recommend')
+    def reply_recommend(body:RecommendationBody, actor=Depends(authorized)):
+        def action():
+            from video_processing.utils.secondary_reply_policy import parse_editor_policy
+            from video_processing.utils.reply_linked_policy import recommend
+            config, capacity = recommend(parse_editor_policy(body.config))
+            return {'config':config,'capacity':capacity}
+        return call(action)
+
     @router.post('/api/runtime-configuration/preview')
     def preview(body:PreviewBody,actor=Depends(authorized)):
         def action():
@@ -165,6 +183,9 @@ def create_runtime_configuration_router(db, *, port):
             if current.revision!=body.expected_revision:raise ConfigurationConflict('配置版本已变化；草稿保留，请重新载入')
             if (body.domains is None)==(body.rollback_version is None):raise ConfigurationError('选择编辑草稿或回滚版本其中一种')
             domains=body.domains if body.domains is not None else store().version(body.rollback_version).domains()
+            if body.domains is not None:
+                from video_processing.utils.reply_linked_policy import normalize_domains
+                domains=normalize_domains(domains)
             allowed=True;approval=None
             try:approved_validation(domains)
             except (ConfigurationError,ValueError) as exc:allowed=False;approval=str(exc)
@@ -180,7 +201,10 @@ def create_runtime_configuration_router(db, *, port):
                 for op,purpose in [('publish','发布'),('first_comment','首评'),('reply','回复'),('comment_scan','评论扫描'),('post_match','作品匹配'),('keepalive','保活')]:
                     info=_evaluate_operations(account,now,purpose,'',domains['wechat_operations'],account_only=True)
                     proposed[op]={k:info.get(k) for k in ['allowed','blockers','until','sessions_24h_count','sessions_1h_count','daily_limit','hourly_limit']}
-            report={'preview_id':secrets.token_hex(16),'expires_at':time.time()+120,'expected_revision':current.revision,
+            from video_processing.utils.reply_linked_policy import capacity_view, editor_config
+            try:reply_capacity=capacity_view(editor_config(domains))
+            except ValueError:reply_capacity={'insufficient':None,'message':'参数未通过校验，无法估算容量。'}
+            report={'reply_capacity':reply_capacity,'preview_id':secrets.token_hex(16),'expires_at':time.time()+120,'expected_revision':current.revision,
                     'changes':changes,'can_apply':allowed,'approval_required':not allowed,'message':approval,
                     'risk':'R3：需要专门批准' if not allowed else 'R2：批准范围内调整；保留历史事实',
                     'waiting_tasks':len(db.runtime_configuration_waits()),'in_flight':worker_state(current)['active_attempt'],

@@ -1,6 +1,7 @@
 """业务层配置快照与统一验证适配；不启动平台工作、不更改账本。
 
 # Modification History
+| reply-linkage-v1 | 2026-10-25 | Codex | 每日额度联动与持久手动覆盖；校验实际检查节拍。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 回复策略复用活动版本校验，保留既有时段与审批批准上界。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -57,6 +58,8 @@ def validate_domains(domains):
 def approved_validation(domains):
     """原值基线为服务端迁移材料；客户端不能上传/修改批准边界。"""
     validate_domains(domains)
+    from .reply_linked_policy import validate_linked_values
+    validate_linked_values(domains)
     from config.runtime_policy import decode
     baseline = decode((settings.runtime_configuration_path / 'approved-baseline.json').read_bytes())
     candidate = domains['interaction_controls'].get('reply_strategy')

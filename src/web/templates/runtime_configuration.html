@@ -3,7 +3,9 @@
 <meta name="runtime-csrf" content="__RUNTIME_CSRF__"><title>运行配置 · 视频运营工作台</title>
 <script>(()=>{let p={};try{p=JSON.parse(localStorage.getItem('vp-display-preferences')||'{}')}catch(_){}document.documentElement.dataset.theme=p.theme==='system'||!p.theme?(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):p.theme;document.documentElement.dataset.textSize=p.size||'large'})();</script>
 <link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css"><link rel="stylesheet" href="/static/css/console_workspace.css"><link rel="stylesheet" href="/static/css/runtime_configuration.css">
-<script defer src="/static/js/runtime_configuration.js"></script><script defer src="/static/js/console_navigation.js"></script>
+<link rel="stylesheet" href="/static/css/reply_linkage.css?v=1">
+<script defer src="/static/js/reply_linkage.js?v=1"></script>
+<script defer src="/static/js/runtime_configuration.js?v=reply-linkage-1"></script><script defer src="/static/js/console_navigation.js"></script>
 </head><body><main class="product-settings runtime-settings">
 <nav class="breadcrumbs" aria-label="当前位置"><a href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">运行配置</span></nav>
 <header class="page-header"><div><h1>运行配置</h1><p class="hint">先看为什么等待，再决定是否调整。</p></div><div class="header-actions"><button type="button" id="reload" disabled>重新载入</button><button type="button" id="preview" class="primary" disabled>预览更改</button></div></header>

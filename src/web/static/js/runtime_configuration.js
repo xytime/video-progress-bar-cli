@@ -1,3 +1,4 @@
+/* reply-linkage-v1 | 2026-10-25 | Codex | 共用回复联动、手动状态和容量预览。 */
 /* optional-publish-v1 | 2026-10-25 | Codex | 显式显示无每日上限；清空数值以原CAS流程取消日额。 */
 /* runtime-center-v1 | 2026-10-24 | Codex | 草稿/预览/CAS/回滚与加载状态；无平台操作。 */
 (() => {
@@ -7,13 +8,14 @@
   const names={publish:'发视频',first_comment:'发首评',reply:'回复评论',comment_scan:'扫描新评论',post_match:'匹配作品编号',keepalive:'按需保活'};
   const labels={rolling_24h_limit:'最近24小时额度',rolling_1h_limit:'最近60分钟额度',min_interval_seconds:'两次流程最小间隔',max_replies_per_video_lifetime:'每视频累计回复',max_videos_per_run:'每轮最多视频',same_batch_success_cooldown_seconds:'同批成功查询冷却',max_retries:'额外重试次数',interval_seconds:'重试最小间隔'};
   let saved=null,draft=null,revision=null,metadata=null,preview=null,busy=false,conflict=false,page=1,view='operations',generation=0,editEpoch=0,afterDiscard=null,operationId=null,composing=false;
+  let replyLinkage=null,replyBase=null,replyCapacity=null;
   const invalid=new Map();
   const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const stamp=t=>{if(!t)return '未知';const raw=typeof t==='number'?t*1000:/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(t)?t.replace(' ','T')+'Z':t;const d=new Date(raw);return Number.isNaN(d.getTime())?'未知':d.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});};
   const get=(obj,path)=>path.split('.').reduce((p,k)=>p?.[k],obj);
   const put=(obj,path,value)=>{const keys=path.split('.'),key=keys.pop();get(obj,keys.join('.'))[key]=value;};
   function changed(){return saved&&JSON.stringify(saved)!==JSON.stringify(draft);}
-  function updateDirty(){ $('dirty-state').textContent=changed()?'有未保存修改':'与活动版本一致';$('preview').disabled=!changed()||busy||conflict||invalid.size>0; }
+  function updateDirty(){ $('dirty-state').textContent=changed()?'有未保存修改':'与活动版本一致';$('preview').disabled=!changed()||busy||conflict||invalid.size>0||Boolean(replyLinkage?.pending)||Boolean(replyLinkage?.error); }
   async function api(path,options={}) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
     try {
@@ -38,13 +40,26 @@
     });box.append(title,input,hint,error);return box;
   }
   function renderOperations(){
+    replyLinkage?.dispose();replyLinkage=null;
     $('automatic-replies-enabled').disabled=false;$('automatic-replies-enabled').checked=draft.interaction_controls.automatic_replies_enabled;
     $('reply-control-state').textContent='当前活动值：'+(saved.interaction_controls.automatic_replies_enabled?'开启':'关闭')+' · 来源 interaction_controls · '+revision.slice(0,10);
     $('operation-cards').replaceChildren();
     Object.keys(names).forEach(op=>{const values=draft.wechat_operations.operations[op];
       const card=node('section');card.append(node('h2',names[op]));const gate=node('p','正在读取本地用量…','gate-summary');gate.id='gate-'+op;card.append(gate);const fields=node('div',undefined,'runtime-fields');card.append(fields);
-      Object.entries(values).forEach(([key,val])=>{if(typeof val!=='number'&&val!==null)return;const path='operations.'+op+'.'+key,meta=metadata.fields.find(r=>r.domain==='wechat_operations'&&r.key===path);fields.append(field('wechat_operations.'+path,labels[key],meta.unit,meta.range,meta.default));});
+      const order=['rolling_24h_limit','rolling_1h_limit','min_interval_seconds','max_replies_per_video_lifetime'];
+      Object.entries(values).sort((a,b)=>op==='reply'?order.indexOf(a[0])-order.indexOf(b[0]):0).forEach(([key,val])=>{if(typeof val!=='number'&&val!==null)return;const path='operations.'+op+'.'+key,meta=metadata.fields.find(r=>r.domain==='wechat_operations'&&r.key===path);fields.append(field('wechat_operations.'+path,labels[key],meta.unit,meta.range,meta.default));});
       $('operation-cards').append(card);
+      if(op==='reply'){
+        const help=node('p','调整总量会联动自动字段；手动字段保留。最近24小时滚动计数，不在午夜清零。','hint'),link=node('a','调整回复时段与审批方式');link.href='/secondary-reply-settings?tab=policy';card.append(help,link);
+        const host=node('div',undefined,'reply-linkage-panel');host.id='runtime-reply-linkage';card.append(host);
+        const paths={daily_quota:'rolling_24h_limit',hourly_quota:'rolling_1h_limit',min_interval_seconds:'min_interval_seconds'};
+        const editor=()=>({...replyBase,...(draft.interaction_controls.reply_strategy||{}),daily_quota:values.rolling_24h_limit,hourly_quota:values.rolling_1h_limit,min_interval_seconds:values.min_interval_seconds,
+          max_per_video:values.max_replies_per_video_lifetime,linkage:structuredClone(draft.interaction_controls.reply_linkage||replyBase.linkage)});
+        replyLinkage=ReplyLinkage.mount({host,inputs:Object.fromEntries(Object.entries(paths).map(([key,p])=>[key,$('field-wechat_operations-operations-reply-'+p)])),get:editor,
+          set:config=>{for(const [key,p] of Object.entries(paths))if(key in config){values[p]=config[key];$('field-wechat_operations-operations-reply-'+p).value=String(config[key]);invalid.delete('wechat_operations.operations.reply.'+p);const field=$('field-wechat_operations-operations-reply-'+p);field.setAttribute('aria-invalid','false');$(field.id+'-error').textContent='';}
+            if(config.linkage)draft.interaction_controls.reply_linkage=structuredClone(config.linkage);},
+          onChange:()=>{editEpoch++;preview=null;updateDirty();},capacity:replyCapacity,original:editor()});
+      }
     });
     $('retry-fields').replaceChildren();Object.entries(draft.wechat_operations.retry_policies.write_actions).forEach(([key,val])=>$('retry-fields').append(field('wechat_operations.retry_policies.write_actions.'+key,labels[key],key==='max_retries'?'首次之外的次数':'秒',key==='max_retries'?[0,2]:[60,604800],val)));
   }
@@ -71,7 +86,7 @@
   }
   function selectView(next){if(next==='catalog'&&!metadata){$('feedback').textContent='先重新载入有效配置，再查看参数目录';return;}view=['operations','catalog','history'].includes(next)?next:'operations';for(const v of ['operations','catalog','history'])$(v+'-view').hidden=v!==view;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.view===view?'true':'false'));$('change-reason').hidden=view==='history';persist();if(view==='history')loadHistory();}
   async function load(){const seq=++generation;busy=true;updateDirty();$('feedback').textContent='正在读取活动版本…';
-    try{const data=await api('/current');if(seq!==generation)return;saved=data.domains;draft=structuredClone(saved);revision=data.revision;metadata=data.catalog;document.querySelectorAll('[data-view]').forEach(b=>b.disabled=false);invalid.clear();conflict=false;preview=null;
+    try{const data=await api('/current');if(seq!==generation)return;saved=data.domains;draft=structuredClone(saved);revision=data.revision;metadata=data.catalog;replyBase=data.reply_editor;replyCapacity=data.reply_capacity;document.querySelectorAll('[data-view]').forEach(b=>b.disabled=false);invalid.clear();conflict=false;preview=null;
       $('revision').textContent=data.version+' · '+revision.slice(0,10);$('coverage').textContent=metadata.coverage;
       $('group').replaceChildren(new Option('全部配置组','all'),...metadata.groups.map(g=>new Option(g.id+' '+g.name+'（'+g.count+'）',g.id)));
       const u=new URL(location.href);$('search').value=u.searchParams.get('q')||'';$('group').value=u.searchParams.get('group')||'all';$('mode').value=u.searchParams.get('mode')||'all';page=Number(u.searchParams.get('page')||1);
@@ -90,8 +105,8 @@
       $('additional-gates').replaceChildren(...(data.additional_gates||[]).map(g=>node('p',g.name+'：'+g.value)));$('state-feedback').textContent='本地快照 '+stamp(Date.now()/1000)+'。'+data.meaning;
     }catch(e){$('state-feedback').textContent='门禁状态读取失败：'+e.message+'；不沿用旧的可执行结论。';for(const op of Object.keys(names)){const box=$('gate-'+op);if(box)box.textContent='当前状态未知，请重试';}}
   }
-  async function openPreview(rollbackVersion=null){if(busy)return;if(invalid.size){$('feedback').textContent='请先修正字段错误';return;}const reason=$('reason').value.trim();if(reason.length<3){$('reason').setAttribute('aria-invalid','true');$('feedback').textContent='请填写至少3字的变更原因';$('change-reason').hidden=false;$('reason').focus();return;}$('reason').removeAttribute('aria-invalid');busy=true;updateDirty();
-    try{const epoch=editEpoch,body={expected_revision:revision,reason,...(rollbackVersion?{rollback_version:rollbackVersion}:{domains:draft})};const report=await api('/preview',{method:'POST',body:JSON.stringify(body)});if(epoch!==editEpoch){$('feedback').textContent='草稿已变化，请重新预览';return;}preview=report;operationId=crypto.randomUUID().replaceAll('-','');$('preview-content').replaceChildren();for(const d of report.changes){const row=node('div',undefined,'diff-row');row.append(node('strong',d.field),node('p',(d.before===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.before))+' → '+(d.after===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.after))));$('preview-content').append(row);}for(const [op,g] of Object.entries(report.proposed_operations||{})){if(!g.allowed)$('preview-content').append(node('p',names[op]+'：调整后仍等待 '+g.blockers.map(b=>b.reason).join('；')+'；最早下界 '+stamp(g.until)));}$('preview-content').append(node('p',report.risk),node('p','受影响的本地等待 '+report.waiting_tasks+' 条；'+(report.in_flight?'存在在途操作，继续原快照':'没有在途操作')),...report.effects.map(e=>node('p',e)));$('apply-feedback').textContent=report.message||'请核对以上差异；批准范围外的放宽不能在这里确认。';$('apply').disabled=!report.can_apply;$('preview-dialog').showModal();$('cancel-preview').focus();
+  async function openPreview(rollbackVersion=null){if(busy)return;if(replyLinkage&&!await replyLinkage.settled())return;if(invalid.size){$('feedback').textContent='请先修正字段错误';return;}const reason=$('reason').value.trim();if(reason.length<3){$('reason').setAttribute('aria-invalid','true');$('feedback').textContent='请填写至少3字的变更原因';$('change-reason').hidden=false;$('reason').focus();return;}$('reason').removeAttribute('aria-invalid');busy=true;updateDirty();
+    try{const epoch=editEpoch,body={expected_revision:revision,reason,...(rollbackVersion?{rollback_version:rollbackVersion}:{domains:draft})};const report=await api('/preview',{method:'POST',body:JSON.stringify(body)});if(epoch!==editEpoch){$('feedback').textContent='草稿已变化，请重新预览';return;}preview=report;operationId=crypto.randomUUID().replaceAll('-','');$('preview-content').replaceChildren();for(const d of report.changes){const row=node('div',undefined,'diff-row');row.append(node('strong',d.field),node('p',(d.before===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.before))+' → '+(d.after===null&&d.field.endsWith('publish.rolling_24h_limit')?'无每日上限':String(d.after))));$('preview-content').append(row);}for(const [op,g] of Object.entries(report.proposed_operations||{})){if(!g.allowed)$('preview-content').append(node('p',names[op]+'：调整后仍等待 '+g.blockers.map(b=>b.reason).join('；')+'；最早下界 '+stamp(g.until)));}$('preview-content').append(node('p',report.risk),node('p','受影响的本地等待 '+report.waiting_tasks+' 条；'+(report.in_flight?'存在在途操作，继续原快照':'没有在途操作')),...report.effects.map(e=>node('p',e)));if(report.reply_capacity)$('preview-content').append(node('p',report.reply_capacity.message));$('apply-feedback').textContent=report.message||'请核对以上差异；批准范围外的放宽不能在这里确认。';$('apply').disabled=!report.can_apply;$('preview-dialog').showModal();$('cancel-preview').focus();
     }catch(e){$('feedback').textContent='预览失败：'+e.message+'。草稿已保留。';if(e.status===409)conflict=true;}finally{busy=false;updateDirty();}
   }
   async function apply(){if(busy||!preview?.can_apply)return;busy=true;$('apply').disabled=true;$('cancel-preview').disabled=true;$('apply-feedback').textContent='正在提交版本；不会中断在途操作…';

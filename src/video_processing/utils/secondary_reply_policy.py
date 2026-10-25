@@ -6,6 +6,7 @@
 依赖方向：web / db / interaction -> 本模块 -> config.settings / wechat_product_config (atomic_json)。
 
 # Modification History
+| reply-linkage-v1 | 2026-10-25 | Codex | 每日额度联动与持久手动覆盖；校验实际检查节拍。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 策略页接入活动版本 CAS，独立额度一致读取，旧文件只保留批准基线。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -18,12 +19,9 @@ import fcntl
 import hashlib
 import json
 import logging
-import re
 import uuid
 from pathlib import Path
-from typing import Dict, Literal, Optional
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Dict, Optional
 
 from config.settings import settings
 from config.runtime_registry import REPLY_STRATEGY_FIELDS, validate_reply_strategy
@@ -31,37 +29,10 @@ from .wechat_product_config import PolicyConflict, atomic_json
 
 logger = logging.getLogger(__name__)
 
-_TIME_START_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-_TIME_END_RE = re.compile(r"^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$")
+from config.secondary_reply_schema import SecondaryReplyPolicyModel, parse_policy
 
 # 记录各配置文件路径上次已热加载到 settings 的 st_mtime_ns
 _LAST_MTIME_NS: Dict[str, int] = {}
-
-
-class SecondaryReplyPolicyModel(BaseModel):
-    """二级回复运营策略 Schema（禁止额外字段与类型强转）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: int = Field(default=1, strict=True, ge=1, le=1)
-    window_start_shanghai: str = Field(default="00:00")
-    window_end_shanghai: str = Field(default="24:00")
-    min_interval_seconds: int = Field(default=3600, strict=True, ge=0, le=86400)
-    hourly_quota: int = Field(default=10, strict=True, ge=1, le=100)
-    max_per_video: int = Field(default=3, strict=True, ge=1, le=20)
-    approval_mode: Literal["manual", "hybrid_auto"] = "manual"
-
-
-def parse_policy(data: dict) -> dict:
-    """校验并规范化二级回复策略字典。"""
-    value = SecondaryReplyPolicyModel.model_validate(data).model_dump()
-    start = value["window_start_shanghai"]
-    end = value["window_end_shanghai"]
-    if not _TIME_START_RE.fullmatch(start):
-        raise ValueError(f"开始时间格式不合法（须为 00:00–23:59）：{start}")
-    if not _TIME_END_RE.fullmatch(end):
-        raise ValueError(f"结束时间格式不合法（须为 00:00–24:00）：{end}")
-    return value
 
 
 def validate_strategy_approval(candidate: dict, approved: dict) -> None:
@@ -75,9 +46,23 @@ def validate_strategy_approval(candidate: dict, approved: dict) -> None:
         raise ValueError('扩大回复时段或自动审批范围需要专门批准；本次未保存，草稿已保留')
 
 
+def parse_editor_policy(data: dict) -> dict:
+    base = {k: v for k, v in data.items() if k not in {'daily_quota', 'linkage'}}
+    result = parse_policy(base, editor=True)
+    if 'daily_quota' in data:
+        daily = data['daily_quota']
+        if type(daily) is not int or not 1 <= daily <= 1000:
+            raise ValueError('最近24小时回复上限须为1–1000的整数')
+        result['daily_quota'] = daily
+    if 'linkage' in data:
+        from config.reply_linkage import validate_linkage
+        result['linkage'] = dict(validate_linkage(data['linkage']))
+    return result
+
+
 def digest(config: dict) -> str:
     """计算配置字典的确定性 SHA256 摘要，用于 CAS 并发保护。"""
-    normalized = parse_policy(config)
+    normalized = parse_editor_policy(config)
     return hashlib.sha256(
         json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
@@ -109,12 +94,12 @@ def current_policy_from_settings() -> dict:
         "max_per_video": int(getattr(settings, "wechat_reply_max_per_video", 3)),
         "approval_mode": str(getattr(settings, "wechat_reply_approval_mode", "manual") or "manual"),
     }
-    return parse_policy(raw)
+    return parse_policy(raw, editor=settings.runtime_configuration_enabled)
 
 
 def apply_policy_to_settings(config: dict) -> dict:
     """将已校验的策略字典立即热更新到当前进程 settings 单例。"""
-    validated = parse_policy(config)
+    validated = parse_editor_policy(config)
     settings.wechat_reply_window_start_shanghai = validated["window_start_shanghai"]
     settings.wechat_reply_window_end_shanghai = validated["window_end_shanghai"]
     settings.wechat_reply_min_interval_seconds = validated["min_interval_seconds"]
@@ -168,7 +153,9 @@ def _runtime_policy(current, path=None) -> dict:
     reply = domains['wechat_operations']['operations']['reply']
     config.update(min_interval_seconds=reply['min_interval_seconds'], hourly_quota=reply['rolling_1h_limit'],
                   max_per_video=reply['max_replies_per_video_lifetime'])
-    return parse_policy(config)
+    from .reply_linked_policy import editor_config
+    config.update(editor_config(domains, legacy=config))
+    return parse_editor_policy(config)
 
 
 def load_policy(path: Optional[Path] = None) -> dict:
@@ -185,9 +172,13 @@ def policy_view(path: Path) -> dict:
         from config.wechat_operations_schema import APPROVED
         current = snapshot(fresh=True)
         config = _runtime_policy(current, path)
+        from .reply_linked_policy import capacity_view
         return {'config': config, 'digest': digest(config), 'revision': current.revision,
+                'capacity': capacity_view(config),
                 'limits': {'min_interval_seconds': APPROVED['reply']['min_interval_seconds'],
                            'hourly_quota': APPROVED['reply']['rolling_1h_limit'],
+                           'daily_quota': APPROVED['reply']['rolling_24h_limit'],
+                           'max_interval_seconds': 604800,
                            'max_per_video': APPROVED['reply']['max_replies_per_video_lifetime']}}
     config = load_policy(path)
     return {'config': config, 'digest': digest(config), 'revision': None}
@@ -196,18 +187,24 @@ def policy_view(path: Path) -> dict:
 def save_policy(path: Path, data: dict, expected_digest: Optional[str] = None,
                 *, expected_revision: Optional[str] = None, actor: str = 'secondary-reply-settings') -> dict:
     """校验、CAS 原子落盘并立即热更新到内存 settings。"""
-    config = parse_policy(data)
+    config = parse_editor_policy(data) if settings.runtime_configuration_enabled else parse_policy(data)
     if settings.runtime_configuration_enabled:
         from config.runtime_policy import ConfigurationConflict
         from .runtime_configuration import snapshot, store, approved_validation
         current = snapshot(fresh=True)
         if expected_revision != current.revision or expected_digest != digest(_runtime_policy(current, path)):
             raise PolicyConflict('配置版本已变化。草稿已保留，请重新载入后合并修改。')
+        from .reply_linked_policy import recommend
+        prior = _runtime_policy(current, path)
+        config.setdefault('daily_quota', prior['daily_quota'])
+        config.setdefault('linkage', prior['linkage'])
+        config, _ = recommend(config)
         domains = current.domains()
         reply = domains['wechat_operations']['operations']['reply']
-        reply.update(min_interval_seconds=config['min_interval_seconds'], rolling_1h_limit=config['hourly_quota'],
+        reply.update(rolling_24h_limit=config['daily_quota'], min_interval_seconds=config['min_interval_seconds'], rolling_1h_limit=config['hourly_quota'],
                      max_replies_per_video_lifetime=config['max_per_video'])
         domains['interaction_controls']['reply_strategy'] = {key: config[key] for key in REPLY_STRATEGY_FIELDS}
+        domains['interaction_controls']['reply_linkage'] = config['linkage']
         try:
             store().commit(domains, expected_revision=current.revision, actor=actor,
                            reason='评论回复策略页保存', operation_id='reply_settings_' + uuid.uuid4().hex,

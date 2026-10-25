@@ -1,5 +1,6 @@
 /** 评论回复：分栏阅读、直接筛选、请求竞态保护与保留草稿的策略保存。
  * Modification History
+ * | reply-linkage-v1 | 2026-10-25 | Codex | 每日额度、自动联动与持久手动覆盖。 |
  * | Version | Date | Author | Description |
  * | --- | --- | --- | --- |
  * | reply-recovery-v1 | 2026-10-25 | Codex | 活动版本保存、本机验证、真实错误与草稿保护。 |
@@ -12,8 +13,9 @@
   const filters = {...defaults};
   const statuses = {APPROVED:'待发送', PENDING_REVIEW:'待审核', VERIFIED:'已核实', UNCERTAIN:'待只读对账', FAILED:'失败', SKIPPED:'已跳过', MANUAL:'人工处理'};
   const styles = {MACRO:'宏观视角', PRAGMATIC:'务实交流', PHILOSOPHICAL:'哲理思辨', CASUAL_LIGHT:'轻松互动', CASUAL:'轻松互动', HUMOROUS:'幽默互动'};
-  const fields = {'window-start':'window_start_shanghai', 'window-end':'window_end_shanghai', 'min-interval-seconds':'min_interval_seconds', 'hourly-quota':'hourly_quota', 'max-per-video':'max_per_video', 'approval-mode':'approval_mode'};
+  const fields = {'daily-quota':'daily_quota', 'window-start':'window_start_shanghai', 'window-end':'window_end_shanghai', 'min-interval-seconds':'min_interval_seconds', 'hourly-quota':'hourly_quota', 'max-per-video':'max_per_video', 'approval-mode':'approval_mode'};
   let saved = null, digest = '', revision = null, busy = false, conflict = false;
+  let replyLinkage = null, editorLinkage = null;
   let items = [], selected = '', historyController, historySequence = 0, searchTimer, composing = false;
   let leaveAction, returnFocus, listScroll = 0;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -205,7 +207,8 @@
   }
   function draft() {
     const value = structuredClone(saved || {});
-    Object.entries(fields).forEach(([id,name]) => { value[name] = $(id).type === 'number' ? ($(id).value === '' ? null : Number($(id).value)) : $(id).value.trim(); });
+    Object.entries(fields).forEach(([id,name]) => { if(id==='daily-quota'&&!revision)return; value[name] = $(id).type === 'number' ? ($(id).value === '' ? null : Number($(id).value)) : $(id).value.trim(); });
+    if(revision&&editorLinkage)value.linkage=structuredClone(editorLinkage);
     return value;
   }
   const dirty = () => Boolean(saved && JSON.stringify(draft()) !== JSON.stringify(saved));
@@ -217,12 +220,13 @@
   const windowLabel = config => config.window_start_shanghai === config.window_end_shanghai || (config.window_start_shanghai === '00:00' && config.window_end_shanghai === '24:00') ? '全天 24 小时' : `${config.window_start_shanghai}–${config.window_end_shanghai}`;
   function state() {
     $('editor').disabled = !saved || busy;
-    $('save').disabled = !dirty() || busy || conflict;
+    $('save').disabled = !dirty() || busy || conflict || Boolean(replyLinkage?.pending) || Boolean(replyLinkage?.error);
     $('reload-policy').disabled = busy;
     $('dirty-state').textContent = busy ? '正在处理…' : !saved ? '尚未载入策略' : conflict ? '保存冲突，草稿已保留' : dirty() ? '有未保存的修改' : '与已保存策略一致';
     if (!saved) return;
     const value = draft();
     $('preview-window').textContent = windowLabel(value);
+    $('preview-daily').textContent = value.daily_quota ? `${value.daily_quota} 条 / 24 小时` : '在运行配置中心管理';
     $('preview-interval').textContent = interval(value.min_interval_seconds);
     $('preview-hourly').textContent = `${value.hourly_quota ?? '—'} 条 / 60 分钟`;
     $('preview-video-max').textContent = `${value.max_per_video ?? '—'} 条 / 视频`;
@@ -231,15 +235,22 @@
     $('policy-preview').textContent = `${dirty() ? '未保存草稿' : '已保存配置'}：${value.approval_mode === 'hybrid_auto' ? '自动回复 + 事后通告' : '人工审批后发送'}。`;
   }
   function renderPolicy(data) {
+    replyLinkage?.dispose(); replyLinkage=null;
     revision = data.revision ?? null;
+    editorLinkage=data.config.linkage ? structuredClone(data.config.linkage) : null;
+    $('daily-quota-field').hidden=!revision; $('reply-linkage').hidden=!revision;
     $('min-interval-seconds').min = data.limits?.min_interval_seconds ?? 0;
+    $('min-interval-seconds').max = data.limits?.max_interval_seconds ?? 86400;
     $('hourly-quota').max = data.limits?.hourly_quota ?? 100;
-    $('min-interval-seconds').labels[0].textContent = `最小提交间隔（秒，${$('min-interval-seconds').min}–86400）`;
+    $('min-interval-seconds').labels[0].textContent = `最小提交间隔（秒，${$('min-interval-seconds').min}–${$('min-interval-seconds').max}）`;
     $('hourly-quota').labels[0].textContent = `账号滚动 60 分钟上限（1–${$('hourly-quota').max}）`;
     $('quota-source').textContent = revision ? '回复使用独立额度；首评单独计额。所有调整仍受已批准边界约束。' : '首评和二级回复共享账号滚动 60 分钟配额。';
     saved = data.config; digest = data.digest; conflict = false;
     Object.entries(fields).forEach(([id,name]) => { $(id).value = String(saved[name]); $(id).removeAttribute('aria-invalid'); });
     $('saved-summary').innerHTML = `${esc(saved.approval_mode === 'hybrid_auto' ? '自动回复' : '人工审批')} · 北京时间 ${esc(windowLabel(saved))}<span class="sr-saved-schedule"> · 间隔 ${esc(interval(saved.min_interval_seconds))}</span><span class="sr-saved-limits"> · ${esc(saved.hourly_quota)} 条 / 60 分钟 · ${esc(saved.max_per_video)} 条 / 视频</span>`;
+    if(revision) replyLinkage=ReplyLinkage.mount({host:$('reply-linkage'),inputs:Object.fromEntries(Object.entries(fields).map(([id,key])=>[key,$(id)])),
+      get:draft,set:value=>{for(const [id,key] of Object.entries(fields))if(key in value)$(id).value=String(value[key]);if(value.linkage)editorLinkage=structuredClone(value.linkage);},
+      onChange:state,capacity:data.capacity,original:saved});
     state();
   }
   async function loadPolicy() {
@@ -255,9 +266,10 @@
     const clock = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!clock.test(value.window_start_shanghai)) failures.push(['window-start','开始时间须为 00:00–23:59。']);
     if (!clock.test(value.window_end_shanghai) && value.window_end_shanghai !== '24:00') failures.push(['window-end','结束时间须为 00:00–24:00。']);
-    [['min-interval-seconds',Number($('min-interval-seconds').min),86400],['hourly-quota',1,Number($('hourly-quota').max)],['max-per-video',1,20]].forEach(([id,min,max]) => { const number = value[fields[id]]; if (!Number.isInteger(number) || number < min || number > max) failures.push([id,`${$(id).labels[0].textContent}须为范围内整数。`]); });
+    if(revision&&(!Number.isInteger(value.daily_quota)||value.daily_quota<1||value.daily_quota>1000))failures.push(['daily-quota','最近24小时回复上限须为1–1000的整数。']);
+    [['min-interval-seconds',Number($('min-interval-seconds').min),Number($('min-interval-seconds').max)],['hourly-quota',1,Number($('hourly-quota').max)],['max-per-video',1,20]].forEach(([id,min,max]) => { const number = value[fields[id]]; if (!Number.isInteger(number) || number < min || number > max) failures.push([id,`${$(id).labels[0].textContent}须为范围内整数。`]); });
     if (!['manual','hybrid_auto'].includes(value.approval_mode)) failures.push(['approval-mode','请选择有效回复方式。']);
-    Object.keys(fields).forEach(id => { $(id).setAttribute('aria-invalid',String(failures.some(([field]) => id === field))); $(id).setAttribute('aria-describedby','feedback'); });
+    Object.keys(fields).forEach(id => { $(id).setAttribute('aria-invalid',String(failures.some(([field]) => id === field))); $(id).setAttribute('aria-describedby',[...new Set((($(id).getAttribute('aria-describedby')||'')+' feedback').trim().split(/\s+/))].join(' ')); });
     if (failures.length) { $('feedback').textContent = failures.map(([,message]) => message).join(' '); $(failures[0][0]).focus(); return false; }
     return true;
   }
@@ -282,6 +294,8 @@
   $('settings-form').addEventListener('submit',async event => {
     event.preventDefault();
     if (busy || conflict || !dirty() || !validate()) return;
+    if(replyLinkage&&(!await replyLinkage.settled()||!await replyLinkage.confirmCapacity()))return;
+    if(busy||conflict)return;
     const config = draft(); busy = true; state(); $('feedback').textContent = '正在保存策略…';
     try { renderPolicy(await api('', {method:'PUT',body:JSON.stringify({config,expected_digest:digest,expected_revision:revision})})); $('feedback').textContent = '策略已保存；后续执行将按既有机制读取。'; }
     catch (error) { conflict = error.status === 409; $('feedback').textContent = `${conflict ? '保存冲突：' : '保存失败：'}${error.message} 草稿已保留。`; }
@@ -291,8 +305,8 @@
   $('edit-policy').addEventListener('click',() => switchTab('policy',true));
   ['ledger','policy'].forEach(name => $('tab-' + name).addEventListener('click',() => switchTab(name)));
   document.querySelector('[role=tablist]').addEventListener('keydown',event => { if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return; event.preventDefault(); switchTab(event.key === 'Home' ? 'ledger' : event.key === 'End' ? 'policy' : filters.tab === 'policy' ? 'ledger' : 'policy',true); });
-  [['preset-24h','00:00','24:00'],['preset-daytime','08:30','23:00']].forEach(([id,start,end]) => $(id).addEventListener('click',() => { $('window-start').value = start; $('window-end').value = end; state(); }));
-  [['preset-interval-1h',3600],['preset-interval-2h',7200],['preset-interval-30m',1800]].forEach(([id,seconds]) => $(id).addEventListener('click',() => { $('min-interval-seconds').value = seconds; state(); }));
+  [['preset-24h','00:00','24:00'],['preset-daytime','08:30','23:00']].forEach(([id,start,end]) => $(id).addEventListener('click',() => { $('window-start').value = start; $('window-end').value = end; $('window-end').dispatchEvent(new Event('input',{bubbles:true})); state(); }));
+  [['preset-interval-1h',3600],['preset-interval-2h',7200],['preset-interval-30m',1800]].forEach(([id,seconds]) => $(id).addEventListener('click',() => { $('min-interval-seconds').value = seconds; $('min-interval-seconds').dispatchEvent(new Event('input',{bubbles:true})); state(); }));
   Object.entries({size:'filter-size',sort:'filter-sort',platform_post_id:'filter-video',time_window:'filter-time-window',style:'filter-style',provider_kind:'filter-provider'}).forEach(([name,id]) => $(id).addEventListener('change',() => { filters[name] = name === 'size' ? Number($(id).value) : $(id).value; applyFilters(); }));
   $('status-filters').addEventListener('click',event => { const button = event.target.closest('[data-status]'); if (button) { filters.status = button.dataset.status; applyFilters(); } });
   $('filter-other-status').addEventListener('change',() => { filters.status = $('filter-other-status').value; applyFilters(); });

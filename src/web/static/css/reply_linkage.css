@@ -1,0 +1,9 @@
+/* Modification History: 1.0.0 | 2026-10-25 | Codex | 双入口联动状态与容量提示。 */
+.reply-linkage-mode { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:6px 0 12px; color:var(--text2); font-size:.8125rem; }
+.reply-linkage-mode button { min-height:44px; }
+.reply-linkage-panel { margin:12px 0; overflow-wrap:anywhere; }
+.reply-linkage-panel [data-state="warning"] { color:var(--orange); }
+.reply-linkage-panel [data-state="error"] { color:var(--red); }
+.reply-linkage-panel p { min-height:1.5em; }
+.reply-linkage-panel button { cursor:pointer; min-height:44px; }
+.reply-linkage-panel button:disabled { cursor:default; }

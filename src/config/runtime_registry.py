@@ -1,6 +1,7 @@
 """运行参数唯一字段归属；安全上界不能由客户端或活动版本自行扩大。
 
 # Modification History
+| reply-linkage-v1 | 2026-10-25 | Codex | 每日额度联动与持久手动覆盖；校验实际检查节拍。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 共用回复策略与可选迁移领域校验，保留旧版本兼容。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -62,12 +63,15 @@ def validate_reply_strategy(value):
 
 
 def validate_interaction_controls(value):
-    if not isinstance(value, dict) or set(value) not in (
-        {'automatic_replies_enabled'}, {'automatic_replies_enabled', 'reply_strategy'}
-    ) or type(value['automatic_replies_enabled']) is not bool:
+    if (not isinstance(value, dict) or 'automatic_replies_enabled' not in value
+            or not set(value) <= {'automatic_replies_enabled', 'reply_strategy', 'reply_linkage'}
+            or type(value['automatic_replies_enabled']) is not bool):
         raise ValueError('观众回复总开关必须为布尔值，不能附带其他权限开关')
     if 'reply_strategy' in value:
         validate_reply_strategy(value['reply_strategy'])
+    if 'reply_linkage' in value:
+        from .reply_linkage import validate_linkage
+        validate_linkage(value['reply_linkage'])
     return value
 
 GROUPS = [

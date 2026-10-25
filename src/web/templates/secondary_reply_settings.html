@@ -24,7 +24,9 @@
   <link rel="stylesheet" href="/static/css/product_settings.css">
   <link rel="stylesheet" href="/static/css/console_workspace.css">
   <link rel="stylesheet" href="/static/css/secondary_reply_settings.css">
-  <script defer src="/static/js/secondary_reply_settings.js"></script>
+  <link rel="stylesheet" href="/static/css/reply_linkage.css?v=1">
+<script defer src="/static/js/reply_linkage.js?v=1"></script>
+<script defer src="/static/js/secondary_reply_settings.js?v=reply-linkage-1"></script>
   <script defer src="/static/js/console_navigation.js"></script>
 </head>
 <body class="secondary-reply-page" data-console-navigation="inbox">
@@ -105,6 +107,9 @@
             <section>
               <h2>发送频控与配额预算</h2>
               <p id="quota-source" class="hint">设置回复间隔与数量上限。</p>
+              <div id="daily-quota-field" hidden><label for="daily-quota">最近24小时回复上限（1–1000）</label>
+              <input id="daily-quota" type="number" min="1" max="1000" step="1" aria-describedby="daily-quota-help">
+              <p id="daily-quota-help" class="hint">修改总量会联动自动字段；手动字段保留。最近24小时滚动计数，不在午夜清零。</p></div>
               <div class="sr-preset-bar">
                 <button id="preset-interval-1h" class="sr-preset-btn" type="button" data-js-action disabled>间隔 1 小时 (3600s)</button>
                 <button id="preset-interval-2h" class="sr-preset-btn" type="button" data-js-action disabled>间隔 2 小时 (7200s)</button>
@@ -124,6 +129,7 @@
                   <input id="max-per-video" type="number" min="1" max="20" step="1">
                 </div>
               </div>
+              <div id="reply-linkage" class="reply-linkage-panel" hidden></div>
             </section>
           </div>
 
@@ -138,6 +144,7 @@
 
             <div class="sr-summary-list" aria-label="当前表单预览">
               <div class="sr-summary-item"><span>开放时间窗口 (BJ)</span><strong id="preview-window">—</strong></div>
+              <div class="sr-summary-item"><span>最近24小时配额</span><strong id="preview-daily">—</strong></div>
               <div class="sr-summary-item"><span>最小发送间隔</span><strong id="preview-interval">—</strong></div>
               <div class="sr-summary-item"><span>滚动 60 分钟配额</span><strong id="preview-hourly">—</strong></div>
               <div class="sr-summary-item"><span>单视频累计配额</span><strong id="preview-video-max">—</strong></div>
