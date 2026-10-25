@@ -10,6 +10,7 @@
    调用沙箱 ``AgySecondaryReplyProvider`` 生成双语草稿、落库 ``PENDING_REVIEW`` 并通过 ``TelegramApprovalTransport`` 推送审批卡片。
 
 # Modification History
+| reply-coverage-v2 | 2026-10-25 | Codex | 原生活动唯一绑定后供下一批优先选择，保存顶层续扫水位与候选来源。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 维护暂停返回有界等待并保留已完成回执，不误标草稿失败。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -343,7 +344,13 @@ def _run_secondary_reply_tick(
                             post_row["description"] = vdesc
                     pub_at = str(post_row.get("publication_created_at") or post_row.get("published_at") or "")
                     scan_now_dt = _utc_now(clock)
-                    disc = discover_fn(post_id=post_id, video_title=vtitle, published_description=vdesc)
+                    paged_discover = getattr(platform, "discover_comment_pages", None)
+                    if callable(paged_discover):
+                        prior = db.get_comment_scan_state(acct, post_id) or {}
+                        disc = paged_discover(post_id=post_id, video_title=vtitle,
+                            published_description=vdesc, resume_cursor=prior.get("comment_cursor") or "")
+                    else:
+                        disc = discover_fn(post_id=post_id, video_title=vtitle, published_description=vdesc)
                     if not isinstance(disc, dict) or not disc.get("ok") or not isinstance(disc.get("payload"), dict):
                         err_reason = str((disc or {}).get("reason") or "DISCOVER_FAILED")
                         db.record_comment_scan_state(
@@ -352,6 +359,7 @@ def _run_secondary_reply_tick(
                             top_level_status="INCOMPLETE",
                             observed_comment_count=0,
                             complete=False,
+                            comment_cursor=(db.get_comment_scan_state(acct, post_id) or {}).get("comment_cursor") or "",
                             last_error=err_reason,
                             published_at_utc=pub_at,
                             now_utc=scan_now_dt,
@@ -380,6 +388,7 @@ def _run_secondary_reply_tick(
                             top_level_status="INVALID",
                             observed_comment_count=0,
                             complete=False,
+                            comment_cursor=(db.get_comment_scan_state(acct, post_id) or {}).get("comment_cursor") or "",
                             last_error=err_msg,
                             published_at_utc=pub_at,
                             now_utc=scan_now_dt,
@@ -400,6 +409,7 @@ def _run_secondary_reply_tick(
                                 "like_count": c.like_count,
                                 "is_author": c.is_author,
                                 "has_author_reply": c.has_author_reply,
+                                "source_page_cursor": (disc.get("comment_page_cursors") or {}).get(c.comment_id, ""),
                             }
                             for c in parsed.comments
                         ],
@@ -412,7 +422,8 @@ def _run_secondary_reply_tick(
                         top_level_status=parsed.top_level_status.value,
                         observed_comment_count=len(parsed.comments),
                         complete=is_complete,
-                        last_error=None,
+                        comment_cursor=str(disc.get("comment_cursor") or ""),
+                        last_error=str(disc.get("reason") or "") or None,
                         published_at_utc=pub_at,
                         now_utc=scan_now_dt,
                     )
@@ -422,6 +433,10 @@ def _run_secondary_reply_tick(
                             "ok": True,
                             "top_level_status": parsed.top_level_status.value,
                             "discovered_count": len(parsed.comments),
+                            "candidate_origin": post_row.get("scan_candidate_origin", "explicit_target"),
+                            "pages_observed": disc.get("pages_observed", 1),
+                            "continuation_pending": not is_complete,
+                            "scan_note": disc.get("reason"),
                         }
                     )
 
@@ -430,6 +445,33 @@ def _run_secondary_reply_tick(
             if not isinstance(exc, WeChatSessionLockBusy):
                 raise
             report["scan_deferred"] = str(exc)
+
+    observations_fn = getattr(platform, "comment_activity_observations", None)
+    if callable(observations_fn) and report["scanned_posts"]:
+        observations = observations_fn()
+        if observations:
+            known = db.get_due_comment_scan_posts(account_key=acct, limit=100000,
+                                                  include_cooling=True, now_utc=now_dt)
+            descriptions = {}
+            for row in known:
+                description = " ".join(resolve_published_copy_text(row).split())
+                if len(description) >= 30:
+                    descriptions.setdefault(description, []).append(str(row["platform_post_id"]))
+            activity_audit = []
+            for observed in observations:
+                matches = descriptions.get(" ".join(str(observed.get("description") or "").split()), [])
+                if len(matches) != 1:
+                    activity_audit.append({"native_id": observed.get("native_id"),
+                                           "binding": "UNKNOWN_OR_AMBIGUOUS"})
+                    continue
+                db.record_comment_activity(account_key=acct, platform_post_id=matches[0],
+                    comment_count=observed["comment_count"], unread_count=observed["unread_count"],
+                    scanned_complete=any(r.get("post_id") == matches[0] and r.get("top_level_status") == "COMPLETE"
+                                         for r in report["scanned_posts"]))
+                activity_audit.append({"post_id": matches[0], "native_id": observed["native_id"],
+                    "binding": "UNIQUE_FULL_DESCRIPTION", "comment_count": observed["comment_count"],
+                    "unread_count": observed["unread_count"]})
+            report["activity_observations"] = activity_audit
 
     # =========================================================================
     # Phase 3: 无浏览器锁状态下生成新草稿并推送 Telegram 审批卡片 (SR-03)

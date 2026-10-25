@@ -140,7 +140,8 @@ def test_unknown_card_fails_closed_before_intent(stack):
         chinese_reply="谢谢分享。", english_reply="Thanks.", formatted_reply="谢谢分享。\nThanks.", provider="rule_mock",
     )
     out = s.orch.submit(tid)
-    assert out.status == "REJECTED_BEFORE_INTENT", out
+    assert out.status == "DEFERRED_AUTHOR_STATE_UNKNOWN", out
+    assert s.db.get_secondary_reply_task(tid)["status"] == "APPROVED"
     assert _sends(s) == []
     assert s.db.check_secondary_reply_idempotency("export/synth_not_on_page", "synth_cmt_101", account_key=TEST_ACCOUNT) is None
 
@@ -328,7 +329,8 @@ def test_orchestrated_pagination_unknown_fails_closed_before_intent(stack):
     s = stack
     tid = _task(s, comment_id="synth_cmt_106")
     out = s.orch.submit(tid)
-    assert out.status == "REJECTED_BEFORE_INTENT", out
+    assert out.status == "DEFERRED_AUTHOR_STATE_UNKNOWN", out
+    assert s.db.get_secondary_reply_task(tid)["status"] == "APPROVED"
     assert "无法完整判断是否已回复" in (out.detail or "")
     assert _sends(s) == []
     assert s.db.check_secondary_reply_idempotency(POST, "synth_cmt_106", account_key=TEST_ACCOUNT) is None

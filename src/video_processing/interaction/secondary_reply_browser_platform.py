@@ -10,6 +10,7 @@
 - 真实平台仍需 M3 只读样本验证；默认不被任何入口自动构造。
 
 # Modification History
+| reply-coverage-v2 | 2026-10-25 | Codex | 只读发现传入持久游标，并公开已捕获原生活动证据供业务层严格绑定。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 只读扫描透传维护暂停，交由调度器正常等待。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -52,6 +53,7 @@ class BrowserSecondaryReplyPlatform:
         *,
         account_finder_id: str,
         post_hints: Optional[Callable[[str], Tuple[str, str]]] = None,
+        comment_cursor_hint: Optional[Callable[[str, str], str]] = None,
         session_factory: Optional[SessionFactory] = None,
         trusted_origins: Tuple[str, ...] = (),
         evidence_dir: Optional[Path] = None,
@@ -62,6 +64,7 @@ class BrowserSecondaryReplyPlatform:
             raise ValueError("account_finder_id 不能为空（必须是已验证的作者原生账号标识）")
         self.adapter = adapter
         self.account_finder_id = account_finder_id
+        self._comment_cursor_hint = comment_cursor_hint or (lambda _post, _root: "")
         self._hints = post_hints or (lambda _post_id: ("", ""))
         self._session = session_factory or adapter.open_session
         self.submission_scope = (lambda post_id: nullcontext()) if session_factory else adapter.reply_workflow
@@ -81,8 +84,14 @@ class BrowserSecondaryReplyPlatform:
             expected_finder_id=self.account_finder_id, trusted_origins=self._trusted_origins,
         )
 
+    def _prepare_root_hint(self, post_id, root_id):
+        setter = getattr(self.adapter, "set_root_page_hint", None)
+        if callable(setter):
+            setter(post_id, self._comment_cursor_hint(post_id, root_id))
+
     def author_reply_state(self, *, post_id: str, root_id: str) -> str:
         title, desc = self._hints(post_id)
+        self._prepare_root_hint(post_id, root_id)
         try:
             with self._readonly_session(post_id) as page:
                 status, _ev, _reason = self.adapter.execute_page_reply_flow(
@@ -124,6 +133,7 @@ class BrowserSecondaryReplyPlatform:
             return ok
 
         title, desc = self._hints(post_id)
+        self._prepare_root_hint(post_id, root_id)
         try:
             with self._session(guard) as page:
                 status, _evidence, reason = self.adapter.execute_page_reply_flow(
@@ -141,6 +151,7 @@ class BrowserSecondaryReplyPlatform:
 
     def lookup_reply(self, *, post_id: str, root_id: str, text: str) -> LookupResult:
         title, desc = self._hints(post_id)
+        self._prepare_root_hint(post_id, root_id)
         for attempt in range(self._lookup_max_attempts):
             shot = ""
             shot_ok = True
@@ -172,14 +183,26 @@ class BrowserSecondaryReplyPlatform:
                 time.sleep(self._lookup_retry_delay_seconds)
         return LookupResult(found=False)
 
+    def comment_activity_observations(self):
+        """返回已有会话捕获的活动，不新增平台请求。"""
+        return list(self.adapter.observed_post_activity.values())
+
+    def discover_comment_pages(self, *, resume_cursor="", **kwargs):
+        """有界续扫入口，保留旧端口测试兼容性。"""
+        return self.discover_comments(resume_cursor=resume_cursor, **kwargs)
+
     def discover_comments(
         self,
         *,
         post_id: str,
         video_title: str = "",
         published_description: str = "",
+        resume_cursor: str = "",
     ) -> Dict[str, Any]:
         """在只读会话锁与路由强拦截下，绑定目标作品卡片并返回捕获到的 comment_list 原始载荷。"""
+        setter = getattr(self.adapter, "set_root_page_hint", None)
+        if callable(setter):
+            setter("", "")
         hint_title, hint_desc = self._hints(post_id) if self._hints else ("", "")
         title = video_title or hint_title
         desc = published_description or hint_desc
@@ -192,6 +215,7 @@ class BrowserSecondaryReplyPlatform:
                         platform_post_id=post_id,
                         video_title=title,
                         published_description=desc,
+                        resume_cursor=resume_cursor,
                     )
         except Exception as exc:
             from ..core.maintenance import MaintenanceDenied

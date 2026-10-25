@@ -5,6 +5,7 @@
 dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 API、零副作用。
 
 # Modification History
+| reply-coverage-v2 | 2026-10-25 | Codex | 后页父评论导航读取账户/作品/评论绑定的原生游标，仍独立复核目标。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | reply-cursor-v1 | 2026-10-25 | Codex | 传递完整已发布文案，仅用于查找实际观测过的原生列表游标。 |
@@ -318,6 +319,8 @@ def _build_real_platform(args, db: Optional[PipelineDB] = None):
 
     return BrowserSecondaryReplyPlatform(
         adapter,
+        comment_cursor_hint=lambda post, root: str((db.get_audience_comment(
+            account_key=settings.wechat_reply_account_key, platform_post_id=post, comment_id=root) or {}).get("source_page_cursor") or "") if db else "",
         account_finder_id=finder,
         post_hints=_resolve_hints,
         evidence_dir=evidence_dir,

@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| reply-coverage-v2 | 2026-10-25 | Codex | 活动优先与公平回补兼顾旧作品，持久保存原生评论续扫游标与活动证据。 |
 | reply-page-hint-v1 | 2026-10-25 | Codex | 依据已绑定作品顺序估计扫描起始页，仅辅助翻页，作品身份仍由原生响应严格核验。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 到期评论扫描按最久未扫轮转，避免最新作品重复占满批次。 |
 | filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
@@ -2278,6 +2279,9 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     UNIQUE(account_key, platform_post_id, comment_id)
                 )
             ''')
+            audience_columns = {r[1] for r in cursor.execute("PRAGMA table_info(wechat_audience_comments)")}
+            if "source_page_cursor" not in audience_columns:
+                cursor.execute("ALTER TABLE wechat_audience_comments ADD COLUMN source_page_cursor TEXT NOT NULL DEFAULT ''")
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_wechat_audience_comments_post
                 ON wechat_audience_comments(platform_post_id, status)
@@ -2365,6 +2369,16 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     PRIMARY KEY (account_key, platform_post_id)
                 )
             ''')
+            scan_columns = {r[1] for r in cursor.execute("PRAGMA table_info(wechat_comment_scan_state)")}
+            for name, definition in {
+                "comment_cursor": "TEXT NOT NULL DEFAULT ''",
+                "activity_count": "INTEGER DEFAULT NULL",
+                "activity_unread": "INTEGER NOT NULL DEFAULT 0",
+                "activity_at": "TIMESTAMP DEFAULT NULL",
+                "activity_pending": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if name not in scan_columns:
+                    cursor.execute(f"ALTER TABLE wechat_comment_scan_state ADD COLUMN {name} {definition}")
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_wechat_comment_scan_state_next
                 ON wechat_comment_scan_state(account_key, next_scan_after)
@@ -13697,11 +13711,11 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     """
                     INSERT OR IGNORE INTO wechat_audience_comments (
                         account_key, platform_post_id, comment_id, nickname, content, content_hash,
-                        createtime, like_count, is_author, has_author_reply, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
+                        createtime, like_count, is_author, has_author_reply, source_page_cursor, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISCOVERED')
                     """,
                     (account_key, platform_post_id, cid, nickname, content, content_hash,
-                     createtime, like_count, is_author, has_reply),
+                     createtime, like_count, is_author, has_reply, str(item.get("source_page_cursor") or "")),
                 )
                 if cur.rowcount > 0:
                     inserted += 1
@@ -13713,12 +13727,12 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                         """
                         UPDATE wechat_audience_comments
                         SET content = ?, content_hash = ?, nickname = ?, like_count = ?,
-                            has_author_reply = MAX(has_author_reply, ?)
+                            has_author_reply = MAX(has_author_reply, ?),
+                            source_page_cursor = COALESCE(?, source_page_cursor)
                         WHERE account_key = ? AND platform_post_id = ? AND comment_id = ?
-                          AND content_hash != ?
                         """,
                         (content, content_hash, nickname, like_count, has_reply,
-                         account_key, platform_post_id, cid, content_hash),
+                         item.get("source_page_cursor"), account_key, platform_post_id, cid),
                     )
             conn.commit()
         return inserted
@@ -14895,6 +14909,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
         platform_post_id: str,
         top_level_status: str,
         observed_comment_count: int = 0,
+        comment_cursor: str = "",
         complete: bool = False,
         last_error: Optional[str] = None,
         published_at_utc: Optional[str] = None,
@@ -14929,13 +14944,17 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 """
                 INSERT INTO wechat_comment_scan_state (
                     account_key, platform_post_id, last_scanned_at, last_complete_scan_at,
-                    top_level_status, observed_comment_count, next_scan_after, last_error, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    top_level_status, observed_comment_count, next_scan_after, last_error, comment_cursor, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(account_key, platform_post_id) DO UPDATE SET
                     last_scanned_at = excluded.last_scanned_at,
                     last_complete_scan_at = COALESCE(excluded.last_complete_scan_at, wechat_comment_scan_state.last_complete_scan_at),
                     top_level_status = excluded.top_level_status,
-                    observed_comment_count = excluded.observed_comment_count,
+                    observed_comment_count = CASE WHEN excluded.top_level_status NOT IN ('INVALID', 'INCOMPLETE')
+                        THEN excluded.observed_comment_count ELSE wechat_comment_scan_state.observed_comment_count END,
+                    comment_cursor = excluded.comment_cursor,
+                    activity_pending = CASE WHEN excluded.last_complete_scan_at IS NOT NULL
+                        THEN 0 ELSE wechat_comment_scan_state.activity_pending END,
                     next_scan_after = excluded.next_scan_after,
                     last_error = excluded.last_error,
                     updated_at = CURRENT_TIMESTAMP
@@ -14949,6 +14968,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     int(observed_comment_count),
                     next_scan_iso,
                     last_error,
+                    "" if complete else str(comment_cursor),
                 ),
             )
             conn.commit()
@@ -14957,6 +14977,29 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 (account_key, platform_post_id),
             ).fetchone()
             return dict(row) if row else {}
+
+    def record_comment_activity(self, *, account_key: str, platform_post_id: str,
+                                comment_count: int, unread_count: int = 0, scanned_complete: bool = False) -> None:
+        """仅接收已完成原生身份/完整文案绑定的只读活动观测，不改扫描冷却。"""
+        if type(comment_count) is not int or comment_count < 0:
+            return
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO wechat_comment_scan_state
+                    (account_key, platform_post_id, activity_count, activity_unread, activity_at, activity_pending)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(account_key, platform_post_id) DO UPDATE SET
+                    activity_pending = CASE WHEN ? THEN 0 WHEN excluded.activity_unread > 0
+                        OR (wechat_comment_scan_state.activity_count IS NOT NULL
+                            AND excluded.activity_count != wechat_comment_scan_state.activity_count)
+                        OR (wechat_comment_scan_state.activity_count IS NULL
+                            AND excluded.activity_count > wechat_comment_scan_state.observed_comment_count)
+                        THEN 1 ELSE wechat_comment_scan_state.activity_pending END,
+                    activity_count = excluded.activity_count,
+                    activity_unread = excluded.activity_unread, activity_at = CURRENT_TIMESTAMP
+                """, (account_key, platform_post_id, comment_count, max(0, unread_count),
+                       int(not scanned_complete and (unread_count > 0 or comment_count > 0)), int(scanned_complete)))
+            conn.commit()
 
     def get_comment_scan_state(self, account_key: str, platform_post_id: str) -> Optional[Dict[str, Any]]:
         """查询单个作品的评论扫描水位。"""
@@ -14972,10 +15015,11 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
         *,
         account_key: str,
         limit: int = 2,
-        max_age_days: int = 14,
+        max_age_days: Optional[int] = None,
+        include_cooling: bool = False,
         now_utc: Optional[datetime.datetime] = None,
     ) -> List[Dict[str, Any]]:
-        """按扫描水位与发布时间选择本轮到期需扫描评论的 PUBLISHED 视频号作品。"""
+        """活动优先且每批保留最久未扫回补；默认不以作品年龄排除评论。"""
         now_dt = now_utc or datetime.datetime.now(datetime.timezone.utc)
         if now_dt.tzinfo is None:
             now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
@@ -14999,7 +15043,11 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     s.last_complete_scan_at,
                     s.top_level_status,
                     s.observed_comment_count,
-                    s.next_scan_after
+                    s.next_scan_after,
+                    s.comment_cursor, s.activity_pending, s.activity_count, s.activity_unread,
+                    CASE WHEN s.activity_pending = 1 THEN 'native_activity'
+                         WHEN s.comment_cursor != '' THEN 'pagination_resume'
+                         ELSE 'fair_backfill' END AS scan_candidate_origin
                 FROM wechat_publications w
                 LEFT JOIN processed_videos p ON p.id = w.video_id
                 LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
@@ -15008,18 +15056,26 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     ON s.account_key = ? AND s.platform_post_id = w.platform_post_id
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
-                  AND datetime(w.created_at) >= datetime(?, '-' || ? || ' days')
-                  AND (s.next_scan_after IS NULL OR datetime(s.next_scan_after) <= datetime(?))
+                  AND (? IS NULL OR datetime(w.created_at) >= datetime(?, '-' || ? || ' days'))
+                  AND (? OR s.next_scan_after IS NULL OR datetime(s.next_scan_after) <= datetime(?))
                 ORDER BY
                     CASE WHEN s.last_scanned_at IS NULL THEN 0 ELSE 1 END ASC,
                     datetime(s.last_scanned_at) ASC,
                     w.created_at DESC,
                     w.id DESC
-                LIMIT ?
                 """,
-                (account_key, now_iso, int(max_age_days), now_iso, max(1, int(limit))),
+                (account_key, max_age_days, now_iso, max_age_days, int(include_cooling), now_iso),
             ).fetchall()
-            return [dict(r) for r in rows]
+            candidates = [dict(r) for r in rows]
+            if not candidates:
+                return []
+            # 公平位置先保留；活动/续扫不能使其永久饥饿，也不越过任何冷却。
+            fair = candidates[0]
+            priority = sorted(candidates[1:], key=lambda r: (
+                0 if r.get("activity_pending") else 1 if r.get("comment_cursor") else 2,
+                r.get("last_scanned_at") or "",
+            ))
+            return [fair, *priority[:max(0, int(limit) - 1)]]
 
     def list_secondary_reply_history(
         self,

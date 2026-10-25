@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| reply-coverage-v2 | 2026-10-25 | Codex | 浏览器夹具接入现有额度联动路由，保留真实跨页保存与边界校验。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 浏览器请求经过真实 Dashboard 中间件与本机会话，全部状态隔离。 |
 """
 from pathlib import Path
@@ -19,15 +20,19 @@ from tests.unit.test_secondary_reply_recovery import migrated, configured, activ
 from tests.unit.test_runtime_configuration import ORIGIN, save
 from video_processing.utils import runtime_configuration as runtime
 from web.secondary_reply_settings import create_secondary_reply_settings_router
+from web.runtime_configuration import create_runtime_configuration_router
 
 
 @pytest.fixture
-def ui(chromium, migrated):
+def ui(chromium, migrated, monkeypatch):
     _, db, path = migrated
+    from video_processing.utils import reply_linked_policy
+    monkeypatch.setattr(reply_linked_policy, 'verified_cadence', lambda: 72)
     from web.app import reject_untrusted_browser_origins
     app = FastAPI()
     app.middleware('http')(reject_untrusted_browser_origins)
     app.include_router(create_secondary_reply_settings_router(active=path, access_db=db, history_lookup=lambda limit: []))
+    app.include_router(create_runtime_configuration_router(db, port=9100))
     root = Path(__file__).resolve().parents[2]
     app.mount('/static', StaticFiles(directory=root/'src/web/static'))
     client = TestClient(app, base_url=ORIGIN, client=('127.0.0.1', 50000))
@@ -49,6 +54,13 @@ def ui(chromium, migrated):
     assert errors == []
 
 
+def save_form(page):
+    expect(page.locator('#save')).to_be_enabled()
+    page.locator('#save').click()
+    if page.locator('#reply-linkage-capacity').get_attribute('data-state') == 'warning':
+        page.get_by_role('button', name='仍保存此配置').click()
+
+
 def test_effective_quota_save_reload_and_cross_page_conflict(ui):
     page, _ = ui
     page.locator('#edit-policy').click()
@@ -57,7 +69,7 @@ def test_effective_quota_save_reload_and_cross_page_conflict(ui):
     expect(page.locator('#min-interval-seconds')).to_have_value('60')
     expect(page.locator('#quota-source')).to_contain_text('首评单独计额')
     page.locator('#hourly-quota').fill('49')
-    page.locator('#save').click()
+    save_form(page)
     expect(page.locator('#feedback')).to_contain_text('策略已保存')
     assert runtime.snapshot(fresh=True).domains()['wechat_operations']['operations']['reply']['rolling_1h_limit'] == 49
     page.reload()
@@ -68,7 +80,7 @@ def test_effective_quota_save_reload_and_cross_page_conflict(ui):
     data = current.domains()
     data['observability']['wait_notice_cooldown_seconds'] = 7200
     save(data, current.revision, 'browser_other_page_000000001')
-    page.locator('#save').click()
+    save_form(page)
     expect(page.locator('#feedback')).to_contain_text('配置版本已变化')
     expect(page.locator('#hourly-quota')).to_have_value('48')
     expect(page.locator('#save')).to_be_disabled()
@@ -82,7 +94,7 @@ def test_bound_rejection_is_not_misreported_as_concurrent_edit(ui):
     page.locator('#edit-policy').click()
     page.locator('#window-start').fill('00:00')
     page.locator('#window-end').fill('24:00')
-    page.locator('#save').click()
+    save_form(page)
     expect(page.locator('#feedback')).to_contain_text('需要专门批准')
     expect(page.locator('#feedback')).not_to_contain_text('保存冲突')
     expect(page.locator('#window-start')).to_have_value('00:00')

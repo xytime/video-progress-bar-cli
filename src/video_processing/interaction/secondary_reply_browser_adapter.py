@@ -11,6 +11,7 @@
 - 故障注入安全：提交意图落盘后任何异常仅转入 UNCERTAIN 只读对账
 
 # Modification History
+| reply-coverage-v2 | 2026-10-25 | Codex | 采集原生活动证据，顶层评论按真实游标有界续扫，错误保持未完成。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | reply-cursor-v1 | 2026-10-25 | Codex | 普通账户按真实 lastBuff 游标续扫，跨会话导航按凭据及查询隔离，仍保留共享预算和独立身份校验。 |
@@ -169,6 +170,17 @@ class SecondaryReplyBrowserAdapter:
         self._manual_retry_consumed = False
         self._list_page_hint: Tuple[str, int] = ("", 1)
         self._list_description_hint = ""
+        self.observed_post_activity = {}
+        self._comment_request = None
+        self._post_list_request = None
+        self._activity_probe_pending = False
+        self._activity_probe_active = False
+        self._root_page_hint = ("", "")
+        self._comment_page_cursors = {}
+
+    def set_root_page_hint(self, post_id, cursor=""):
+        """真实观测游标仅辅助导航；父评论/作品仍需新会话原生证据。"""
+        self._root_page_hint = (post_id, cursor)
 
     def set_post_list_page_hint(self, post_id: str, page_number: int, *, published_description: str = "") -> None:
         """提示仅绑定本次作品，用于缩小原生分页范围，不参与身份判定。"""
@@ -200,6 +212,9 @@ class SecondaryReplyBrowserAdapter:
         def paginate(route):
             nonlocal cursor_state, cursor_started, advance_cursor
             request = route.request
+            if self._activity_probe_active:
+                route.fallback()
+                return
             if (not is_official_wechat_origin(request.url)
                     or urlparse(request.url).path != COMMENT_POST_LIST_PATH
                     or request.method != 'POST'):
@@ -234,6 +249,24 @@ class SecondaryReplyBrowserAdapter:
             # fallback 保留 BrowserContext 上的共享请求限流；禁止直接 continue_ 绕过它。
             route.fallback(post_data=json.dumps(dict(payload, currentPage=payload['currentPage'] + start_page - 1)))
 
+        def root_page(route):
+            request = route.request
+            hint_post, cursor = self._root_page_hint
+            try:
+                payload = request.post_data_json
+            except (ValueError, TypeError):
+                payload = None
+            if (cursor and hint_post == post_id and self._bound_scene_post_id
+                    and is_official_wechat_origin(request.url)
+                    and urlparse(request.url).path == COMMENT_LIST_PATH
+                    and request.method == "POST" and isinstance(payload, dict)
+                    and str(payload.get("exportId") or payload.get("objectId") or "") == self._bound_scene_post_id
+                    and payload.get("lastBuff") == ""):
+                route.fallback(post_data=json.dumps(dict(payload, lastBuff=cursor)))
+            else:
+                route.fallback()
+
+        page.route("**/comment/comment_list*", root_page)
         page.route('**/post/post_list*', paginate)
         page.on('response', observe)
 
@@ -267,7 +300,17 @@ class SecondaryReplyBrowserAdapter:
         self._last_comment_list_payload = None
         self._bound_scene_post_id = None
         self._active_guard = guard
+        self._comment_request = None
+        self._post_list_request = None
         def on_request(req):
+            if (req.method == "POST" and is_official_wechat_origin(req.url)
+                    and urlparse(req.url).path == COMMENT_POST_LIST_PATH):
+                try:
+                    data = req.post_data_json
+                    if isinstance(data, dict) and data.get("pageSize") == 10:
+                        self._post_list_request = (req.url, dict(data))
+                except (ValueError, TypeError):
+                    pass
             if req.method == "POST" and "comment/comment_list" in req.url:
                 try:
                     pdata = req.post_data_json
@@ -275,6 +318,8 @@ class SecondaryReplyBrowserAdapter:
                         eid = str(pdata.get("exportId") or pdata.get("objectId") or "").strip()
                         if eid:
                             self._active_export_id = eid
+                            if is_official_wechat_origin(req.url) and urlparse(req.url).path == COMMENT_LIST_PATH:
+                                self._comment_request = (req.url, dict(pdata))
                 except Exception:
                     pass
 
@@ -292,6 +337,13 @@ class SecondaryReplyBrowserAdapter:
                         for key in ("exportId", "objectId"):
                             if item.get(key) and desc:
                                 self._post_descriptions[str(item[key])] = _normalized_text(desc)
+                                count = item.get("commentCount")
+                                unread = item.get("unreadcommentCount", 0)
+                                if type(count) is int and count >= 0 and type(unread) is int:
+                                    self.observed_post_activity[str(item[key])] = {
+                                        "native_id": str(item[key]), "description": _normalized_text(desc),
+                                        "comment_count": count, "unread_count": max(0, unread),
+                                    }
                 except (KeyError, TypeError, ValueError):
                     pass
             if "comment/comment_list" in res.url and res.status in (200, 201):
@@ -946,6 +998,8 @@ class SecondaryReplyBrowserAdapter:
             logger.info("[SecondaryReplyBrowser] 具名扫描等待本地时间门禁 %.3f 秒；之后仍完整核验", delay)
             time.sleep(delay)  # 不持浏览器锁，不访问平台；配置/锁/队列在原生准入时重新判断。
         with self._session_scope(identity, purpose="评论扫描") as session:
+            self.observed_post_activity.clear()
+            self._activity_probe_pending = True
             self._workflow_session = session
             self._scan_post_ids = frozenset(ids)
             try:
@@ -1013,6 +1067,9 @@ class SecondaryReplyBrowserAdapter:
                         page.wait_for_selector(".comment-feed-wrap, [data-object-id]", timeout=15000)
                     except Exception:
                         page.wait_for_timeout(2000)
+                    if self.scan_active and self._activity_probe_pending:
+                        self._activity_probe_pending = False
+                        self._probe_unread_activity(page)
                     yield page
                 finally:
                     context.close()
@@ -1148,6 +1205,28 @@ class SecondaryReplyBrowserAdapter:
 
         return None
 
+    def _load_root_comment_pages(self, page, root_comment_id):
+        """最多两次原生评论区滚动寻找父评论；无身份/游标证明就停止。"""
+        for _ in range(2):
+            if root_comment_id in self._captured_comments:
+                return
+            payload = self._last_comment_list_payload
+            if not isinstance(payload, dict):
+                return
+            body = payload.get("data", payload)
+            if not isinstance(body, dict) or body.get("downContinueFlag") != 1 or not body.get("lastBuff"):
+                return
+            before = body["lastBuff"]
+            region = page.locator(".scroll-list-wrap:visible").filter(has=page.locator(".comment-item"))
+            if region.count() != 1:
+                return
+            region.hover()
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(1000)
+            after = self._last_comment_list_payload
+            if not isinstance(after, dict) or after.get("data", after).get("lastBuff") == before:
+                return
+
     def _check_author_already_replied(
         self,
         page,
@@ -1155,6 +1234,7 @@ class SecondaryReplyBrowserAdapter:
         author_id: Optional[str],
     ) -> Tuple[bool, str, Any]:
         """检查指定一级评论下是否已有作者回复与分页完整性。"""
+        self._load_root_comment_pages(page, root_comment_id)
         parent_loc = page.locator(f"[data-comment-id='{root_comment_id}']").filter(visible=True)
         parent_node = None
         if parent_loc.count() == 1:
@@ -1588,6 +1668,98 @@ class SecondaryReplyBrowserAdapter:
                 attempt_dir=out_dir,
             )
 
+    @staticmethod
+    def _fetch_native_json(page, url, payload):
+        """真实已观测同源读接口；保留上下文路由预算和十秒网络上限。"""
+        return page.evaluate("""async ({url, payload}) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
+            try {
+                const r = await fetch(url, {method:'POST', credentials:'same-origin',
+                    headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload),
+                    signal:controller.signal});
+                return {status:r.status, payload:await r.json()};
+            } finally {clearTimeout(timer);}
+        }""", {"url": url, "payload": payload})
+
+    def _probe_unread_activity(self, page):
+        """每批首个已有上下文读一次原生未读头页，占用原有作品列表请求预算。"""
+        template = self._post_list_request
+        if not template:
+            return
+        url, payload = template
+        if not isinstance(payload.get("lastBuff"), str) or payload.get("forMcn"):
+            return  # 未验证的新分页类型不猜测；已有公平回补继续。
+        self._activity_probe_active = True
+        try:
+            self._fetch_native_json(page, url, dict(payload, lastBuff="", onlyUnread=True,
+                                                   needAllCommentCount=True))
+        except Exception as exc:
+            logger.info("原生活动候选读取未完成，保留公平回补: %s", type(exc).__name__)
+        finally:
+            self._activity_probe_active = False
+
+    def _collect_comment_pages(self, page, *, resume_cursor="", max_pages=3):
+        """只使用当前已绑定作品的真实请求模板/服务器游标；最多三页，失败不称完整。"""
+        initial = self._last_comment_list_payload
+        template = self._comment_request
+        if not isinstance(initial, dict) or not template:
+            return None, "NO_COMMENT_LIST_PAYLOAD_CAPTURED", 0
+        url, request = template
+        expected = self._bound_scene_post_id
+        if not expected or str(request.get("exportId") or request.get("objectId") or "") != expected:
+            return None, "COMMENT_REQUEST_IDENTITY_MISMATCH", 0
+        if initial.get("errCode", 0) != 0:
+            return None, "COMMENT_PAGE_NATIVE_ERROR", 1
+        body = initial.get("data", initial)
+        if not isinstance(body, dict) or not isinstance(body.get("comment"), list):
+            return None, "COMMENT_PAGE_SCHEMA_INVALID", 1
+        comments = {str(c.get("commentId")): c for c in body["comment"] if isinstance(c, dict)}
+        self._comment_page_cursors = {cid: str(request.get("lastBuff") or "") for cid in comments}
+        current = dict(body)
+        cursor = resume_cursor or current.get("lastBuff") or ""
+        seen = set()
+        pages = 1
+        error = ""
+        while resume_cursor or current.get("downContinueFlag") == 1:
+            resume_cursor = ""
+            if pages >= max_pages:
+                error = "COMMENT_PAGE_BUDGET_EXHAUSTED"
+                break
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                error = "COMMENT_CURSOR_MISSING_OR_REPEATED"
+                break
+            seen.add(cursor)
+            payload = dict(request, lastBuff=cursor)
+            try:
+                result = self._fetch_native_json(page, url, payload)
+                pages += 1
+                data = result["payload"]
+                next_body = data.get("data", data)
+                if result["status"] not in (200, 201) or data.get("errCode", 0) != 0:
+                    raise ValueError("COMMENT_PAGE_NATIVE_ERROR")
+                if not isinstance(next_body, dict) or not isinstance(next_body.get("comment"), list):
+                    raise ValueError("COMMENT_PAGE_SCHEMA_INVALID")
+                if type(next_body.get("downContinueFlag")) is not int or next_body["downContinueFlag"] not in (0, 1):
+                    raise ValueError("COMMENT_PAGE_COMPLETENESS_UNKNOWN")
+                for c in next_body["comment"]:
+                    if isinstance(c, dict):
+                        comments[str(c.get("commentId"))] = c
+                        self._comment_page_cursors[str(c.get("commentId"))] = cursor
+                current = dict(next_body)
+                cursor = current.get("lastBuff") or ""
+            except Exception as exc:
+                error = str(exc)
+                break
+        # 初始页缺少分页状态也必须按未知处理，不使用契约层兼容默认值推断完整。
+        if type(current.get("downContinueFlag")) is not int or current.get("downContinueFlag") not in (0, 1):
+            error = error or "COMMENT_PAGE_COMPLETENESS_UNKNOWN"
+        current["comment"] = list(comments.values())
+        current["lastBuff"] = cursor
+        if error:
+            current["downContinueFlag"] = 1
+        return {"data": current}, error, pages
+
     def discover_comments_on_page(
         self,
         page: Any,
@@ -1595,6 +1767,7 @@ class SecondaryReplyBrowserAdapter:
         platform_post_id: str,
         video_title: Optional[str] = None,
         published_description: Optional[str] = None,
+        resume_cursor: str = "",
     ) -> Dict[str, Any]:
         """只读绑定指定作品卡片并返回捕获到的 comment_list 原始载荷。"""
         is_login, _ = check_explicit_login_prompt(page)
@@ -1612,7 +1785,9 @@ class SecondaryReplyBrowserAdapter:
         if not bound_ok:
             return {"ok": False, "reason": bind_err or "CARD_BIND_FAILED", "payload": None}
         if isinstance(self._last_comment_list_payload, dict):
-            return {"ok": True, "reason": None, "payload": self._last_comment_list_payload}
+            payload, error, pages = self._collect_comment_pages(page, resume_cursor=resume_cursor)
+            return {"ok": payload is not None, "reason": error or None, "payload": payload,
+                    "pages_observed": pages, "comment_page_cursors": dict(self._comment_page_cursors), "comment_cursor": (payload or {}).get("data", {}).get("lastBuff", "")}
         return {"ok": False, "reason": "NO_COMMENT_LIST_PAYLOAD_CAPTURED", "payload": None}
 
 
