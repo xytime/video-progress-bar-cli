@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-25 | Codex | 封面由图片接口判断可用性，修复待发布、待核实和失败任务已有图却不显示。 |
   | 2026-10-25 | Codex | 授权读回、封面登录核实与人工投稿确认提示。 |
   | 2026-10-25 | Codex | 标签数量跟随筛选，清除恢复全频道与全时间，统一空列表提示。 |
   | 2026-10-23 | Codex | 当前审核阻塞、历史批准和真实字幕阶段分别展示，主行分集共用。 |
@@ -1861,7 +1862,6 @@
           cp.version_id && `版本：${cp.version_id}`,
           cp.cover_sha256 && `SHA256：${cp.cover_sha256}`].filter(Boolean);
         const coverSource = `<details class="cover-source" onkeydown="if(event.key==='Escape'){this.open=false;this.querySelector('summary').focus();}"><summary>${escapeHtml(cp.label || '来源未核验')}</summary><div>${coverDetails.map(escapeHtml).join('<br>')}</div></details>`;
-        const hasLocalCover = ['PUBLISHING', 'PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND'].includes(v.status);
         const isPublished = currentTab === 'high_likes'
           ? v.engagement?.stage === 'ENG_PUBLISHED'
           : ['PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND'].includes(v.status) || v.display_status === 'PUBLISHED';
@@ -1870,17 +1870,15 @@
         const coverCell = `
           <td class="cover-thumb-cell">
             <div class="cover-thumb-wrapper">
-              ${hasLocalCover ? `
               <img
                 class="cover-thumb"
                 src="${coverUrl}"
                 alt="封面"
+                data-title="${escapeAttr(v.title || '')}"
                 loading="lazy"
                 onerror="handleCoverError(this)"
-                onclick="openCoverLightbox('${coverUrl}', '${escapeAttr(v.title || '')}');"
-              />` : `
-              <div class="cover-placeholder">🎬</div>
-              `}
+                onclick="event.stopPropagation(); openCoverLightbox(this.src, this.dataset.title)"
+              />
               ${coverSource}
               <div class="cover-status-badge mobile-only">
                 ${currentTab === 'high_likes' ? '' : videoStatusBadge(v)}
