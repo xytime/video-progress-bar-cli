@@ -1,4 +1,9 @@
 'use strict';
+/* Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.3 | 2026-10-25 | Codex | 区分当前英语首选规则与旧冻结单商品规则的说明。 |
+*/
 (() => {
   const $ = id => document.getElementById(id);
   let publisherConnected = false, currentView, libraryAlias = null, libraryDraftDirty = false;
@@ -18,7 +23,8 @@
   const note = (message, error = false) => { $('feedback').textContent = message; $('feedback').dataset.error = String(error); };
   const element = (tag, text) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; return el; };
   const attachmentReasons = {
-    ATTACH_ENGLISH_ALL:'每条英语世界必须绑定快捷英语',
+    ATTACH_ENGLISH_PREFERRED:'英语世界优先绑定快捷英语；失败后按全局默认链继续',
+    ATTACH_ENGLISH_ALL:'旧版规则要求每条英语世界绑定快捷英语',
     ATTACH_ENGLISH_FIRST:'英语世界当天首条要求挂载',SKIP_ENGLISH_LATER:'英语世界当天后续不挂载',
     ENGLISH_FIRST_NOT_REGISTERED:'尚未登记正式制作顺序',ATTACH_THRESHOLD:'源点赞率达到10%，要求挂载',
     SKIP_BELOW_THRESHOLD:'源点赞率低于10%，不挂载',SKIP_METRICS_UNKNOWN:'源指标未知，无法证实达标',
@@ -36,7 +42,7 @@
     const metrics = attachment.metrics || {};
     const rate = metrics.like_rate_percent === null || metrics.like_rate_percent === undefined ? '未知' : `${metrics.like_rate_percent}%`;
     fragment.append(element('p',`源播放数：${knownValue(metrics.view_count)} · 源点赞数：${knownValue(metrics.like_count)} · 源点赞率：${rate}`),
-      element('p',`指标状态：${{VALID:'有效',UNKNOWN:'缺失',INVALID:'无效'}[metrics.status] || '未确认'}。${attachment.reason === 'ATTACH_ENGLISH_ALL' ? '英语世界每条绑定快捷英语，人工跳过、指定其他书及全局默认均不能覆盖。' : attachment.product_intent === 'NONE' || attachment.product_intent === 'PRODUCT' ? '普通视频的人工意图优先。' : '其他自动 YouTube 视频按未四舍五入的比例判断，阈值10%。'}`));
+      element('p',`指标状态：${{VALID:'有效',UNKNOWN:'缺失',INVALID:'无效'}[metrics.status] || '未确认'}。${attachment.reason === 'ATTACH_ENGLISH_ALL' ? '此旧冻结规则只允许快捷英语，不使用全局默认回退；重试沿用原快照。' : attachment.reason === 'ATTACH_ENGLISH_PREFERRED' ? '英语世界优先使用快捷英语；该商品失败后可按全局默认候选链继续，人工跳过或指定其他书不覆盖首选规则。' : attachment.product_intent === 'NONE' || attachment.product_intent === 'PRODUCT' ? '普通视频的人工意图优先。' : '其他自动 YouTube 视频按未四舍五入的比例判断，阈值10%。'}`));
     const production = attachment.production;
     if (production) {
       const first = production.first_task_id || (production.is_first === true ? production.task_id : null);
@@ -175,6 +181,22 @@
     $('profiles').replaceChildren(); $('channel-fields').replaceChildren(); $('legacy-rules').replaceChildren();
     Object.entries(groups).forEach(([key, name]) => {
       const row = element('div'), grid = element('div'); row.className = 'profile-row'; grid.className = 'profile-grid'; const identity = element('div'); identity.className='profile-identity'; identity.append(element('h3',name)); const descriptions={english_world:'英语学习与热点解读',wallstreet:'金融市场与投资观点',ted:'演讲与思想分享',ai_news:'人工智能行业动态',other:'未命中以上类型'}; const desc=element('p',descriptions[key]);desc.className='profile-description';identity.append(desc); row.append(identity,grid); $('profiles').append(row);
+      if (key === 'english_world') {
+        const candidates = config.profiles[key].candidates || [];
+        const englishRuleValid = candidates.length === 1 && candidates[0] === 'kuaijie_english';
+        const configuredFirst = candidates[0] || '';
+        productField(grid, `${key}-0`, `${name} · 固定首选商品`, configuredFirst, null, () => {});
+        productField(grid, `${key}-1`, `${name} · 默认兜底`, '', '继承全局默认候选链', () => {});
+        for (const index of [0, 1]) $(`${key}-${index}`).disabled = true;
+        const rule = element('p', englishRuleValid
+          ? '英语世界固定优先使用已核实的《快捷英语》；后续候选继承上方全局默认链。'
+          : `当前载入配置的英语首选不符合规定：${candidates.length ? candidates.join('、') : '未配置'}。页面保留实际配置且未改写；当前规则无法采用此配置，请由配置维护流程修复后再预览或保存。`);
+        rule.className = `hint english-product-rule${englishRuleValid ? '' : ' policy-error'}`;
+        rule.setAttribute('role', englishRuleValid ? 'note' : 'alert');
+        rule.dataset.valid = String(englishRuleValid);
+        grid.append(rule);
+        return;
+      }
       ['首选商品', '备选商品'].forEach((label, index) => productField(grid, `${key}-${index}`, `${name} · ${label}`, config.profiles[key].candidates[index], index ? '无额外备选' : '继承全局默认', () => {
         if (!$(key + '-0').value) $(key + '-1').value = '';
         $(key + '-1').disabled = !$(key + '-0').value;

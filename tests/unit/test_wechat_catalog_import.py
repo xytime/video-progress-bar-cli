@@ -32,15 +32,23 @@ def import_setup(api_setup):
 def test_preview_then_import_updates_catalog_only(import_setup):
     client,active,path,doc=import_setup
     old_policy=active.read_bytes();old_catalog=path.read_bytes();body=request_body(client,doc)
+    configured_ids={product['product_id'] for product in json.loads(old_policy)['products'].values()}
+    expected_ids=configured_ids|{'8880001'}
+    document_ids={item['product_id'] for page in doc['pages'] for item in page['items']}
+    assert configured_ids=={'10001054866768','10000028955239','10000129752415','10000006971274'}
+    assert '10000006971274' in configured_ids  # 快捷英语商品也必须保留
+    assert document_ids==expected_ids
     preview=client.post('/api/product-settings/catalog/preview',json=body)
-    assert preview.status_code==200 and preview.json()['total_items']==4
-    assert preview.json()['added'][0]['product_id']=='8880001'
-    assert preview.json()['account_first_import'] is True
+    preview_result=preview.json()
+    assert preview.status_code==200 and preview_result['total_items']==len(expected_ids)==5
+    assert {item['product_id'] for item in preview_result['added']}=={'8880001'}
+    assert preview_result['account_first_import'] is True
     assert path.read_bytes()==old_catalog and active.read_bytes()==old_policy
     response=client.post('/api/product-settings/catalog/import',json=body)
     assert response.status_code==200
     catalog=client.get('/api/product-settings').json()['catalog']
-    assert len(catalog['items'])==4 and catalog['completeness']=='complete'
+    assert {item['product_id'] for item in catalog['items']}==expected_ids
+    assert len(catalog['items'])==len(expected_ids)==5 and catalog['completeness']=='complete'
     assert catalog['live_verified'] is False and catalog['account_id']=='account-fixture'
     assert 'product_8880001' in catalog['products']
     assert active.read_bytes()==old_policy

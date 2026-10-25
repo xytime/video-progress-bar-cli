@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-25 | Codex | 刷新复核弹窗测试数据并覆盖手动处理失败响应边界。 |
 | 1.2.0 | 2026-09-23 | Codex | 真实浏览器验证待发布计数、占用原因和平台事实分离。 |
 | 1.0.0 | 2026-09-08 | Codex | 覆盖刷新选择、具名删除确认、状态一致性和过期响应隔离 |
 | 1.1.0 | 2026-09-08 | Codex | 共用显式 Chromium 快照夹具；依赖缺失明确失败 |
@@ -23,6 +24,7 @@ def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity
     page.evaluate("Object.defineProperty(navigator, 'vibrate', {value: undefined})")
     video = dict(_video('first', status='FAILED'),
                  error_msg='Censorship P0 Reject' if severity == 'critical' else 'Channel Policy Reject')
+    video['censorship_state'] = {'can_review': True}
     parent = dict(_video('first', status='SEGMENTED'), slices_count=1)
     state['payload'] = _payload([parent if slice_index else video], total=1)
     page.route('**/api/videos/first/slices', lambda route: route.fulfill(
@@ -35,6 +37,7 @@ def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity
                }))
     page.locator('.console-primary[data-section=production]').click()
     page.locator('#tab-error').click()
+    page.evaluate('async () => { await loadVideos(); }')
     if slice_index:
         page.locator('#btn-toggle-first').click()
     page.set_viewport_size({'width': viewport[0], 'height': viewport[1]})
@@ -59,14 +62,47 @@ def test_bypass_modal_without_vibration_support(dashboard, slice_index, severity
 
 
 @pytest.mark.parametrize('slice_index', [None, 2])
+@pytest.mark.parametrize('can_review', [False, None], ids=['explicitly-denied', 'missing-state'])
+def test_historical_censorship_text_alone_does_not_show_bypass(dashboard, slice_index, can_review):
+    page, state = dashboard
+    video = dict(_video('first', status='FAILED'), error_msg='Censorship P0 Reject')
+    if can_review is not None:
+        video['censorship_state'] = {'can_review': can_review}
+    if slice_index is None:
+        state['payload'] = _payload([video], total=1)
+    else:
+        parent = dict(_video('first', status='SEGMENTED'), slices_count=1)
+        state['payload'] = _payload([parent], total=1)
+        page.route('**/api/videos/first/slices', lambda route: route.fulfill(
+            json={'slices': [dict(video, slice_index=slice_index)]}))
+    page.locator('.console-primary[data-section=production]').click()
+    page.locator('#tab-error').click()
+    page.evaluate('async () => { await loadVideos(); }')
+    if slice_index is not None:
+        page.locator('#btn-toggle-first').click()
+        row = page.locator(f'#row-first_s{slice_index}')
+    else:
+        row = page.locator('#row-first')
+    from playwright.sync_api import expect
+    expect(row).to_be_visible()
+    assert row.get_by_role('button', name='🔓 复核放行', exact=True).count() == 0
+    assert state['writes'] == []
+
+
+@pytest.mark.parametrize('slice_index', [None, 2])
 @pytest.mark.parametrize('status,payload,expected', [
     (503, {'detail': {'code': 'MAINTENANCE', 'message': '维护状态不允许领取新工作'}},
      '维护状态不允许领取新工作 [MAINTENANCE]'),
     (503, {'detail': {'code': 'UNKNOWN', 'message': '维护状态无法确认'}},
      '维护状态无法确认 [UNKNOWN]'),
+    (503, {'detail': None}, '请求失败（HTTP 503）'),
     (503, {'detail': '服务暂不可用'}, '服务暂不可用'),
     (503, None, '请求失败（HTTP 503）'),
+    (503, [], '请求失败（HTTP 503）'),
+    (503, 'empty-body', '请求失败（HTTP 503）'),
     (200, {'success': False, 'error': '视频当前状态不是 PENDING'}, '视频当前状态不是 PENDING'),
+    (200, {'success': 'true'}, '请求未确认，请刷新查看后再操作'),
+    (200, [], '响应格式无效，请刷新查看后再操作'),
 ])
 def test_process_failure_shows_reason_and_restores_button(dashboard, slice_index, status, payload, expected):
     from playwright.sync_api import expect
@@ -78,6 +114,8 @@ def test_process_failure_shows_reason_and_restores_button(dashboard, slice_index
         requests.append(route.request.method)
         if payload is None:
             route.fulfill(status=status, content_type='text/html', body='<h1>Unavailable</h1>')
+        elif payload == 'empty-body':
+            route.fulfill(status=status, content_type='application/json', body='')
         else:
             route.fulfill(status=status, json=payload)
 

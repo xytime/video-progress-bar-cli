@@ -1,10 +1,29 @@
-/* 手动执行共用冷却确认：取消不领取，等待不启动，跳过只授权一次。 */
+/*
+ * 手动执行共用冷却确认：取消不领取，等待不启动，跳过只授权一次。
+ *
+ * Modification History
+ * | Version | Date | Author | Description |
+ * | --- | --- | --- | --- |
+ * | 1.1.0 | 2026-10-25 | Codex | 规范错误响应解析，保留冷却确认并安全处理无效响应。 |
+ */
 window.ManualVideoExecution = (() => {
   const pending = new Set();
   let dialogOpen = false;
   function remaining(seconds) {
     const n = Math.max(0, Math.ceil(seconds));
     return n ? `${Math.floor(n / 60)} 分 ${n % 60} 秒` : '冷却已到期';
+  }
+  function failureMessage(result, response) {
+    const detail = result?.detail;
+    const message = result?.error || (typeof detail === 'string' ? detail : detail?.message);
+    const code = detail !== null && typeof detail === 'object' && !Array.isArray(detail)
+      && typeof detail.code === 'string' ? detail.code : null;
+    if (typeof message === 'string' && message) return message + (code ? ` [${code}]` : '');
+    if (!response.ok) return `请求失败（HTTP ${response.status}）`;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      return '响应格式无效，请刷新查看后再操作';
+    }
+    return '请求未确认，请刷新查看后再操作';
   }
   function confirmCooldown(result) {
     if (dialogOpen) return Promise.resolve('cancel');
@@ -55,8 +74,10 @@ window.ManualVideoExecution = (() => {
       let target = url;
       while (true) {
         const response = await fetch(target, {method: 'POST', signal: AbortSignal.timeout(20000)});
-        const result = await response.json();
-        if (result.code === 'WECHAT_COOLDOWN' && result.cooldown) {
+        let result;
+        try { result = await response.json(); } catch { result = null; }
+        if (result && typeof result === 'object' && !Array.isArray(result)
+            && result.code === 'WECHAT_COOLDOWN' && result.cooldown) {
           const choice = await confirmCooldown(result);
           if (choice === 'cancel') return {cancelled: true};
           const next = new URL(url, location.origin);
@@ -65,9 +86,9 @@ window.ManualVideoExecution = (() => {
           target = next.pathname + next.search;
           continue;
         }
-        if (!response.ok || !result.success) {
-          const detail = result.error || result.detail;
-          throw new Error(typeof detail === 'string' ? detail : detail?.message || '请求未确认，请刷新查看后再操作');
+        if (!response.ok || !result || typeof result !== 'object' || Array.isArray(result)
+            || result.success !== true) {
+          throw new Error(failureMessage(result, response));
         }
         return result;
       }

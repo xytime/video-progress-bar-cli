@@ -5,7 +5,7 @@
 (() => {const root=document.documentElement; const system=matchMedia('(prefers-color-scheme: dark)'); let prefs={};try {prefs=JSON.parse(localStorage.getItem('vp-display-preferences') || '{}') || {};} catch (_) {} const theme=['system','dark','light','contrast'].includes(prefs.theme)?prefs.theme:'system'; const apply=()=>{root.dataset.theme=theme==='system'?(system.matches?'dark':'light'):theme;root.dataset.textSize=['standard','large','xlarge'].includes(prefs.size)?prefs.size:'large';};apply();system.addEventListener('change',apply);})();
 </script>
 <link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
-<script defer src="/static/js/product_picker.js?v=20261011-redesign"></script><script defer src="/static/js/product_settings.js?v=20261011-redesign"></script>
+<script defer src="/static/js/product_picker.js?v=20261011-redesign"></script><script defer src="/static/js/product_settings.js?v=20261025-english-lock-v2"></script>
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-1"><script defer src="/static/js/console_navigation.js"></script></head><body><main class="product-settings">
 <nav class="breadcrumbs" aria-label="当前位置"><a id="back" href="/">视频控制台</a><span aria-hidden="true"> / </span><span aria-current="page">商品挂载</span></nav>
 <header class="page-header"><div><h1>商品挂载</h1><p class="hint">按视频类型配置商品，保存前查看影响。</p></div><div class="header-actions"><span id="dirty-state" role="status">正在载入…</span><button id="history-open" type="button" disabled>版本历史</button><button id="save" disabled class="primary" type="button">保存更改</button></div></header>
@@ -14,7 +14,7 @@
 <nav class="view-tabs" aria-label="商品管理视图"><button id="tab-rules" type="button" data-view="rules" aria-current="page" disabled>按类型配置</button><button id="tab-library" type="button" data-view="library" disabled>商品库 <span id="library-count"></span></button><button id="tab-records" type="button" data-view="records" disabled>执行记录</button></nav>
 <form id="settings-form" novalidate><fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
 <div id="view-rules" class="view-panel"><div class="rules-layout"><div class="rules-main"><section class="mapping-panel"><div class="section-head"><h2>类型与商品</h2><span class="hint">首选 → 备选 → 全局默认</span></div><div class="mapping-columns" aria-hidden="true"><span>视频类型</span><span>首选商品</span><span>备选商品</span></div><div id="profiles"></div></section>
-<section class="default-panel"><div><h2>全局默认商品</h2><p class="hint">候选均不可用时等待，不空挂发布。</p></div><div><label for="default-product" class="sr-only">全局默认商品</label><select id="default-product" aria-describedby="default-detail" data-product-picker></select><p id="default-detail" class="sr-only"></p></div></section>
+<section class="default-panel"><div><h2>全局默认商品</h2><p class="hint">英语世界的快捷英语失败后也按此全局默认候选链继续；候选均不可用时等待，不空挂发布。</p></div><div><label for="default-product" class="sr-only">全局默认商品</label><select id="default-product" aria-describedby="default-detail" data-product-picker></select><p id="default-detail" class="sr-only"></p></div></section>
 <details class="advanced"><summary>识别条件与其他类型细分</summary>
 <p class="hint">英语世界使用任务内容类型；下列来源频道按完整 ID 匹配，多个 ID 用逗号分隔。AI 也接受显式主题 AI，“科技”分类不会自动归入 AI。</p>
 <div id="channel-fields"></div>
@@ -29,7 +29,7 @@
 <label for="wait-max_checks">最多连续检查次数</label><input id="wait-max_checks" type="number" min="1" max="30">
 <label for="wait-lease_seconds">单次检查占用上限（秒）</label><input id="wait-lease_seconds" type="number" min="30" max="600"></details>
 </div><aside class="details-panel"><section><p id="current-context" class="eyebrow">全局默认商品</p><h2 id="current-title">正在载入商品…</h2><dl class="product-facts"><div><dt>商品 ID</dt><dd id="current-id">—</dd></div><div><dt>店铺</dt><dd id="current-shop">—</dd></div><div><dt>身份资料</dt><dd id="current-identity">—</dd></div><div><dt>库存观测</dt><dd id="current-stock">—</dd></div></dl><p id="current-catalog" class="hint"></p></section><section class="preview-panel" aria-labelledby="preview-heading"><h2 id="preview-heading">预览选品结果</h2><p class="hint">查看当前配置的候选顺序。</p>
-<p class="hint">英语世界每条必须绑定《快捷英语》，不可换书或无商品发表；其他自动 YouTube 视频点赞率达到10%才尝试挂载。旧英语世界冻结规则不符时须重新审核。</p>
+<p class="hint">英语世界每条优先绑定已核实的《快捷英语》，该商品失败后按上方全局默认链继续；英语世界不可替换首选。其他自动 YouTube 视频点赞率达到10%才尝试挂载。旧英语世界冻结规则不符时须重新审核。</p>
 <label for="video">最近待发布视频（最多 100 条）</label><select id="video"><option value="">使用样例上下文</option></select><p id="videos-state" class="hint"></p>
 <details id="sample-context"><summary>样例上下文</summary>
 <label for="content-type">内容类型</label><select id="content-type"><option value="GENERAL">普通视频</option><option value="ENGLISH_WORLD_SHORT">英语世界短视频</option></select>

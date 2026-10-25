@@ -1,4 +1,10 @@
-"""真实 Chromium + 实际 FastAPI 路由；所有 HTTP 在隔离夹具内转送 TestClient。"""
+"""真实 Chromium + 实际 FastAPI 路由；所有 HTTP 在隔离夹具内转送 TestClient。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.2 | 2026-10-25 | Codex | 验证首选规则与旧冻结决定隔离，并核对目录选品身份。 |
+"""
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,21 +138,48 @@ def test_real_save_preview_persist_and_version(ui):
     page,active,status,flags=ui
     expect(page).to_have_title('商品挂载设置 · 视频控制台')
     expect(page.locator('#publisher-state')).to_contain_text('尚未接入')
-    choose(page, '#english_world-0', 'finance')
-    choose(page, '#english_world-1', 'news')
+    expect(page.locator('#english_world-0-picker')).to_be_disabled()
+    expect(page.locator('#english_world-1-picker')).to_be_disabled()
+    expect(page.locator('.english-product-rule')).to_contain_text('后续候选继承上方全局默认链')
+    choose(page, '#default-product', 'finance')
     page.locator('#video').select_option('english:1')
     page.locator('#preview').click()
     expect(page.locator('#preview-result')).to_contain_text('英语世界短视频')
     expect(page.locator('#preview-result')).to_contain_text('当前未保存表单的预览')
-    expect(page.locator('#preview-result li')).to_have_count(3)
+    expect(page.locator('#preview-result li')).to_have_count(2)
+    expect(page.locator('#preview-result li').nth(0)).to_contain_text('ID 10000006971274')
+    expect(page.locator('#preview-result li').nth(1)).to_contain_text('ID 10000028955239')
     assert not status.exists()
     before=load_policy(active).digest
     save_with_preview(page)
     expect(page.locator('#feedback')).to_contain_text('配置已保存；发布器尚未接入')
     assert flags['writes']==1 and load_policy(active).digest!=before
     expect(page.locator('#adopted-version')).to_contain_text('尚无实际选品记录')
-    page.reload();expect(page.locator('#english_world-0')).to_have_value('finance')
+    page.reload();expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
+    expect(page.locator('#default-product')).to_have_value('finance')
     assert not status.exists()
+
+
+def test_english_product_is_locked_in_ui_and_invalid_preview_is_rejected(ui):
+    page, active, _, _ = ui
+    expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
+    expect(page.locator('#english_world-0-picker')).to_be_disabled()
+    expect(page.locator('#english_world-1-picker')).to_be_disabled()
+    expect(page.locator('#default-product-picker')).to_be_enabled()
+    expect(page.locator('#wallstreet-0-picker')).to_be_enabled()
+    invalid = json.loads(active.read_text())
+    invalid['profiles']['english_world']['candidates'] = ['finance']
+    result = page.evaluate("async config => { const r = await fetch('/api/product-settings/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({config, context:{content_type:'ENGLISH_WORLD_SHORT'}})}); return {status:r.status, body:await r.json()}; }", invalid)
+    assert result['status'] == 422
+    assert '快捷英语' in result['body']['detail']
+    active.write_text(json.dumps(invalid))
+    invalid_snapshot = active.read_bytes()
+    page.reload()
+    expect(page.locator('#english_world-0')).to_have_value('finance')
+    expect(page.locator('.english-product-rule')).to_have_attribute('data-valid', 'false')
+    expect(page.locator('.english-product-rule')).to_contain_text('当前载入配置的英语首选不符合规定')
+    expect(page.locator('#english_world-0-picker')).to_be_disabled()
+    assert active.read_bytes() == invalid_snapshot
 
 
 @pytest.mark.parametrize('views,likes,rate,state,reason', [
@@ -178,7 +211,7 @@ def test_preview_reports_source_metrics_without_treating_zero_as_unknown(ui, vie
 def test_saved_config_simulation_stays_separate_from_actual_frozen_decision(frozen_ui, name):
     page, active, status, db, snapshots, keys = frozen_ui
     old = snapshots[name]
-    choose(page, '#english_world-0', 'finance')
+    choose(page, '#default-product', 'finance')
     save_with_preview(page)
     expect(page.locator('#feedback')).to_contain_text('配置已保存')
     new = load_policy(active)
@@ -207,16 +240,17 @@ def test_saved_config_simulation_stays_separate_from_actual_frozen_decision(froz
         expect(frozen).to_contain_text(f'正式制作任务：pipeline:frozen-{name}:0')
         expect(frozen).to_contain_text('当日首条任务：pipeline:frozen-first:0')
         expect(frozen).to_contain_text('不代表平台账号已核实')
+        expect(frozen).to_contain_text('ATTACH_ENGLISH_PREFERRED')
+        expect(frozen.locator('li')).to_have_count(2)
+        expect(frozen.locator('li').nth(0)).to_contain_text('ID 10000006971274')
+        expect(frozen.locator('li').nth(1)).to_contain_text('ID 10001054866768')
+        expect(simulation.locator('li')).to_have_count(2)
+        expect(simulation.locator('li').nth(0)).to_contain_text('ID 10000006971274')
+        expect(simulation.locator('li').nth(1)).to_contain_text('ID 10000028955239')
         if name == 'first':
-            expect(frozen).to_contain_text('ATTACH_ENGLISH_FIRST')
-            expect(frozen.locator('li')).to_have_count(1)
-            expect(frozen.locator('li')).to_contain_text('ID 10001054866768')
-            expect(simulation.locator('li').first).to_contain_text('ID 10000028955239')
+            expect(frozen).to_contain_text('本任务是首条')
         else:
             expect(frozen).to_contain_text('本任务是后续任务')
-            expect(frozen).to_contain_text('SKIP_ENGLISH_LATER')
-            expect(frozen.locator('li')).to_have_count(0)
-            expect(simulation).to_contain_text('不执行商品选择器')
     assert db.get_product_task_decision(old['task_id']) == old
     assert not status.exists()
     page.set_viewport_size({'width': 390, 'height': 900})
@@ -263,11 +297,20 @@ def test_manual_preview_override_does_not_change_frozen_none_intent(frozen_ui):
 def test_impact_distinguishes_candidate_change_from_unchanged_frozen_tasks(frozen_ui):
     page, active, _, db, snapshots, _ = frozen_ui
     original = active.read_bytes()
-    choose(page, '#english_world-0', 'finance')
+    choose(page, '#default-product', 'finance')
     page.locator('#save').click()
     expect(page.locator('#impact-dialog')).to_be_visible()
-    expect(page.locator('#impact-result')).to_contain_text('配置候选链变化 2 条；预计实际选品变化 0 条')
-    expect(page.locator('#impact-result')).to_contain_text('实际决定已冻结，继续沿用原快照')
+    report = page.locator('#impact-result')
+    expect(report).to_contain_text('配置候选链变化 3 条；预计实际选品变化 0 条')
+    report_text = report.inner_text()
+    frozen_note = '实际决定已冻结，继续沿用原快照'
+    for name, reason in (('first', 'ENGLISH_WORLD_PREFERRED'),
+                         ('later', 'ENGLISH_WORLD_PREFERRED'), ('none', 'DEFAULT')):
+        start = report_text.index(f'{name} 冻结测试')
+        end = report_text.index(frozen_note, start) + len(frozen_note)
+        task_report = report_text[start:end]
+        assert f'规则 {reason} → {reason}' in task_report
+        assert frozen_note in task_report
     page.locator('#impact-cancel').click()
     assert active.read_bytes() == original
     for old in snapshots.values():
@@ -303,8 +346,8 @@ def test_conflict_failure_preserves_draft_and_reload_cancel(ui):
 
 def test_invalid_chain_does_not_save(ui):
     page,active,_,_=ui
-    old=active.read_bytes();choose(page, '#english_world-0', 'finance');choose(page, '#english_world-1', 'news')
-    page.locator('summary').filter(has_text='识别条件').click();page.locator('#attempts').select_option('2')
+    old=active.read_bytes();choose(page, '#default-product', 'finance')
+    page.locator('summary').filter(has_text='识别条件').click();page.locator('#attempts').select_option('1')
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('默认回退不可达')
     assert active.read_bytes()==old
     page.locator('#timeout').fill('0');save_with_preview(page)
@@ -320,7 +363,8 @@ def test_keyboard_responsive_and_screenshot(ui,width):
     expect(control).to_be_focused()
     assert ui[3]['writes']==0
     page.locator('#video').select_option('english:1');page.locator('#preview').click()
-    expect(page.locator('#preview-result li')).to_have_count(1)
+    expect(page.locator('#preview-result li')).to_have_count(2)
+    expect(page.locator('#preview-result li').first).to_contain_text('ID 10000006971274')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     assert page.evaluate("Array.from(document.querySelectorAll('select,input')).every(x=>x.labels.length>0)")
     evidence=Path(__file__).resolve().parents[2]/'output/test-evidence';evidence.mkdir(parents=True,exist_ok=True)
@@ -366,27 +410,32 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
     catalog=json.loads(path.read_text());catalog['items'][-1]['stock']=0;path.write_text(json.dumps(catalog))
     original=active.read_bytes()
     reload_ui(page)
-    expect(page.locator('#catalog-state')).to_contain_text('5 件商品')
+    expect(page.locator('#catalog-state')).to_contain_text('6 件商品')
     expect(page.locator('#catalog-state')).to_contain_text('全量完整性尚未确认')
     assert active.read_bytes()==original
     controls=['#default-product','#manual','#rule-0','#rule-1']
-    controls += [f'#{group}-{index}' for group in saved['profiles'] for index in (0,1)]
+    controls += [f'#{group}-{index}' for group in saved['profiles'] if group != 'english_world' for index in (0,1)]
     for control in controls:
         expect(page.locator(control+' option[value="product_70001"]')).to_have_count(1)
         expect(page.locator(control+' option[value="product_70002"]')).to_have_count(1)
         expect(page.locator(control+' option[value="product_70002"]')).to_contain_text('采集时缺货')
-    choose(page, '#english_world-0', 'product_70001')
-    expect(page.locator('#english_world-0-detail')).to_contain_text('ID 70001')
-    expect(page.locator('#english_world-0-detail')).to_contain_text('采集时库存未知')
+    expect(page.locator('#english_world-0-picker')).to_be_disabled()
+    expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
+    choose(page, '#ted-0', 'product_70001')
+    expect(page.locator('#ted-0-detail')).to_contain_text('ID 70001')
+    expect(page.locator('#ted-0-detail')).to_contain_text('采集时库存未知')
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
-    page.reload();expect(page.locator('#english_world-0')).to_have_value('product_70001')
+    page.reload();expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
+    expect(page.locator('#ted-0')).to_have_value('product_70001')
     page.locator('#video').select_option('english:1');page.locator('#preview').click()
-    expect(page.locator('#preview-result li').first).to_contain_text('ID 70001')
+    expect(page.locator('#preview-result li').first).to_contain_text('ID 10000006971274')
     assert flags['writes']==1
-    assert json.loads(active.read_text())['profiles']['ted']==saved['profiles']['ted']
+    persisted=json.loads(active.read_text())
+    assert persisted['profiles']['ted']['candidates']==['product_70001']
+    assert persisted['profiles']['wallstreet']==saved['profiles']['wallstreet']
     path.write_text('{')
     reload_ui(page);expect(page.locator('#catalog-state')).to_contain_text('商品清单读取失败')
-    expect(page.locator('#english_world-0')).to_have_value('product_70001')
+    expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
 
 
 def test_catalog_file_preview_import_and_error_keeps_current(ui):
@@ -401,9 +450,9 @@ def test_catalog_file_preview_import_and_error_keeps_current(ui):
     expect(page.locator('#catalog-import-preview')).to_contain_text('首次登记清单账号')
     assert not active.with_name('wechat_product_catalog.json').exists()
     page.locator('#catalog-apply').click()
-    expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 4 件商品')
+    expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 5 件商品')
     expect(page.locator('#catalog-state')).to_contain_text('导入完整性校验通过（2 页），非平台实时核验')
-    for control in ('#default-product','#english_world-0','#ted-1','#manual','#rule-0'):
+    for control in ('#default-product','#ted-1','#manual','#rule-0'):
         expect(page.locator(control+' option[value="product_8880001"]')).to_have_count(1)
     assert active.read_bytes()==original
     page.locator('[data-close="catalog-dialog"]').click();page.reload();expect(page.locator('#catalog-state')).to_contain_text('2 页')
@@ -436,25 +485,25 @@ def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
     with pytest.raises(PlaywrightTimeoutError):
         page.locator('#catalog-apply').click(timeout=200)
     assert not active.with_name('wechat_product_catalog.json').exists()
-    flags['release']();expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 3 件商品')
+    flags['release']();expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 4 件商品')
     expect(page.locator('#ted-0')).to_have_value('finance')
 
 
 def test_impact_cancel_and_history_restore_as_draft(ui):
     page,active,status,flags=ui
-    old=load_policy(active);choose(page, '#english_world-0', 'finance')
+    old=load_policy(active);choose(page, '#default-product', 'finance')
     page.locator('#save').click();expect(page.locator('#impact-dialog')).to_be_visible()
     expect(page.locator('#impact-result')).to_contain_text('变化 1 条')
-    expect(page.locator('#impact-result')).to_contain_text('预计实际选品变化 0 条')
-    expect(page.locator('#impact-result')).to_contain_text('实际影响未知 1 条')
-    expect(page.locator('#impact-result')).to_contain_text('正式制作顺序尚未确定')
+    expect(page.locator('#impact-result')).to_contain_text('预计实际选品变化 1 条')
+    expect(page.locator('#impact-result')).to_contain_text('预计影响下一次尚未冻结的选品')
     assert active.read_bytes() and load_policy(active).digest==old.digest
     page.locator('#impact-cancel').click();assert flags['writes']==0
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     expect(page.locator('#revision option')).to_have_count(2)
     page.locator('#history-open').click();page.locator('#revision').select_option(old.digest);page.locator('#restore-revision').click()
     expect(page.locator('#feedback')).to_contain_text('恢复草稿')
-    expect(page.locator('#english_world-0')).to_have_value('default')
+    expect(page.locator('#english_world-0')).to_have_value('kuaijie_english')
+    expect(page.locator('#default-product')).to_have_value('default')
     assert load_policy(active).digest!=old.digest
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     assert load_policy(active).version!=old.version
@@ -480,12 +529,17 @@ def test_library_pending_then_verified_and_selected(ui):
     page.locator('#lib-verified_at').fill('2026-01-01T00:00:00+08:00')
     page.locator('#lib-identity_status').select_option('VERIFIED')
     page.locator('#library-apply').click()
-    page.locator('#tab-rules').click();choose(page, '#english_world-0', alias)
+    page.locator('#tab-rules').click();choose(page, '#wallstreet-0', alias)
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
-    assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0].product_id=='88888888'
-    page.reload();expect(page.locator('#english_world-0')).to_have_value(alias)
+    assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0].product_id=='10000006971274'
+    assert load_policy(active).decide(source_channel_id='UCTK_cv-y88CScoudcXnS1Ew').candidates[0].product_id=='88888888'
+    page.reload();expect(page.locator('#wallstreet-0')).to_have_value(alias)
     page.locator('#tab-library').click();page.locator('#library-search').fill('快捷英语')
-    expect(page.locator('#library-choice option')).to_have_count(2)
+    options = page.locator('#library-choice option')
+    expect(options).to_have_count(3)  # 空白占位 + 两个不同商品身份
+    expect(options.first).to_have_text('选择商品或新增资料')
+    expect(options.filter(has_text='10000006971274')).to_have_count(1)
+    expect(options.filter(has_text='88888888')).to_have_count(1)
 
 
 def test_refresh_wait_parameters_and_disabled_reference(ui):
@@ -513,7 +567,7 @@ def test_search_picker_keyboard_cancel_and_main_viewport(ui):
     expect(page.locator('.picker-count')).to_have_text('没有匹配的商品')
     expect(page.locator('.picker-apply')).to_be_disabled()
     page.locator('.picker-clear').click();expect(search).to_be_focused()
-    expect(page.locator('#picker-list option')).to_have_count(4)
+    expect(page.locator('#picker-list option')).to_have_count(5)
     page.keyboard.press('Escape');expect(page.locator('.product-picker-dialog')).not_to_be_visible()
     expect(button).to_be_focused();expect(page.locator('#wallstreet-0')).to_have_value(old)
     expect(page.locator('#save')).to_be_disabled()
@@ -547,7 +601,7 @@ def test_library_pagination_filters_and_url_restore(ui):
     install_catalog(active,rows);reload_ui(page)
     page.locator('#tab-library').click()
     expect(page.locator('.library-table tbody tr')).to_have_count(25)
-    page.locator('#library-next').click();expect(page.locator('.library-table tbody tr')).to_have_count(8)
+    page.locator('#library-next').click();expect(page.locator('.library-table tbody tr')).to_have_count(9)
     page.locator('#library-search').fill('目录商品 29')
     expect(page.locator('.library-table tbody tr')).to_have_count(1)
     page.reload();expect(page.locator('#view-library')).to_be_visible()
@@ -562,7 +616,7 @@ def test_theme_preferences_and_mobile_picker_geometry(ui,theme):
     page.evaluate('(theme)=>localStorage.setItem("vp-display-preferences",JSON.stringify({theme,size:"large"}))',theme)
     page.reload();expect(page.locator('#editor')).to_be_enabled()
     page.set_viewport_size({'width':390,'height':844})
-    page.locator('#english_world-0-picker').click()
+    page.locator('#default-product-picker').click()
     dialog=page.locator('.product-picker-dialog');expect(dialog).to_be_visible()
     box=dialog.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
     assert box['y']>=0 and box['y']+box['height']<=844
