@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | reply-cursor-v1 | 2026-10-25 | Codex | 保存平台实际返回的游标，按凭据代次和查询隔离，支持跨上下文续扫与定位。 |
+| reply-cursor-v2 | 2026-10-25 | Codex | 活跃查询中目标提示过期时仅回首页核对一次，保留全局旧页续扫进度。 |
 """
 from __future__ import annotations
 
@@ -72,6 +73,16 @@ class CommentListCursor:
                 items.pop(key, None)
             self._write(scopes)
             return cursor, False
+        expired_target = any(isinstance(items.get(key), dict)
+                             and isinstance(items[key].get('seen'), (int, float))
+                             and self.clock() - items[key]['seen'] >= self.TTL for key in keys)
+        if expired_target:
+            # 目标可能仍在近期页；不能让别的作品的全局旧页进度把它跳过去。
+            # 消费失效提示，只回首页一次；未找到时下轮仍可继续全局回补。
+            for key in keys:
+                items.pop(key, None)
+            self._write(scopes)
+            return '', False
         return str(row.get('next') or ''), True
 
     def observe(self, request_cursor, body, *, advance):
