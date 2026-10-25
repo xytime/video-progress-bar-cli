@@ -97,6 +97,8 @@ def test_auth_status_recheck_mobile_and_keyboard(console, width):
     expect(page.locator('#operation-receipt-content')).to_contain_text('封面服务已登录')
     expect(page.locator('#operation-receipt-content')).to_contain_text('最近检查：')
     assert page.locator('#operation-receipt-dialog').evaluate('e=>e.scrollWidth<=e.clientWidth')
+    assert page.locator('#operation-receipt-dialog').evaluate('e=>{const r=e.getBoundingClientRect(); return Math.abs(r.x+r.width/2-innerWidth/2)<2 && Math.abs(r.y+r.height/2-innerHeight/2)<2}')
+    assert page.locator('#operation-receipt-close').evaluate('e=>e.getBoundingClientRect().height>=44')
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     page.keyboard.press('Escape')
     expect(page.locator('#cover-auth-status')).to_be_focused()
