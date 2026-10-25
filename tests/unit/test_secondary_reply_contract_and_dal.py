@@ -148,7 +148,14 @@ def test_input_comment_budget_and_no_silent_truncation():
 # =========================================================================
 
 @pytest.fixture
-def test_db(tmp_path: Path) -> PipelineDB:
+def test_db(tmp_path: Path, monkeypatch) -> PipelineDB:
+    # 明确隔离旧共享预算；仓库中的已批准运营时段不是本套测试的默认值。
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path / "legacy-policy.json")
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00")
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "24:00")
+    monkeypatch.setattr(settings, "wechat_reply_hourly_quota", 10)
+    monkeypatch.setattr(settings, "wechat_reply_max_per_video", 3)
+    monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 3600)
     db_file = tmp_path / "test_pipeline.db"
     return PipelineDB(db_path=str(db_file))
 

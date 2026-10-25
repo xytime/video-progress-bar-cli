@@ -10,6 +10,7 @@
    调用沙箱 ``AgySecondaryReplyProvider`` 生成双语草稿、落库 ``PENDING_REVIEW`` 并通过 ``TelegramApprovalTransport`` 推送审批卡片。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 维护暂停返回有界等待并保留已完成回执，不误标草稿失败。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -96,7 +97,19 @@ def resolve_published_copy_text(post_row: Optional[Dict[str, Any]]) -> str:
     return ""
 
 
-def run_secondary_reply_tick(
+def run_secondary_reply_tick(db: PipelineDB, **kwargs) -> Dict[str, Any]:
+    """维护暂停是可恢复等待；保留暂停前已经完成的提交与扫描回执。"""
+    from ..core.maintenance import gate, MaintenanceDenied
+    progress: Dict[str, Any] = {}
+    try:
+        gate().require_running()
+        return _run_secondary_reply_tick(db, _progress=progress, **kwargs)
+    except MaintenanceDenied as exc:
+        progress.update(ok=True, status='DEFERRED_MAINTENANCE', reason=exc.code)
+        return progress
+
+
+def _run_secondary_reply_tick(
     db: PipelineDB,
     *,
     platform: Any,
@@ -115,6 +128,7 @@ def run_secondary_reply_tick(
     max_reconcile_attempts: Optional[int] = None,
     platform_post_id: Optional[str] = None,
     video_title_hint: str = "",
+    _progress: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """执行一次有界二级回复 Tick 周期。"""
     sync_secondary_reply_settings()
@@ -191,7 +205,8 @@ def run_secondary_reply_tick(
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     approval_mode = str(getattr(settings, "wechat_reply_approval_mode", "manual") or "manual")
 
-    report: Dict[str, Any] = {
+    report: Dict[str, Any] = _progress if _progress is not None else {}
+    report.update({
         "ok": True,
         "status": "COMPLETED",
         "account_key": acct,
@@ -204,7 +219,7 @@ def run_secondary_reply_tick(
         "drafted": [],
         "approver_configured": bool(ident),
         "approver_warning": ident_err,
-    }
+    })
 
     # =========================================================================
     # Phase 0: 到期 UNCERTAIN 任务只读对账（优先恢复确定性状态，带指数退避）
@@ -456,6 +471,9 @@ def run_secondary_reply_tick(
             try:
                 draft = svc.generate_draft(record, video_context=video_ctx)
             except Exception as exc:
+                from ..core.maintenance import MaintenanceDenied
+                if isinstance(exc, MaintenanceDenied):
+                    raise
                 logger.warning("[SecondaryReplyRunner] 评论 %s 草稿生成或安全门禁未通过，落库 FAILED: %s", cid, exc)
                 fail_tid = db.create_or_update_secondary_reply_task(
                     platform_post_id=post_id,

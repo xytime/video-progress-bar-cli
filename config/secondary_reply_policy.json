@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "window_start_shanghai": "05:30",
+  "window_end_shanghai": "21:00",
+  "min_interval_seconds": 3600,
+  "hourly_quota": 10,
+  "max_per_video": 1,
+  "approval_mode": "hybrid_auto"
+}

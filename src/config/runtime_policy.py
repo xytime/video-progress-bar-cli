@@ -1,6 +1,7 @@
 """非秘密运行配置的不可变版本仓库；不导入业务层，不修改操作事实。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 配置仓库校验回复策略领域，保留未知权限字段闭锁。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | hash校验、共享读锁、CAS/幂等提交及只回滚配置的版本存储。 |
@@ -128,14 +129,13 @@ class PolicyStore:
             if hashlib.sha256(raw).hexdigest() != sha:
                 raise ConfigurationError("配置内容摘要不匹配：" + name)
             domains[name] = decode(raw)
-        from config.runtime_registry import SETTING_FIELDS, TASK_FIELDS, OBSERVABILITY_FIELDS, validate_fields
+        from config.runtime_registry import SETTING_FIELDS, TASK_FIELDS, OBSERVABILITY_FIELDS, validate_fields, validate_interaction_controls
         from config.wechat_operations_schema import validate
         validate(domains['wechat_operations'])
         validate_fields(domains['runtime_settings'], SETTING_FIELDS)
         validate_fields(domains['task_scheduling'], TASK_FIELDS)
         validate_fields(domains['observability'], OBSERVABILITY_FIELDS)
-        if not isinstance(domains['interaction_controls'],dict) or set(domains['interaction_controls'])!={'automatic_replies_enabled'} or type(domains['interaction_controls']['automatic_replies_enabled']) is not bool:
-            raise ConfigurationError('观众回复总开关必须为布尔值，不能附带其他权限开关')
+        validate_interaction_controls(domains['interaction_controls'])
         return PolicySnapshot(revision, version, manifest["created_at"], domains, manifest)
 
     def _read(self):

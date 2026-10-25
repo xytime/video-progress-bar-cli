@@ -1,11 +1,14 @@
 """运行参数唯一字段归属；安全上界不能由客户端或活动版本自行扩大。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 共用回复策略与可选迁移领域校验，保留旧版本兼容。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | 核心额度和任务/观测参数注册；其余启动配置按目录只读或专用编辑。 |
 """
 from __future__ import annotations
+
+import re
 
 # (中文名称、单位、最小值、最大值、生效边界、候选组)
 SETTING_FIELDS = {
@@ -40,6 +43,32 @@ OBSERVABILITY_DEFAULTS = {"wait_notice_cooldown_seconds": 3600}
 OBSERVABILITY_FIELDS = {"wait_notice_cooldown_seconds": ("相同等待通知静默时间", "秒", 300, 86400, "下一次通知", "G12")}
 REPLY_CONTROL_SETTING_NAMES = frozenset({'enable_wechat_secondary_reply','enable_wechat_secondary_reply_live_submission'})
 INTERACTION_CONTROLS_DEFAULTS = {'automatic_replies_enabled':False}
+REPLY_STRATEGY_FIELDS = frozenset({'window_start_shanghai', 'window_end_shanghai', 'approval_mode'})
+
+
+def validate_reply_strategy(value):
+    """策略页和配置仓库共用严格校验；旧版本可以没有策略领域。"""
+    if not isinstance(value, dict) or set(value) != REPLY_STRATEGY_FIELDS:
+        raise ValueError('回复时段与审批字段不完整')
+    start, end = value['window_start_shanghai'], value['window_end_shanghai']
+    clock = r'(?:[01]\d|2[0-3]):[0-5]\d'
+    if not isinstance(start, str) or not re.fullmatch(clock, start):
+        raise ValueError('开始时间须为 00:00–23:59')
+    if not isinstance(end, str) or not re.fullmatch(clock + r'|24:00', end):
+        raise ValueError('结束时间须为 00:00–24:00')
+    if value['approval_mode'] not in ('manual', 'hybrid_auto'):
+        raise ValueError('回复审批模式无效')
+    return value
+
+
+def validate_interaction_controls(value):
+    if not isinstance(value, dict) or set(value) not in (
+        {'automatic_replies_enabled'}, {'automatic_replies_enabled', 'reply_strategy'}
+    ) or type(value['automatic_replies_enabled']) is not bool:
+        raise ValueError('观众回复总开关必须为布尔值，不能附带其他权限开关')
+    if 'reply_strategy' in value:
+        validate_reply_strategy(value['reply_strategy'])
+    return value
 
 GROUPS = [
     ("G01", "任务等待与过期"), ("G02", "队列与执行节奏"), ("G03", "扫描对象与年龄范围"),

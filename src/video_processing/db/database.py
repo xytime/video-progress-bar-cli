@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 到期评论扫描按最久未扫轮转，避免最新作品重复占满批次。 |
 | filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
 | product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 结构化门禁等待、版本变更重算及年龄配置；不更改历史次数和提交事实。 |
@@ -14986,6 +14987,7 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
                   AND (s.next_scan_after IS NULL OR datetime(s.next_scan_after) <= datetime(?))
                 ORDER BY
                     CASE WHEN s.last_scanned_at IS NULL THEN 0 ELSE 1 END ASC,
+                    datetime(s.last_scanned_at) ASC,
                     w.created_at DESC,
                     w.id DESC
                 LIMIT ?

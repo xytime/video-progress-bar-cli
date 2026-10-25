@@ -1,6 +1,7 @@
 """本机配置中心：预览、受控编辑、CAS审计回滚与执行者实际加载状态。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 提取共用本机写入权限边界，保持原配置中心校验。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | 复用本机真实对端/会话/CSRF边界，放宽超批准基线无普通批准接口。 |
@@ -8,24 +9,18 @@
 """
 from __future__ import annotations
 import datetime as dt
-import hashlib
-import hmac
-import ipaddress
 import json
 import secrets
 import threading
 import time
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel,ConfigDict,Field
 from config.settings import settings
-from config.runtime_policy import ConfigurationConflict,ConfigurationError,ConfigurationUnavailable,digest,decode
+from config.runtime_policy import ConfigurationConflict,ConfigurationError,ConfigurationUnavailable
 from video_processing.utils.runtime_configuration import store,snapshot,approved_validation,recompute_waits
 from video_processing.utils.configuration_catalog import catalog
-
-COOKIE='runtime_local_session'
-
 
 class PreviewBody(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True)
@@ -130,36 +125,8 @@ def gates(db):
 def create_runtime_configuration_router(db, *, port):
     router=APIRouter(); previews={};mutex=threading.Lock()
 
-    def boundary(request:Request):
-        try:peer=ipaddress.ip_address(request.client.host)
-        except (ValueError,AttributeError):raise HTTPException(403,'配置中心仅允许本机访问')
-        hosts={f'localhost:{port}',f'127.0.0.1:{port}',f'[::1]:{port}'}
-        origin=request.headers.get('origin');expected=f'{request.url.scheme}://{request.headers.get("host","")}'
-        if not peer.is_loopback or request.headers.get('host') not in hosts:
-            raise HTTPException(403,'配置中心仅允许控制台真实回环对端，不信任转发头')
-        if (origin and origin!=expected) or request.headers.get('sec-fetch-site')=='cross-site':
-            raise HTTPException(403,'请从当前控制台页面操作')
-        if request.method not in ('GET','HEAD') and origin!=expected:
-            raise HTTPException(403,'写操作缺少有效同源验证')
-
-    def key(token):return hashlib.sha256(token.encode()).hexdigest()
-    def csrf(token):return hashlib.sha256(('runtime-csrf:'+token).encode()).hexdigest()
-
-    async def authorized(request:Request,response:Response,_=Depends(boundary)):
-        response.headers['Cache-Control']='no-store'
-        token=request.cookies.get(COOKIE,'')
-        if len(token)!=64 or not db.topic_session(key(token),dt.datetime.now(dt.timezone.utc)):
-            raise HTTPException(403,'本机会话已过期；草稿保留，请重新打开配置中心')
-        if request.method not in ('GET','HEAD') and not hmac.compare_digest(request.headers.get('x-runtime-csrf',''),csrf(token)):
-            raise HTTPException(403,'页面验证失败，请重新打开配置中心')
-        if request.method not in ('GET','HEAD'):
-            try:
-                raw=await request.body()
-                if len(raw)>131072:raise ValueError('配置请求过大')
-                decode(raw)
-            except (ValueError,UnicodeError) as exc:
-                raise HTTPException(422,'JSON存在重复键、非有限数值或无效内容') from exc
-        return key(token)[:16]
+    from .local_runtime_access import create_runtime_access
+    boundary, authorized, page_response = create_runtime_access(db, port)
 
     def call(action):
         try:return action()
@@ -170,13 +137,8 @@ def create_runtime_configuration_router(db, *, port):
 
     @router.get('/runtime-configuration',response_class=HTMLResponse,dependencies=[Depends(boundary)])
     def page(request:Request):
-        token=request.cookies.get(COOKIE,'')
-        if len(token)!=64 or not db.topic_session(key(token),dt.datetime.now(dt.timezone.utc)):
-            token=secrets.token_hex(32);db.topic_session(key(token),dt.datetime.now(dt.timezone.utc),issue=True)
-        content=(Path(__file__).parent/'templates/runtime_configuration.html').read_text().replace('__RUNTIME_CSRF__',csrf(token))
-        response=HTMLResponse(content,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'})
-        response.set_cookie(COOKIE,token,httponly=True,samesite='strict',secure=request.url.scheme=='https',max_age=8*3600,path='/')
-        return response
+        content=(Path(__file__).parent/'templates/runtime_configuration.html').read_text()
+        return page_response(request, content)
 
     @router.get('/api/runtime-configuration/current')
     def current(actor=Depends(authorized)):

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="runtime-csrf" content="__RUNTIME_CSRF__">
+  <title>评论回复 · 视频控制台</title>
+  <script>
+  (() => {
+    const root = document.documentElement;
+    const system = matchMedia('(prefers-color-scheme: dark)');
+    let prefs = {};
+    try { prefs = JSON.parse(localStorage.getItem('vp-display-preferences') || '{}') || {}; } catch (_) {}
+    const theme = ['system', 'dark', 'light', 'contrast'].includes(prefs.theme) ? prefs.theme : 'system';
+    const apply = () => {
+      root.dataset.theme = theme === 'system' ? (system.matches ? 'dark' : 'light') : theme;
+      root.dataset.textSize = ['standard', 'large', 'xlarge'].includes(prefs.size) ? prefs.size : 'large';
+    };
+    apply();
+    system.addEventListener('change', apply);
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="stylesheet" href="/static/css/product_settings.css">
+  <link rel="stylesheet" href="/static/css/console_workspace.css">
+  <link rel="stylesheet" href="/static/css/secondary_reply_settings.css">
+  <script defer src="/static/js/secondary_reply_settings.js"></script>
+  <script defer src="/static/js/console_navigation.js"></script>
+</head>
+<body class="secondary-reply-page" data-console-navigation="inbox">
+<!-- 评论回复：已确认的左右分栏与手机阅读视图。 -->
+<main class="product-settings secondary-reply-workspace">
+  <nav class="breadcrumbs" aria-label="当前位置"><a id="back" href="/?view=operations">配置与运维</a><span aria-hidden="true"> / </span><span aria-current="page">评论回复</span></nav>
+  <header class="page-header">
+    <div><h1>评论回复</h1><p class="hint">逐条核对评论、回复和处理记录。</p></div>
+    <button id="refresh-history" type="button" data-js-action disabled><span class="sr-icon sr-icon-refresh" aria-hidden="true"></span>刷新</button>
+  </header>
+  <div class="view-tabs" role="tablist" aria-label="评论回复视图">
+    <button id="tab-ledger" type="button" role="tab" aria-selected="true" aria-controls="view-ledger" data-js-action disabled>回复记录</button>
+    <button id="tab-policy" type="button" role="tab" aria-selected="false" aria-controls="view-policy" tabindex="-1" data-js-action disabled>回复策略</button>
+  </div>
+  <div class="sr-policy-banner" aria-label="已保存策略">
+    <div><span class="sr-muted">已保存策略</span><span id="saved-summary">正在读取…</span></div>
+    <button id="edit-policy" type="button" data-js-action disabled>编辑策略<span class="sr-icon sr-icon-right" aria-hidden="true"></span></button>
+  </div>
+  <section id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger">
+    <search class="sr-filters" aria-label="筛选回复记录">
+      <div class="sr-filter-primary">
+        <div class="sr-search"><span class="sr-icon sr-icon-search" aria-hidden="true"></span><label class="sr-only" for="filter-search">搜索观众、评论、回复、视频或评论ID</label><input id="filter-search" type="search" placeholder="搜索评论或回复" autocomplete="off"><button id="clear-search" type="button" aria-label="清空搜索" hidden data-js-action disabled><span class="sr-icon sr-icon-close" aria-hidden="true"></span></button></div>
+        <label class="sr-only" for="filter-video">所属视频</label><select id="filter-video"><option value="all">全部视频</option></select>
+        <label class="sr-only" for="filter-time-window">原评时间</label><select id="filter-time-window"><option value="all">不限时间</option><option value="24h">近24小时</option><option value="today_bj">今日（北京时间）</option><option value="7d">近7天</option><option value="30d">近30天</option></select>
+        <label class="sr-only" for="filter-style">回复风格</label><select id="filter-style"><option value="all">全部风格</option><option value="MACRO">宏观视角</option><option value="PRAGMATIC">务实交流</option><option value="PHILOSOPHICAL">哲理思辨</option><option value="CASUAL_LIGHT">轻松互动</option><option value="HUMOROUS">幽默互动</option></select>
+        <label class="sr-only" for="filter-provider">生成来源</label><select id="filter-provider"><option value="all">全部来源</option><option value="ai">AI生成</option><option value="manual">人工精修导入</option></select>
+        <button id="btn-clear-filters" type="button" disabled>清除</button>
+      </div>
+      <div class="sr-filter-bottom">
+        <div id="status-filters" class="sr-status-filters" role="group" aria-label="按处理状态筛选">
+          <button type="button" data-status="all" aria-pressed="true" data-js-action disabled>全部 <span data-count="all">0</span></button>
+          <button type="button" data-status="APPROVED" aria-pressed="false" data-js-action disabled>待发送 <span data-count="APPROVED">0</span></button>
+          <button type="button" data-status="PENDING_REVIEW" aria-pressed="false" data-js-action disabled>待审核 <span data-count="PENDING_REVIEW">0</span></button>
+          <button type="button" data-status="VERIFIED" aria-pressed="false" data-js-action disabled>已核实 <span data-count="VERIFIED">0</span></button>
+          <button type="button" data-status="UNCERTAIN" aria-pressed="false" data-js-action disabled>待对账 <span data-count="UNCERTAIN">0</span></button>
+          <button type="button" data-status="FAILED" aria-pressed="false" data-js-action disabled>失败 <span data-count="FAILED">0</span></button>
+          <label class="sr-other-status"><span class="sr-only">其他处理状态</span><select id="filter-other-status"><option value="all">其他状态</option><option value="INACTIVE">已跳过 / 人工处理</option><option value="SKIPPED">已跳过</option><option value="MANUAL">人工处理</option></select></label>
+        </div>
+        <label class="sr-sort"><span class="sr-only">排序</span><select id="filter-sort"><option value="newest_desc">最新任务优先</option><option value="comment_time_desc">原评时间：新到旧</option><option value="comment_time_asc">原评时间：旧到新</option><option value="verified_time_desc">核实时间：新到旧</option><option value="updated_desc">状态更新时间</option><option value="likes_desc">原评点赞最多</option></select></label>
+      </div>
+    </search>
+    <div class="sr-history-status"><p id="history-feedback" role="status" aria-live="polite"></p><button id="retry-history" type="button" hidden data-js-action disabled>重试读取</button></div>
+    <div id="reading-workspace" class="sr-reading-workspace" aria-busy="true">
+      <div class="sr-list-pane"><div id="history-list" aria-label="回复记录"></div>
+      <div class="sr-pagination-bar"><p id="history-counts" role="status">正在读取…</p><div class="sr-pagination-actions"><div id="page-controls" aria-label="记录分页"></div><label class="sr-only" for="filter-size">每页记录数</label><select id="filter-size"><option value="5">5条/页</option><option value="10" selected>10条/页</option><option value="20">20条/页</option><option value="50">50条/页</option></select></div></div></div>
+      <article id="record-detail" class="sr-record-detail" aria-labelledby="detail-title"><p class="sr-empty">正在读取记录…</p></article>
+    </div>
+    <p class="sr-scope">范围：最近最多500条记录；全部时间均为北京时间。</p>
+  </section>
+  <!-- 视图 2：运营策略与频控配置 -->
+  <section id="view-policy" role="tabpanel" aria-labelledby="tab-policy" hidden>
+    <p class="hint">保存后供后续任务读取；当前页面仅显示保存状态。</p>
+    <form id="settings-form" novalidate>
+      <fieldset id="editor" disabled>
+        <legend class="sr-only">二级回复策略配置</legend>
+        <div class="sr-settings-grid">
+          <div class="sr-policy-fields">
+            <section>
+              <h2>提交时间窗口（北京时间）</h2>
+              <p class="hint">设置允许回复的北京时间，支持跨午夜；窗口外的已批准任务顺延。</p>
+              <div class="sr-preset-bar">
+                <button id="preset-24h" class="sr-preset-btn" type="button" data-js-action disabled>设为全天 24 小时 (00:00–24:00)</button>
+                <button id="preset-daytime" class="sr-preset-btn" type="button" data-js-action disabled>设为日间 (08:30–23:00)</button>
+              </div>
+              <div class="sr-form-row-2col">
+                <div>
+                  <label for="window-start">窗口开始时间 (HH:MM，00:00–23:59)</label>
+                  <input id="window-start" type="text" maxlength="5" placeholder="00:00">
+                </div>
+                <div>
+                  <label for="window-end">窗口结束时间 (HH:MM，00:00–24:00)</label>
+                  <input id="window-end" type="text" maxlength="5" placeholder="24:00">
+                </div>
+              </div>
+              <p id="window-summary" class="hint" role="status"></p>
+            </section>
+
+            <section>
+              <h2>发送频控与配额预算</h2>
+              <p id="quota-source" class="hint">设置回复间隔与数量上限。</p>
+              <div class="sr-preset-bar">
+                <button id="preset-interval-1h" class="sr-preset-btn" type="button" data-js-action disabled>间隔 1 小时 (3600s)</button>
+                <button id="preset-interval-2h" class="sr-preset-btn" type="button" data-js-action disabled>间隔 2 小时 (7200s)</button>
+                <button id="preset-interval-30m" class="sr-preset-btn" type="button" data-js-action disabled>间隔 30 分钟 (1800s)</button>
+              </div>
+              <label for="min-interval-seconds">最小提交间隔（秒，0–86400）</label>
+              <input id="min-interval-seconds" type="number" min="0" max="86400" step="1">
+              <p id="interval-summary" class="hint"></p>
+
+              <div class="sr-form-row-2col">
+                <div>
+                  <label for="hourly-quota">账号滚动 60 分钟上限（1–100）</label>
+                  <input id="hourly-quota" type="number" min="1" max="100" step="1">
+                </div>
+                <div>
+                  <label for="max-per-video">单视频累计上限（1–20，永不重置）</label>
+                  <input id="max-per-video" type="number" min="1" max="20" step="1">
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="sr-policy-preview">
+            <h2>回复方式与草稿预览</h2>
+            <p class="hint">人工模式在 Telegram 审批后发送；自动模式批准合规草稿，核实发送结果后通知。</p>
+            <label for="approval-mode">回复方式</label>
+            <select id="approval-mode">
+              <option value="manual">人工审批（Telegram 卡片点击批准后发送）</option>
+              <option value="hybrid_auto">自动回复 + 事后通告（合规草稿自动入队，发送后 Telegram 通告）</option>
+            </select>
+
+            <div class="sr-summary-list" aria-label="当前表单预览">
+              <div class="sr-summary-item"><span>开放时间窗口 (BJ)</span><strong id="preview-window">—</strong></div>
+              <div class="sr-summary-item"><span>最小发送间隔</span><strong id="preview-interval">—</strong></div>
+              <div class="sr-summary-item"><span>滚动 60 分钟配额</span><strong id="preview-hourly">—</strong></div>
+              <div class="sr-summary-item"><span>单视频累计配额</span><strong id="preview-video-max">—</strong></div>
+            </div>
+
+            <div id="policy-preview" class="hint" role="status" aria-live="polite" style="margin-top:14px;"></div>
+          </aside>
+        </div>
+      </fieldset>
+      <div class="sr-save-bar"><span id="dirty-state" role="status">正在读取策略…</span><div class="actions"><button id="reload-policy" type="button" data-js-action disabled>重新载入策略</button><button id="save" class="primary" type="submit" disabled>保存策略</button></div></div>
+      <p id="feedback" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <dialog id="discard-dialog" aria-labelledby="discard-heading">
+    <h2 id="discard-heading">有尚未保存的修改</h2>
+    <p>继续会丢弃当前表单中的修改。</p>
+    <div class="dialog-foot">
+      <button id="keep-editing" type="button" autofocus disabled>继续编辑</button>
+      <button id="discard" type="button" disabled>丢弃修改并继续</button>
+    </div>
+  </dialog>
+</main>
+</body>
+</html>

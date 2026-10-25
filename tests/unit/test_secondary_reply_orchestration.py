@@ -46,7 +46,13 @@ def _ledger_rows(db: PipelineDB, count: int, *, minutes_ago: int = 6, account_ke
 
 
 @pytest.fixture(autouse=True)
-def _no_min_interval(monkeypatch):
+def _no_min_interval(monkeypatch, tmp_path):
+    # 本套验证旧共享预算，不能从仓库运营种子热加载生产时段和间隔。
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path / "legacy-policy.json")
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00")
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "24:00")
+    monkeypatch.setattr(settings, "wechat_reply_hourly_quota", 10)
+    monkeypatch.setattr(settings, "wechat_reply_max_per_video", 3)
     monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 0, raising=False)
 
 

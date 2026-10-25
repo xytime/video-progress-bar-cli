@@ -1,6 +1,7 @@
 """业务层配置快照与统一验证适配；不启动平台工作、不更改账本。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 回复策略复用活动版本校验，保留既有时段与审批批准上界。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | 唯一读取入口、批准范围校验、失败闭锁与执行者5秒加载确认。 |
@@ -14,7 +15,7 @@ import time
 from config.settings import settings
 from config.runtime_policy import PolicyStore, ATTEMPT, ConfigurationError, atomic
 from config.runtime_registry import (SETTING_FIELDS, TASK_FIELDS, OBSERVABILITY_FIELDS,
-                                     TASK_DEFAULTS, OBSERVABILITY_DEFAULTS, validate_fields)
+                                     TASK_DEFAULTS, OBSERVABILITY_DEFAULTS, validate_fields, validate_interaction_controls)
 
 
 def store():
@@ -49,9 +50,7 @@ def validate_domains(domains):
     validate_fields(domains['task_scheduling'], TASK_FIELDS)
     validate_fields(domains['observability'], OBSERVABILITY_FIELDS)
     validate_fields(domains['runtime_settings'], SETTING_FIELDS)
-    controls=domains['interaction_controls']
-    if not isinstance(controls,dict) or set(controls)!={'automatic_replies_enabled'} or type(controls['automatic_replies_enabled']) is not bool:
-        raise ConfigurationError('观众回复总开关必须为布尔值')
+    validate_interaction_controls(domains['interaction_controls'])
     return domains
 
 
@@ -60,6 +59,11 @@ def approved_validation(domains):
     validate_domains(domains)
     from config.runtime_policy import decode
     baseline = decode((settings.runtime_configuration_path / 'approved-baseline.json').read_bytes())
+    candidate = domains['interaction_controls'].get('reply_strategy')
+    if candidate is not None:
+        from .secondary_reply_policy import read_legacy_policy, validate_strategy_approval
+        original = baseline['interaction_controls'].get('reply_strategy') or read_legacy_policy()
+        validate_strategy_approval(candidate, original)
     for name, candidate in domains['runtime_settings'].items():
         original = baseline['runtime_settings'][name]
         more_is_safer = 'interval' in name or name.endswith('retry_hours')

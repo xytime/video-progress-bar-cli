@@ -10,6 +10,7 @@
 - 真实平台仍需 M3 只读样本验证；默认不被任何入口自动构造。
 
 # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 只读扫描透传维护暂停，交由调度器正常等待。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -193,6 +194,9 @@ class BrowserSecondaryReplyPlatform:
                         published_description=desc,
                     )
         except Exception as exc:
+            from ..core.maintenance import MaintenanceDenied
+            if isinstance(exc, MaintenanceDenied):
+                raise
             logger.warning("[BrowserSecondaryReplyPlatform] 只读评论扫描异常: %s", exc)
             return {"ok": False, "reason": f"DISCOVER_COMMENTS_EXCEPTION: {exc}", "payload": None}
 

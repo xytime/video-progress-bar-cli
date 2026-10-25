@@ -20,7 +20,7 @@ SECRET = re.compile(r'(token|password|secret|api_key|access_key|credential|priva
 FILE_OWNERS = {
  'wechat_operations.json':('视频号六类操作','/runtime-configuration','已迁移；旧文件只作为迁移证据，不再覆盖活动版本'),
  'wechat_scheduler_policy.json':('旧账号调度','/wechat-cooldown-settings','已被分用途预算替代；真实限流恢复仍按安全合同，只读'),
- 'secondary_reply_policy.json':('回复时段与审批','/secondary-reply-settings','时段与审批保持现值；旧额度字段不再覆盖独立回复池，变更需专门批准'),
+ 'secondary_reply_policy.json':('评论回复策略','/secondary-reply-settings','策略页保存到活动版本；独立回复额度与配置中心一致，时段与审批可在既有批准范围内收紧'),
  'wechat_products.json':('商品挂载','/product-settings','专用校验、CAS与版本历史；新任务冻结商品合同，在途不热改'),
  'wechat_product_catalog.json':('商品资料库','/product-settings','专用导入、身份校验与CAS；资料不是实时平台库存'),
  'vocabulary_outro.json':('生词片尾','/vocabulary-outro-settings','专用CAS/草稿；仅尚未开始的片尾步骤采用'),

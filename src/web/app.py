@@ -184,8 +184,6 @@ async def reject_untrusted_browser_origins(request, call_next):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
     origin = request.headers.get("origin")
-    if settings.runtime_configuration_enabled and request.method=='PUT' and request.url.path=='/api/secondary-reply-settings':
-        return JSONResponse(status_code=409,content={'detail':'额度已迁移到运行配置中心；时段与审批保持既有批准值，调整需专门批准'})
     if origin:
         port = settings.dashboard_port
         trusted_origins = {
@@ -231,6 +229,7 @@ app.include_router(
     create_secondary_reply_settings_router(
         active=settings.wechat_reply_policy_path,
         history_lookup=lambda limit: db.list_secondary_reply_history(limit=limit),
+        access_db=db,
     )
 )
 from web.wechat_cooldown_settings import create_wechat_cooldown_settings_router
@@ -3808,6 +3807,7 @@ def batch_delete_videos(req: BatchDeleteRequest):
     """[Gemini_2.5_Pro_planning]    批量删除视频记录（不含物理文件，除非可选）。
     
     # Modification History
+| reply-recovery-v1 | 2026-10-25 | Codex | 移除迁移入口无条件冲突，策略页改走活动配置与本机权限。 |
 | filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
     | Version | Date | Author | Description |
     | --- | --- | --- | --- |
