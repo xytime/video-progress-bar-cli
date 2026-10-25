@@ -2,10 +2,12 @@
 
 # Modification History
 | Version | Date | Author | Description |
+| 1.2 | 2026-10-25 | Codex | 验证素材原图补位、不可用终止与冻结投稿封面不降级为原图。 |
 | 1.1 | 2026-10-25 | Codex | 验证跨状态封面真实加载、缺失占位、点击放大及分集隔离。 |
 | 1.0 | 2026-10-15 | Codex | 桌面手机键盘展开和 API 来源一致性。 |
 """
 import hashlib
+from io import BytesIO
 from pathlib import Path
 import pytest
 from PIL import Image
@@ -14,6 +16,86 @@ from tests.browser.test_dashboard_workspace import workspace
 from tests.browser_fixtures import chromium
 from video_processing.cover_provenance import version, canonical, source_path, freeze_submission
 from web import app as web_app
+
+
+@pytest.mark.parametrize('width', [1366, 390])
+def test_waitlist_previews_source_thumbnail_when_cover_not_generated(workspace, tmp_path, monkeypatch, width):
+    page, client, state, db = workspace
+    monkeypatch.setattr(web_app, '_OUT_DIR', tmp_path)
+    db.add_video('sourceImg01', '待筛选素材原图', 'UC-fixture', score=20)
+    image_bytes = BytesIO()
+    Image.new('RGB', (480, 360), 'green').save(image_bytes, format='JPEG')
+    thumbnail_requests = []
+
+    def thumbnail(route):
+        thumbnail_requests.append(route.request.url)
+        route.fulfill(content_type='image/jpeg', body=image_bytes.getvalue())
+
+    thumbnail_url = 'https://i.ytimg.com/vi/sourceImg01/hqdefault.jpg'
+    page.route(thumbnail_url, thumbnail)
+    page.set_viewport_size(dict(width=width, height=844))
+    url = 'http://127.0.0.1:9100/?view=topics&tab=waitlist&created_window=all&search=sourceImg01'
+    page.goto(url)
+    image = page.locator('#row-sourceImg01 .cover-thumb')
+    expect(image).to_have_js_property('naturalWidth', 480)
+    expect(image).to_have_attribute('alt', 'YouTube 原视频缩略图')
+    expect(page.locator('#row-sourceImg01 .cover-source summary')).to_have_text('YouTube 原图')
+    assert page.title() == '选题中心 · 视频运营工作台'
+    assert thumbnail_requests == [thumbnail_url]
+    image.click()
+    expect(page.locator('#lb-img')).to_have_js_property('naturalWidth', 480)
+    page.keyboard.press('Escape')
+    summary = page.locator('#row-sourceImg01 .cover-source summary')
+    summary.focus()
+    page.keyboard.press('Enter')
+    expect(page.locator('#row-sourceImg01 .cover-source[open]')).to_contain_text('仅供素材浏览')
+    page.keyboard.press('Escape')
+    expect(summary).to_be_focused()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+    # 原图只补位，随后生成的本地封面仍然优先。
+    requests_before_reload = list(thumbnail_requests)
+    Image.new('RGB', (120, 160), 'blue').save(tmp_path / 'sourceImg01_cover.jpg')
+    page.reload()
+    expect(page.locator('#row-sourceImg01 .cover-thumb')).to_have_js_property('naturalWidth', 120)
+    expect(page.locator('#row-sourceImg01 .cover-source summary')).to_have_text('来源未核验')
+    assert thumbnail_requests == requests_before_reload
+
+
+def test_unavailable_source_thumbnail_stops_and_bound_cover_never_falls_back(workspace, tmp_path, monkeypatch):
+    page, client, state, db = workspace
+    monkeypatch.setattr(web_app, '_OUT_DIR', tmp_path)
+    db.add_video('brokenImg01', '原图不可用', 'UC-fixture', score=20)
+    thumbnail_requests = []
+
+    def unavailable(route):
+        thumbnail_requests.append(route.request.url)
+        route.fulfill(status=404, body='missing')
+
+    page.route('https://i.ytimg.com/**', unavailable)
+    page.goto('http://127.0.0.1:9100/?view=topics&tab=waitlist&created_window=all&search=brokenImg01')
+    expect(page.locator('#row-brokenImg01 .cover-placeholder')).to_be_visible()
+    expect(page.locator('#row-brokenImg01 .cover-source summary')).to_have_text('暂无预览图')
+    assert len(thumbnail_requests) == 1
+    assert not page.locator('#row-brokenImg01 .cover-thumb').count()
+
+    # 即使投稿冻结文件丢失，也不能用 YouTube 原图冒充投稿封面。
+    db.add_video('boundImg001', '投稿封面缺失', 'UC-fixture', score=20)
+    cover = tmp_path / 'bound-cover.jpg'
+    Image.new('RGB', (120, 160), 'blue').save(cover)
+    data = version(dict(source='codex_luna_ai_visual', youtube_id='boundImg001', slice_index=0,
+                        cover_sha256=hashlib.sha256(cover.read_bytes()).hexdigest()))
+    source_path(cover).write_text(canonical(data))
+    evidence = tmp_path / 'bound-submission'
+    freeze_submission(cover, evidence)
+    db.record_wechat_submission_acceptance('boundImg001', evidence_path=str(evidence),
+                                          error_message=None, final_title='投稿封面缺失',
+                                          platform_post_id='bound-post')
+    (evidence / 'submitted_cover.jpg').unlink()
+    page.goto('http://127.0.0.1:9100/?view=publications&tab=review&created_window=all&search=boundImg001')
+    expect(page.locator('#row-boundImg001 .cover-placeholder')).to_be_visible()
+    expect(page.locator('#row-boundImg001 .cover-source summary')).to_have_text('Codex 接力')
+    assert len(thumbnail_requests) == 1
 
 
 @pytest.mark.parametrize('width', [1366, 390])

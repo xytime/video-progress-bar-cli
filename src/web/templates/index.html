@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-25 | Codex | 待筛选素材缺少生成封面时展示 YouTube 原图，保留投稿封面来源边界。 |
   | 2026-10-25 | Codex | 封面由图片接口判断可用性，修复待发布、待核实和失败任务已有图却不显示。 |
   | 2026-10-25 | Codex | 授权读回、封面登录核实与人工投稿确认提示。 |
   | 2026-10-25 | Codex | 标签数量跟随筛选，清除恢复全频道与全时间，统一空列表提示。 |
@@ -731,6 +732,25 @@
 <script src="/static/js/engagement_rows.js?v=20261020"></script>
 <script>
   function handleCoverError(img) {
+    const source = img.closest('.cover-thumb-wrapper')?.querySelector('.cover-source');
+    if (img.dataset.sourceThumbnail) {
+      const thumbnail = img.dataset.sourceThumbnail;
+      delete img.dataset.sourceThumbnail;
+      img.dataset.previewSource = 'youtube';
+      img.alt = 'YouTube 原视频缩略图';
+      img.style.objectFit = 'contain';
+      img.referrerPolicy = 'no-referrer';
+      if (source) {
+        source.querySelector('summary').textContent = 'YouTube 原图';
+        source.querySelector('div').textContent = '原视频缩略图，仅供素材浏览；尚未生成投稿封面。';
+      }
+      img.src = thumbnail;
+      return;
+    }
+    if (img.dataset.previewSource === 'youtube' && source) {
+      source.querySelector('summary').textContent = '暂无预览图';
+      source.querySelector('div').textContent = '原视频缩略图暂不可用；尚未生成投稿封面。';
+    }
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
   }
 
@@ -1853,6 +1873,10 @@
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格与已发布状态
         const coverUrl = `/api/covers/${v.youtube_id}?slice_index=${v.slice_index || 0}`;
         const cp = v.cover_provenance || {label: '来源未核验'};
+        const sourceThumbnail = ['waitlist', 'high_likes'].includes(currentTab)
+          && !v.slice_index && cp.binding !== 'submission' && !cp.version_id
+          && /^[A-Za-z0-9_-]{11}$/.test(v.youtube_id)
+          ? `https://i.ytimg.com/vi/${v.youtube_id}/hqdefault.jpg` : '';
         const coverDetails = [cp.binding === 'submission' ? '本次投稿绑定' : '当前生成版本',
           cp.degraded ? '退化：是' : cp.verified ? '退化：否' : '退化：未核验',
           cp.handoff_reason && `接力原因：${cp.handoff_reason}`,
@@ -1875,6 +1899,7 @@
                 src="${coverUrl}"
                 alt="封面"
                 data-title="${escapeAttr(v.title || '')}"
+                data-source-thumbnail="${escapeAttr(sourceThumbnail)}"
                 loading="lazy"
                 onerror="handleCoverError(this)"
                 onclick="event.stopPropagation(); openCoverLightbox(this.src, this.dataset.title)"
