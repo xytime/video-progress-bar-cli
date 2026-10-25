@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-25 | Codex | 标签数量跟随筛选，清除恢复全频道与全时间，统一空列表提示。 |
   | 2026-10-23 | Codex | 当前审核阻塞、历史批准和真实字幕阶段分别展示，主行分集共用。 |
   | 2026-10-17 | Codex | 只读命中证据与当前重扫分开，保留 P0 双确认门禁。 |
   | 2026-10-15 | Codex | 缩略图下统一来源标识与键盘可展开证据，兼容手机。 |
@@ -1279,7 +1280,9 @@
     filterState.search = ''; filterState.channel = ''; filterState.sort = 'source_published_at_desc';
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
-    if (setCreatedWindow('today_bj')) fetchGlobalFunnel();
+    filterState.includeExpired = false; filterState.attentionKind = null;
+    document.getElementById('attention-filter-banner').hidden = true;
+    if (setCreatedWindow('all')) fetchGlobalFunnel();
     clearFunnelDrilldown(false);
     syncFilterControls();
     currentPage = 1;
@@ -1475,9 +1478,7 @@
         document.getElementById('tab-ready').textContent = `待发布(${d.tab_counts.ready || 0})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
         document.getElementById('tab-wechat_deferred').textContent = `待微信恢复(${d.tab_counts.wechat_deferred || 0})`;
-        const localAccepted = d.tab_counts.local_accepted || 0;
-        const pendingConfirmation = d.tab_counts.review || 0;
-        document.getElementById('tab-review').textContent = `本地受理 / 待确认(${localAccepted + pendingConfirmation})`;
+        document.getElementById('tab-review').textContent = `本地受理 / 待确认(${d.tab_counts.review || 0})`;
         document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
         document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
         if (d.tab_counts.high_likes !== undefined) {
@@ -1501,15 +1502,7 @@
       if (!d.videos || d.videos.length === 0) {
         _currentVideosMap = {};
         clearSelection();
-        let emptyMsg = '暂无数据';
-        if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
-        else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
-        else if (currentTab === 'ready') emptyMsg = '当前没有等待发布的成片';
-        else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
-        else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
-        else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已浏览”查看历史';
-        if (filterState.likeRateMin !== null || filterState.likeRateMax !== null) emptyMsg = '当前点赞率区间没有匹配记录，请调整区间或清除筛选';
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>当前筛选下无匹配记录</td></tr>';
         return;
       }
 

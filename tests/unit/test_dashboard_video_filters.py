@@ -4,6 +4,7 @@
 绝不能改变任务或平台状态。
 
 # Modification History
+| filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.5.0 | 2026-09-26 | Antigravity | 断言模板来源发布采用 sourceDateTimeLabel 并将默认入库时间筛选窗口对齐为 today_bj。 |
@@ -17,10 +18,71 @@
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from video_processing.db.database import PipelineDB
 from web import app as web_app
+
+
+class FilterFixtureDB(PipelineDB):
+    def age_video(self, youtube_id: str) -> None:
+        """仅为临时测试库准备历史入库记录。"""
+        with self.get_connection() as conn:
+            conn.execute("UPDATE processed_videos SET created_at = datetime('now', '-60 days') WHERE youtube_id = ?", (youtube_id,))
+            conn.commit()
+
+
+def test_filtered_tab_counts_follow_channel_date_search_and_like_rate(tmp_path, monkeypatch):
+    db = FilterFixtureDB(str(tmp_path / 'counts.db'))
+    db.add_channel('alpha', '甲频道')
+    db.add_channel('beta', '乙频道')
+    for channel in ('alpha', 'beta'):
+        for scene in ('queue', 'ready', 'error', 'review'):
+            for age in ('recent', 'old'):
+                yid = f'{channel}-{scene}-{age}'
+                db.add_video(yid, f'共同主题 {yid}', channel, score=90, view_count=1000, like_count=40)
+                if scene == 'ready':
+                    db.set_video_preparation_ready(yid, True)
+                elif scene in ('error', 'review'):
+                    db.update_video_status(yid, 'FAILED' if scene == 'error' else 'SUBMITTED_UNBOUND')
+                if age == 'old':
+                    db.age_video(yid)
+    monkeypatch.setattr(web_app, 'db', db)
+    with TestClient(web_app.app) as client:
+        for filters, expected in [({'channel': '甲频道', 'created_window': '7d'}, 1),
+                                  ({'channel': 'alpha', 'created_window': 'all'}, 2),
+                                  ({'created_window': '7d'}, 2),
+                                  ({'created_window': 'all'}, 4),
+                                  ({'search': 'beta', 'created_window': '7d'}, 1),
+                                  ({'search': '共同主题', 'like_rate_min': 3, 'like_rate_max': 5}, 4),
+                                  ({'like_rate_min': 5}, 0),
+                                  ({'channel': '不存在'}, 0)]:
+            payload = client.get('/api/videos', params={'tab': 'ready', 'size': 1, **filters}).json()
+            assert payload['total_count'] == expected
+            assert len(payload['videos']) == min(expected, 1)
+            for tab in ('queue', 'ready', 'error', 'review'):
+                assert payload['tab_counts'][tab] == expected, (filters, tab, payload)
+        # 计数不修改任务状态或恢复已入库的历史项。
+        assert db.get_video_by_youtube_id('alpha-review-old')['status'] == 'SUBMITTED_UNBOUND'
+
+
+@pytest.mark.parametrize('tab,filters', [
+    ('error', {'error_type': 'channel_policy'}),
+    ('waitlist', {'score_band': '50_74'}),
+    ('high_likes', {'include_processed': True, 'status': 'SUBMITTED_BOUND'}),
+    ('completed', {'funnel_stage': 'failed'}),
+    ('error', {'attention_kind': 'execution'}),
+])
+def test_tab_counts_match_current_list_and_existing_tab_switch_rules(tmp_path, tab, filters):
+    db = PipelineDB(str(tmp_path / 'scenes.db'))
+    _seed(db)
+    counts = db.get_filtered_tab_counts(tab, channel='TEDx Talks', **filters)
+    assert counts[tab] == db.get_paginated_videos(tab, channel='TEDx Talks', **filters)[1]
+    # 切换标签会清除分数、异常、状态等场景筛选，频道继续保留。
+    for other in counts:
+        if other != tab:
+            assert counts[other] == db.get_paginated_videos(other, channel='TEDx Talks')[1]
 
 
 def _seed(db: PipelineDB) -> None:

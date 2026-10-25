@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
 | product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 结构化门禁等待、版本变更重算及年龄配置；不更改历史次数和提交事实。 |
 | cleanup-timeout-v1 | 2026-10-24 | Codex | 英语卡已证明未提交的清理技术失败纳入冻结写入重试链，达到上限在本地停止，不改用量。 |
@@ -6780,28 +6781,15 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
             ).fetchall()
         return [str(row['channel_name']) for row in rows]
 
-    def get_paginated_videos(
-        self,
-        tab: str = 'waitlist',
-        page: int = 1,
-        size: int = 20,
-        *,
-        search: str = '',
-        channel: str = '',
-        sort: str = 'source_published_at_desc',
-        score_band: str = 'all',
-        error_type: str = 'all',
-        status: str = 'all',
-        engagement_window_days: int = 3,
-        include_processed: bool = False,
-        include_expired: bool = False,
-        created_window: str = 'all',
-        funnel_stage: Optional[str] = None,
-        attention_kind: Optional[str] = None,
-        like_rate_min: Optional[float] = None,
-        like_rate_max: Optional[float] = None,
-    ) -> tuple[List[Dict[str, Any]], int]:
-        """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
+    def _build_video_list_condition(
+        self, tab: str, *, search: str = '', channel: str = '',
+        score_band: str = 'all', error_type: str = 'all', status: str = 'all',
+        engagement_window_days: int = 3, include_processed: bool = False,
+        include_expired: bool = False, created_window: str = 'all',
+        funnel_stage: Optional[str] = None, attention_kind: Optional[str] = None,
+        like_rate_min: Optional[float] = None, like_rate_max: Optional[float] = None,
+    ) -> tuple[str, List[Any]]:
+        """列表及标签计数共用完整筛选谓词，避免统计口径漂移。"""
         if attention_kind:
             if attention_kind not in {'delivery','blocked','execution','review','policy'} or funnel_stage:
                 raise ValueError('Unknown or conflicting attention kind')
@@ -6876,6 +6864,62 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
         if tab == 'high_likes' and not include_processed:
             clauses.append("NOT EXISTS (SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED')")
 
+        return ' AND '.join(f'({clause})' for clause in clauses), query_params
+
+    def get_filtered_tab_counts(self, current_tab: str, **filters: Any) -> Dict[str, int]:
+        """统计当前筛选下各标签数量；非当前标签按既有切换规则清除场景筛选。"""
+        tabs = ('waitlist', 'queue', 'ready', 'active', 'wechat_deferred',
+                'review', 'completed', 'error', 'high_likes')
+        if current_tab not in tabs:
+            raise ValueError(f"Unknown video tab: {current_tab}")
+        expressions, query_params = [], []
+        for tab in tabs:
+            tab_filters = dict(filters)
+            if tab != current_tab:
+                tab_filters.update(score_band='all', error_type='all', status='all',
+                                   include_processed=False, include_expired=False,
+                                   funnel_stage=None, attention_kind=None)
+            condition, params = self._build_video_list_condition(tab, **tab_filters)
+            expressions.append(f"COUNT(CASE WHEN {condition} THEN 1 END) AS {tab}")
+            query_params.extend(params)
+        with self.get_connection() as conn:
+            row = conn.execute(
+                f"SELECT {', '.join(expressions)} FROM processed_videos pv "
+                "LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id",
+                query_params,
+            ).fetchone()
+        return {tab: int(row[tab]) for tab in tabs}
+
+    def get_paginated_videos(
+        self,
+        tab: str = 'waitlist',
+        page: int = 1,
+        size: int = 20,
+        *,
+        search: str = '',
+        channel: str = '',
+        sort: str = 'source_published_at_desc',
+        score_band: str = 'all',
+        error_type: str = 'all',
+        status: str = 'all',
+        engagement_window_days: int = 3,
+        include_processed: bool = False,
+        include_expired: bool = False,
+        created_window: str = 'all',
+        funnel_stage: Optional[str] = None,
+        attention_kind: Optional[str] = None,
+        like_rate_min: Optional[float] = None,
+        like_rate_max: Optional[float] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
+        where, query_params = self._build_video_list_condition(
+            tab, search=search, channel=channel, score_band=score_band,
+            error_type=error_type, status=status, engagement_window_days=engagement_window_days,
+            include_processed=include_processed, include_expired=include_expired,
+            created_window=created_window, funnel_stage=funnel_stage, attention_kind=attention_kind,
+            like_rate_min=like_rate_min, like_rate_max=like_rate_max,
+        )
+
         # 历史记录可能只有 YYYYMMDD 的 upload_date；控制面把它作为来源发布日期回退展示，
         # 所以默认排序也必须使用同一字段，并保留 ISO 时间以实现同日内的新到旧排序。
         # 使用 GLOB 校验确保必须以 19xx 或 20xx 等合规年份开头，防止非标准日期（如带编号前缀）被字符串降序排在最前。
@@ -6907,7 +6951,6 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
         else:
             raise ValueError(f"Unknown video sort: {sort}")
 
-        where = ' AND '.join(f'({clause})' for clause in clauses)
         offset = (page - 1) * size
         engagement_columns = (
             f"{self._engagement_stage_sql()} AS engagement_stage, "

@@ -1,6 +1,7 @@
 """v0.3：真实 Chromium、FastAPI 与临时 SQLite 验证总览和导航，不连接生产。
 
 # Modification History
+| filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-12 | Codex | H01–H14 首页口径、只读、恢复、失败、移动端证据 |
@@ -242,7 +243,7 @@ def test_like_rate_presets_slider_url_reset_and_mobile(workspace):
     page.locator('#like-rate-min').fill('99')
     page.locator('#like-rate-min').press('Tab')
     expect(page.locator('#like-rate-min')).to_have_value('5')
-    expect(page.locator('#activity-body')).to_contain_text('当前点赞率区间没有匹配记录')
+    expect(page.locator('#activity-body')).to_contain_text('当前筛选下无匹配记录')
     page.locator('#tab-high_likes').click()
     expect(page.locator('#like-rate-min')).to_have_value('5')
     for theme in ('light', 'dark', 'high-contrast'):
@@ -298,3 +299,37 @@ def test_filter_preferences_reopen_url_precedence_clear_and_rate_label(workspace
     page.goto(entry)
     expect(page.locator('#video-filter-like-rate')).to_have_value('10,100')
     evidence(page,'remembered-like-rate-desktop')
+
+
+@pytest.mark.parametrize('width', [1366, 390])
+def test_filtered_tab_counts_clear_channel_and_all_time(workspace, width):
+    page, client, state, db = workspace
+    db.add_channel('UC-fixture', '验收频道')
+    db.add_channel('UC-other', '另一个频道')
+    db.add_video('ready-other', '另一个频道的待发布成片', 'UC-other', score=90)
+    db.set_video_preparation_ready('ready-other', True)
+    page.set_viewport_size(dict(width=width, height=844))
+    page.goto('http://127.0.0.1:9100/?view=production&tab=ready&channel=不存在&created_window=7d')
+    expect(page.locator('#tab-ready')).to_have_text('待发布(0)')
+    expect(page.locator('#tab-queue')).to_have_text('待处理(0)')
+    expect(page.locator('#tab-error')).to_have_text('出错异常(0)')
+    expect(page.locator('#activity-body')).to_contain_text('当前筛选下无匹配记录')
+    # 当前场景无成片的频道仍应通过原深链接保留，不能偷偷改为全部频道。
+    page.goto('http://127.0.0.1:9100/?view=production&tab=ready&channel=验收频道&created_window=7d')
+    expect(page.locator('#tab-queue')).to_have_text('待处理(1)')
+    expect(page.locator('#tab-ready')).to_have_text('待发布(0)')
+    expect(page.locator('#tab-error')).to_have_text('出错异常(1)')
+    evidence(page, f'filtered-empty-{width}')
+    page.locator('.btn-filter-clear').focus()
+    page.keyboard.press('Enter')
+    expect(page.locator('#video-filter-channel')).to_have_value('')
+    expect(page.locator('#video-filter-created-window')).to_have_value('all')
+    expect(page.locator('#tab-ready')).to_have_text('待发布(1)')
+    expect(page.locator('#activity-count')).to_have_text('1')
+    expect(page.locator('#activity-body')).to_contain_text('另一个频道的待发布成片')
+    assert 'created_window=all' in page.url
+    page.reload()
+    expect(page.locator('#video-filter-channel')).to_have_value('')
+    expect(page.locator('#video-filter-created-window')).to_have_value('all')
+    expect(page.locator('#tab-ready')).to_have_text('待发布(1)')
+    evidence(page, f'filtered-cleared-{width}')

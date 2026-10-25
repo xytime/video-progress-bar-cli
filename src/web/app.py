@@ -2042,8 +2042,8 @@ def get_videos(
     if like_rate_min is not None and like_rate_max is not None and like_rate_min > like_rate_max:
         raise HTTPException(422, "点赞率下限不能超过上限")
     page = max(1, page)
-    videos, total_count = db.get_paginated_videos(
-        tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
+    filters = dict(
+        search=search.strip(), channel=channel.strip(),
         score_band=score_band, error_type=error_type, status=status,
         engagement_window_days=engagement_window_days, include_processed=include_processed,
         include_expired=include_expired,
@@ -2051,6 +2051,7 @@ def get_videos(
         funnel_stage=funnel_stage, attention_kind=attention_kind,
         like_rate_min=like_rate_min, like_rate_max=like_rate_max,
     )
+    videos, total_count = db.get_paginated_videos(tab, page, size, sort=sort, **filters)
     for video in videos:
         video['cover_provenance'] = db.get_cover_context(video['youtube_id'], video.get('slice_index') or 0)
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
@@ -2064,7 +2065,8 @@ def get_videos(
                 f"/api/videos/{video['youtube_id']}/prepared-video?slice_index={video.get('slice_index') or 0}"
                 if path and video.get("preparation_ready") else None
             )
-    tab_counts = db.get_tab_counts()
+    tab_counts = db.get_filtered_tab_counts(tab, **filters)
+    tab_counts[tab] = total_count
     return {
         "videos": videos,
         "total_count": total_count,
@@ -3806,6 +3808,7 @@ def batch_delete_videos(req: BatchDeleteRequest):
     """[Gemini_2.5_Pro_planning]    批量删除视频记录（不含物理文件，除非可选）。
     
     # Modification History
+| filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
     | Version | Date | Author | Description |
     | --- | --- | --- | --- |
     | 1.0.0 | 2026-05-24 | Unknown_Model | Initial creation |
