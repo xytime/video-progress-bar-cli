@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-25 | Codex | 排除运行记录待办计数，折叠技术诊断并统一步骤时区。 |
 | 1.2.0 | 2026-10-25 | Codex | 重开研究任务时沿用原任务明确来源并保留原失败记录。 |
 | 1.1.0 | 2026-10-25 | Codex | 将缺少近期心跳的执行状态标为待核实，并提供阶段中文名。 |
 | 1.0.0 | 2026-10-25 | Codex | 提供任务视图、详情、固定证据及受控动作服务。 |
@@ -16,7 +17,7 @@ from pathlib import Path
 import uuid
 from urllib.parse import urlparse
 
-from .console import EnglishConsole, clean
+from .console import EnglishConsole, clean, stamp
 
 
 class EnglishWorldWorkbench:
@@ -40,7 +41,18 @@ class EnglishWorldWorkbench:
         identity = self._run_identity(record) if is_run else None
         bound_attempts = identity.get("attempts", []) if identity else []
         attempt = bound_attempts[-1] if bound_attempts else None
-        block = row.get("error") or ("历史关联不足：没有明确的运行身份记录" if is_run and not identity else "")
+        raw_error = row.get("error") or ""
+        block = raw_error or ("历史关联不足：没有明确的运行身份记录" if is_run and not identity else "")
+        if raw_error:
+            if "执行摘要：" in raw_error:
+                # 保留摘要之前的中文原因，完整技术文本只在详情的折叠诊断字段提供。
+                cause = raw_error.split("执行摘要：", 1)[0].strip()
+                block = clean(cause)[:180] if cause else ("定时运行失败；技术诊断已折叠" if is_run else "任务处理失败；技术诊断已折叠")
+            elif len(raw_error) > 240 or "\n" in raw_error:
+                block = "定时运行失败；技术诊断已折叠" if is_run else "任务处理失败；技术诊断已折叠"
+            else:
+                # 短错误往往是唯一的具体原因，列表中保留它。
+                block = clean(raw_error)[:180]
         if is_run and not block and not record.get("_run_status", {}).get("phase"):
             block = "没有与本次run配对的阶段状态/heartbeat；当前运行状态无法核实"
         current_step = (record.get("production_state") or status) if not is_run else ("candidate:"+str(attempt.get("candidate_id") or "unknown") if attempt else "run_record")
@@ -270,8 +282,8 @@ class EnglishWorldWorkbench:
                 "page": page, "page_size": self.PAGE_SIZE, "pages": pages, "total": total,
                 "items": selected[(page-1)*self.PAGE_SIZE:page*self.PAGE_SIZE],
                 "summary": {"latest_run": next((x for x in items if x["record_type"] == "run"), None),
-                            "active": sum(1 for r, i in zip(rows, items) if r["active"] and i["display_status"] not in {"研究状态待核实", "制作状态待核实"}),
-                            "waiting": sum(1 for r, i in zip(rows, items) if r["attention"] or i["display_status"] in {"研究状态待核实", "制作状态待核实"}), "next_scheduled": None},
+                            "active": sum(1 for r, i in zip(rows, items) if i["record_type"] != "run" and r["active"] and i["display_status"] not in {"研究状态待核实", "制作状态待核实"}),
+                            "waiting": sum(1 for r, i in zip(rows, items) if i["record_type"] != "run" and (r["attention"] or i["display_status"] in {"研究状态待核实", "制作状态待核实"})), "next_scheduled": None},
                 "history": {"count": len(historical), "page": page, "pages": history_pages,
                             "items": historical[(page-1)*self.PAGE_SIZE:page*self.PAGE_SIZE] if history and view != "runs" else [],
                             "collapsed": view == "attention" and not history},
@@ -294,14 +306,14 @@ class EnglishWorldWorkbench:
             production_unverified = (job.get("production_state") or "not_started") == "PRODUCING"
             steps = [{"id": name, "label": label, "state": state,
                       "display_state": ("研究状态待核实" if name == "research" and research_unverified else "制作状态待核实" if name == "production" and production_unverified else None),
-                      "started_at": job.get("production_started_at") if name == "production" else job.get("created_at"),
-                      "ended_at": job.get("production_finished_at") if name == "production" else job.get("updated_at") if research_state == "CANDIDATES_READY" else None,
-                      "last_activity": job.get("updated_at"), "detail": job.get("error_message") or ("没有近期执行心跳；账本状态保留，当前执行状态待核实" if (research_unverified if name == "research" else production_unverified) else "当前无阶段心跳；状态可能已陈旧" if row.get("stale") else None)}
+                      "started_at": stamp(job.get("production_started_at") if name == "production" else job.get("created_at")),
+                      "ended_at": stamp(job.get("production_finished_at") if name == "production" else job.get("updated_at") if research_state == "CANDIDATES_READY" else None),
+                      "last_activity": stamp(job.get("updated_at")), "detail": item["block_reason"] if job.get("error_message") else ("没有近期执行心跳；账本状态保留，当前执行状态待核实" if (research_unverified if name == "research" else production_unverified) else "当前无阶段心跳；状态可能已陈旧" if row.get("stale") else None)}
                      for name,label,state in [("research","候选研究", research_state),
                                               ("production","制作", job.get("production_state") or "not_started")]]
         else:
-            steps = [{"id": "submission", "label": "审核与投稿", "state": record.get("state"), "started_at": record.get("submission_started_at"),
-                      "ended_at": record.get("submission_finished_at"), "last_activity": record.get("updated_at"), "detail": row.get("error")}]
+            steps = [{"id": "submission", "label": "审核与投稿", "state": record.get("state"), "started_at": stamp(record.get("submission_started_at")),
+                      "ended_at": stamp(record.get("submission_finished_at")), "last_activity": stamp(record.get("updated_at")), "detail": item["block_reason"] or None}]
         evidence = []
         for kind, report_kind in (("video", "asset"), ("cover", "asset"), ("submission", "platform"),
                                   ("audio", "audio"), ("language", "language"), ("visual", "visual"), ("safety", "safety")):
@@ -406,10 +418,13 @@ class EnglishWorldWorkbench:
                                "verification_note": result.get("verification_note"),
                                "dispatch_state": result.get("dispatch_state"),
                                "dispatch_message": "执行器启动异常或状态未知；使用原 operation_id 核验" if result.get("dispatch_state") == "FAILED_OR_UNKNOWN" else None})
+        diagnostic_text = row.get("error") or (row.get("_job") or {}).get("error_message")
+        safe_diagnostics = {"collapsed": True, "text": clean(diagnostic_text)[:600]} if diagnostic_text else None
         return {"task": item, "steps": steps, "evidence": evidence, "actions": item["action_eligibility"], "package": package,
                 "candidates": candidates,
                 "audit": safe_audit,
                 "audit_summary": safe_audit[0] if safe_audit else None,
+                "safe_diagnostics": safe_diagnostics,
                 "platform_management_url": "https://channels.weixin.qq.com/platform/post/list"}
 
     def _run_steps(self, identity, attempt):
@@ -438,7 +453,7 @@ class EnglishWorldWorkbench:
                  "last_activity": self._ns_stamp(event.get("finished_ns") or event.get("started_ns")),
                  "detail": (clean(' · '.join(str(value) for value in (
                      event.get('error_class') or event.get('error_kind'),
-                     event.get('error') or event.get('message')) if value))[:300] or ("阶段已开始，但没有后续心跳，执行状态待核实" if str(event.get("state", "")).upper() == "RUNNING" else None))}
+                     event.get('error') or event.get('message')) if value))[:180] or ("阶段已开始，但没有后续心跳，执行状态待核实" if str(event.get("state", "")).upper() == "RUNNING" else None))}
                 for stage, event in by_stage.items()]
 
     @staticmethod

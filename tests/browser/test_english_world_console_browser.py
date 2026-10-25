@@ -99,7 +99,8 @@ def ui(chromium, tmp_path):
             task = parse_qs(parsed.query).get('task',[''])[0]
             ix = int(task.split('-')[-1]) if task.startswith('job:') else 90
             row = next((x for x in tasks+runs if x['task_id']==task), make_row(ix))
-            route.fulfill(json={'task':row,'steps':[{'id':'language_review','label':'语言复核','state':'failed' if ix==3 else 'complete','started_at':'2026-10-25T05:00:00Z','ended_at':'2026-10-25T05:20:00Z','last_activity':'2026-10-25T05:20:00Z','detail':'质量报告需要复核。'}],
+            route.fulfill(json={'task':row,'steps':[{'id':'language_review','label':'语言复核','state':'failed' if ix==3 else 'complete','started_at':'2026-10-25T05:00:00Z','ended_at':'2026-10-25T05:20:00Z','last_activity':'2026-10-25T05:20:00Z','detail':'质量报告需要复核。'},{'id':'association','label':'运行关联','state':'unverified','started_at':None,'ended_at':None,'last_activity':None,'detail':'历史关联不足，无法确认该阶段归属。'}],
+                                'safe_diagnostics':{'text':'合成安全诊断摘要，仅展开后显示。'},
                                 'package':{'title':f'当前实际成片 {ix}','platform':'WeChat Channels','package_hashes':{'artifact_sha256':'sha256:fixture-video','manifest_sha256':'sha256:fixture-manifest','title_sha256':'sha256:title','copy_sha256':'sha256:copy','cover_sha256':'sha256:cover','cover_provenance_sha256':'sha256:cover-source'},'hash_bound_to_review':True,'product_summary':{'status':'FROZEN','intent':'NONE','name':None,'summary':'无需平台商品'},'quality_summary':{'status':'通过','items':[{'kind':'audio','status':'通过','summary':'音频正常'}]}},
                             'evidence':[{'kind':'video','status':'已绑定','generated_at':'2026-10-25T05:20:00Z','identity_status':'bound to review item','summary':'真实成片证据','issues':[],'href':'/api/english-world/workbench/media?task=x&kind=video'},
                                             {'kind':'cover','status':'已绑定','generated_at':'2026-10-25T05:20:00Z','identity_status':'bound to review item','summary':'真实封面证据','issues':[]},
@@ -137,15 +138,50 @@ def test_desktop_filters_history_and_navigation(ui):
     page.locator('#ew-q').fill('ocean')
     page.wait_for_timeout(400)
     page.locator('#ew-trigger').select_option('manual')
+    page.locator('#ew-status').select_option('failed')
     expect(page.locator('#ew-rows tr')).to_have_count(12)
     expect(page.locator('#ew-chips')).to_contain_text('搜索：ocean')
-    assert 'q=ocean' in page.url and 'trigger=manual' in page.url
+    expect(page.locator('#ew-chips')).to_contain_text('状态：失败')
+    expect(page.locator('#ew-chips')).to_contain_text('触发：人工')
+    assert 'q=ocean' in page.url and 'trigger=manual' in page.url and 'status=failed' in page.url
+    page.locator('#ew-trigger').select_option('scheduled')
+    expect(page.locator('#ew-chips')).to_contain_text('触发：定时')
+    page.locator('#ew-trigger').select_option('manual')
+    page.locator('#ew-status').select_option('')
+    expect(page.locator('#ew-history')).to_be_visible()
     page.locator('#ew-history').locator('summary').click()
     expect(page.locator('#ew-history-rows tr')).to_have_count(1)
     page.locator('#ew-history-rows .ew-task-title').first.click()
     expect(page.locator('#ew-drawer')).to_be_visible()
     expect(page.locator('#ew-drawer-body')).to_contain_text('质量报告与提交证据')
+    expect(page.locator('#ew-drawer-body')).to_contain_text('关联未核实')
+    expect(page.locator('#ew-safe-diagnostics-text')).not_to_be_visible()
+    diagnostic_summary=page.locator('#ew-drawer-body details summary').filter(has_text='查看安全诊断摘要')
+    diagnostic_summary.click()
+    expect(page.locator('#ew-safe-diagnostics-text')).to_be_visible()
+    expect(page.locator('#ew-safe-diagnostics-text')).to_have_text('合成安全诊断摘要，仅展开后显示。')
     expect(page.locator('#ew-drawer-actions button[data-action="approve_submission"]')).to_have_count(0)
+    def assert_drawer_rows_do_not_overlap():
+        geometry=page.locator('#ew-drawer').evaluate("el=>{const d=el.getBoundingClientRect(),b=el.querySelector('#ew-drawer-body').getBoundingClientRect(),f=el.querySelector('#ew-drawer-actions').getBoundingClientRect();return {bodyBottom:b.bottom,footerTop:f.top,footerBottom:f.bottom,drawerBottom:d.bottom,scrolling:el.querySelector('#ew-drawer-body').scrollHeight>el.querySelector('#ew-drawer-body').clientHeight}}")
+        assert geometry['bodyBottom'] <= geometry['footerTop']+1 and geometry['footerBottom'] <= geometry['drawerBottom']+1 and geometry['scrolling'], geometry
+    capture(page,'drawer-1440-950')
+    page.set_viewport_size({'width':1366,'height':768})
+    assert_drawer_rows_do_not_overlap()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).not_to_be_visible()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).to_be_visible()
+    capture(page,'drawer-1366-768')
+    page.evaluate('document.documentElement.style.fontSize="20px"')
+    page.set_viewport_size({'width':1366,'height':950})
+    assert_drawer_rows_do_not_overlap()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).not_to_be_visible()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).to_be_visible()
+    capture(page,'drawer-1366-large-type')
+    page.evaluate('document.documentElement.style.fontSize=""')
+    page.set_viewport_size({'width':640,'height':800})
+    assert_drawer_rows_do_not_overlap()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).not_to_be_visible()
+    diagnostic_summary.click();expect(page.locator('#ew-safe-diagnostics-text')).to_be_visible()
+    capture(page,'drawer-narrow-640-800')
     page.keyboard.press('Escape')
     expect(page.locator('#ew-drawer')).not_to_be_visible()
     expect(page.locator('#ew-history-rows .ew-task-title').first).to_be_focused()

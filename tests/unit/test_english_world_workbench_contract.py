@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-25 | Codex | 覆盖最近计划时刻、运行待办排除、诊断折叠及UTC步骤时间转换。 |
 | 1.3.0 | 2026-10-25 | Codex | 覆盖按上海当前时刻选择最近配置计划时刻。 |
 | 1.2.0 | 2026-10-25 | Codex | 覆盖无心跳执行状态监督和失败研究来源沿用。 |
 | 1.1.0 | 2026-10-25 | Codex | 覆盖桌面授权过期、六项投稿包绑定及启动失败后的原操作回执重放。 |
@@ -53,6 +54,37 @@ def test_next_scheduled_display_uses_next_shanghai_slot_and_rolls_to_tomorrow():
 
     assert next_scheduled_display(slots, datetime(2026, 10, 25, 13, 30, tzinfo=shanghai)) == "14:00"
     assert next_scheduled_display(slots, datetime(2026, 10, 25, 20, 0, tzinfo=shanghai)) == "明日 09:00"
+
+
+def test_failed_runs_do_not_inflate_business_waiting_and_technical_error_is_folded(tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    db.create_english_world_research_job()
+    workbench = EnglishWorldWorkbench(db, tmp_path)
+    business_rows, _, _ = workbench.console.tasks()
+    created_at = "2026-10-25T08:00:00+08:00"
+    runs = []
+    long_error = "本次协调器运行失败\n执行摘要：Traceback (most recent call last): RuntimeError: " + "provider output " * 40
+    for index in range(35):
+        record = {"id": f"failed-run-{index}", "state": "FAILED", "title": f"Failed run {index}",
+                  "created_at": created_at, "updated_at": created_at,
+                  "error_message": long_error if index == 0 else "具体错误：下载请求返回 HTTP 403"}
+        runs.append(workbench.console.task(None, record, run=True))
+    monkeypatch.setattr(workbench.console, "tasks", lambda: (business_rows + runs, {}, []))
+
+    result = workbench.view(view="attention")
+    failed_run = next(row for row in business_rows + runs if row["id"] == "run:failed-run-0")
+    item = workbench._item(failed_run)
+    detail = workbench.detail("run:failed-run-0")
+    short_error_run = workbench._item(next(row for row in runs if row["id"] == "run:failed-run-1"))
+
+    assert result["summary"]["waiting"] == 0
+    assert result["summary"]["active"] == 1
+    assert result["summary"]["latest_run"]["record_type"] == "run"
+    assert "本次协调器运行失败" in item["block_reason"]
+    assert "Traceback" not in item["block_reason"]
+    assert detail["safe_diagnostics"]["collapsed"] is True
+    assert "Traceback" in detail["safe_diagnostics"]["text"]
+    assert short_error_run["block_reason"] == "具体错误：下载请求返回 HTTP 403"
 
 
 def test_same_new_research_operation_concurrently_creates_one_job(tmp_path, monkeypatch):
@@ -232,6 +264,10 @@ def test_stale_execution_without_heartbeat_is_visible_as_unverified_attention(tm
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     job = db.create_english_world_research_job(source_url="https://www.youtube.com/watch?v=abcdefghijk")
     assert db.claim_english_world_job_for_research(job["id"])
+    with db.get_connection() as conn:
+        conn.execute("UPDATE english_world_jobs SET created_at=?, updated_at=? WHERE id=?",
+                     ("2026-10-25 00:29:20", "2026-10-25 00:30:14", job["id"]))
+        conn.commit()
     workbench = EnglishWorldWorkbench(db, tmp_path)
 
     result = workbench.view(view="attention")
@@ -247,6 +283,8 @@ def test_stale_execution_without_heartbeat_is_visible_as_unverified_attention(tm
     assert result["summary"]["waiting"] >= 1
     assert item["action_eligibility"]["research"]["allowed"] is False
     assert research["display_state"] == "研究状态待核实"
+    assert research["started_at"] == "2026-10-25T08:29:20+08:00"
+    assert research["last_activity"] == "2026-10-25T08:30:14+08:00"
 
     journal = tmp_path / "stage_recovery.json"
     journal.write_text(json.dumps({"attempts": [{"run_id": "run-1", "source_attempt_id": "attempt-1",
