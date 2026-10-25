@@ -10,6 +10,7 @@
    调用沙箱 ``AgySecondaryReplyProvider`` 生成双语草稿、落库 ``PENDING_REVIEW`` 并通过 ``TelegramApprovalTransport`` 推送审批卡片。
 
 # Modification History
+| scan-deadline-v1 | 2026-10-25 | Codex | 正常扫描暂缓记录结构化释放时间，成功/失败读取仍沿用原水位和单轮计费。 |
 | reply-coverage-v2 | 2026-10-25 | Codex | 原生活动唯一绑定后供下一批优先选择，保存顶层续扫水位与候选来源。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 维护暂停返回有界等待并保留已完成回执，不误标草稿失败。 |
 | Version | Date | Author | Description |
@@ -326,6 +327,11 @@ def _run_secondary_reply_tick(
     }
 
     if callable(discover_fn) and scan_limit > 0 and due_posts:
+        wake_store, pending_wake, wake_scope = None, None, None
+        if not platform_post_id and getattr(getattr(platform, "adapter", None), "state_path", None):
+            from .secondary_reply_scan_wake import store, scope_key
+            wake_store, wake_scope = store(), scope_key(acct, finder)
+            pending_wake = wake_store.read()
         try:
             with getattr(platform, "scan_scope", lambda _ids: nullcontext())([str(p["platform_post_id"]) for p in due_posts]):
                 for post_row in due_posts:
@@ -445,6 +451,13 @@ def _run_secondary_reply_tick(
             if not isinstance(exc, WeChatSessionLockBusy):
                 raise
             report["scan_deferred"] = str(exc)
+            if wake_store is not None:
+                from .secondary_reply_scan_wake import remember_scan_wait
+                report["scan_wait"] = remember_scan_wait(exc, account=acct, finder=finder,
+                                                        scan_limit=scan_limit, platform=platform)
+        else:
+            if wake_store is not None and pending_wake and pending_wake["scope"] == wake_scope:
+                wake_store.complete(wake_scope, pending_wake["token"])
 
     observations_fn = getattr(platform, "comment_activity_observations", None)
     if callable(observations_fn) and report["scanned_posts"]:

@@ -5,6 +5,7 @@
 dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 API、零副作用。
 
 # Modification History
+| scan-deadline-v1 | 2026-10-25 | Codex | 既有发送检查可恢复已登记的到期扫描，仅执行扫描、不重跑发送/对账/生成。 |
 | reply-coverage-v2 | 2026-10-25 | Codex | 后页父评论导航读取账户/作品/评论绑定的原生游标，仍独立复核目标。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -430,9 +431,34 @@ def ops_main(argv: List[str], platform_factory=None, approval_transport=_UNSET_T
             return show({"ok": False, "reason": "AUTHOR_FINDER_ID_NOT_CONFIGURED"})
         from video_processing.utils.runtime_configuration import presence
         with presence('secondary-reply'):
+            platform = factory(args)
+            if (args.max_reconcile == 0 and args.max_submit == 1 and args.scan_posts == 0
+                    and args.max_drafts == 0 and not args.post_id and not args.skip_cooldown_once
+                    and getattr(getattr(platform, "adapter", None), "state_path", None)):
+                from video_processing.interaction.secondary_reply_scan_wake import (
+                    store, scope_key, NativeScanWakeEnvironment, resume_scan_wait)
+                from video_processing.core.reply_send_schedule import verified_cadence
+                wakes = store()
+                try:
+                    pending = wakes.read()
+                    if pending:
+                        def resume_scanning(scan_limit):
+                            return run_secondary_reply_tick(db, platform=platform,
+                                approval_transport=resolved_transport, account_key=account_key,
+                                finder_id=finder, evidence_dir=args.evidence_dir or ops.DEFAULT_EVIDENCE_DIR,
+                                max_reconcile_per_tick=0, max_submit_per_tick=0,
+                                scan_posts_per_tick=scan_limit, max_drafts_per_tick=0)
+                        resumed = resume_scan_wait(wakes, scope_key(account_key, finder),
+                            NativeScanWakeEnvironment(platform), resume_scanning, cadence=verified_cadence())
+                        if resumed is not None:
+                            return show(resumed)
+                except Exception as exc:
+                    # 不能验证等待/配置/维护时闭锁本轮恢复，不打印账号、游标或异常私密内容。
+                    return show({"ok": False, "status": "SCAN_WAKE_UNAVAILABLE",
+                                 "error_type": type(exc).__name__})
             return show(run_secondary_reply_tick(
                 db,
-                platform=factory(args),
+                platform=platform,
                 approval_transport=resolved_transport,
                 account_key=account_key,
                 finder_id=finder,
