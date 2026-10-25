@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| video-review-origin-v1 | 2026-10-25 | Codex | 单条视频复核复用精确 HTTPS/Host/真实对端校验，保持配置页面隔离。 |
 | english-world-origin-v1 | 2026-10-25 | Codex | 为英语世界可选受保护 HTTPS Origin 提供共享的精确 Host/路径判定；其它路由保持本机边界。 |
 | reply-settings-v1 | 2026-10-25 | Codex | 迁移策略页复用配置中心权限，避免绕过本机会话和同源校验。 |
 """
@@ -27,6 +28,21 @@ def configured_english_world_public_origin(request, public_origin):
         return None
     path = request.url.path
     if path != '/english-world' and not path.startswith('/api/english-world/'):
+        return None
+    return _configured_https_public_origin(request, public_origin)
+
+
+def configured_video_review_public_origin(request, public_origin):
+    """只开放单条视频复核的既有路由，不信任任何转发头。"""
+    if request.method != 'POST' or not re.fullmatch(
+        r'/api/videos/[A-Za-z0-9_-]+/bypass-censor', request.url.path,
+    ):
+        return None
+    return _configured_https_public_origin(request, public_origin)
+
+
+def _configured_https_public_origin(request, public_origin):
+    if not public_origin:
         return None
     try:
         peer = ipaddress.ip_address(request.client.host)

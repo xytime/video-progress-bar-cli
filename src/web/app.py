@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| video-review-origin-v1 | 2026-10-25 | Codex | 修复受保护 HTTPS 控制台单条复核的 Origin 拒绝，并为 CP/P1/P2 批准留审计。 |
 | english-public-origin-v1 | 2026-10-25 | Codex | 仅允许配置的受保护 HTTPS Origin 访问英语世界路由；其它配置页边界不变。 |
 | english-workbench-v1 | 2026-10-25 | Codex | 注入英语世界桌面研究、制作、审核投稿与具名待审核续做执行器。 |
 | proxy-peer-v1 | 2026-10-25 | Codex | 禁用 Uvicorn 转发头改写，保留英语世界本机边界使用的真实连接对端。 |
@@ -150,7 +151,7 @@ from video_processing.core.douyin_ui_guard_policy import (
     douyin_publish_is_blocked,
 )
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
-from web.local_runtime_access import configured_english_world_public_origin
+from web.local_runtime_access import configured_english_world_public_origin, configured_video_review_public_origin
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 from video_processing.utils.generated_content_validation import is_upstream_error_response
 from video_processing.highlight import HighlightJobService
@@ -199,7 +200,10 @@ async def reject_untrusted_browser_origins(request, call_next):
         english_world_origin = configured_english_world_public_origin(
             request, settings.dashboard_english_world_public_origin,
         )
-        if origin not in trusted_origins and origin != english_world_origin:
+        review_origin = configured_video_review_public_origin(
+            request, settings.dashboard_review_public_origin,
+        )
+        if origin not in trusted_origins and origin not in {english_world_origin, review_origin}:
             return JSONResponse(
                 status_code=403,
                 content={"detail": "untrusted dashboard origin"},
@@ -3433,6 +3437,21 @@ def bypass_censor(
             review_stage=incident.get("review_stage"), platform=incident.get("platform"),
             title=video.get("title"), zh_title=video.get("zh_title"),
             text_excerpt="Operator approved only the verified input and rule fingerprint.",
+        )
+
+    if layer in {"CP", "P1", "P2"}:
+        incident = next((row for row in db.get_censorship_incidents(
+            youtube_id, slice_index=slice_index, limit=100,
+        ) if row.get("level") == layer and row.get("stage") != "manual_review"), {})
+        db.record_censorship_incident(
+            youtube_id, slice_index=slice_index, stage="manual_review", level=layer,
+            action="MANUAL_BYPASS", tag=video.get("censor_tag") or layer,
+            score=None, matched=incident.get("matched") or em, channel="operator",
+            decision=f"MANUAL_{layer}_APPROVED", rule_id=f"dashboard.{layer.lower()}_review",
+            input_hash=incident.get("input_hash"), rule_pack_version=incident.get("rule_pack_version"),
+            source_field=incident.get("source_field"), review_stage=incident.get("review_stage"),
+            platform=incident.get("platform"), title=video.get("title"), zh_title=video.get("zh_title"),
+            text_excerpt=f"Operator approved task {video['id']} slice {slice_index}; source incident {incident.get('id')}.",
         )
 
     # 1) 置放行标志。P0 还须由上方 MANUAL_P0_APPROVED 审计记录配对认可。

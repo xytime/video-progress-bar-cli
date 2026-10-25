@@ -231,8 +231,10 @@ class Settings(BaseSettings):
     )
     # 仅英语世界页面可选使用的外部 HTTPS Origin；空值保持所有配置页本机访问。
     dashboard_english_world_public_origin: str = ""
+    # 单条视频人工复核入口使用的受保护公网 Origin；不开放配置页或其它控制面。
+    dashboard_review_public_origin: str = ""
 
-    @field_validator("dashboard_english_world_public_origin")
+    @field_validator("dashboard_english_world_public_origin", "dashboard_review_public_origin")
     @classmethod
     def validate_dashboard_english_world_public_origin(cls, value):
         if value == "":
