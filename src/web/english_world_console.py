@@ -183,7 +183,7 @@ def create_english_console_router(db, *, port, output=None, start_research=None,
                 try:
                     callback = None
                     if body.action == 'approve_submission' and start_submission:
-                        callback = lambda: start_submission(body.task.removeprefix('review:'))
+                        callback = lambda: start_submission(result['review_id'])
                     elif body.action == 'research' and start_research:
                         callback = lambda: start_research(result['task_id'].removeprefix('job:'))
                     elif body.action == 'confirm_production' and start_production:

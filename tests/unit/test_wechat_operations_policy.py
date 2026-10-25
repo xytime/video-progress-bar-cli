@@ -46,6 +46,40 @@ def event(at, operation, task='synthetic'):
     purpose={'publish':'发布','first_comment':'首评','reply':'回复','comment_scan':'评论扫描','post_match':'作品匹配','keepalive':'保活'}[operation]
     return {'at':at,'purpose':purpose,'operation':operation,'task':task}
 
+@pytest.mark.parametrize('blocked_by', ['recovery', 'submitted', 'reserved', 'priority', 'quota'])
+def test_ineligible_queue_head_does_not_block_admissible_publish(active, monkeypatch, blocked_by):
+    now=time.time(); row=state()
+    operation='reply' if blocked_by in {'recovery', 'quota'} else 'publish'
+    queued={**event(now-120,operation,'older'), 'seen':now, 'policy_protocol':1}
+    row['schedule']['queue']=[queued]
+    if blocked_by=='recovery':
+        row.update(last_limited_at=now-90000,blocked_until=now-3600)
+    elif blocked_by=='submitted':
+        row['schedule']['submit_intents']={'older':{'at':now-100}}
+    elif blocked_by=='reserved':
+        monkeypatch.setattr(settings,'wechat_scheduler_priority_video','new')
+    elif blocked_by=='priority':
+        row['schedule']['recovery_priority']=[{'task':'new','expires_at':now+300}]
+    elif blocked_by=='quota':
+        row['schedule']['sessions']=[event(now-100-i,'reply') for i in range(50)]
+    before=copy.deepcopy(row)
+    assert not evaluate(row,now,queued['purpose'],'older')['allowed']
+    assert evaluate(row,now,'发布','new')['allowed']
+    assert row==before
+
+def test_eligible_queue_keeps_fifo_and_recovery_does_not_bypass_backoff(active):
+    now=time.time();row=state()
+    row['schedule']['queue']=[{**event(now-120,'publish','older'),'seen':now,'policy_protocol':1}]
+    assert 'QUEUE_ORDER' in {b['code'] for b in evaluate(row,now,'发布','new')['blockers']}
+    assert evaluate(row,now,'发布','older')['allowed']
+    row['schedule']['queue']=[{**event(now-120,'reply','older'),'seen':now,'policy_protocol':1}]
+    row.update(last_limited_at=now-100,blocked_until=now+60)
+    assert 'PLATFORM_BACKOFF' in {b['code'] for b in evaluate(row,now,'发布','new')['blockers']}
+    row['blocked_until']=now-1
+    row['schedule']['recovery_started']=now-10
+    row['schedule']['sessions']=[event(now-10,'publish')]
+    assert 'RECOVERY_INTERVAL' in {b['code'] for b in evaluate(row,now,'发布','new')['blockers']}
+
 def test_exact_approved_configuration_and_17_fields(active):
     policy,_=active
     assert load_policy()==policy

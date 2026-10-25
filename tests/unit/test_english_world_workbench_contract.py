@@ -432,3 +432,48 @@ def test_failed_dispatch_replays_original_approval_without_second_dispatch(tmp_p
     assert replay.json()["replayed"] is True
     assert replay.json()["dispatch_state"] == "FAILED_OR_UNKNOWN"
     assert calls == [review["id"]]
+
+
+@pytest.mark.parametrize("linked_job", [False, True])
+def test_approval_dispatches_bound_review_once_for_both_task_forms(tmp_path, monkeypatch, linked_job):
+    db, output, review = _review_fixture(tmp_path)
+    db.topic_initialize()
+    monkeypatch.setattr(EnglishWorldWorkbench, "_product_context_status",
+                        lambda _self, _record: (True, "fixture gated independently"))
+    task_id = "review:" + review["id"]
+    if linked_job:
+        job = db.create_english_world_research_job()
+        assert db.claim_english_world_job_for_research(job["id"])
+        db.complete_english_world_research(job["id"], candidates=[{
+            "id": "dispatch-candidate", "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "source_title": "Synthetic science story", "source_channel_id": "UCWUA2W6LueNy9BSovivFVvQ",
+            "youtube_id": "abcdefghijk", "topic": "science", "learning_value": "Vocabulary",
+            "safety_note": "Synthetic fixture", "caption_status": "unchecked"}])
+        db.select_english_world_candidate("dispatch-candidate")
+        db.request_english_world_production(job["id"])
+        assert db.claim_english_world_job_for_production(job["id"])
+        db.complete_english_world_job_production(job["id"], review_id=review["id"],
+                                                mp4_path=review["mp4_path"], manifest_path=review["manifest_path"])
+        task_id = "job:" + job["id"]
+    calls = []
+    app = FastAPI()
+    app.include_router(create_english_console_router(db, port=9100, output=output, start_submission=calls.append))
+    client = TestClient(app, base_url="http://127.0.0.1:9100", client=("127.0.0.1", 50000))
+    assert client.get("/english-world").status_code == 200
+    csrf = hashlib.sha256(("runtime-csrf:" + client.cookies.get("runtime_local_session")).encode()).hexdigest()
+    service = EnglishWorldWorkbench(db, output)
+    body = {"task": task_id, "action": "approve_submission",
+            "revision": service._item(service.console.find(task_id))["revision"],
+            "operation_id": "bound-review-dispatch-01", "payload": {"review_id": "untrusted-other-review"}}
+    headers = {"Origin": "http://127.0.0.1:9100", "X-Runtime-CSRF": csrf}
+
+    first = client.post("/api/english-world/workbench/actions", json=body, headers=headers)
+    replay = client.post("/api/english-world/workbench/actions", json=body, headers=headers)
+
+    assert first.status_code == replay.status_code == 200
+    assert calls == [review["id"]]
+    assert first.json()["review_id"] == review["id"]
+    assert first.json()["dispatch_state"] == "ADMITTED"
+    assert replay.json()["replayed"] is True
+    assert replay.json()["review_id"] == review["id"]
+    assert db.get_english_world_review_item(review["id"])["approval_source"] == "DESKTOP_WORKBENCH"

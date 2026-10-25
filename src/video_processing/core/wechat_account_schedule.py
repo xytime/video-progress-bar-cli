@@ -167,7 +167,7 @@ def _operation_blocks(sessions, now, operation, policy):
     return blockers, values
 
 
-def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False):
+def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False, compare_queue=True):
     """稳定期按操作独立；真实原生退避、恢复保护、投稿去重与物理锁继续有效。"""
     state = row.get("schedule", {})
     actual = [s for s in state.get("sessions", []) if s["at"] > now - DAY]
@@ -209,18 +209,21 @@ def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False)
         blockers.extend(current)
     if not account_only and operation:
         from ..utils.runtime_configuration import value
-        queue = [q for q in state.get("queue", []) if q["seen"] > now - value('task_scheduling',
-                 'reply_queue_seen_seconds' if q['purpose']=='回复' else 'queue_seen_seconds',
-                 2700 if q['purpose']=='回复' else 600)]
         priorities = [p for p in state.get("recovery_priority", []) if p["expires_at"] > now]
         if priorities and task_identity(task) != task_identity(priorities[0]["task"]):
             block("RECOVERY_RESERVED", "已有明确恢复任务保留下一次机会", priorities[0]["expires_at"])
-        # 只比较当前可执行的排队项；额度已满的某一用途不能堵住其他用途。
-        eligible = [q for q in queue if q.get("policy_protocol") == 1 and
-                    q.get("operation") == PURPOSES.get(q["purpose"]) and PURPOSES.get(q["purpose"]) and
-                    not _operation_blocks(actual, now, PURPOSES[q["purpose"]], policy)[0]]
-        if eligible and task_identity(min(eligible, key=lambda q: q["at"])["task"]) != task_identity(task):
-            block("QUEUE_ORDER", "另一个当前可执行的待办在前，等待浏览器串行机会")
+        if compare_queue:
+            queue = [q for q in state.get("queue", []) if q["seen"] > now - value('task_scheduling',
+                     'reply_queue_seen_seconds' if q['purpose']=='回复' else 'queue_seen_seconds',
+                     2700 if q['purpose']=='回复' else 600)]
+            # 复用完整准入保护，只关闭内层队列比较，最多两层；不删队、不扣次。
+            # 恢复期禁用、投稿保护或保留任务不匹配的队首不能反向堵住可执行任务。
+            eligible = [q for q in queue if q.get("policy_protocol") == 1 and
+                        q.get("operation") == PURPOSES.get(q["purpose"]) and PURPOSES.get(q["purpose"]) and
+                        _evaluate_operations(row, now, q["purpose"], q["task"], policy,
+                                             compare_queue=False)["allowed"]]
+            if eligible and task_identity(min(eligible, key=lambda q: q["at"])["task"]) != task_identity(task):
+                block("QUEUE_ORDER", "另一个当前可执行的待办在前，等待浏览器串行机会")
     untils = [b["until"] for b in blockers if b["until"] is not None]
     config = policy["operations"].get(operation, {})
     return {"allowed": not blockers, "blockers": blockers,

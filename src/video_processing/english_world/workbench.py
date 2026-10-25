@@ -552,7 +552,8 @@ class EnglishWorldWorkbench:
             if any(hashes.get(key) != record.get(field) for field,key in bound_fields.items()):
                 raise PermissionError("当前文件与审核绑定包哈希不一致；素材已变化，必须生成新revision并重新复核")
             approved = self.db.approve_english_world_submission(str(record["id"]), authorization="DESKTOP_WORKBENCH")
-            result = {"task_id": task_id, "status": approved["state"], "approval_source": approved.get("approval_source")}
+            result = {"task_id": task_id, "review_id": approved["id"], "status": approved["state"],
+                      "approval_source": approved.get("approval_source")}
         elif action == "hold":
             held = self.db.hold_english_world_review_item(str(record["id"]))
             result = {"task_id": task_id, "status": held["state"]}
