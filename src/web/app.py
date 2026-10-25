@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| english-public-origin-v1 | 2026-10-25 | Codex | 仅允许配置的受保护 HTTPS Origin 访问英语世界路由；其它配置页边界不变。 |
 | english-workbench-v1 | 2026-10-25 | Codex | 注入英语世界桌面研究、制作、审核投稿与具名待审核续做执行器。 |
 | proxy-peer-v1 | 2026-10-25 | Codex | 禁用 Uvicorn 转发头改写，保留英语世界本机边界使用的真实连接对端。 |
 | demand-keepalive-v1 | 2026-10-25 | Codex | 按真实认证证据排期、跨重启退避与准确的准入等待原因。 |
@@ -149,6 +150,7 @@ from video_processing.core.douyin_ui_guard_policy import (
     douyin_publish_is_blocked,
 )
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
+from web.local_runtime_access import configured_english_world_public_origin
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 from video_processing.utils.generated_content_validation import is_upstream_error_response
 from video_processing.highlight import HighlightJobService
@@ -194,7 +196,10 @@ async def reject_untrusted_browser_origins(request, call_next):
             f"http://[::1]:{port}",
             f"{request.url.scheme}://{request.url.netloc}",
         }
-        if origin not in trusted_origins:
+        english_world_origin = configured_english_world_public_origin(
+            request, settings.dashboard_english_world_public_origin,
+        )
+        if origin not in trusted_origins and origin != english_world_origin:
             return JSONResponse(
                 status_code=403,
                 content={"detail": "untrusted dashboard origin"},
@@ -246,6 +251,7 @@ app.include_router(create_runtime_configuration_router(db,port=settings.dashboar
 from web.english_world_console import create_english_console_router
 app.include_router(create_english_console_router(
     db, port=settings.dashboard_port,
+    public_origin=settings.dashboard_english_world_public_origin,
     start_research=lambda job_id: _start_english_world_research(job_id),
     start_production=lambda job_id: _start_english_world_production(job_id),
     start_submission=lambda review_id: _start_english_world_submission(review_id),

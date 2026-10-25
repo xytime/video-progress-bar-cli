@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-25 | Codex | 支持配置的英语世界受保护 HTTPS Origin，继续强制真实回环对端、精确Host、会话与CSRF。 |
 | 1.2.0 | 2026-10-25 | Codex | 按上海当前时间展示最近的配置计划时刻。 |
 | 1.1.0 | 2026-10-25 | Codex | 接入会话可信桌面动作、幂等回执、固定媒体证据与安全执行状态。 |
 | 1.0.0 | 2026-10-25 | Codex | 独立管理入口、有限分页和固定类型报告；没有生产写接口。 |
@@ -58,9 +59,10 @@ class WorkbenchActionRequest(BaseModel):
 
 
 def create_english_console_router(db, *, port, output=None, start_research=None,
-                                  start_production=None, start_submission=None, start_resume=None):
+                                  start_production=None, start_submission=None, start_resume=None,
+                                  public_origin=''):
     router = APIRouter()
-    boundary, authorized, page_response = create_runtime_access(db, port)
+    boundary, authorized, page_response = create_runtime_access(db, port, public_origin=public_origin)
     service = EnglishConsole(db, output or settings.default_output_dir)
     workbench = EnglishWorldWorkbench(db, output or settings.default_output_dir)
 

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| dashboard-public-origin-v1 | 2026-10-25 | Codex | 为英语世界声明可选、严格校验的受保护 HTTPS 公网 Origin。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 声明每浏览器上下文的有界作品列表请求预算。 |
@@ -124,6 +125,7 @@
 """
 import json
 import os
+import re
 import socket
 import urllib.request
 from contextlib import contextmanager
@@ -132,8 +134,9 @@ from pathlib import Path
 from typing import Optional, List, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, computed_field, PrivateAttr
+from pydantic import Field, computed_field, field_validator, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from urllib.parse import urlsplit
 
 # [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
 # 用于 env_file 绝对路径，避免 cwd 不同时 .env 加载失败的根因
@@ -226,6 +229,41 @@ class Settings(BaseSettings):
         default="0.0.0.0",
         pattern=r"^(127\.0\.0\.1|::1|0\.0\.0\.0)$",
     )
+    # 仅英语世界页面可选使用的外部 HTTPS Origin；空值保持所有配置页本机访问。
+    dashboard_english_world_public_origin: str = ""
+
+    @field_validator("dashboard_english_world_public_origin")
+    @classmethod
+    def validate_dashboard_english_world_public_origin(cls, value):
+        if value == "":
+            return value
+        if not isinstance(value, str) or value != value.strip():
+            raise ValueError("必须是无路径的完整 HTTPS origin")
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("必须是无路径的完整 HTTPS origin") from exc
+        host = parsed.hostname or ""
+        labels = host.split(".")
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or not host
+            or not host.isascii()
+            or host.endswith(".")
+            or any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels)
+            or (port is not None and not 1 <= port <= 65535)
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.netloc != (f"{host}:{port}" if port is not None else host)
+            or value != f"https://{parsed.netloc}"
+        ):
+            raise ValueError("必须是无路径的完整 HTTPS origin")
+        return value
 
     # Telegram Bot 调用高权限控制面 API 时使用的独立内部令牌。仅本机进程持有，
     # 不复用 Telegram Bot token；缺失时相关 API 必须 fail-closed。
