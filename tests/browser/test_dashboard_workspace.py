@@ -61,7 +61,7 @@ def evidence(page,name):
 
 def test_home_entry_counts_readonly_and_first_screen(workspace):
     page,client,state,db=workspace
-    expect(page.locator('.console-primary')).to_have_count(5)
+    expect(page.locator('.console-primary')).to_have_count(6)
     expect(page.locator('#console-search-state')).to_contain_text('生产搜索关闭')
     for tab in ('waitlist','active','ready','error'):
         total=client.get('/api/videos',params={'tab':tab,'created_window':'all'}).json()['total_count']

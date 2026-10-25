@@ -8,6 +8,7 @@
       ['视频预筛选', '/video-prefilter'], ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
       ['手动加入生产队列', '/?view=topics&tab=manual']]],
     ['production', '生产队列', '/?view=production&tab=queue', []],
+    ['english', '英语世界', '/english-world', []],
     ['publications', '发布记录', '/?view=publications&tab=review', []],
     ['operations', '配置与运维', '/?view=operations', [['运行配置中心', '/runtime-configuration'], ['生词片尾', '/vocabulary-outro-settings'], ['发布恢复与调度', '/wechat-cooldown-settings']]],
   ];
@@ -46,5 +47,5 @@
     }
   });
   window.ConsoleNavigation={select};
-  select(root ? 'overview' : ['/topic-candidates','/video-prefilter'].includes(location.pathname)?'topics':'operations');
+  select(root ? 'overview' : location.pathname==='/english-world'?'english':['/topic-candidates','/video-prefilter'].includes(location.pathname)?'topics':'operations');
 })();

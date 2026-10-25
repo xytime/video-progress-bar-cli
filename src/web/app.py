@@ -241,6 +241,8 @@ app.include_router(
 
 from web.runtime_configuration import create_runtime_configuration_router
 app.include_router(create_runtime_configuration_router(db,port=settings.dashboard_port))
+from web.english_world_console import create_english_console_router
+app.include_router(create_english_console_router(db, port=settings.dashboard_port))
 
 
 @app.on_event('startup')

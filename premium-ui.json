@@ -13,7 +13,8 @@
     "CRUD"
   ],
   "ownership": {
-    "Select/Listbox": "native"
+    "Select/Listbox": "native",
+    "Date": "native"
   },
   "requiredCommands": [
     "browser"
@@ -24,6 +25,7 @@
   "evidence": {
     "crudFullFlow": "tests/browser/test_topic_candidates_browser.py",
     "failurePaths": "tests/browser/test_topic_candidates_browser.py",
-    "publishingRecovery": "tests/browser/test_publishing_recovery_browser.py"
+    "publishingRecovery": "tests/browser/test_publishing_recovery_browser.py",
+    "englishWorldConsole": "tests/browser/test_english_world_console_browser.py"
   }
 }

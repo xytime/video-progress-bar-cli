@@ -142,3 +142,17 @@
 ## 视频主列表筛选与标签数量
 
 2026-10-25 用户确认：标签数量复用列表筛选谓词。频道、入库时间、搜索和点赞率跨标签保留；分数、异常类型、状态及透视等场景条件按既有切换规则清除，标签预示切换后的数量。当前标签数量与列表总数一致。“清除筛选”回到第一页、全部频道及全部入库时间，并清除场景条件；空列表统一提示“当前筛选下无匹配记录”。验证由 `tests/unit/test_dashboard_video_filters.py` 和 `tests/browser/test_dashboard_workspace.py` 覆盖，查询与筛选不改变业务状态。
+
+
+## 英语世界只读管理台（2026-10-25）
+
+依据：已验收 Superdesign 草稿 29124163-8ad4-4859-8556-cb5a797bfda0 v4；当前用户授权开发与部署。任务/投稿事实来自 EnglishConsoleDAL，自动早期失败来自固定目录的运行回执；不把失败通知 ACCEPTED 当成视频发表。没有创建、重试、批准、提交或平台查询接口。成片存在、投稿授权、平台受理、审核和历史公开回读分别呈现。超过24小时未更新的在途记录标当前待确认。
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Select/Listbox / Date | native select / input date | english_world_console.html | 系统 popup 几何与日期选择 | test_english_world_console_browser.py |
+| Scrollbar | dashboard.css / console_workspace.css | DESIGN.md | 本页列表、详情分别滚动；手机自然滚动 | test_english_world_console_browser.py |
+| Navigation / Dialog / Feedback | console_navigation.js / native dialog / 页面 status | UX-CONTRACT.md | Esc关闭、入口焦点恢复、失败保留旧记录 | test_english_world_console_browser.py |
+| Read-only list | english_world_console.js + EnglishConsole | 本地数据库与固定运行回执 | AND筛选、每页20、URL恢复 | test_english_world_console.py |
+
+统计明确限定最近1000个人工任务、1000成片和200次运行，按已知review/manifest关联去重；计数不随筛选变化，待处理与已结束可重叠。关键词忽略大小写和首尾空格，与状态/来源方式/北京创建日期同时生效；IME结束后300ms读取，清空即时，过期请求取消，空结果清除旧详情。刷新保留仍匹配的选择；HTTP故障保留旧数据并标当前未知。报告仅固定七类，本地文件限output目录、拒绝越界和外部链接，使用文件内容hash核实关联；缺失或不匹配不采纳通过，报告不能修改原质量门禁。

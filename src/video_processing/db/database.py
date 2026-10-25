@@ -237,9 +237,10 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
 from .english_product_recovery import EnglishProductRecoveryDAL
+from .english_console import EnglishConsoleDAL
 
 
-class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。

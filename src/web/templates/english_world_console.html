@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Modification History: 1.0.0 | 2026-10-25 | Codex | 已确认 v4 英语世界管理台，真实数据只读。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>英语世界 · 视频运营工作台</title>
+<script src="/static/js/topic_display_preferences.js?v=1"></script>
+<link rel="stylesheet" href="/static/css/dashboard.css?v=20261022-source-age">
+<link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
+<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261013-04">
+<link rel="stylesheet" href="/static/css/english_world_console.css?v=1">
+<script defer src="/static/js/console_navigation.js?v=english-world-1"></script>
+<script defer src="/static/js/english_world_console.js?v=1"></script>
+</head><body><main class="product-settings english-console">
+<header class="ew-header"><div><p class="ew-eyebrow">独立学习短视频</p><h1>英语世界</h1><p class="hint">管理制作进度、质量报告与平台记录</p></div><button disabled id="ew-refresh" type="button">刷新进度</button></header>
+<p id="ew-feedback" class="hint ew-feedback" role="status" aria-live="polite">页面正在准备；若长时间未显示，请刷新页面并确认浏览器允许运行脚本。</p>
+<section class="ew-metrics" aria-label="全局任务统计"><div><span>全部任务</span><strong id="count-all">—</strong></div><div><span>进行中</span><strong id="count-active">—</strong></div><div><span>待处理</span><strong id="count-attention">—</strong></div><div><span>已结束</span><strong id="count-done">—</strong></div></section>
+<p class="hint ew-count-note">全局统计不随筛选变化；失败与暂停同时计入待处理、已结束。</p>
+<details id="ew-schedule"><summary>查看日程与统计范围</summary><p id="ew-schedule-text" class="hint">尚未读取</p><p id="ew-coverage" class="hint"></p><p class="hint">刷新仅读取本地台账，不启动制作、重试或平台回查。</p></details>
+<section id="ew-list-view" aria-label="任务查找">
+<div class="ew-filterbar"><div class="ew-search"><label for="ew-search" class="sr-only">搜索标题或来源</label><input id="ew-search" type="search" placeholder="搜索标题或来源" maxlength="160"><button disabled id="ew-clear-search" type="button" hidden aria-label="清空搜索">清空</button></div><button disabled id="ew-more" type="button" aria-expanded="false" aria-controls="ew-extra">更多筛选</button><div id="ew-extra"><label for="ew-trigger" class="sr-only">触发方式</label><select id="ew-trigger"><option value="">全部触发方式</option><option value="manual">人工任务</option><option value="scheduled">定时运行</option><option value="auto">独立成片</option></select><label for="ew-date" class="sr-only">任务创建日期（北京时间）</label><input id="ew-date" type="date" aria-label="任务创建日期（北京时间）"><button disabled id="ew-reset" type="button">重置条件</button></div></div>
+<div class="ew-tabs" role="group" aria-label="任务状态"><button disabled type="button" data-category="all" aria-pressed="true">全部</button><button disabled type="button" data-category="active" aria-pressed="false">进行中</button><button disabled type="button" data-category="attention" aria-pressed="false">待处理</button><button disabled type="button" data-category="done" aria-pressed="false">已结束</button></div>
+</section>
+<div class="ew-workspace"><section class="ew-list-column" aria-label="任务列表"><p id="ew-results" class="hint" role="status"></p><div id="ew-tasks" aria-busy="true"></div><div class="ew-pagination"><button id="ew-prev" type="button" disabled>上一页</button><span id="ew-page" class="hint"></span><button id="ew-next" type="button" disabled>下一页</button></div></section><section id="ew-detail" class="ew-detail-column" aria-label="任务详情"><p class="hint">读取任务后显示详情。</p></section></div>
+<dialog id="ew-report" aria-labelledby="ew-report-heading"><div class="ew-dialog-header"><h2 id="ew-report-heading">证据报告</h2><button disabled id="ew-report-close" type="button" autofocus>关闭报告</button></div><div id="ew-report-body" aria-live="polite"></div></dialog>
+</main></body></html>
