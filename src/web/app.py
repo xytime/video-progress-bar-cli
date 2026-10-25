@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 | english-workbench-v1 | 2026-10-25 | Codex | 注入英语世界桌面研究、制作、审核投稿与具名待审核续做执行器。 |
+| proxy-peer-v1 | 2026-10-25 | Codex | 禁用 Uvicorn 转发头改写，保留英语世界本机边界使用的真实连接对端。 |
 | demand-keepalive-v1 | 2026-10-25 | Codex | 按真实认证证据排期、跨重启退避与准确的准入等待原因。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
@@ -4521,4 +4522,4 @@ if __name__ == "__main__":
     host = settings.dashboard_bind_host
     display_host = f"[{host}]" if ":" in host else host
     print(f"\n\U0001f680 Video Pipeline Control Center → http://{display_host}:{port}\n")
-    uvicorn.run(app, host=host, port=port, reload=False)
+    uvicorn.run(app, host=host, port=port, reload=False, proxy_headers=False)
