@@ -25,6 +25,8 @@ def engagement_page(chromium, tmp_path, monkeypatch):
         seed(db, yid, status, score, error=error)
     dispatch = Mock()
     monkeypatch.setattr(web_app, "db", db)
+    monkeypatch.setattr(web_app, "_OUT_DIR", tmp_path)
+    monkeypatch.setattr(type(web_app.settings), "default_output_dir", property(lambda _: tmp_path))
     monkeypatch.setattr(web_app, "_trigger_video_async", dispatch)
     client = TestClient(web_app.app, base_url="http://localhost:9100", client=("127.0.0.1", 50000))
     page = chromium.new_page(viewport={"width": 1440, "height": 1000})

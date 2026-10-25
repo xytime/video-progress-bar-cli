@@ -59,7 +59,7 @@ def test_auth_notice_deduplicated_and_recovers_after_manual_login(tmp_path):
     assert len(calls) == 2 and len(notices) == 1
     assert check(1600, lambda: None)
     assert json.loads(path.read_text())['status'] == 'READY'
-    assert not check(1601)
+    assert not check(1900)
     assert len(notices) == 2  # 新故障可再次提示。
 
 

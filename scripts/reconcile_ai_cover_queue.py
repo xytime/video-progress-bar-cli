@@ -3,6 +3,7 @@
 
 # Modification History
 | Version | Date | Author | Description |
+| auth-freshness-v1 | 2026-10-25 | Codex | 无待处理封面时也定期核实认证，五分钟缓存避免重复检查。 |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | --- | --- | --- | --- |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
@@ -53,7 +54,7 @@ LOCK_PATH = PROJECT_ROOT / "output" / "ai_cover_reconciler.lock"
 _COVER_QUEUE_ACTIVE_STATUS = "AI_COVER_PENDING"
 
 
-def _agy_auth_ready(db: PipelineDB) -> bool:
+def _agy_auth_ready(db: PipelineDB, *, force: bool = False) -> bool:
     env = build_subprocess_env(include_gemini=False, include_telegram=False)
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
         env.pop(key, None)
@@ -71,7 +72,7 @@ def _agy_auth_ready(db: PipelineDB) -> bool:
     return auth_ready(PROJECT_ROOT / "output" / "agy_cover_auth.json",
                       check=lambda: require_auth(settings.agy_command, cwd=PROJECT_ROOT / "output",
                                                  env=env, runner=run_process),
-                      notify=notify, now=time.time())
+                      notify=notify, now=time.time(), force=force)
 
 
 def _is_dedicated_cover(cover_path: Path) -> bool:
@@ -357,6 +358,7 @@ def reconcile() -> int:
                 PROJECT_ROOT / settings.ai_cover_finish_dir,
             )
             db = PipelineDB()
+            _agy_auth_ready(db)
             circuit = ProviderCircuit(PROJECT_ROOT / "output" / "agy_cover_health.json",
                                       cooldown=settings.ai_cover_provider_cooldown_seconds)
             resolved = 0
@@ -389,7 +391,7 @@ def reconcile() -> int:
                     except (OSError, ValueError):
                         auth_wait = False
                     if auth_wait:
-                        _agy_auth_ready(db)
+                        _agy_auth_ready(db, force=True)
                     else:
                         circuit.record(visual is not None)
                 if (visual is None and getattr(settings, "enable_codex_luna_cover_fallback", False)

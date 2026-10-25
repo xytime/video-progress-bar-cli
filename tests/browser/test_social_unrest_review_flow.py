@@ -1,4 +1,7 @@
-"""真实 Chromium、临时审计库验证平台题材复核完整闭环；平台触发替身。"""
+"""真实 Chromium、临时审计库验证平台题材复核完整闭环；平台触发替身。
+
+Modification History: 2026-10-25 Codex 授权后持续展示回执，保留单次提交与键盘关闭验证。
+"""
 from pathlib import Path
 from urllib.parse import urlsplit
 from unittest.mock import Mock
@@ -82,6 +85,10 @@ def test_unavailable_rereview_bound_approval_and_keyboard(flow, width):
     page.screenshot(path=str(folder / f'verified-{width}.png'))
     # 两次同步点击只有一次 POST，服务端随后也拒绝重复状态恢复。
     page.evaluate('confirmBypass(); confirmBypass()')
+    expect(page.locator('#bypass-feedback')).to_contain_text('授权已保存 · 回执 #')
+    expect(page.locator('#btn-confirm-bypass')).to_be_disabled()
+    expect(page.locator('#bypass-modal')).to_be_visible()
+    page.keyboard.press('Escape')
     expect(page.locator('#bypass-modal')).not_to_be_visible()
     trigger.assert_called_once()
     assert state['writes'].count('/api/videos/unrest/bypass-censor') == 1

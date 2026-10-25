@@ -39,6 +39,7 @@
 | 3.36.0 | 2026-09-09 | Codex | 新增已确认公开发布账本只读接口，供 Telegram /last 查询；拒绝本地工作流状态回退。 |
 | 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
 | Version | Date | Author | Description |
+| console-receipts-v1 | 2026-10-25 | Codex | 授权回执读回、封面认证时效和人工投稿确认提示闭环。 |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 历史审核标签不再提供当前复核入口，展示真实字幕阶段与复用结果。 |
@@ -1556,6 +1557,14 @@ def _attach_publish_display_fields(rows: list[dict]) -> list[dict]:
         if not yid:
             continue
         slice_index = int(row.get("slice_index") or 0)
+        wechat = (row.get('platforms') or {}).get('wechat')
+        if wechat and wechat.get('state') == 'UNCERTAIN':
+            from video_processing.core.operation_receipts import submission_feedback
+            feedback = submission_feedback(_OUT_DIR, yid, slice_index)
+            wechat['confirmation'] = feedback
+            if feedback['kind'] == 'MANUAL_CONFIRMATION_REQUIRED':
+                wechat['display_state'] = 'MANUAL_CONFIRMATION_REQUIRED'
+                wechat['error'] = feedback['message']
         paths = _backfill_asset_paths(yid, slice_index)
         published_title = _read_publish_text(paths["title"], max_chars=120)
         published_copy_preview = _read_publish_text(paths["copy"], max_chars=280)
@@ -3357,6 +3366,42 @@ def review_censor(youtube_id: str, request: CensorshipBypassRequest, slice_index
         return {"success": False, "error": "重新审查失败：" + str(exc)}
 
 
+@app.get("/api/videos/{youtube_id}/operation-receipts")
+def get_operation_receipts(youtube_id: str, slice_index: int = 0):
+    from video_processing.core.operation_receipts import review_receipt, submission_feedback
+    receipt = review_receipt(db, youtube_id, slice_index)
+    if receipt['state'] == 'NOT_FOUND':
+        raise HTTPException(404, '视频不存在')
+    video = db.get_engagement_video(youtube_id, slice_index=slice_index)
+    platform = (video.get('platforms') or {}).get('wechat') or {}
+    submission = submission_feedback(_OUT_DIR, youtube_id, slice_index) if platform.get('state') == 'UNCERTAIN' else None
+    return JSONResponse({'success': True, 'receipt': receipt, 'submission': submission,
+                         'wechat_state': platform.get('state'), 'automatic_retry': False},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.get("/api/cover-service/auth")
+def get_cover_auth():
+    from video_processing.utils.agy_background_auth import auth_snapshot
+    response = JSONResponse(auth_snapshot(_OUT_DIR / 'agy_cover_auth.json', now=time.time()))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.post("/api/cover-service/auth/recheck")
+def recheck_cover_auth():
+    from video_processing.utils.agy_background_auth import auth_ready, require_auth
+    from video_processing.utils.subprocess_env import build_subprocess_env
+    from video_processing.utils.cover_agy import run_process
+    env = build_subprocess_env(include_gemini=False, include_telegram=False)
+    for key in ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ADMIN_IDS'):
+        env.pop(key, None)
+    auth_ready(_OUT_DIR / 'agy_cover_auth.json',
+               check=lambda: require_auth(settings.agy_command, cwd=_OUT_DIR, env=env, runner=run_process),
+               notify=None, now=time.time(), force=True)
+    return get_cover_auth()
+
+
 @app.post("/api/videos/{youtube_id}/bypass-censor")
 def bypass_censor(
     youtube_id: str,
@@ -3399,7 +3444,7 @@ def bypass_censor(
         }
 
     if is_p0_redline:
-        db.record_censorship_incident(
+        approval_id = db.record_censorship_incident(
             youtube_id,
             slice_index=slice_index,
             stage="manual_review",
@@ -3429,7 +3474,7 @@ def bypass_censor(
         if not request or (request.incident_id, request.input_hash, request.rule_version) != (
                 evidence["incident_id"], evidence["input_hash"], evidence["rule_version"]):
             return {"success": False, "error": "复核证据已过期或未绑定，请刷新证据后确认", "evidence_stale": True}
-        db.record_censorship_incident(
+        approval_id = db.record_censorship_incident(
             youtube_id, slice_index=slice_index, stage="manual_review", level="RISK",
             action="MANUAL_BYPASS", tag=TAG, score=None, matched=incident.get("matched"), channel="operator",
             decision=APPROVAL, rule_pack_version=evidence["rule_version"], input_hash=evidence["input_hash"],
@@ -3443,7 +3488,7 @@ def bypass_censor(
         incident = next((row for row in db.get_censorship_incidents(
             youtube_id, slice_index=slice_index, limit=100,
         ) if row.get("level") == layer and row.get("stage") != "manual_review"), {})
-        db.record_censorship_incident(
+        approval_id = db.record_censorship_incident(
             youtube_id, slice_index=slice_index, stage="manual_review", level=layer,
             action="MANUAL_BYPASS", tag=video.get("censor_tag") or layer,
             score=None, matched=incident.get("matched") or em, channel="operator",
@@ -3463,21 +3508,31 @@ def bypass_censor(
         db.update_video_score(youtube_id, 100, force=True, slice_index=slice_index)
     # 4) 重置为 PENDING 并清除错误信息
     db.update_video_status(youtube_id, "PENDING", error_msg=None, slice_index=slice_index)
+    # 审计与启用标志均须读回；保存成功与执行启动分别报告。
+    from video_processing.core.operation_receipts import review_receipt
+    receipt = review_receipt(db, youtube_id, slice_index)
+    if receipt['state'] != 'SAVED' or receipt['approval']['id'] != approval_id:
+        raise HTTPException(503, '授权回执未能读回，请核实授权结果，勿重复提交')
     # 5) 立即抢占并触发管线
     triggered = False
     if db.claim_video_for_processing(youtube_id, slice_index=slice_index):
         fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
         if fresh:
-            _trigger_video_async(fresh)
-            triggered = True
+            try:
+                _trigger_video_async(fresh)
+                triggered = True
+            except Exception:
+                logging.getLogger(__name__).exception("授权已保存，但处理启动失败：%s", youtube_id)
+                db.update_video_status(youtube_id, "PENDING", error_msg=None, slice_index=slice_index)
 
     return {
         "success": True,
+        "receipt": receipt,
         "youtube_id": youtube_id,
         "slice_index": slice_index,
         "layer": layer,
         "triggered": triggered,
-        "message": "已复核放行并重新触发管线" if triggered else "已复核放行（score=100），等待调度器触发",
+        "message": "授权已保存，已发起后续处理请求" if triggered else "授权已保存，处理尚未启动，请查看调度状态",
     }
 
 

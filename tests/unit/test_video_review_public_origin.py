@@ -52,7 +52,8 @@ def test_review_origin_cannot_be_malformed(origin):
 
 
 @pytest.mark.parametrize('index', [0, 1])
-def test_https_review_persists_approval_and_audit_then_pipeline_honors_it(tmp_path, monkeypatch, index):
+@pytest.mark.parametrize('spawn_error', [False, True])
+def test_https_review_persists_approval_and_audit_then_pipeline_honors_it(tmp_path, monkeypatch, index, spawn_error):
     import web.app as dashboard
 
     db = PipelineDB(str(tmp_path / 'pipeline.db'))
@@ -60,7 +61,7 @@ def test_https_review_persists_approval_and_audit_then_pipeline_honors_it(tmp_pa
     if index:
         db.add_video(YID, 'Obama reacts to Republican attacks', 'channel', score=100, slice_index=index)
     monkeypatch.setattr(dashboard, 'db', db)
-    trigger = Mock()
+    trigger = Mock(side_effect=RuntimeError("spawn failed") if spawn_error else None)
     monkeypatch.setattr(dashboard, '_trigger_video_async', trigger)
     monkeypatch.setattr(dashboard.settings, 'dashboard_review_public_origin', ORIGIN)
     monkeypatch.setattr(dashboard.settings, 'enable_channel_policy_filter', True)
@@ -84,8 +85,12 @@ def test_https_review_persists_approval_and_audit_then_pipeline_honors_it(tmp_pa
 
     accepted = client.post(url, headers={'Origin': ORIGIN}, json={})
     assert accepted.status_code == 200 and accepted.json()['success'] is True
-    assert accepted.json()['triggered'] is True
+    assert accepted.json()['triggered'] is (not spawn_error)
     assert db.get_video_by_youtube_id(YID, slice_index=index)['bypass_censorship'] == 1
+    receipt = client.get(f'/api/videos/{YID}/operation-receipts?slice_index={index}')
+    assert receipt.headers['cache-control'] == 'no-store'
+    assert receipt.json()['receipt']['state'] == 'SAVED'
+    assert receipt.json()['receipt']['approval'] == accepted.json()['receipt']['approval']
     approval = db.get_censorship_incidents(YID, slice_index=index)[0]
     assert approval['decision'] == 'MANUAL_CP_APPROVED'
     assert approval['input_hash'] == incident['input_hash']
@@ -112,3 +117,22 @@ def test_public_review_configuration_does_not_open_other_routes(monkeypatch):
     remote = TestClient(dashboard.app, base_url='http://' + HOST, client=('198.51.100.1', 50000))
     assert remote.post(PATH, headers={'Origin': ORIGIN, 'X-Forwarded-For': '127.0.0.1',
                                      'X-Forwarded-Proto': 'https'}).status_code == 403
+
+
+def test_cover_auth_recheck_is_exact_https_path_and_does_not_run_model(tmp_path, monkeypatch):
+    import web.app as dashboard
+    import video_processing.utils.agy_background_auth as auth
+    calls = []
+    monkeypatch.setattr(dashboard, '_OUT_DIR', tmp_path)
+    monkeypatch.setattr(dashboard.settings, 'dashboard_review_public_origin', ORIGIN)
+    monkeypatch.setattr(auth, 'require_auth', lambda *a, **k: calls.append(1))
+    client = TestClient(dashboard.app, base_url='http://' + HOST, client=('127.0.0.1', 50000))
+    path = '/api/cover-service/auth/recheck'
+    assert client.post(path, headers={'Origin':'https://attacker.invalid'}).status_code == 403
+    assert not calls
+    response = client.post(path, headers={'Origin':ORIGIN})
+    assert response.status_code == 200 and response.json()['status'] == 'READY'
+    assert len(calls) == 1
+    assert client.get('/api/cover-service/auth').json()['status'] == 'READY'
+    for suffix in ('/extra', '-other'):
+        assert client.post(path+suffix, headers={'Origin':ORIGIN}).status_code == 403

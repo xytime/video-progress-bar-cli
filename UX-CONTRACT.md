@@ -173,3 +173,12 @@
 | Navigation / Scrollbar | `console_navigation.js` / `dashboard.css` | 本合同 / DESIGN.md | 页面自然滚动、表格自身滚动、抽屉单滚动区 | 同上 |
 | Dialog / Feedback | 原生 dialog、页面 live region | 服务端版本与资格 | 取消首焦点、Escape关闭并恢复入口焦点 | 同上 |
 | List / Detail / Actions | `english_world_console.js` | 工作台 v1 API 与服务端动作回执 | URL恢复、分页20、revision+operation_id | 同上 |
+
+## 授权与状态回执闭环（2026-10-25）
+
+- 范围：现有授权反馈、AGY 封面认证状态、视频号人工确认提示的小修复；不改变审批条件或投稿策略。
+- 所有者：`operation_receipts.js/css` 复用 native Dialog、原生 button 与项目 Toast；复核提交仍由既有 `confirmBypass` 单一拥有。
+- 保存：POST 返回审计编号后 GET 再读回同一任务/分集的回执；持续显示结果，关闭或刷新后仍可从平台详情读取。HTTP 拒绝和响应丢失分别提示，核实按钮只读，不重复 POST。
+- 认证：READY/AUTH_REQUIRED 仅五分钟内有效；无记录、过期或检查故障为 UNKNOWN。显式核实不运行模型、不弹 OAuth；恢复登录后可更新状态。
+- 投稿：只有同次同成片提交意图及点击返回证据，才显示“等待人工确认”；UNCERTAIN、平台原生 ID 和防重复门禁保持。证据缺失继续显示结果待核实。
+- 验收：隔离 Chromium + FastAPI/SQLite 覆盖成功、403、响应丢失、认证时效、移动端和键盘；生产 HTTPS 核实既有授权回执、真实认证重查及投稿提示，不新增投稿。

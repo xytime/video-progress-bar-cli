@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-25 | Codex | 授权读回、封面登录核实与人工投稿确认提示。 |
   | 2026-10-25 | Codex | 标签数量跟随筛选，清除恢复全频道与全时间，统一空列表提示。 |
   | 2026-10-23 | Codex | 当前审核阻塞、历史批准和真实字幕阶段分别展示，主行分集共用。 |
   | 2026-10-17 | Codex | 只读命中证据与当前重扫分开，保留 P0 双确认门禁。 |
@@ -105,6 +106,8 @@
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js"></script>
 <script defer src="/static/js/dashboard_workspace.js?v=20261020-header"></script>
+<link rel="stylesheet" href="/static/css/operation_receipts.css?v=20261025-1">
+<script defer src="/static/js/operation_receipts.js?v=20261025-1"></script>
 <script defer src="/static/js/console_header.js?v=20261020-auth-age"></script>
 <link rel="stylesheet" href="/static/css/console_header.css?v=20261020_3">
   <link rel="stylesheet" href="/static/css/manual_video_execution.css?v=20261021_1" />
@@ -130,6 +133,7 @@
         <small id="header-wechat-age">授权时间核实中</small>
       </div>
       <button type="button" id="btn-toggle-preferences" class="btn-tool-prefs" onclick="toggleDisplayPreferences()" title="外观风格与字号设置">外观设置</button>
+      <button type="button" id="cover-auth-status" class="btn-tool-prefs" onclick="OperationReceipts.openAuth()">封面登录待核实</button>
       <details id="header-more-menu" class="console-header-menu">
         <summary>更多操作</summary>
         <div class="console-header-popup">
@@ -675,6 +679,7 @@
 
       <p id="bypass-feedback" role="status" style="color:var(--text2); font-size:0.8125rem; overflow-wrap:anywhere;"></p>
       <div style="display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; position:sticky; bottom:0; padding:10px 0; background:var(--bg2);">
+        <button id="btn-check-bypass-receipt" class="btn" onclick="checkBypassReceipt()">核实授权结果</button>
         <button id="btn-rereview-censor" hidden onclick="rereviewCensor()" class="btn">重新审查</button>
         <button autofocus onclick="closeBypassModal()" style="padding:8px 16px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">取消</button>
         <button id="btn-confirm-bypass" onclick="confirmBypass()" style="padding:8px 16px; border-radius:6px; background:var(--orange); border:none; color:#fff; font-weight:600; cursor:pointer;">确认放行并继续处理</button>
@@ -765,6 +770,7 @@
     UNDER_REVIEW: ['审核中', 'SUBMITTED_BOUND', '平台审核中，尚未确认公开发布'],
     SUBMITTED_BOUND: ['已提交，待确认发布', 'SUBMITTED_BOUND', '已记录平台作品 ID，但尚无公开发布证明；禁止重发'],
     SUBMITTED_UNBOUND: ['本地已受理，待关联作品', 'SUBMITTED_UNBOUND', '本地已受理，尚未绑定平台作品 ID，也无公开发布证明；禁止重发'],
+    MANUAL_CONFIRMATION_REQUIRED: ['待人工确认', 'UNCERTAIN', '已执行发表操作，按策略等待人工确认；勿重复投稿'],
     UNCERTAIN: ['待核验', 'UNCERTAIN', '状态不确定，须先核验；不得盲目重发'],
     NOT_FOUND: ['平台未找到作品', 'UNCERTAIN', '回查未找到作品，不代表可以重新提交；须先核验'],
     REJECTED: ['审核未通过', 'FAILED'],
@@ -793,15 +799,16 @@
     const state = v.censorship_state || {};
     const text = state.current_layer ? `当前待复核：${state.current_label}`
       : state.history_tag ? [state.approval_label, `历史命中：${state.history_tag}`].filter(Boolean).join(' · ') : '';
-    if (!text) return '';
+    const receipt = v.bypass_censorship ? `<button type="button" class="btn" data-review-receipt="${escapeAttr(v.youtube_id)}" data-slice-index="${Number(v.slice_index) || 0}" onclick="OperationReceipts.open(this.dataset.reviewReceipt, Number(this.dataset.sliceIndex))">授权回执</button>` : '';
+    if (!text) return receipt;
     const color = state.current_layer ? 'var(--red)' : 'var(--text2)';
-    return `<span class="meta-chip censor-badge" style="color:${color};border:1px solid var(--border);white-space:normal">${escapeHtml(text)}</span>`;
+    return `<span class="meta-chip censor-badge" style="color:${color};border:1px solid var(--border);white-space:normal">${escapeHtml(text)}</span>` + receipt;
   }
 
   function videoStatusBadge(v) {
     const badge = v.failure_summary
       ? `<span class="badge badge-FAILED" title="${escapeAttr(v.error_msg || '')}">${escapeHtml(v.failure_summary)}</span>`
-      : statusBadge(v.processing_detail ? 'CAPTION_PROCESSING' : (v.display_status || v.status));
+      : statusBadge(v.processing_detail ? 'CAPTION_PROCESSING' : (v.platforms?.wechat?.display_state === 'MANUAL_CONFIRMATION_REQUIRED' ? 'MANUAL_CONFIRMATION_REQUIRED' : (v.display_status || v.status)));
     return badge + (v.processing_detail ? `<div class="processing-detail" style="white-space:normal;font-size:.75rem;color:var(--text2);margin-top:6px">${escapeHtml(v.processing_detail)}</div>` : '');
   }
 
@@ -2757,6 +2764,7 @@
     const btn = document.getElementById('btn-confirm-bypass');
     const oldText = btn.innerHTML;
     btn.disabled = true; btn.innerHTML = '<span class="inline-spinner"></span>';
+    document.getElementById('bypass-feedback').textContent = '正在保存授权，请勿重复提交…';
     try {
       document.getElementById('btn-rereview-censor').disabled = true;
       const options = {method:'POST', headers:{'Content-Type':'application/json'}, signal:AbortSignal.timeout(20000),
@@ -2766,20 +2774,23 @@
       const r = await fetch(`/api/videos/${_bypassYid}/bypass-censor?slice_index=${_bypassSlice}${_bypassEngagementVersion ? '&engagement_version=' + encodeURIComponent(_bypassEngagementVersion) : ''}`, options);
       const d = await r.json();
       if (generation !== _bypassRequest) return;
-      if (d.success) {
-        showToast('✅ ' + (d.message || '已复核放行'));
-        closeBypassModal();
-        loadVideos();
-        fetchStats();
+      if (r.ok && d.success && d.receipt?.state === 'SAVED') {
+        const readback = await OperationReceipts.read(_bypassYid, _bypassSlice);
+        if (generation !== _bypassRequest) return;
+        if (readback.receipt?.state !== 'SAVED' || readback.receipt.approval?.id !== d.receipt.approval.id) throw new Error('回执不一致');
+        document.getElementById('bypass-feedback').textContent = OperationReceipts.text(readback.receipt)
+          + '\n' + (d.triggered ? '已发起处理请求，请以队列状态为准。' : '处理尚未启动，请查看队列状态。');
+        showToast('授权已保存，回执 #' + d.receipt.approval.id);
+        btn.textContent = '授权已保存';
+        loadVideos(); fetchStats();
       } else {
-        showToast('❌ 放行失败: ' + (d.error || d.detail || '未知错误'), 'error');
-        document.getElementById('bypass-feedback').textContent = d.error || d.detail || '放行失败，请重新核实证据。';
-        if (_bypassRisk) { _bypassEvidence = null; }
-        btn.disabled = _bypassRisk; btn.innerHTML = oldText;
+        const detail = typeof (d.error || d.detail) === 'string' ? (d.error || d.detail) : '请求未通过';
+        document.getElementById('bypass-feedback').textContent = `本次授权未取得保存确认（HTTP ${r.status}）：${detail}。请点“核实授权结果”读取回执。`;
+        btn.disabled = true; btn.innerHTML = oldText;
       }
     } catch (e) {
       if (generation !== _bypassRequest) return;
-      document.getElementById('bypass-feedback').textContent = '请求结果未确认，请关闭并重新打开弹窗核实状态，勿重复提交。';
+      document.getElementById('bypass-feedback').textContent = '请求结果未确认。请点“核实授权结果”读取服务器回执，勿重复提交。';
       btn.disabled = true; btn.innerHTML = oldText;
     } finally {
       if (generation === _bypassRequest) {
@@ -2787,6 +2798,20 @@
         document.getElementById('btn-rereview-censor').disabled = !_bypassEvidence;
       }
     }
+  }
+
+  async function checkBypassReceipt() {
+    if (!_bypassYid || _bypassBusy) return;
+    const current = _bypassRequest;
+    const btn = document.getElementById('btn-check-bypass-receipt');
+    btn.disabled = true;
+    try {
+      const data = await OperationReceipts.read(_bypassYid, _bypassSlice);
+      if (current !== _bypassRequest) return;
+      document.getElementById('bypass-feedback').textContent = OperationReceipts.text(data.receipt);
+    } catch (error) {
+      if (current === _bypassRequest) document.getElementById('bypass-feedback').textContent = '回执读取失败，授权结果尚未核实；请勿重复提交。';
+    } finally { btn.disabled = false; }
   }
 
   function closeBypassModal() {
@@ -3646,6 +3671,13 @@
     const video = _currentVideosMap[youtubeId];
     if (!video) return;
 
+    let receiptButton = document.getElementById('platform-review-receipt');
+    if (!receiptButton) {
+      receiptButton = document.createElement('button'); receiptButton.id = 'platform-review-receipt';
+      receiptButton.type = 'button'; receiptButton.className = 'btn'; receiptButton.textContent = '查看授权回执与投稿确认';
+      titleEl.after(receiptButton);
+    }
+    receiptButton.onclick = () => OperationReceipts.open(youtubeId, video.slice_index || 0);
     titleEl.textContent = `📹 ${video.display_title || video.published_title || video.zh_title || video.title || youtubeId}`;
 
     const plats = ['wechat', 'kuaishou', 'douyin'];
@@ -3666,6 +3698,8 @@
       let linkOrLog = '—';
       if (info.external_url) {
         linkOrLog = `<a href="${escapeAttr(info.external_url)}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none;">🔗 打开作品</a>`;
+      } else if (info.confirmation?.kind === 'MANUAL_CONFIRMATION_REQUIRED') {
+        linkOrLog = `<span style="color:var(--text2);">${escapeHtml(info.confirmation.message)}</span>`;
       } else if (info.error) {
         linkOrLog = `<span style="color:var(--red);" title="${escapeAttr(info.error)}">⚠️ ${escapeHtml(info.error.slice(0, 30))}...</span>`;
       }

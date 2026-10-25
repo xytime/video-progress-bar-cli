@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| review-receipt-v1 | 2026-10-25 | Codex | 精确任务授权审计与启用标志单次只读回读，不受事件分页上限影响。 |
 | reply-coverage-v2 | 2026-10-25 | Codex | 活动优先与公平回补兼顾旧作品，持久保存原生评论续扫游标与活动证据。 |
 | reply-page-hint-v1 | 2026-10-25 | Codex | 依据已绑定作品顺序估计扫描起始页，仅辅助翻页，作品身份仍由原生响应严格核验。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 到期评论扫描按最久未扫轮转，避免最新作品重复占满批次。 |
@@ -2643,6 +2644,25 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 (*params, max(1, min(int(limit), 500))),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def get_manual_review_receipt(self, youtube_id: str, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """单次读取审批审计与任务标志，不受最近事件分页上限影响。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT pv.id AS task_id, pv.status AS task_status, pv.bypass_censorship,
+                          ci.id, ci.created_at, ci.level, ci.decision, ci.input_hash,
+                          ci.rule_pack_version, ci.source_field, ci.review_stage, ci.platform
+                   FROM processed_videos pv LEFT JOIN censorship_incidents ci ON ci.id = (
+                       SELECT id FROM censorship_incidents
+                       WHERE youtube_id=pv.youtube_id AND slice_index=pv.slice_index
+                         AND stage='manual_review' AND action='MANUAL_BYPASS'
+                         AND decision IN ('MANUAL_P0_APPROVED', 'MANUAL_P1_APPROVED',
+                             'MANUAL_P2_APPROVED', 'MANUAL_CP_APPROVED', 'MANUAL_SOCIAL_UNREST_APPROVED')
+                       ORDER BY id DESC LIMIT 1)
+                   WHERE pv.youtube_id=? AND pv.slice_index=?""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
 
     def has_manual_p0_approval(self, youtube_id: str, slice_index: int = 0) -> bool:
         """确认视频/切片是否已完成可审计的 P0 双重人工复核。"""

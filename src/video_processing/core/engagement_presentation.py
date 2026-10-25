@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-25 | Codex | 人工确认策略有本次证据时单独显示，保留不可重入队资格。 |
 | 1.1.0 | 2026-10-23 | Codex | 活跃任务沿用真实字幕阶段和复用状态。 |
 """
 import hashlib
@@ -51,6 +52,9 @@ def present_engagement(video: dict) -> dict:
         label = video.get("processing_detail") or ACTIVE_LABELS.get(video.get("status"), label)
     if video.get("publication_review_required") and stage == "ENG_VERIFY":
         reason = "该任务要求人工复核，暂不能从高互动列表重新启动"
+    confirmation = ((video.get('platforms') or {}).get('wechat') or {}).get('confirmation') or {}
+    if stage == 'ENG_VERIFY' and confirmation.get('kind') == 'MANUAL_CONFIRMATION_REQUIRED':
+        label, reason = confirmation['label'], confirmation['message']
     if stage in {"ENG_POLICY", "ENG_FAILED", "ENG_PENDING", "ENG_LOGIN", "ENG_READY"}:
         reason = video.get("publication_wait_reason") or video.get("error_msg") or reason
     if stage == "ENG_FAILED" and (video.get("score") or 0) < 75:

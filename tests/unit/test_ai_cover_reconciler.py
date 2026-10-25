@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| auth-freshness-v1 | 2026-10-25 | Codex | 空闲队列也核实认证，测试桩隔离认证外部依赖。 |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-10-01 | Codex | 验证 Luna 新任务路由与独立来源回执 |
 """
@@ -37,12 +38,13 @@ def setup_task(tmp_path, monkeypatch, age=0, luna=False, channel='channel'):
         ai_cover_primary_provider='agy',ai_cover_queue_dir='queue',ai_cover_finish_dir='finish',
         enable_antigravity_cover_fallback=False, ai_cover_provider_cooldown_seconds=900))
     monkeypatch.setattr(reconciler,'PipelineDB',lambda:db)
+    monkeypatch.setattr(reconciler,'_agy_auth_ready',lambda db, **kwargs: True)
     return queue,task,db
 
 
 def test_auth_wait_preserves_budget_and_deadline_fallback(tmp_path, monkeypatch):
     queue, task, db = setup_task(tmp_path, monkeypatch, luna=True)
-    monkeypatch.setattr(reconciler, '_agy_auth_ready', lambda db: False)
+    monkeypatch.setattr(reconciler, '_agy_auth_ready', lambda db, **kwargs: False)
     assert reconciler.reconcile() == 0
     assert not (task.finish_dir / 'antigravity_attempt.json').exists()
     assert not (task.finish_dir / 'luna_handoff.json').exists()
@@ -273,3 +275,12 @@ def test_async_cover_wait_has_no_required_pid_and_survives_orphan_reaper(tmp_pat
     monkeypatch.setattr(reconciler,'run_process',renderer)
     assert reconciler.reconcile()==1
     assert db.get_video_by_youtube_id('cover-guard')['status']=='PENDING'
+
+
+def test_auth_refresh_runs_even_when_no_eligible_cover_remains(tmp_path, monkeypatch):
+    _, _, db = setup_task(tmp_path, monkeypatch)
+    db.update_video_status('cover-guard', 'PUBLISHED')
+    checks = []
+    monkeypatch.setattr(reconciler, '_agy_auth_ready', lambda db, **kwargs: checks.append(1) or False)
+    assert reconciler.reconcile() == 0
+    assert checks == [1]

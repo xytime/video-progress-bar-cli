@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| manual-result-feedback-v1 | 2026-10-25 | Codex | 保留本次投稿动作证据，区分策略性人工确认与真实结果未知。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
@@ -1112,7 +1113,7 @@ class PipelineManager:
         if not submission_confirmed:
             self.db.record_wechat_publication_confirmation(
                 yid,
-                evidence_path=None,
+                evidence_path=str(evidence_path) if evidence_path else None,
                 state="UNCERTAIN",
                 error_message=reason,
                 slice_index=slice_index,
@@ -1134,6 +1135,14 @@ class PipelineManager:
                 logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
             from .delivery_recovery import DeliveryRecoveryService, keyboard
             recovery = DeliveryRecoveryService(self.db, self._PRJ_ROOT).register_unknown(yid, slice_index)
+            from .core.operation_receipts import submission_feedback
+            feedback = submission_feedback(self._OUT_DIR, yid, slice_index,
+                                           evidence_dir=evidence_path.parent if evidence_path else None)
+            if feedback['kind'] == 'MANUAL_CONFIRMATION_REQUIRED':
+                self.send_telegram_msg(
+                    f"<b>视频号等待人工确认投稿结果</b>\nID: <code>{html.escape(prefix)}</code>\n"
+                    + html.escape(feedback['message']))
+                return
             self.send_telegram_msg(
                 "⚠️ <b>WeChat submission uncertain</b>\n"
                 f"ID: <code>{html.escape(prefix)}</code>\n"
@@ -4191,10 +4200,13 @@ class PipelineManager:
                 )
                 return
             if upload_err.returncode == 3:
-                reason = "视频号提交结果无法确认（可能已受理/可能未受理）；已停止自动重传，等待后台核验。"
+                from .core.operation_receipts import submission_feedback
+                feedback = submission_feedback(self._OUT_DIR, yid, slice_index, evidence_dir=evidence_dir)
+                reason = feedback['message']
                 logger.error(f"WeChat publish UNCONFIRMED for {prefix} — keeping artifacts, no GC, no auto-republish.")
                 self._mark_wechat_submission_under_review(
-                    yid, prefix, evidence_path=None, reason=reason, slice_index=slice_index,
+                    yid, prefix, evidence_path=evidence_dir / "submission_attempt.json",
+                    reason=reason, slice_index=slice_index,
                 )
                 return
             if upload_err.returncode == 6:
