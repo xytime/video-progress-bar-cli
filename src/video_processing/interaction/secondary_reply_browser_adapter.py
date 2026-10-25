@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| reply-cursor-v1 | 2026-10-25 | Codex | 普通账户按真实 lastBuff 游标续扫，跨会话导航按凭据及查询隔离，仍保留共享预算和独立身份校验。 |
 | reply-page-hint-v1 | 2026-10-25 | Codex | 具名作品起始页提示通过原生分页字段生效，仍经过共享请求预算及严格作品绑定。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | scan-timer-v1 | 2026-10-25 | Codex | 具名扫描仅遇5秒内已知时间门禁时先做一次本地等待，再走完整原生准入，避免cron秒级抖动多等半小时。 |
@@ -66,6 +67,7 @@ from video_processing.interaction.secondary_reply_contract import (
     COMMENT_SUBMIT_PATHS,
     SecondaryReplySubmissionGuard,
 )
+from video_processing.interaction.secondary_reply_list_cursor import CommentListCursor
 
 logger = logging.getLogger(__name__)
 
@@ -166,19 +168,37 @@ class SecondaryReplyBrowserAdapter:
         self._manual_retry_post_id = manual_retry_post_id
         self._manual_retry_consumed = False
         self._list_page_hint: Tuple[str, int] = ("", 1)
+        self._list_description_hint = ""
 
-    def set_post_list_page_hint(self, post_id: str, page_number: int) -> None:
+    def set_post_list_page_hint(self, post_id: str, page_number: int, *, published_description: str = "") -> None:
         """提示仅绑定本次作品，用于缩小原生分页范围，不参与身份判定。"""
         if not _PLATFORM_POST_ID_RE.fullmatch(post_id) or type(page_number) is not int or page_number < 1:
             raise ValueError("作品分页提示无效")
         self._list_page_hint = (post_id, page_number)
+        self._list_description_hint = published_description
 
     def _setup_list_pagination(self, page, *, post_id: str) -> None:
         hint_post, start_page = self._list_page_hint
-        if hint_post != post_id or start_page <= 1:
-            return
+        session = current_wechat_session()
+        generation = getattr(session, '_credential_generation', None)
+        effective_payloads = {}
+        cursor_state = None
+        cursor_started = False
+        advance_cursor = True
+
+        def observe(response):
+            nonlocal cursor_state
+            request = response.request
+            payload = effective_payloads.pop(request, None)
+            if payload is None or cursor_state is None or response.status not in (200, 201):
+                return
+            try:
+                cursor_state.observe(payload['lastBuff'], response.json(), advance=advance_cursor)
+            except (ValueError, TypeError, KeyError):
+                cursor_state.reset()
 
         def paginate(route):
+            nonlocal cursor_state, cursor_started, advance_cursor
             request = route.request
             if (not is_official_wechat_origin(request.url)
                     or urlparse(request.url).path != COMMENT_POST_LIST_PATH
@@ -189,14 +209,33 @@ class SecondaryReplyBrowserAdapter:
                 payload = request.post_data_json
             except (ValueError, TypeError):
                 payload = None
-            if (not isinstance(payload, dict) or type(payload.get('currentPage')) is not int
-                    or payload['currentPage'] < 1 or payload.get('pageSize') != 10):
+            if not isinstance(payload, dict) or payload.get('pageSize') != 10:
+                route.fallback()
+                return
+            if (generation and isinstance(payload.get('lastBuff'), str)
+                    and 'currentPage' not in payload and not payload.get('forMcn')):
+                if not cursor_started:
+                    cursor_started = True
+                    query = {key: payload.get(key) for key in
+                             ('pageSize', 'onlyUnread', 'needAllCommentCount', 'userpageType', 'forMcn')}
+                    cursor_state = CommentListCursor(self.state_path, generation, query)
+                    if not payload['lastBuff']:
+                        cursor, advance_cursor = cursor_state.start(
+                            post_id, self._list_description_hint if hint_post == post_id else '')
+                        payload = dict(payload, lastBuff=cursor)
+                effective_payloads[request] = payload
+                # fallback 继续经过账户级预算；不直接发请求，也不跳过上下文守卫。
+                route.fallback(post_data=json.dumps(payload))
+                return
+            if (hint_post != post_id or start_page <= 1 or type(payload.get('currentPage')) is not int
+                    or payload['currentPage'] < 1):
                 route.fallback()
                 return
             # fallback 保留 BrowserContext 上的共享请求限流；禁止直接 continue_ 绕过它。
             route.fallback(post_data=json.dumps(dict(payload, currentPage=payload['currentPage'] + start_page - 1)))
 
         page.route('**/post/post_list*', paginate)
+        page.on('response', observe)
 
     @contextlib.contextmanager
     def _session_scope(self, post_id: str, purpose: str = "回复"):

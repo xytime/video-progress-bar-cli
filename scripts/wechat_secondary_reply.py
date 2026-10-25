@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| reply-cursor-v1 | 2026-10-25 | Codex | 传递完整已发布文案，仅用于查找实际观测过的原生列表游标。 |
 | reply-page-hint-v1 | 2026-10-25 | Codex | 为具名回复/扫描传递发布顺序分页提示，保留原生绑定与共享请求预算。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 具名单次恢复入口和严格的单作品操作上限。 |
@@ -296,14 +297,16 @@ def _build_real_platform(args, db: Optional[PipelineDB] = None):
         from video_processing.interaction.secondary_reply_runner import resolve_published_copy_text
 
         adapter.set_post_list_page_hint(post_id, 1)
+        page_hint = 1
         post_row = None
         if db is not None and post_id:
             try:
                 post_row = db.get_commentable_wechat_post_by_platform_id(post_id)
-                adapter.set_post_list_page_hint(post_id, db.get_wechat_comment_list_page_hint(post_id))
+                page_hint = db.get_wechat_comment_list_page_hint(post_id)
             except Exception:
                 post_row = None
         copy_desc = resolve_published_copy_text(post_row) if isinstance(post_row, dict) else ""
+        adapter.set_post_list_page_hint(post_id, page_hint, published_description=copy_desc)
         if cli_title:
             return cli_title, copy_desc
         if isinstance(post_row, dict):
