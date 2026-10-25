@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| reply-page-hint-v1 | 2026-10-25 | Codex | 依据已绑定作品顺序估计扫描起始页，仅辅助翻页，作品身份仍由原生响应严格核验。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 到期评论扫描按最久未扫轮转，避免最新作品重复占满批次。 |
 | filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
 | product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
@@ -13266,6 +13267,26 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
                 (platform_post_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def get_wechat_comment_list_page_hint(self, platform_post_id: str) -> int:
+        """估计原生倒序列表起始页，预留一页重叠；绝不作为作品身份依据。
+
+        原生评论页每页 10 个作品。新建上下文从第一页开始会让较旧作品永远
+        落在请求预算之外；用已绑定发布账本缩小翻页范围，外部作品或顺序差异
+        仍须通过原生 ID / 唯一完整文案绑定，估计失败时禁止选择其他作品。
+        """
+        with self.get_connection() as conn:
+            target = conn.execute("""SELECT id, created_at FROM wechat_publications
+                WHERE platform_post_id=? AND state IN ('PUBLISHED','SUBMITTED_BOUND')
+                ORDER BY created_at DESC, id DESC LIMIT 1""", (platform_post_id,)).fetchone()
+            if not target or not target['created_at']:
+                return 1
+            row = conn.execute("""SELECT COUNT(DISTINCT platform_post_id) AS newer
+                FROM wechat_publications WHERE state IN ('PUBLISHED','SUBMITTED_BOUND')
+                  AND platform_post_id IS NOT NULL AND platform_post_id!=''
+                  AND platform_post_id!=? AND (created_at>? OR (created_at=? AND id>?))""",
+                (platform_post_id, target['created_at'], target['created_at'], target['id'])).fetchone()
+            return max(1, int(row['newer']) // 10)
 
     def get_published_wechat_post_by_video_id(self, video_id: int) -> Optional[dict]:
         """根据内部 video_id 查询已公开发布的视频号作品（严格限定 state='PUBLISHED'）。"""

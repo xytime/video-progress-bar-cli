@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| reply-page-hint-v1 | 2026-10-25 | Codex | 旧作品起始页估计覆盖发布时间、失败作品排除及未知目标回退。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 真实临时配置仓库/SQLite/HTTP 验证，不接触平台或真实评论。 |
 """
 import copy
@@ -26,6 +27,7 @@ from video_processing.utils.secondary_reply_policy import (
 from web.secondary_reply_settings import create_secondary_reply_settings_router
 from tests.unit.test_runtime_configuration import configured, active, save, ORIGIN
 from tests.unit.test_secondary_reply_m35_runner import _seed_published_post, TEST_ACCT
+from tests.unit.test_secondary_reply_cli_real_entry import cli
 
 
 @pytest.fixture
@@ -140,6 +142,35 @@ def test_tick_waits_during_maintenance_without_touching_database_or_platform():
     gate().enter('合成维护等待')
     result = run_secondary_reply_tick(None, platform=None)
     assert result == dict(ok=True, status='DEFERRED_MAINTENANCE', reason='MAINTENANCE')
+
+
+def test_native_page_hint_counts_newer_bound_posts_and_keeps_overlap(tmp_path):
+    db = PipelineDB(str(tmp_path / 'pages.db'))
+    for i in range(132):
+        _seed_published_post(db, 'export/page-' + str(i), 'page-' + str(i))
+        with db.get_connection() as conn:
+            published = dt.datetime(2026, 10, 24) + dt.timedelta(minutes=i)
+            conn.execute('UPDATE wechat_publications SET created_at=? WHERE platform_post_id=?',
+                         (published.isoformat(' '), 'export/page-' + str(i)))
+    assert db.get_wechat_comment_list_page_hint('export/page-0') == 13
+    assert db.get_wechat_comment_list_page_hint('export/page-131') == 1
+    assert db.get_wechat_comment_list_page_hint('export/not-in-ledger') == 1
+    with db.get_connection() as conn:
+        conn.execute("UPDATE wechat_publications SET state='NOT_FOUND' WHERE id IN (SELECT id FROM wechat_publications ORDER BY id DESC LIMIT 20)")
+    assert db.get_wechat_comment_list_page_hint('export/page-0') == 11
+
+
+def test_real_cli_propagates_and_resets_target_page_hint(tmp_path, monkeypatch, cli):
+    from types import SimpleNamespace
+    db = PipelineDB(str(tmp_path / 'cli-pages.db'))
+    for i in range(32):
+        _seed_published_post(db, 'export/cli-page-' + str(i), 'cli-page-' + str(i))
+    monkeypatch.setattr(settings, 'wechat_reply_author_finder_id', 'fixture-author@finder')
+    platform = cli._build_real_platform(SimpleNamespace(), db)
+    platform._hints('export/cli-page-0')
+    assert platform.adapter._list_page_hint == ('export/cli-page-0', 3)
+    platform._hints('export/cli-page-31')
+    assert platform.adapter._list_page_hint == ('export/cli-page-31', 1)
 
 
 def test_tick_maintenance_race_preserves_completed_receipts(monkeypatch):

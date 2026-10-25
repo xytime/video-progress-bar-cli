@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| reply-page-hint-v1 | 2026-10-25 | Codex | 具名作品起始页提示通过原生分页字段生效，仍经过共享请求预算及严格作品绑定。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | scan-timer-v1 | 2026-10-25 | Codex | 具名扫描仅遇5秒内已知时间门禁时先做一次本地等待，再走完整原生准入，避免cron秒级抖动多等半小时。 |
 | scan-binding-diagnostic | 2026-10-25 | Codex | 绑定失败只记录脱敏结构计数，保留严格绑定和原访问次数，不记录正文/原生ID/会话信息。 |
@@ -164,6 +165,38 @@ class SecondaryReplyBrowserAdapter:
         self._active_guard: Optional[SecondaryReplySubmissionGuard] = None
         self._manual_retry_post_id = manual_retry_post_id
         self._manual_retry_consumed = False
+        self._list_page_hint: Tuple[str, int] = ("", 1)
+
+    def set_post_list_page_hint(self, post_id: str, page_number: int) -> None:
+        """提示仅绑定本次作品，用于缩小原生分页范围，不参与身份判定。"""
+        if not _PLATFORM_POST_ID_RE.fullmatch(post_id) or type(page_number) is not int or page_number < 1:
+            raise ValueError("作品分页提示无效")
+        self._list_page_hint = (post_id, page_number)
+
+    def _setup_list_pagination(self, page, *, post_id: str) -> None:
+        hint_post, start_page = self._list_page_hint
+        if hint_post != post_id or start_page <= 1:
+            return
+
+        def paginate(route):
+            request = route.request
+            if (not is_official_wechat_origin(request.url)
+                    or urlparse(request.url).path != COMMENT_POST_LIST_PATH
+                    or request.method != 'POST'):
+                route.fallback()
+                return
+            try:
+                payload = request.post_data_json
+            except (ValueError, TypeError):
+                payload = None
+            if (not isinstance(payload, dict) or type(payload.get('currentPage')) is not int
+                    or payload['currentPage'] < 1 or payload.get('pageSize') != 10):
+                route.fallback()
+                return
+            # fallback 保留 BrowserContext 上的共享请求限流；禁止直接 continue_ 绕过它。
+            route.fallback(post_data=json.dumps(dict(payload, currentPage=payload['currentPage'] + start_page - 1)))
+
+        page.route('**/post/post_list*', paginate)
 
     @contextlib.contextmanager
     def _session_scope(self, post_id: str, purpose: str = "回复"):
@@ -924,6 +957,7 @@ class SecondaryReplyBrowserAdapter:
                 try:
                     page = context.new_page()
                     self._setup_page_listeners(page, guard)
+                    self._setup_list_pagination(page, post_id=post_id)
                     if guard is not None:
                         def route_interceptor(route):
                             if not guard.capture_request(route.request):
