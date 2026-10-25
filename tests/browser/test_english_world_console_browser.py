@@ -124,6 +124,8 @@ def ui(chromium, tmp_path):
 
 def test_desktop_filters_history_and_navigation(ui):
     page,_,_,_=ui
+    expect(page.locator('link[href*="english_world_console.css"]')).to_have_attribute('href','/static/css/english_world_console.css?v=20261025-workbench-3')
+    expect(page.locator('script[src*="english_world_console.js"]')).to_have_attribute('src','/static/js/english_world_console.js?v=20261025-workbench-3')
     expect(page.locator('#ew-rows tr')).to_have_count(20)
     expect(page.locator('#ew-history')).to_be_visible()
     expect(page.locator('#ew-history-label')).to_contain_text('2')
