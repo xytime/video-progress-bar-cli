@@ -63,6 +63,8 @@
 - 原实现反例：恢复保护、已有提交保护及两类保留优先场景均可复现队首阻断；修复后的同例与有效任务 FIFO、原生退避和恢复间隔反例全部通过。
 - 初次专项测试有一处新增夹具缺少频道 ID，已按真实候选契约补齐并完整重跑；一次浏览器命令引用了不存在的文件，未收集用例，纠正路径后得到上述 98 项结果。
 - 测试使用合成内容与临时数据库；没有通过真实发帖或回复来验收。
-- 原生部署与源码回读结果将在采用后补记。
+- 修复提交 `4a78b29cf6c5ecda88d30f356035fbcaaea8f6cc` 已由原生部署采用；目录 `/Volumes/EXT2T/AppDataOffload/ryusei/review-fixes-deployment-20261025`，9 步全部 COMPLETE、pending/error 均为 null，完成于 2026-10-25 12:55:56 +08:00。
+- 最终回读 `/Volumes/EXT2T/AppDataOffload/ryusei/review-fixes-deployment-20261025/final-readback.json`：459 个运行源码文件与已测清单一致，54 个无关 dirty 文件及 1276 个未跟踪文件完整保留；UI PID 84621，新来源指纹 `73ba00d62c81f028e8ecac1a23f3dcc9e14ce26f7a714cfce0631cfe3475de91`。
+- 维护状态 RUNNING，原调度已恢复，搜索保持 OFF。首页、商品设置、英语世界与工作台 API 均回读 200；投稿/回复真实平台效果未用于本次验收。曾在未建立对应页面会话时读关键词 API 得到 403，按既有页面入口建立会话后回读成功，未绕过访问控制。
 
 相邻修复 e1cbccf 的历史验收已重新读取原始回执：191 项浏览器及 130 项 Python 通过，分别见 `video-pytest-s9yxf856` 与 `video-pytest-it5yj5p9`。因此旧验收文档中的 27 failed / 6 errors 不再代表当前状态；本轮仍会对相关页面重新回归。
