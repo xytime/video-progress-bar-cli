@@ -2,11 +2,13 @@
 
 # Modification History
 | Version | Date | Author | Description |
+| 1.3 | 2026-10-25 | Codex | 自查九类列表、未投稿原图补位与分集实际封面及缺失隔离。 |
 | 1.2 | 2026-10-25 | Codex | 验证素材原图补位、不可用终止与冻结投稿封面不降级为原图。 |
 | 1.1 | 2026-10-25 | Codex | 验证跨状态封面真实加载、缺失占位、点击放大及分集隔离。 |
 | 1.0 | 2026-10-15 | Codex | 桌面手机键盘展开和 API 来源一致性。 |
 """
 import hashlib
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 import pytest
@@ -94,6 +96,7 @@ def test_unavailable_source_thumbnail_stops_and_bound_cover_never_falls_back(wor
     (evidence / 'submitted_cover.jpg').unlink()
     page.goto('http://127.0.0.1:9100/?view=publications&tab=review&created_window=all&search=boundImg001')
     expect(page.locator('#row-boundImg001 .cover-placeholder')).to_be_visible()
+    expect(page.locator('#row-boundImg001 .cover-placeholder')).to_contain_text('投稿封面缺失')
     expect(page.locator('#row-boundImg001 .cover-source summary')).to_have_text('Codex 接力')
     assert len(thumbnail_requests) == 1
 
@@ -103,13 +106,18 @@ def test_existing_cover_loads_across_task_states(workspace, tmp_path, monkeypatc
     page, client, state, db = workspace
     monkeypatch.setattr(web_app, '_OUT_DIR', tmp_path)
     title = '''已有封面 "双引号" '单引号' <标题>'''
-    db.add_video('available-cover', title, 'UC-fixture', score=88)
+    db.add_video('available-cover', title, 'UC-fixture', score=88,
+                 view_count=1000, like_count=40, upload_date=datetime.now().strftime('%Y%m%d'))
     cover = tmp_path / 'available-cover_cover.jpg'
     Image.new('RGB', (120, 160), 'blue').save(cover)
     page.set_viewport_size(dict(width=width, height=844))
-    for status, tab in [('PENDING', 'ready'), ('UNCERTAIN', 'review'),
-                        ('FAILED', 'error'), ('AI_COVER_PENDING', 'active')]:
+    for status, tab in [('PENDING', 'waitlist'), ('PENDING', 'queue'),
+                        ('PENDING', 'ready'), ('UNCERTAIN', 'review'),
+                        ('PENDING', 'high_likes'), ('WECHAT_DEFERRED', 'wechat_deferred'),
+                        ('PUBLISHED', 'completed'), ('AI_COVER_PENDING', 'active'),
+                        ('FAILED', 'error')]:
         db.update_video_status('available-cover', status)
+        db.update_video_score('available-cover', 20 if tab == 'waitlist' else 88)
         db.set_video_preparation_ready('available-cover', tab == 'ready')
         page.goto(f'http://127.0.0.1:9100/?tab={tab}&created_window=all&search=available-cover')
         image = page.locator('.cover-thumb')
@@ -126,6 +134,89 @@ def test_existing_cover_loads_across_task_states(workspace, tmp_path, monkeypatc
     page.reload()
     expect(page.locator('.cover-placeholder')).to_be_visible()
     expect(page.locator('.cover-thumb')).to_have_count(0)
+
+
+def test_source_preview_covers_unsubmitted_lists_but_not_publication_states(workspace, tmp_path, monkeypatch):
+    page, client, state, db = workspace
+    monkeypatch.setattr(web_app, '_OUT_DIR', tmp_path)
+    db.add_video('queuedImg01', '未投稿列表原图', 'UC-fixture', score=88)
+    image_bytes = BytesIO()
+    Image.new('RGB', (480, 360), 'green').save(image_bytes, format='JPEG')
+    requests = []
+
+    def thumbnail(route):
+        requests.append(route.request.url)
+        route.fulfill(content_type='image/jpeg', body=image_bytes.getvalue())
+
+    page.route('https://i.ytimg.com/**', thumbnail)
+    for status, tab in [('PENDING', 'queue'), ('TRANSCRIBING', 'active'),
+                        ('FAILED', 'error'), ('WECHAT_DEFERRED', 'wechat_deferred')]:
+        db.update_video_status('queuedImg01', status)
+        page.goto(f'http://127.0.0.1:9100/?tab={tab}&created_window=all&search=queuedImg01')
+        expect(page.locator('#row-queuedImg01 .cover-thumb')).to_have_js_property('naturalWidth', 480)
+        expect(page.locator('#row-queuedImg01 .cover-source summary')).to_have_text('YouTube 原图')
+    before = len(requests)
+    for status, tab in [('UNCERTAIN', 'review'), ('SUBMITTED_UNBOUND', 'review'),
+                        ('PUBLISHED', 'completed')]:
+        db.update_video_status('queuedImg01', status)
+        page.goto(f'http://127.0.0.1:9100/?tab={tab}&created_window=all&search=queuedImg01')
+        expect(page.locator('#row-queuedImg01 .cover-placeholder')).to_be_visible()
+        assert len(requests) == before
+
+    # 已记录的生成版本丢失文件，也不以素材图替代。
+    db.record_cover_version(version(dict(source='deterministic_fallback', youtube_id='queuedImg01',
+                                         slice_index=0, cover_sha256='f' * 64)))
+    db.update_video_status('queuedImg01', 'FAILED')
+    page.goto('http://127.0.0.1:9100/?tab=error&created_window=all&search=queuedImg01')
+    expect(page.locator('#row-queuedImg01 .cover-placeholder')).to_be_visible()
+    expect(page.locator('#row-queuedImg01 .cover-placeholder')).to_contain_text('生成封面缺失')
+    expect(page.locator('#row-queuedImg01 .cover-source summary')).to_have_text('默认封面')
+    assert len(requests) == before
+
+
+@pytest.mark.parametrize('width', [1366, 390])
+def test_expanded_slices_load_their_own_cover_and_missing_slice_stays_separate(workspace, tmp_path, monkeypatch, width):
+    page, client, state, db = workspace
+    monkeypatch.setattr(web_app, '_OUT_DIR', tmp_path)
+    db.add_video('sliceTest01', '父视频封面', 'UC-fixture', score=88)
+    parent = db.get_video_by_youtube_id('sliceTest01')
+    title = '''分集 "封面" '独立' <验证>'''
+    for index in [1, 2]:
+        db.add_video('sliceTest01', title if index == 1 else '无封面分集', 'UC-fixture',
+                     score=88, slice_index=index, parent_id=parent['id'])
+    Image.new('RGB', (120, 160), 'blue').save(tmp_path / 'sliceTest01_cover.jpg')
+    cover = tmp_path / 'sliceTest01_s1_cover.jpg'
+    Image.new('RGB', (96, 128), 'green').save(cover)
+    value = version(dict(source='deterministic_fallback', youtube_id='sliceTest01', slice_index=1,
+                         cover_sha256=hashlib.sha256(cover.read_bytes()).hexdigest()))
+    db.record_cover_version(value)
+    source_requests = []
+    page.route('https://i.ytimg.com/**', lambda route: (source_requests.append(route.request.url), route.abort()))
+    page.set_viewport_size(dict(width=width, height=844))
+    page.goto('http://127.0.0.1:9100/?tab=queue&created_window=all&search=sliceTest01')
+    expect(page.locator('#row-sliceTest01 .cover-thumb')).to_have_js_property('naturalWidth', 120)
+    page.locator('#btn-toggle-sliceTest01').click()
+    image = page.locator('#row-sliceTest01_s1 .cover-thumb')
+    expect(image).to_have_js_property('naturalWidth', 96)
+    expect(image).to_have_attribute('alt', '分集封面')
+    expect(page.locator('#row-sliceTest01_s2 .cover-placeholder')).to_be_visible()
+    summary = page.locator('#row-sliceTest01_s1 .cover-source summary')
+    expect(summary).to_have_text('默认封面')
+    summary.focus()
+    page.keyboard.press('Enter')
+    expect(page.locator('#row-sliceTest01_s1 .cover-source[open]')).to_contain_text(value['version_id'])
+    page.keyboard.press('Escape')
+    expect(summary).to_be_focused()
+    image.click()
+    expect(page.locator('#lb-img')).to_have_js_property('naturalWidth', 96)
+    expect(page.locator('#lb-caption')).to_have_text(title)
+    page.keyboard.press('Escape')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#btn-toggle-sliceTest01').click()
+    expect(page.locator('#row-sliceTest01_s1')).to_have_count(0)
+    page.locator('#btn-toggle-sliceTest01').click()
+    expect(page.locator('#row-sliceTest01_s1 .cover-thumb')).to_have_js_property('naturalWidth', 96)
+    assert not source_requests
 
 
 def test_cover_source_api_and_responsive_display(workspace,tmp_path):

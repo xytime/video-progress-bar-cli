@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-25 | Codex | 主行与分集共用封面组件，未投稿任务跨列表补位原图，投稿与历史记录保持证据边界。 |
   | 2026-10-25 | Codex | 待筛选素材缺少生成封面时展示 YouTube 原图，保留投稿封面来源边界。 |
   | 2026-10-25 | Codex | 封面由图片接口判断可用性，修复待发布、待核实和失败任务已有图却不显示。 |
   | 2026-10-25 | Codex | 授权读回、封面登录核实与人工投稿确认提示。 |
@@ -102,7 +103,7 @@
     })();
   </script>
   <script src="/static/js/source_publication.js?v=20261022-1"></script>
-  <link rel="stylesheet" href="/static/css/dashboard.css?v=20261022-source-age" />
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20261025-cover-state" />
   <link rel="stylesheet" href="/static/css/engagement_rows.css?v=20261020_2" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 <link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
@@ -742,16 +743,57 @@
       img.referrerPolicy = 'no-referrer';
       if (source) {
         source.querySelector('summary').textContent = 'YouTube 原图';
-        source.querySelector('div').textContent = '原视频缩略图，仅供素材浏览；尚未生成投稿封面。';
+        source.querySelector('div').textContent = '原视频缩略图，仅供素材浏览；暂无可读取的生成封面。';
       }
       img.src = thumbnail;
       return;
     }
     if (img.dataset.previewSource === 'youtube' && source) {
       source.querySelector('summary').textContent = '暂无预览图';
-      source.querySelector('div').textContent = '原视频缩略图暂不可用；尚未生成投稿封面。';
+      source.querySelector('div').textContent = '原视频缩略图暂不可用；暂无可读取的生成封面。';
     }
-    img.outerHTML = '<div class="cover-placeholder">🎬</div>';
+    const missingLabel = img.dataset.coverBinding === 'submission' ? '投稿封面缺失'
+      : img.dataset.coverVersion ? '生成封面缺失' : '暂无预览图';
+    img.outerHTML = `<div class="cover-placeholder" role="img" aria-label="${missingLabel}"><span aria-hidden="true">🎬</span><small>${missingLabel}</small></div>`;
+  }
+
+  function renderCoverCell(video, showStatus = true) {
+    const sliceIndex = Number(video.slice_index) || 0;
+    const cp = video.cover_provenance || {label: '来源未核验'};
+    const previewStates = ['PENDING', 'PROCESSING', 'DOWNLOADING', 'COPYWRITING',
+      'TRANSCRIBING', 'CAPTION_PROCESSING', 'RENDERING', 'AI_COVER_PENDING',
+      'READY_TO_PUBLISH', 'READY_COOLDOWN', 'PUBLISH_PRECHECK', 'WECHAT_DEFERRED',
+      'LOGIN_REQUIRED', 'FAILED'];
+    const platformStates = ['NOT_QUEUED', 'QUEUED', ...previewStates];
+    const sourceThumbnail = !sliceIndex && cp.binding !== 'submission' && !cp.version_id
+      && !cp.submission_binding && !video.publication_last_attempt_at
+      && previewStates.includes(video.status)
+      && Object.values(video.platforms || {}).every(p => !p.published_at && platformStates.includes(p.state))
+      && /^[A-Za-z0-9_-]{11}$/.test(video.youtube_id)
+      ? `https://i.ytimg.com/vi/${video.youtube_id}/hqdefault.jpg` : '';
+    const details = [cp.binding === 'submission' ? '本次投稿绑定' : '当前生成版本',
+      cp.degraded ? '退化：是' : cp.verified ? '退化：否' : '退化：未核验',
+      cp.handoff_reason && `接力原因：${cp.handoff_reason}`,
+      cp.fallback_reason && `兜底原因：${cp.fallback_reason}`,
+      cp.agy_error && `AGY：${cp.agy_error}`, cp.codex_error && `Codex：${cp.codex_error}`,
+      cp.generated_at && `生成时间：${cp.generated_at}`,
+      cp.version_id && `版本：${cp.version_id}`,
+      cp.cover_sha256 && `SHA256：${cp.cover_sha256}`].filter(Boolean);
+    return `<td class="cover-thumb-cell"><div class="cover-thumb-wrapper">
+      <img class="cover-thumb"
+        src="/api/covers/${encodeURIComponent(video.youtube_id)}?slice_index=${sliceIndex}"
+        alt="${sliceIndex ? '分集封面' : '封面'}"
+        data-cover-binding="${escapeAttr(cp.binding || '')}"
+        data-cover-version="${escapeAttr(cp.version_id || '')}"
+        data-title="${escapeAttr(video.display_title || video.published_title || video.zh_title || video.title || '')}"
+        data-source-thumbnail="${escapeAttr(sourceThumbnail)}" loading="lazy"
+        onerror="handleCoverError(this)"
+        onclick="event.stopPropagation(); openCoverLightbox(this.src, this.dataset.title)" />
+      <details class="cover-source" onkeydown="if(event.key==='Escape'){this.open=false;this.querySelector('summary').focus();}">
+        <summary>${escapeHtml(cp.label || '来源未核验')}</summary><div>${details.map(escapeHtml).join('<br>')}</div>
+      </details>
+      ${showStatus && currentTab !== 'high_likes' ? `<div class="cover-status-badge mobile-only">${videoStatusBadge(video)}</div>` : ''}
+    </div></td>`;
   }
 
   const STEP_ORDER = ["PENDING","PROCESSING","DOWNLOADING","COPYWRITING","TRANSCRIBING","READY_TO_PUBLISH","PUBLISHING","UNDER_REVIEW","PUBLISHED"];
@@ -1870,46 +1912,11 @@
         const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}${badgesPart ? ' · ' + badgesPart : ''}</div>`;
         const platformBadgesHtml = renderPlatformBadges(v);
 
-        // [Gemini_2.5_Pro_planning] 封面缩略图单元格与已发布状态
-        const coverUrl = `/api/covers/${v.youtube_id}?slice_index=${v.slice_index || 0}`;
-        const cp = v.cover_provenance || {label: '来源未核验'};
-        const sourceThumbnail = ['waitlist', 'high_likes'].includes(currentTab)
-          && !v.slice_index && cp.binding !== 'submission' && !cp.version_id
-          && /^[A-Za-z0-9_-]{11}$/.test(v.youtube_id)
-          ? `https://i.ytimg.com/vi/${v.youtube_id}/hqdefault.jpg` : '';
-        const coverDetails = [cp.binding === 'submission' ? '本次投稿绑定' : '当前生成版本',
-          cp.degraded ? '退化：是' : cp.verified ? '退化：否' : '退化：未核验',
-          cp.handoff_reason && `接力原因：${cp.handoff_reason}`,
-          cp.fallback_reason && `兜底原因：${cp.fallback_reason}`,
-          cp.agy_error && `AGY：${cp.agy_error}`, cp.codex_error && `Codex：${cp.codex_error}`,
-          cp.generated_at && `生成时间：${cp.generated_at}`,
-          cp.version_id && `版本：${cp.version_id}`,
-          cp.cover_sha256 && `SHA256：${cp.cover_sha256}`].filter(Boolean);
-        const coverSource = `<details class="cover-source" onkeydown="if(event.key==='Escape'){this.open=false;this.querySelector('summary').focus();}"><summary>${escapeHtml(cp.label || '来源未核验')}</summary><div>${coverDetails.map(escapeHtml).join('<br>')}</div></details>`;
         const isPublished = currentTab === 'high_likes'
           ? v.engagement?.stage === 'ENG_PUBLISHED'
           : ['PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND'].includes(v.status) || v.display_status === 'PUBLISHED';
 
-        // 状态徽章在移动端直接挂在封面缩略图正下方，垂直居中排布
-        const coverCell = `
-          <td class="cover-thumb-cell">
-            <div class="cover-thumb-wrapper">
-              <img
-                class="cover-thumb"
-                src="${coverUrl}"
-                alt="封面"
-                data-title="${escapeAttr(v.title || '')}"
-                data-source-thumbnail="${escapeAttr(sourceThumbnail)}"
-                loading="lazy"
-                onerror="handleCoverError(this)"
-                onclick="event.stopPropagation(); openCoverLightbox(this.src, this.dataset.title)"
-              />
-              ${coverSource}
-              <div class="cover-status-badge mobile-only">
-                ${currentTab === 'high_likes' ? '' : videoStatusBadge(v)}
-              </div>
-            </div>
-          </td>`;
+        const coverCell = renderCoverCell(v);
 
         // [Gemini_2.5_Pro_planning] checkbox 单元格（仅 waitlist tab 显示）
         const isWaitlist = currentTab === 'waitlist';
@@ -2488,7 +2495,7 @@
           return `
             <tr id="row-${s.youtube_id}_s${s.slice_index}" class="child-row-${parentYid}" style="background: rgba(255,255,255,0.015); border-left: 3px solid var(--accent);">
               <td class="cb-cell" style="${currentTab === 'waitlist' ? '' : 'display:none'}"></td>
-              <td class="cover-thumb-cell"><div class="cover-placeholder" style="width:36px; height:64px; font-size:0.875rem;">✂️</div></td>
+              ${renderCoverCell(s, false)}
               <td class="info-cell" style="padding-left: 24px;">
                 <div class="video-zh-title" style="padding-left: 20px;">${escapeHtml(sliceDisplayTitle)}</div>
                 <div class="video-meta-row" style="padding-left: 20px;">
