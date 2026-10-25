@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2026.10.25 | 2026-10-25 | GPT-6.1 Sol | 合规二创不可变审批与队列隔离整改 |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase 生产代码 |
 | 1.1.0 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 增加 PipelineAgent 统一接管除 /help /start 以外的所有指令及文本消息 |
 | 1.1.1 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 调整为仅非 /help 命令交由 Agent，标准指令由程序处理 |
@@ -49,6 +50,7 @@
 | 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
 | 1.29.0  | 2026-10-08 | Antigravity                         | 落实 RFC-2026-DEEP-CREATION-001：新增 /masterpiece 远程指令，支持重大新闻高品质二创母带一键调度。 |
 | 1.30.0  | 2026-10-17 | Antigravity                         | M3.5: 新增 handle_secondary_reply_callback (^rep:)，在纯短事务内消费视频号二级回复一次性审批回调。 |
+| 1.31.0  | 2026-10-25 | Antigravity                         | 新增 /compliance-video-remix 指令与两阶段人工审核确认发布回调 |
 """
 from __future__ import annotations
 
@@ -1519,6 +1521,128 @@ async def cmd_masterpiece(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(f"❌ *二创调度异常*: {exc}", parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_compliance_video_remix(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """只生成提案；管理员批准后仅制作，发布另行审核。"""
+    if not _check_admin(update):
+        return
+    text = (update.message.text or update.message.caption or "").strip() if update.message else ""
+    args = ctx.args or []
+    match = _YOUTUBE_RE.search(args[0] if args else text)
+    if not match:
+        await update.message.reply_text(
+            "🛡️ <b>合规二创指令用法</b>：\n<code>/compliance-video-remix &lt;YouTube URL&gt;</code>\n"
+            "仅获取字幕及元数据生成对照表。批准只用于制作；发布须另行审核。", parse_mode="HTML")
+        return
+    url = match.group(0)
+    from video_processing.compliance_remix.remix_service import _extract_video_id
+    try:
+        _extract_video_id(url)
+    except ValueError:
+        await update.message.reply_text("无效的 YouTube 来源链接。")
+        return
+    actor = str(update.effective_user.id)
+    chat = str(update.effective_chat.id)
+    init_msg = await update.message.reply_text(
+        "🛡️ <b>合规二创提案生成中</b>\n仅提取元数据及带时间戳字幕；缺来源证据时阻断。\n"
+        "提案通过规则检查后等待人工审阅，批准仅制作。", parse_mode="HTML")
+    asyncio.create_task(_run_remix_proposal_task(init_msg, url, actor, chat))
+
+
+async def _run_remix_proposal_task(status_msg: Any, url: str, actor: str, chat: str) -> None:
+    from video_processing.compliance_remix.remix_service import run_bounded_async
+    root = Path(__file__).resolve().parents[2]
+    cmd = [str(root / ".venv/bin/python"), "scripts/compliance_remix.py", "--propose", "--url", url,
+           "--actor", actor, "--chat", chat]
+    try:
+        rc, stdout, stderr = await run_bounded_async(cmd, cwd=str(root), timeout=300)
+        if rc:
+            raise RuntimeError(f"提案退出 {rc}: {stderr[-400:]}")
+        result = json.loads(stdout)
+        proposal_id = result["video_id"]
+        if not re.fullmatch(r"remix_[0-9a-f]{32}", proposal_id) or not result.get("censor_passed"):
+            raise ValueError("提案响应无效或检查未通过")
+        import io
+        review_document = io.BytesIO(result["review_text"].encode("utf-8"))
+        review_document.name = "compliance-remix-review.md"
+        await status_msg.reply_document(document=review_document, caption="完整来源字幕、全部拟用镜头及对照表；批准前请核对来源事实与脚本。")
+        text = (
+            f"📋 <b>二创对照表待人工审阅</b>\n"
+            f"提案：<code>{html.escape(proposal_id)}</code>\n"
+            f"标题：{html.escape(result['remix_title'])}\n"
+            f"来源：{html.escape(result['source_url'])}\n"
+            f"内容 SHA256：<code>{html.escape(result['content_hash'])}</code>\n"
+            f"对照表：<code>{html.escape(result['comparison_md_path'])}</code>\n\n"
+            "规则检查通过不代表语义安全。请审阅完整源证据和拟用镜头；下方批准仅制作，绝不自动投稿。")
+        buttons = [[InlineKeyboardButton("已核对脚本及镜头，确认制作", callback_data=f"remix:approve:{proposal_id}"),
+                    InlineKeyboardButton("撤销方案", callback_data=f"remix:cancel:{proposal_id}")]]
+        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await status_msg.edit_text(f"❌ 提案未完成：{html.escape(str(exc))}", parse_mode="HTML")
+
+
+async def handle_compliance_remix_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """远程审批先鉴权，再校验格式、操作者、聊天、不可变哈希和状态。"""
+    if not _check_admin(update) or update.callback_query is None:
+        return
+    query = update.callback_query
+    await query.answer()
+    match = re.fullmatch(r"remix:(approve|cancel):(remix_[0-9a-f]{32})", str(query.data or ""))
+    if not match:
+        await query.edit_message_text("拒绝：审批回调格式无效。")
+        return
+    action, proposal_id = match.groups()
+    from video_processing.compliance_remix.remix_service import ComplianceRemixService
+    try:
+        actor = str(update.effective_user.id)
+        chat = str(update.effective_chat.id)
+        service = ComplianceRemixService()
+        record, _, _ = service.load_proposal(proposal_id)
+        if action == "cancel":
+            service.db.revoke_compliance_remix(proposal_id, actor=actor, chat=chat)
+            await query.edit_message_text(f"已取消提案 {proposal_id}；撤销已持久记录。")
+            return
+        service.approve_remix(proposal_id, actor=actor, chat=chat, content_hash=record["content_hash"], purpose="produce", source_reviewed=True)
+        await query.edit_message_text(f"已记录一次性制作批准：{proposal_id}。尚未投稿；后台领取后开始制作。")
+        asyncio.create_task(_run_remix_execute_task(query.message, proposal_id, actor, chat, record["content_hash"]))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        await query.edit_message_text(f"审批被拒绝：{html.escape(str(exc))}", parse_mode="HTML")
+
+
+async def _run_remix_execute_task(msg_target: Any, proposal_id: str, actor: str, chat: str, content_hash: str) -> None:
+    from video_processing.compliance_remix.remix_service import run_bounded_async
+    root = Path(__file__).resolve().parents[2]
+    cmd = [str(root / ".venv/bin/python"), "scripts/compliance_remix.py", "--execute", "--approved",
+           "--video-id", proposal_id, "--actor", actor, "--chat", chat, "--content-hash", content_hash]
+    try:
+        rc, stdout, stderr = await run_bounded_async(cmd, cwd=str(root), timeout=600)
+        if rc:
+            raise RuntimeError(f"制作退出 {rc}: {stderr[-400:]}")
+        receipt = json.loads(stdout)
+        if receipt.get("status") != "PRODUCED":
+            raise ValueError("未收到本次制作完成回执")
+        await msg_target.reply_text(
+            f"制作完成：<code>{html.escape(proposal_id)}</code>\n"
+            f"成片：<code>{html.escape(str(receipt.get('final_video', '')))}</code>\n"
+            "平台：NOT_SUBMITTED；未自动投稿，实际画面及音色尚须人工审阅。", parse_mode="HTML")
+    except asyncio.CancelledError:
+        _stop_interrupted_remix(proposal_id, "CANCELLED")
+        raise
+    except Exception as exc:
+        _stop_interrupted_remix(proposal_id, type(exc).__name__)
+        await msg_target.reply_text(f"制作未确认完成：{html.escape(str(exc))}；禁止自动重试。", parse_mode="HTML")
+
+
+def _stop_interrupted_remix(proposal_id: str, reason: str) -> None:
+    """外层终止后保存停止态，不把不确定执行放回队列。"""
+    from video_processing.db.database import PipelineDB
+    db = PipelineDB()
+    record = db.get_compliance_remix(proposal_id)
+    if record["state"] == "PROCESSING":
+        db.finish_compliance_remix(proposal_id, state="UNCERTAIN", error=reason)
+
+
 async def cmd_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
@@ -1976,6 +2100,9 @@ def main() -> None:
     app.add_handler(CommandHandler("masterpiece", cmd_masterpiece))
     app.add_handler(CommandHandler("english_world", cmd_english_world))
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
+    app.add_handler(CommandHandler("compliance_video_remix", cmd_compliance_video_remix))
+    app.add_handler(MessageHandler(filters.Regex(r"^/compliance[-_]video[-_]remix(?:\s|$)"), cmd_compliance_video_remix))
+    app.add_handler(CallbackQueryHandler(handle_compliance_remix_callback, pattern=r"^remix:"))
     app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))
     app.add_handler(CallbackQueryHandler(handle_english_world_callback, pattern=r"^ew:"))
     app.add_handler(CallbackQueryHandler(handle_delivery_recovery_callback, pattern=r"^recover:"))

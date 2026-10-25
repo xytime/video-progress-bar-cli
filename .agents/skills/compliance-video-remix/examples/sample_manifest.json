@@ -1,0 +1,43 @@
+{
+  "id": "synthetic_demo",
+  "title": "合成市场观察演练",
+  "description": "合成测试内容",
+  "cover_title": "合成市场观察演练",
+  "cover_subtitle": "观察",
+  "cover_label": "研究",
+  "category": "财经",
+  "badge_text": "观察",
+  "keywords": [
+    "市场"
+  ],
+  "content_hints": [
+    "研究"
+  ],
+  "chapters": [
+    {
+      "index": 1,
+      "text": "市场关注长期成本。",
+      "clauses": [
+        [
+          "市场关注长期成本。",
+          3.0
+        ]
+      ]
+    }
+  ],
+  "cards": [],
+  "raw_shots": [
+    [
+      0,
+      3
+    ]
+  ],
+  "comparison_table": [
+    {
+      "timestamp_range": "00:00 - 00:03",
+      "source_english_gist": "Synthetic source evidence.",
+      "remix_chinese_commentary": "市场关注长期成本。",
+      "reframing_rationale": "解释商业成本。"
+    }
+  ]
+}

@@ -242,9 +242,10 @@ from .publishing_recovery import PublishingRecoveryDAL
 from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
+from .compliance_remix import ComplianceRemixDAL
 
 
-class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -316,6 +317,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
             self.initialize_english_world_workbench_schema()
             self.initialize_delivery_recovery()
             self.initialize_publishing_recovery()
+            self.initialize_compliance_remix()
         self._initializing_schema = False
         from ..core.maintenance import running
         if not self._read_only and running():
@@ -3789,7 +3791,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
         with self.get_connection() as conn:
             conn.execute(
                 "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ?",
+                "WHERE youtube_id = ? AND slice_index = ? AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'",
                 (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
@@ -3960,7 +3962,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 UPDATE processed_videos SET status='PROCESSING', process_pid=?,
                     retry_count=retry_count+1, error_msg='CODEX_MEDIA_RECOVERY', updated_at=CURRENT_TIMESTAMP
                 WHERE youtube_id=? AND slice_index=0 AND status='FAILED' AND score>=75
-                  AND source<>'DISCOVERY' AND keyword_allowed(source,youtube_id) AND error_msg=? AND retry_count=? AND process_pid IS NULL
+                  AND source NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(source,youtube_id) AND error_msg=? AND retry_count=? AND process_pid IS NULL
                   AND updated_at >= datetime('now', '-48 hours')
                   AND NOT EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id=processed_videos.youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=processed_videos.id)
@@ -4090,6 +4092,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 publication_ready_at = COALESCE(publication_ready_at, ?),
                 publication_wait_reason = '等待发布执行者领取', error_msg = NULL, process_pid = NULL,
                 updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?
+                  AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'
                   AND status NOT IN ('PUBLISHED', 'COMPLETED', 'IGNORED', 'HISTORICAL_ARCHIVED', 'UNDER_REVIEW', 'PUBLISHING')
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)""",
@@ -4105,7 +4108,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 WHERE youtube_id = ? AND slice_index = ?
                   AND status IN ('PENDING', 'PROCESSING', 'WECHAT_DEFERRED')
                   AND IFNULL(publication_review_required, 0) = 0
-                  AND COALESCE(source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
+                  AND COALESCE(source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(source,youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive a WHERE a.video_id = processed_videos.id)
@@ -4207,6 +4210,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 '''SELECT pv.youtube_id, pv.slice_index, pv.score, pv.title, pv.status
                    FROM processed_videos pv
                    WHERE pv.status IN ('FAILED', 'LOGIN_REQUIRED')
+                     AND COALESCE(pv.source, 'AUTO') != 'COMPLIANCE_REMIX'
                      AND pv.updated_at >= datetime('now', ?)
                    ORDER BY pv.updated_at DESC''',
                 (f"-{int(hours)} hours",)
@@ -4219,7 +4223,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' AND keyword_allowed(source,youtube_id) "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX' AND keyword_allowed(source,youtube_id) "
                 "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
                 "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
@@ -5000,7 +5004,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                    WHERE pv.status = 'PENDING'
               AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
                               WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
+                     AND COALESCE(pv.source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -5110,7 +5114,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 '''SELECT pv.* FROM processed_videos pv
                    WHERE pv.youtube_id = ? AND pv.slice_index = ?
                      AND pv.status = 'PENDING'
-                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
+                     AND COALESCE(pv.source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(pv.source,pv.youtube_id)
                      AND COALESCE(pv.publication_review_required, 0) = 0
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
@@ -5410,6 +5414,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE status IN ('PROCESSING', 'DOWNLOADING', 'COPYWRITING', 'TRANSCRIBING')
+                AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'
                 AND process_pid IS NULL
                 AND updated_at < datetime('now', ?)
                 ''',
@@ -5443,6 +5448,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
             rows = conn.execute(
                 f"""SELECT * FROM processed_videos
                     WHERE status IN ({placeholders})
+                      AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'
                       AND updated_at < datetime('now', ?)
                     ORDER BY updated_at ASC""",
                 (*states, f"-{max(1, int(stale_minutes))} minutes"),
@@ -5467,7 +5473,8 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT status, retry_count, process_pid FROM processed_videos
-                   WHERE youtube_id = ? AND slice_index = ?""",
+                   WHERE youtube_id = ? AND slice_index = ?
+                     AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'""",
                 (youtube_id, slice_index),
             ).fetchone()
             if not row or row["status"] not in recoverable_states:
@@ -5484,7 +5491,8 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                    SET status = ?, retry_count = ?, process_pid = NULL, error_msg = ?,
                        updated_at = CURRENT_TIMESTAMP
                    WHERE youtube_id = ? AND slice_index = ? AND status = ?
-                     AND process_pid IS ?""",
+                     AND process_pid IS ?
+                     AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'""",
                 (
                     next_status, next_retry_count, error_msg, youtube_id, slice_index,
                     row["status"], expected_process_pid,
@@ -5557,7 +5565,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
               AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
                               WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
               AND pv.score < 75
-              AND IFNULL(pv.source, '') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
+              AND IFNULL(pv.source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(pv.source,pv.youtube_id)
               AND IFNULL(pv.is_manually_scored, 0) = 0
               AND (
                     pv.score_input_signature IS NULL
@@ -5643,7 +5651,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                    WHERE youtube_id = ?
                      AND slice_index = 0
                      AND status IN ('PENDING', 'EXPIRED', 'IGNORED')
-                     AND IFNULL(source, '') != 'DISCOVERY' AND keyword_allowed(source,youtube_id)
+                     AND IFNULL(source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(source,youtube_id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = processed_videos.id)""",
                 (score, youtube_id)
@@ -5743,7 +5751,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                    WHERE status = 'PENDING'
                      AND score < 75
                      AND parent_id IS NULL
-                     AND IFNULL(source, '') != 'DISCOVERY'
+                     AND IFNULL(source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX')
                      AND (
                          created_at < datetime('now', ?)
                          OR (upload_date IS NOT NULL AND upload_date != '' AND upload_date GLOB '[12][0-9][0-9][0-9]*' AND SUBSTR(REPLACE(upload_date, '-', ''), 1, 8) < ?)
@@ -5937,7 +5945,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
               AND {rate_sql}
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
-              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY' AND keyword_allowed(pv.source,pv.youtube_id)
+              AND COALESCE(pv.source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(pv.source,pv.youtube_id)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
                               WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0
@@ -6308,7 +6316,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                 WHERE pv.status = 'PENDING'
               AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
                               WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND pv.score >= 75
-                  AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                  AND COALESCE(pv.source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX')
                   AND COALESCE(pv.publication_review_required, 0) = 0
                   AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
                   AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
@@ -6364,7 +6372,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                    WHERE pv.status = 'PENDING'
               AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
                               WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND pv.score >= 75
-                     AND IFNULL(pv.source, '') != 'DISCOVERY'
+                     AND IFNULL(pv.source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX')
                      AND pv.channel_id NOT IN (
                          SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
                      )
@@ -6733,7 +6741,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
             return """pv.status = 'WECHAT_DEFERRED' AND pv.parent_id IS NULL AND NOT EXISTS (
                 SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         if tab == 'review':
-            return "pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') AND pv.parent_id IS NULL", []
+            return "(pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') OR (pv.source='COMPLIANCE_REMIX' AND pv.status='PENDING_REVIEW')) AND pv.parent_id IS NULL", []
         if tab == 'ready':
             return """((pv.status = 'PENDING' AND IFNULL(pv.preparation_ready, 0) = 1)
                 OR pv.status = 'PUBLISH_PRECHECK')
@@ -6791,7 +6799,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
             WHEN pv.status='WECHAT_DEFERRED' OR ({error} AND {exists(login)}) THEN 'blocked'
             WHEN {error} AND {exists('1=1')} AND NOT {exists(f'NOT {policy} OR {technical}')} THEN 'policy'
             WHEN {error} THEN 'execution'
-            WHEN pv.status='UNDER_REVIEW' THEN 'review'
+            WHEN pv.status='UNDER_REVIEW' OR (pv.source='COMPLIANCE_REMIX' AND pv.status='PENDING_REVIEW') THEN 'review'
             ELSE NULL END"""
 
     def get_attention_summary(self) -> Dict[str, Any]:
@@ -7344,7 +7352,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                         WHERE archive.video_id = pv.id
                     ) THEN 1 ELSE 0 END) as wechat_deferred,
                     SUM(CASE WHEN pv.status = 'SUBMITTED_UNBOUND' THEN 1 ELSE 0 END) as local_accepted,
-                    SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_BOUND', 'UNCERTAIN') THEN 1 ELSE 0 END) as review,
+                    SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_BOUND', 'UNCERTAIN') OR (pv.source='COMPLIANCE_REMIX' AND pv.status='PENDING_REVIEW') THEN 1 ELSE 0 END) as review,
                     SUM(CASE WHEN (
                         pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')
                         OR
@@ -7758,7 +7766,7 @@ class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductReco
                            ORDER BY hj.updated_at DESC LIMIT 1) AS active_highlight_job_id
                    FROM processed_videos pv
                    WHERE pv.slice_index = 0 AND pv.parent_id IS NULL
-                     AND IFNULL(pv.source, '') != 'DISCOVERY'
+                     AND IFNULL(pv.source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX')
                      AND NOT EXISTS (
                          SELECT 1 FROM blacklisted_videos bv WHERE bv.youtube_id = pv.youtube_id
                      )

@@ -417,12 +417,14 @@ def test_slice_level_ignore(test_db, monkeypatch):
 
 def test_cleanup_expired_by_upload_date(test_db):
     """测试当 created_at 较新但原片发布日期(upload_date)超过 30 天时的时效淘汰（含紧凑与带横杠格式）。"""
-    # 模拟从 YouTube 抓取的旧视频：created_at 是今天，但 upload_date 是 2 个月前
-    test_db.add_video("old-yt-upload", "Old YouTube Upload", "Channel F", score=35, source="AUTO", upload_date="20260101")
+    old_date = datetime.now() - timedelta(days=60)
+    recent_date = datetime.now() - timedelta(days=7)
+    # 使用相对日期，避免固定的“近期”样本随时间变为过期。
+    test_db.add_video("old-yt-upload", "Old YouTube Upload", "Channel F", score=35, source="AUTO", upload_date=old_date.strftime("%Y%m%d"))
     # 模拟带横杠格式的旧视频
-    test_db.add_video("old-yt-hyphen", "Old YouTube Hyphen", "Channel F", score=40, source="AUTO", upload_date="2026-01-01")
+    test_db.add_video("old-yt-hyphen", "Old YouTube Hyphen", "Channel F", score=40, source="AUTO", upload_date=old_date.strftime("%Y-%m-%d"))
     # 模拟近期的带横杠视频，不应被淘汰
-    test_db.add_video("recent-yt-hyphen", "Recent YouTube Hyphen", "Channel F", score=50, source="AUTO", upload_date="2026-09-15")
+    test_db.add_video("recent-yt-hyphen", "Recent YouTube Hyphen", "Channel F", score=50, source="AUTO", upload_date=recent_date.strftime("%Y-%m-%d"))
     assert test_db.get_tab_counts()["waitlist"] == 3
 
     evicted = test_db.cleanup_expired_waitlist_videos(ttl_days=30)

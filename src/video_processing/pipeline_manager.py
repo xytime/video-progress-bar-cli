@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| remix-entry-guard-v1 | 2026-10-25 | GPT-6.1 Sol | 普通加工及发布入口拒绝合规二创来源，保留独立审批边界。 |
 | manual-result-feedback-v1 | 2026-10-25 | Codex | 保留本次投稿动作证据，区分策略性人工确认与真实结果未知。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
@@ -3977,6 +3978,9 @@ class PipelineManager:
 
     def _publish_prepared_assets(self, video, copy_file, title_file, category_file, cover_file):
         """复用原有上传、内容证据与受理回执协议。"""
+        if video.get("source") == "COMPLIANCE_REMIX":
+            logger.warning("合规二创任务必须通过独立审批执行，拒绝普通加工或发布入口。")
+            return False
         yid = video["youtube_id"]
         slice_index = int(video.get("slice_index") or 0)
         prefix = f"{yid}_s{slice_index}" if slice_index else yid
@@ -4232,6 +4236,9 @@ class PipelineManager:
     @guarded("video", lambda self, video, **kw: f"{video['youtube_id']}:{video.get('slice_index', 0)}", waiting=True)
     def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False, claim=False):
         """同视频互斥；就绪提交与重型加工使用不同资源锁。"""
+        if video.get("source") == "COMPLIANCE_REMIX":
+            logger.warning("合规二创任务必须通过独立审批执行，拒绝普通加工或发布入口。")
+            return False
         from .core.task_lease import TaskLease, TaskLeaseBusy
         from .utils.youtube_route import YoutubeRouteError
 

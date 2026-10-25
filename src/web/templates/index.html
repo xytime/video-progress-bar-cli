@@ -830,6 +830,8 @@
     SEGMENTED: ['已分集', 'COMPLETED'],
     IGNORED: ['已忽略', 'COMPLETED'],
     WECHAT_DEFERRED: ['待微信恢复', 'SUBMITTED_BOUND'],
+    PENDING_REVIEW: ['待人工批准制作', 'PENDING', '合规二创提案待人工核对脚本及镜头；尚未提交平台'],
+    REMIX_PROCESSING: ['制作中', 'RENDERING', '已领取人工批准，正在制作本地成片'],
     UNDER_REVIEW: ['审核中', 'SUBMITTED_BOUND', '平台审核中，尚未确认公开发布'],
     SUBMITTED_BOUND: ['已提交，待确认发布', 'SUBMITTED_BOUND', '已记录平台作品 ID，但尚无公开发布证明；禁止重发'],
     SUBMITTED_UNBOUND: ['本地已受理，待关联作品', 'SUBMITTED_UNBOUND', '本地已受理，尚未绑定平台作品 ID，也无公开发布证明；禁止重发'],
@@ -842,6 +844,7 @@
     LOGIN_REQUIRED: ['需要登录', 'LOGIN_REQUIRED'],
     BANNED: ['禁止发布', 'FAILED'],
     CANCELED: ['已取消', 'PENDING'],
+    CANCELLED: ['已取消', 'PENDING'],
     DRAFT: ['草稿', 'PENDING'],
     APPROVED: ['监控中', 'PUBLISHED', '频道处于自动抓取监控中'],
     PAUSED: ['已暂停', 'PAUSED', '频道已暂停自动轮询抓取'],
@@ -869,6 +872,7 @@
   }
 
   function videoStatusBadge(v) {
+    if (v.source === 'COMPLIANCE_REMIX' && v.status === 'PROCESSING') return statusBadge('REMIX_PROCESSING');
     const badge = v.failure_summary
       ? `<span class="badge badge-FAILED" title="${escapeAttr(v.error_msg || '')}">${escapeHtml(v.failure_summary)}</span>`
       : statusBadge(v.processing_detail ? 'CAPTION_PROCESSING' : (v.platforms?.wechat?.display_state === 'MANUAL_CONFIRMATION_REQUIRED' ? 'MANUAL_CONFIRMATION_REQUIRED' : (v.display_status || v.status)));
@@ -1703,7 +1707,9 @@
           ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
           : '';
         const engagementBrowseBtn = markDoneBtn + ytLinkBtn;
-        const retryBtn = currentTab === 'high_likes'
+        const retryBtn = v.source === 'COMPLIANCE_REMIX'
+          ? `<span class="meta-chip">请通过原提案审批制作；不自动投稿</span>`
+          : currentTab === 'high_likes'
           ? window.EngagementRows.actions(v) + `<div class="engagement-browse">${engagementBrowseBtn}</div>`
           : isDiscovery
           ? promoteBtn + markDoneBtn + ytLinkBtn + deleteBtn
@@ -1750,7 +1756,9 @@
           : '';
         const displayTitle = v.display_title || v.published_title || v.zh_title || v.title || '—';
         const zhTitleHtml = `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${escapeHtml(displayTitle)}</div>`;
-        const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
+        const enTitleHtml = v.source === 'COMPLIANCE_REMIX'
+          ? `<span class="video-title-link video-title-dim">原片链接及镜头清单见审核材料</span>`
+          : `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
           href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
           onclick="event.stopPropagation()">${escapeHtml(v.title === displayTitle ? '查看原视频' : v.title || '查看原视频')}</a>`;
         const sourceZhHtml = v.title_mismatch && v.zh_title
@@ -1768,9 +1776,11 @@
 
         const sourceBadge = v.source === 'MANUAL'
           ? `<span class="source-badge source-manual">👤 手工加急</span>`
-          : v.source === 'KEYWORD'
-            ? `<span class="source-badge source-auto">YouTube 关键词采集</span>`
-            : `<span class="source-badge source-auto">🤖 自动探测</span>`;
+          : v.source === 'COMPLIANCE_REMIX'
+            ? `<span class="source-badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 600;">🛡️ 合规二创</span>`
+            : v.source === 'KEYWORD'
+              ? `<span class="source-badge source-auto">YouTube 关键词采集</span>`
+              : `<span class="source-badge source-auto">🤖 自动探测</span>`;
 
         // 格式化时长 mm:ss 或 hh:mm:ss
         const fmtDuration = (sec) => {

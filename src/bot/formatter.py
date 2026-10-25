@@ -284,6 +284,7 @@ def fmt_help() -> str:
         "   _例：链接 38 14:43 或 链接 30 (去头) 或 链接 -300 (截前段)_\n\n"
         "🎥 `/whole <url> [开始] [结束]` — 强制以完整整片加入队列\n"
         "🎬 `/slice <url> [开始] [结束]` — 允许切片（若有章节）加入队列\n"
+        "🛡️ `/compliance-video-remix <url>` — 外媒二创（先审对照表，批准仅制作，发布另审）\n"
         "✂️ `/highlight` — 选择已有视频，显式生成金句候选（不会自动发布）\n"
         "✂️ `/highlight <ID>` — 对指定已有视频确认创建 Highlight Job\n"
         "📂 `/highlight jobs` — 查看 Highlight Job 状态\n"

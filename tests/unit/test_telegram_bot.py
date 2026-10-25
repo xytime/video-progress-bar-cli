@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2026.10.25 | 2026-10-25 | GPT-6.1 Sol | 合规二创不可变审批与队列隔离整改 |
 | 1.0.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 初始创建，实现 Telegram URL 路由与裁剪参数提取的 TDD 单元测试 |
 | 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 新增 /whole 与 /slice 核心指令测试，验证默认不切片与强制切片策略的路由传导 |
 | 1.2.0 | 2026-07-28 | Codex | 覆盖 /status 只读质检报告和 Telegram 快捷菜单 |
@@ -542,6 +543,121 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
         final_reply = update.message.reply_text.await_args_list[1].args[0]
         self.assertIn("母带生成失败", final_reply)
         self.assertIn("VTT evidence", final_reply)
+
+    async def test_cmd_compliance_video_remix_usage(self):
+        from bot.telegram_bot import cmd_compliance_video_remix
+
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.text = "/compliance-video-remix"
+        update.message.caption = None
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = []
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_compliance_video_remix(update, context)
+
+        update.message.reply_text.assert_awaited_once()
+        reply = update.message.reply_text.await_args[0][0]
+        self.assertIn("合规二创指令用法", reply)
+        self.assertIn("/compliance-video-remix", reply)
+
+    async def test_cmd_compliance_video_remix_launches_task(self):
+        from bot.telegram_bot import cmd_compliance_video_remix
+
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.text = "/compliance-video-remix https://www.youtube.com/watch?v=p8smG9rkQVY"
+        update.message.caption = None
+        init_reply = MagicMock()
+        update.message.reply_text = AsyncMock(return_value=init_reply)
+        context = MagicMock()
+        context.args = ["https://www.youtube.com/watch?v=p8smG9rkQVY"]
+
+        with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+            "bot.telegram_bot.asyncio.create_task"
+        ) as mock_task:
+            await cmd_compliance_video_remix(update, context)
+
+        update.message.reply_text.assert_awaited_once()
+        reply = update.message.reply_text.await_args[0][0]
+        self.assertIn("合规二创提案生成中", reply)
+        mock_task.assert_called_once()
+        mock_task.call_args.args[0].close()
+
+    async def test_handle_compliance_remix_callback_rejects_malformed(self):
+        from bot.telegram_bot import handle_compliance_remix_callback
+        for data in ["remix:cancel:test12345", "remix:approve:../escape", "remix:approve:remix_" + "a" * 32 + ":extra"]:
+            update = MagicMock()
+            update.callback_query.data = data
+            update.callback_query.answer = AsyncMock()
+            update.callback_query.edit_message_text = AsyncMock()
+            with patch("bot.telegram_bot._check_admin", return_value=True):
+                await handle_compliance_remix_callback(update, MagicMock())
+            self.assertIn("格式无效", update.callback_query.edit_message_text.await_args.args[0])
+
+    async def test_remix_callback_cancel_persists_and_context_bound(self):
+        import tempfile
+        from pathlib import Path
+        from video_processing.db.database import PipelineDB
+        from video_processing.compliance_remix.remix_service import ComplianceRemixService
+        from tests.unit.test_compliance_remix_lifecycle import Generator, source_fetcher, SOURCE_ID
+        from bot.telegram_bot import handle_compliance_remix_callback
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = ComplianceRemixService(PipelineDB(str(root / "db.sqlite")), generator=Generator(), source_fetcher=source_fetcher)
+            result = service.propose_remix(SOURCE_ID, root / "work", actor="12345", chat="678")
+            update = MagicMock()
+            update.effective_user.id = 12345
+            update.effective_chat.id = 999
+            update.callback_query.data = "remix:cancel:" + result["video_id"]
+            update.callback_query.answer = AsyncMock()
+            update.callback_query.edit_message_text = AsyncMock()
+            with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+                "video_processing.compliance_remix.remix_service.ComplianceRemixService", return_value=service
+            ):
+                await handle_compliance_remix_callback(update, MagicMock())
+                self.assertEqual(service.db.get_compliance_remix(result["video_id"])["state"], "PENDING_REVIEW")
+                update.effective_chat.id = 678
+                await handle_compliance_remix_callback(update, MagicMock())
+            self.assertEqual(service.db.get_compliance_remix(result["video_id"])["state"], "REVOKED")
+            self.assertIn("已取消", update.callback_query.edit_message_text.await_args.args[0])
+
+    async def test_remix_callback_approval_once_and_no_publish(self):
+        import tempfile
+        from pathlib import Path
+        from video_processing.db.database import PipelineDB
+        from video_processing.compliance_remix.remix_service import ComplianceRemixService
+        from tests.unit.test_compliance_remix_lifecycle import Generator, source_fetcher, SOURCE_ID
+        from bot.telegram_bot import handle_compliance_remix_callback
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = ComplianceRemixService(PipelineDB(str(root / "db.sqlite")), generator=Generator(), source_fetcher=source_fetcher)
+            result = service.propose_remix(SOURCE_ID, root / "work", actor="12345", chat="678")
+            update = MagicMock()
+            update.effective_user.id = 12345
+            update.effective_chat.id = 678
+            update.callback_query.data = "remix:approve:" + result["video_id"]
+            update.callback_query.answer = AsyncMock()
+            update.callback_query.edit_message_text = AsyncMock()
+            # 两个依赖注入点：服务与任务调度；审批使用真实DAL。
+            queued = []
+            def capture(coroutine):
+                queued.append(coroutine)
+                coroutine.close()
+            with patch("bot.telegram_bot._admin_ids", {12345}), patch(
+                "video_processing.compliance_remix.remix_service.ComplianceRemixService", return_value=service
+            ), patch("bot.telegram_bot.asyncio.create_task", side_effect=capture):
+                await handle_compliance_remix_callback(update, MagicMock())
+                await handle_compliance_remix_callback(update, MagicMock())
+                update.effective_user.id = 999
+                await handle_compliance_remix_callback(update, MagicMock())
+            self.assertEqual(len(queued), 1)
+            record = service.db.get_compliance_remix(result["video_id"])
+            self.assertEqual(record["purpose"], "produce")
+            self.assertIsNotNone(record["human_reviewed_at"])
+            self.assertEqual(record["human_reviewed_hash"], record["content_hash"])
 
 
 if __name__ == "__main__":
