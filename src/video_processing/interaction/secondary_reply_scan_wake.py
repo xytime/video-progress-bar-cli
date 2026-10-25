@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-26 | Codex | 已允许准入的 until 是检查时刻而非阻挡期限，避免循环追逐移动时钟。 |
 | 1.0.0 | 2026-10-25 | Codex | 本地等待不占浏览器、不计费；到期重检全部原生门禁，重启沿用等待事实。 |
 """
 from contextlib import contextmanager
@@ -179,7 +180,10 @@ def resume_scan_wait(wakes, scope, environment, execute, *, cadence, now=time.ti
             release = admission.get("until")
             if not admission.get("allowed") and (type(release) not in (int, float) or not math.isfinite(release)):
                 return {"ok": True, "status": "SCAN_WAKE_BLOCKED", "scan_wait": row}
-            deadline = max(control["window_until"], release or current_time)
+            # allowed 时原生 until 默认是 guard 稍后取得的当前时刻，不能当作新门禁。
+            deadline = control["window_until"]
+            if not admission.get("allowed"):
+                deadline = max(deadline, release)
             if "RESOURCE_OR_ADMISSION_WAIT" in row["codes"]:
                 deadline = max(deadline, row["wake_at"])
             if deadline > current_time:

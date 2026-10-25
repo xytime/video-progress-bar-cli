@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-26 | Codex | 覆盖真实准入调用耗时造成允许状态 until 略晚于循环起点，禁止追逐移动时钟。 |
 | 1.0.0 | 2026-10-25 | Codex | 临时状态文件及合成时钟；零平台、零真实留言、零出站通知。 |
 """
 import copy
@@ -167,6 +168,44 @@ def test_wait_has_zero_debits_then_one_native_batch_and_preserves_failed_waterma
     assert len(row["schedule"]["sessions"]) == 2
     assert db.get_comment_scan_state("a", "export/synthetic0")["last_complete_scan_at"] is None
     assert not evaluate(row, clock.wall, "评论扫描", account_only=True)["allowed"]
+
+
+@pytest.mark.parametrize('inspection_seconds', [0.02, 0.5])
+def test_native_allowed_admission_time_is_not_a_new_future_gate(active, tmp_path, inspection_seconds):
+    from video_processing.core.wechat_account_schedule import evaluate
+    clock = Clock(); row = state(); original = copy.deepcopy(row)
+    wakes = pending(tmp_path, clock.wall); env = Environment(clock.wall)
+    def inspect(start):
+        # 原生 guard 在读取状态/策略后才取 time.time()，晚于外层循环取样。
+        clock.sleep(inspection_seconds)
+        admission = evaluate(row, clock.wall, '评论扫描', account_only=True)
+        assert admission['allowed'] and admission['until'] > start
+        return {'enabled': True, 'window_until': start, 'scan_limit': 5,
+                'revision': 'native', 'admission': admission}
+    env.inspect = inspect
+    calls = []
+    result = run(wakes, clock, env, lambda cap: calls.append((clock.wall, cap)) or {'ok': True})
+    assert result and result['scan_wake_resumed']
+    assert calls == [(10000+inspection_seconds, 5)]
+    assert clock.elapsed == inspection_seconds and row == original
+    assert wakes.read() is None
+
+
+@pytest.mark.parametrize('gate', ['window', 'resource'])
+def test_allowed_account_still_honors_window_and_resource_deadline(tmp_path, gate):
+    clock = Clock(); wakes = pending(tmp_path); env = Environment(0)
+    if gate == 'resource':
+        wakes.defer(SCOPE, until=10007, scan_limit=5, codes=['RESOURCE_OR_ADMISSION_WAIT'])
+    base = env.inspect
+    def inspect(now):
+        control = base(now)
+        control['admission']['until'] = now+0.02
+        if gate == 'window': control['window_until'] = max(now,10007)
+        return control
+    env.inspect = inspect
+    calls = []
+    assert run(wakes,clock,env,lambda cap: calls.append(clock.wall) or {'ok':True})['scan_wake_resumed']
+    assert calls == [10007] and clock.elapsed == 7
 
 
 def test_real_cli_resumes_only_scan_not_send_reconcile_or_draft(configured, cli, monkeypatch, tmp_path, capsys):
