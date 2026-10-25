@@ -25,6 +25,7 @@
 | 3.1.0   | 2026-08-05 | Codex                          | [标题译文防污] 拒绝 Error 500 错误页写入 zh_title，保留原始英文标题待下轮翻译 |
 
 | maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
+| discovery-receipt-v1 | 2026-10-25 | Codex | 返回本次新增与排除原因，记录搜索失败和超时，供刷新结果回读。 |
 """
 import sys
 import argparse
@@ -298,7 +299,7 @@ def discover_new_channels(db: PipelineDB):
 
 
 @entry
-def discover_high_like_videos(db: PipelineDB):
+def discover_high_like_videos(db: PipelineDB, *, progress=None):
     """通过关键词搜索发现最近3天内的高赞视频，进行敏感词检测和分类提取，存入数据库以供浏览和手动触发"""
     # [Gemini_3.5_Flash_planning] 独立高赞视频发现逻辑，避免与频道发现逻辑混合
     print("Running active discovery for high-like videos...")
@@ -314,7 +315,15 @@ def discover_high_like_videos(db: PipelineDB):
     # [Gemini_3.5_Flash_planning] 将高赞视频发现窗口扩大至 3 天，提供更多发现结果
     yesterday_str = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
     
+    report = dict(added=0, duplicates=0, blocked=0, outdated=0, low_views=0,
+                  invalid=0, candidates=0, searches=0, completed=0, failed=0, timeouts=0)
+    def checkpoint():
+        if progress:
+            progress(dict(report))
+
     keywords = get_discovery_keywords()
+    report['searches'] = len(keywords)
+    checkpoint()
     for keyword in keywords:
         with gate().admit("discover_high_like_videos", "high-like-search:" + keyword) as ticket:
             ticket.start()
@@ -330,8 +339,13 @@ def discover_high_like_videos(db: PipelineDB):
             ]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)  # [Claude_Opus_4.6_Thinking_planning] 120→180s，dateafter过滤需更多时间
-                if result.returncode == 0 and result.stdout.strip():
+                if result.returncode != 0:
+                    report['failed'] += 1
+                    print(f"  -> Search failed for '{keyword}' (exit={result.returncode})")
+                    continue
+                if result.stdout.strip():
                     for line in result.stdout.strip().split('\n'):
+                        report['candidates'] += 1
                         parts = line.split('|||', 7)
                         if len(parts) == 8:
                             video_id = parts[0].strip()
@@ -344,6 +358,19 @@ def discover_high_like_videos(db: PipelineDB):
                             category = parts[7].strip()
                             if category in ("NA", ""):
                                 category = None
+
+                            if not video_id or video_id == 'NA' or not upload_date.isdigit() or len(upload_date) != 8:
+                                report['invalid'] += 1
+                                continue
+                            if upload_date < yesterday_str:
+                                report['outdated'] += 1
+                                continue
+                            if view_count is None:
+                                report['invalid'] += 1
+                                continue
+                            if view_count <= 500:
+                                report['low_views'] += 1
+                                continue
 
                             # 筛选最近 3 天内发布且观看量>500的视频
                             if upload_date and upload_date >= yesterday_str:
@@ -374,11 +401,27 @@ def discover_high_like_videos(db: PipelineDB):
                                         category=category, censor_tag=censor_tag, censor_score=censor_score
                                     )
                                     if added:
+                                        report['added'] += 1
+                                        checkpoint()
                                         print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count}, category={category}, censor={censor_tag})")
+                                    elif db.is_blacklisted(video_id):
+                                        report['blocked'] += 1
+                                    else:
+                                        report['duplicates'] += 1
+                        else:
+                            report['invalid'] += 1
             except subprocess.TimeoutExpired:
+                report['timeouts'] += 1
                 print(f"  -> Timeout searching '{keyword}'")
+            except MaintenanceDenied:
+                raise
             except Exception as e:
+                report['failed'] += 1
                 print(f"Error during video discovery for '{keyword}': {e}")
+            finally:
+                report['completed'] += 1
+                checkpoint()
+    return report
 
 
 @entry

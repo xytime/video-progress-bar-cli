@@ -2,7 +2,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const controls = ['btn-scan-channels', 'btn-scan-engagement', 'btn-refresh-high-likes', 'btn-wechat-login', 'btn-run-pipeline', 'header-pipeline-submit'];
-  let runtime = null, wechat = null, pending = false, busy = '', generation = 0;
+  let runtime = null, wechat = null, pending = false, busy = '', generation = 0, lastResultId = '';
   const scans = {channels: false, engagement: false};
   const feedback = message => { $('header-operation-feedback').textContent = message; };
   async function json(url, options) {
@@ -43,17 +43,30 @@
     wechat = login.status === 'fulfilled' && typeof login.value.login_flow_active === 'boolean' && typeof login.value.status_label === 'string' ? login.value : null;
     const oldScans = {...scans};
     scans.channels = runtime?.channel_scan.running ?? true;
-    scans.engagement = engagement.status === 'fulfilled' && typeof engagement.value.running === 'boolean' ? engagement.value.running : true;
+    const engagementValid = engagement.status === 'fulfilled' && typeof engagement.value.running === 'boolean';
+    scans.engagement = engagementValid ? engagement.value.running : true;
+    const result = engagement.status === 'fulfilled' ? engagement.value.result : null;
+    const completedResult = !scans.engagement && typeof result?.message === 'string' ? result : null;
+    const newResult = completedResult && completedResult.run_id !== lastResultId;
+    const refreshStatus = $('high-likes-refresh-status');
+    if (refreshStatus) {
+      refreshStatus.setAttribute('role', 'status');
+      refreshStatus.textContent = !engagementValid ? '高互动刷新状态读取失败，请重新核实状态。' : result?.message || '';
+    }
     pending = false; paint();
-    $('header-status-retry').hidden = Boolean(runtime && wechat && engagement.status === 'fulfilled');
+    $('header-status-retry').hidden = Boolean(runtime && wechat && engagementValid);
     if (!runtime) feedback('运行状态读取失败，操作已暂停；请重新核实状态。');
     else if (runtime.state === 'MAINTENANCE') feedback('维护中：扫描、登录、加工与发布已暂停。' + (runtime.reason ? ` ${runtime.reason}` : ''));
     else if (!wechat) feedback('微信状态读取失败，扫码登录暂不可用；请重新核实状态。');
+    else if (!engagementValid) feedback('高互动刷新状态读取失败，新增结果尚未核实；请重新核实状态。');
     else if (scans.channels || scans.engagement) feedback('扫描任务进行中；同类入口已禁用，页面会自动读取状态。');
     else if (oldScans.channels && runtime.channel_scan.outcome === 'error') feedback('频道扫描失败，请查看频道访问结果及扫描日志后重试。');
     else if (oldScans.channels && runtime.channel_scan.outcome === 'complete') feedback('频道扫描已完成，请在频道白名单核对采集结果。');
-    else if (oldScans.engagement) { feedback('高互动刷新任务已结束，请核对素材列表；结束状态不代表全部来源采集成功。'); window.loadVideos?.(); }
+    else if (completedResult && (newResult || oldScans.engagement || !quiet)) feedback(completedResult.message);
+    else if (oldScans.engagement) feedback('高互动刷新结果尚未核实，请重新核实状态。');
     else if (!quiet) feedback('扫描仅采集素材；运行完整流水线可能继续加工和发布。');
+    if (completedResult) lastResultId = completedResult.run_id;
+    if (newResult || (oldScans.engagement && !scans.engagement)) window.loadVideos?.();
     return runtime?.state === 'RUNNING';
   }
   async function allow(kind) {

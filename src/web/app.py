@@ -4544,42 +4544,26 @@ def refresh_trending_keywords():
 
 
 # ── [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新 ──────────────
-_high_likes_refresh_running = False  # 全局互斥锁，防止重复触发
+from web.high_likes_refresh import HighLikesRefresh
+_high_likes_refresh = HighLikesRefresh(settings.default_output_dir / 'high_likes_refresh.json')
 
 @app.post("/api/high-likes/refresh")
 def refresh_high_likes():
-    """在后台线程中执行 discover_high_like_videos()，立即返回状态。
-
-    discover_high_like_videos() 需要通过 yt-dlp 搜索多个关键词（约 1~3 分钟），
-    因此采用异步触发而非同步阻塞，前端轮询或刷新 Tab 即可获取最新数据。
-    """
-    global _high_likes_refresh_running
-    if _high_likes_refresh_running:
-        return {"started": False, "message": "刷新任务已在进行中，请稍候..."}
-
-    _high_likes_refresh_running = True  # 在启动线程前置位，避免竞态
-
-    def _run():
-        global _high_likes_refresh_running  # [Claude_Opus_4.6_Thinking_planning] P0修复：闭包必须声明global才能写入模块级变量
-        try:
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-            from monitor_channels import discover_high_like_videos  # [Claude_Sonnet_4.6_Thinking_planning]
-            discover_high_like_videos(db)
-        except Exception as e:
-            import logging as _log
-            _log.getLogger(__name__).error(f"[HighLikes] refresh failed: {e}")
-        finally:
-            _high_likes_refresh_running = False
-
-    spawn_admitted(_run, role="high-like-dispatch", object_key="high-like-dispatch", name="high-likes-refresh")
-    return {"started": True, "message": "已在后台开始刷新，1~3 分钟后刷新页面查看结果"}
+    """异步采集并保留本次结果；不启动加工、发布或改变列表筛选。"""
+    gate().require_running()
+    def collect(progress):
+        scripts_dir = str(settings.project_root / 'scripts')
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from monitor_channels import discover_high_like_videos
+        return discover_high_like_videos(db, progress=progress)
+    return _high_likes_refresh.start(collect, spawn_admitted)
 
 
 @app.get("/api/high-likes/status")
 def high_likes_refresh_status():
-    """查询高赞刷新任务是否正在运行"""
-    return {"running": _high_likes_refresh_running}
+    """查询是否在运行及本次新增、零新增原因与素材去向。"""
+    return _high_likes_refresh.status()
 
 
 @app.get("/demo", response_class=HTMLResponse)
