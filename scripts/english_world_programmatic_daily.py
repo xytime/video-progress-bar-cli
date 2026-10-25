@@ -9,6 +9,7 @@ JSON Schema 约束的一次调用中补全中文段译、标题和适量学习�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-10-25 | Codex | 将宿主运行 ID 与候选尝试身份写入工作区、阶段、失败及交付证据。 |
 | 1.6.0 | 2026-10-20 | Codex | 初稿与修订加入有界 CLI 备用通道及真实预检，故障分类跨子进程保留。 |
 | 1.5.3 | 2026-09-25 | Codex | 移除 AGY 不支持的整数枚举，在宿主校验词典索引并保留安全的供应商错误分类。 |
 | 1.5.2 | 2026-09-24 | Codex | 初稿与修订按词典可用索引选词；发音失败换词卡，保留生成结果，制作异常不污染来源排除。 |
@@ -42,6 +43,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from typing import Any, Iterable, Mapping
 
 
@@ -138,13 +140,33 @@ def _candidate_failure_route(exc: Exception, *, locked_source: bool, production_
     return True, True
 
 
+def _record_run_attempt(identity_path: Path, *, run_id: str, source_attempt_id: str,
+                        candidate_id: str, workspace: Path) -> None:
+    """只更新宿主明确传入的运行 sidecar，不扫描目录反推候选归属。"""
+    identity = read_json(identity_path)
+    if identity.get("identity_schema") != 1 or identity.get("run_id") != run_id:
+        raise ValueError("run identity sidecar does not match --run-id")
+    attempts = identity.setdefault("attempts", [])
+    if any(item.get("source_attempt_id") == source_attempt_id for item in attempts):
+        raise ValueError("duplicate source_attempt_id in run identity sidecar")
+    attempts.append({
+        "source_attempt_id": source_attempt_id, "candidate_id": candidate_id,
+        "workspace": str(workspace.resolve()),
+        "stage_journal": str((workspace / "qa/stage_recovery.json").resolve()),
+        "failure_path": str((workspace / "qa/candidate_failure.json").resolve()),
+    })
+    atomic_json(identity_path, identity)
+
+
 def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | None = None):
     """同目录同输入最多执行两次；只重试明确瞬断，保存阶段进度而不重做前序步骤。"""
     journal_path = workspace / "qa/stage_recovery.json"
     journal = read_json(journal_path) if journal_path.exists() else {"version": VERSION, "attempts": []}
     for attempt in (1, 2):
         started_ns = time.time_ns()
-        entry = {"stage": stage, "attempt": attempt, "state": "RUNNING", "started_ns": started_ns}
+        identity = read_json(workspace / "run_identity.json") if (workspace / "run_identity.json").is_file() else {}
+        entry = {"stage": stage, "attempt": attempt, "state": "RUNNING", "started_ns": started_ns,
+                 **{key: identity[key] for key in ("run_id", "source_attempt_id") if identity.get(key)}}
         journal["attempts"].append(entry)
         atomic_json(journal_path, journal)
         try:
@@ -1055,11 +1077,18 @@ def _candidate_semantic_preflight(candidate: Mapping[str, Any], *, timeline: Map
 
 
 def _make_delivery_request(*, request: Path, title: str, mp4: Path, manifest: Path, audio_qa: Path,
-                           safety: Path, rejected: Iterable[str] = ()) -> None:
+                           safety: Path, run_id: str | None = None, source_attempt_id: str | None = None,
+                           run_identity_path: Path | None = None,
+                           rejected: Iterable[str] = ()) -> None:
     _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/record_english_world_delivery_request.py"),
           "--request", str(request), "--title", title, "--mp4", str(mp4), "--manifest", str(manifest),
           "--audio-qa-report", str(audio_qa), "--safety-report", str(safety),
           *(f"--rejected-youtube-id={value}" for value in dict.fromkeys(rejected))], cwd=ROOT, timeout=120)
+    if run_id and source_attempt_id:
+        payload = read_json(request)
+        payload.update(workbench_run_id=run_id, source_attempt_id=source_attempt_id,
+                       workbench_run_identity_path=str((run_identity_path or request.parent / "run_identity.json").resolve()))
+        atomic_json(request, payload)
 
 
 def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
@@ -1138,9 +1167,13 @@ def run(
     *, request: Path, output_root: Path, shadow_only: bool, excluded: set[str] | None = None,
     only_youtube_id: str | None = None,
     product_intent: str = 'AUTO', product_id: str | None = None, product_title: str | None = None,
+    run_id: str | None = None, run_identity_path: Path | None = None,
 ) -> Path:
     """执行一次制作；shadow_only 仍生成完整本地包，但调用方不得消费请求。"""
     excluded = set(excluded or ())
+    run_id = run_id or uuid.uuid4().hex
+    if not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise ValueError("run_id must be a 32-character lowercase hex identifier")
     protected: set[str] = set()
     try:
         from video_processing.db.database import PipelineDB
@@ -1164,6 +1197,14 @@ def run(
         locked_source = False
         video_id = str(candidate.get("youtube_id") or "")
         workspace = output_root / f"{datetime.now():%Y%m%d_%H%M%S_%f}_{video_id}"
+        source_attempt_id = uuid.uuid4().hex
+        atomic_json(workspace / "run_identity.json", {
+            "identity_schema": 1, "run_id": run_id, "source_attempt_id": source_attempt_id,
+            "candidate_id": video_id, "request_path": str(request.resolve()),
+        })
+        if run_identity_path is not None:
+            _record_run_attempt(run_identity_path, run_id=run_id, source_attempt_id=source_attempt_id,
+                                candidate_id=video_id, workspace=workspace)
         stage = "download"
         try:
             source, caption, start, end = _download_candidate(candidate, workspace)
@@ -1248,6 +1289,9 @@ def run(
                   "--timeline", str(timeline_path), "--output", str(mp4), "--source-start", str(start),
                   "--duration", str(end - start), "--allow-long-test"], cwd=ROOT, timeout=1800))
             manifest = mp4.with_suffix(".manifest.json")
+            manifest_payload = read_json(manifest)
+            manifest_payload.update(workbench_run_id=run_id, source_attempt_id=source_attempt_id)
+            atomic_json(manifest, manifest_payload)
             audio_qa = workspace / "qa/final_audio_qa.json"
             stage = "audio_qa"
             _stage_call(stage, workspace, lambda: _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/validate_study_card_audio.py"), "--mp4", str(mp4),
@@ -1267,13 +1311,17 @@ def run(
                   "--manifest", str(manifest), "--visual-review-report", str(visual)], cwd=ROOT, timeout=120), safety_report=safety)
             stage = "delivery_request"
             _make_delivery_request(request=request, title=title, mp4=mp4, manifest=manifest,
-                                   audio_qa=audio_qa, safety=safety, rejected=rejected)
+                                   audio_qa=audio_qa, safety=safety, run_id=run_id,
+                                   source_attempt_id=source_attempt_id, run_identity_path=run_identity_path,
+                                   rejected=rejected)
             return workspace
         except Exception as exc:
             detail = str(exc).replace("\n", " ").strip()[:500] or type(exc).__name__
             workspace.mkdir(parents=True, exist_ok=True)
             atomic_json(workspace / "qa/candidate_failure.json", {
                 "version": VERSION,
+                "run_id": run_id,
+                "source_attempt_id": source_attempt_id,
                 "youtube_id": video_id,
                 "stage": stage,
                 "locked_source": locked_source,
@@ -1316,6 +1364,8 @@ def _failure_summary(failures: list[str]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--run-id")
+    parser.add_argument("--run-identity-path", type=Path)
     parser.add_argument("--output-root", type=Path, default=ROOT / "output/english_world_programmatic")
     parser.add_argument("--shadow-only", action="store_true")
     parser.add_argument("--exclude-youtube-id", action="append", default=[])
@@ -1328,7 +1378,9 @@ def main(argv: list[str] | None = None) -> int:
         workspace = run(request=args.request.resolve(), output_root=args.output_root.resolve(), shadow_only=args.shadow_only,
                         excluded={str(value).strip() for value in args.exclude_youtube_id if str(value).strip()},
                         only_youtube_id=str(args.only_youtube_id).strip() or None if args.only_youtube_id else None,
-                        product_intent=args.product_intent, product_id=args.product_id, product_title=args.product_title)
+                        product_intent=args.product_intent, product_id=args.product_id, product_title=args.product_title,
+                        run_id=args.run_id,
+                        run_identity_path=args.run_identity_path.resolve() if args.run_identity_path else None)
         print(f"English World programmatic run completed: {workspace}")
         return 0
     except Exception as exc:  # request, when possible, is already durable and fail-closed

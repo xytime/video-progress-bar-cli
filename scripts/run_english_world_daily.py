@@ -4,6 +4,8 @@
 # Modification History (recovery)
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.43.0 | 2026-10-25 | Codex | 增加具名宿主阶段回执与只进入人工审核的工作台受限续做。 |
+| 2.42.0 | 2026-10-25 | Codex | 为工作台增加持久运行身份，并将具名身份传递给程序化子协调器。 |
 | english-preferred-v1 | 2026-10-25 | Codex | 生产提示对齐快捷英语优先、系统默认兜底及确认清空后的无商品策略。 |
 | 1.0.0 | 2026-10-24 | Codex | 库存复用自动投稿资格和商品退避排除，人工等待不再伪装满仓。 |
 
@@ -71,6 +73,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -80,8 +83,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -341,6 +345,31 @@ def _write_status(status_path: Path, phase: str, exit_code: int, attempts: int, 
     temporary_path = status_path.with_suffix(".tmp")
     temporary_path.write_text(content, encoding="utf-8")
     temporary_path.replace(status_path)
+    # 每次执行另写具名状态回执；全局 last_run_status 不能作为某次运行的续做证据。
+    identity_path = run_log.with_suffix(".identity.json")
+    try:
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        payload = {"status_schema": 1, "run_id": identity.get("run_id"),
+                   "phase": phase, "exit_code": int(exit_code), "attempts": int(attempts),
+                   "run_log": str(run_log.resolve()), "request_path": identity.get("request_path"),
+                   "recorded_at": datetime.now(timezone.utc).isoformat()}
+        request_path = Path(str(identity.get("request_path") or ""))
+        if request_path.is_file():
+            payload["request_sha256"] = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            try:
+                request = json.loads(request_path.read_text(encoding="utf-8"))
+                if request.get("kind") == "production":
+                    payload["artifact_sha256"] = hashlib.sha256(Path(request["mp4"]).read_bytes()).hexdigest()
+                    payload["manifest_sha256"] = hashlib.sha256(Path(request["manifest"]).read_bytes()).hexdigest()
+            except (KeyError, OSError, TypeError, ValueError):
+                pass
+        status_receipt = run_log.with_suffix(".status.json")
+        temporary_receipt = status_receipt.with_suffix(".status.tmp")
+        temporary_receipt.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        temporary_receipt.replace(status_receipt)
+    except (OSError, ValueError, TypeError):
+        # 状态副本失败不覆盖原运行状态；受控续做会因缺少该回执而拒绝。
+        pass
 
 
 def _log(stream: TextIO, message: str) -> None:
@@ -795,7 +824,12 @@ def _deliver_request_from_host(
     required_source_youtube_id: str | None = None,
 ) -> tuple[int, bool]:
     """由宿主执行封面、审计和上传，返回退出码及是否已发送失败回执。"""
-    request = _read_delivery_request(request_path, paths.project_root)
+    try:
+        request = _read_delivery_request(request_path, paths.project_root)
+    except (OSError, ValueError, TypeError) as exc:
+        _write_host_phase(request_path, paths, state="FAILED_BEFORE_NOTIFIER", notifier_started=False,
+                          request=None, detail=type(exc).__name__)
+        raise
     failure_request = request["kind"] == "failure"
     if not failure_request:
         source_youtube_id = _delivery_request_source_youtube_id(Path(str(request["manifest"])))
@@ -807,6 +841,8 @@ def _deliver_request_from_host(
         try:
             protected_source_ids = set(_submission_protected_youtube_ids(paths.project_root))
         except Exception as exc:  # noqa: BLE001 - unreadable live ledger must fail closed before notifier/browser work
+            _write_host_phase(request_path, paths, state="FAILED_BEFORE_NOTIFIER", notifier_started=False,
+                              request=request, detail="submission_protection_unavailable")
             raise ValueError(f"交付前投稿保护账本不可读取：{type(exc).__name__}") from exc
         resumable = False
         if source_youtube_id in protected_source_ids:
@@ -848,6 +884,7 @@ def _deliver_request_from_host(
             sys.path.insert(0, source_root)
         from video_processing.utils.subprocess_env import build_subprocess_env
 
+        _write_host_phase(request_path, paths, state="STARTING", notifier_started=True, request=request)
         result = run_admitted(
             command,
             cwd=paths.project_root,
@@ -868,6 +905,93 @@ def _deliver_request_from_host(
         _log(stream, "production failure was reported through the host notifier")
         return 1, True
     return 0, False
+
+
+def _write_host_phase(request_path: Path, paths: RuntimePaths, *, state: str,
+                      notifier_started: bool, request: dict | None, detail: str | None = None) -> None:
+    """原子写具名宿主阶段；通知启动后的状态保持 STARTING 并 fail closed。"""
+    try:
+        raw = json.loads(request_path.read_text(encoding="utf-8"))
+        payload = {"host_phase_schema": 1, "state": state,
+                   "notifier_started": bool(notifier_started),
+                   "run_id": raw.get("workbench_run_id"),
+                   "source_attempt_id": raw.get("source_attempt_id"),
+                   "request_path": str(request_path.resolve()),
+                   "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                   "detail": detail}
+        for key, field in (("mp4_sha256", "mp4"), ("manifest_sha256", "manifest"),
+                           ("audio_qa_report_sha256", "audio_qa_report"),
+                           ("safety_report_sha256", "safety_report")):
+            value = (request or {}).get(field) or raw.get(field)
+            payload[key] = hashlib.sha256(Path(str(value)).read_bytes()).hexdigest() if value else None
+        marker = request_path.with_name(request_path.name.replace(".delivery-request.json", ".host-phase.json"))
+        if marker.is_file():
+            try:
+                previous = json.loads(marker.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return
+            # 曾到达通知启动边界的记录不可降级成“肯定未通知”。
+            if previous.get("state") != "FAILED_BEFORE_NOTIFIER":
+                return
+        temporary = marker.with_suffix(".host-phase.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        temporary.replace(marker)
+    except (OSError, ValueError, TypeError):
+        # 缺失或不完整状态不会放行续做。
+        return
+
+
+def _validate_workbench_resume(paths: RuntimePaths, request_path: Path) -> dict:
+    """只允许具名、原始宿主明确失败且输入指纹未变的生产请求进入人工审核。"""
+    request_path = request_path.resolve()
+    request_path.relative_to(paths.log_dir.resolve())
+    if not request_path.name.endswith(".delivery-request.json"):
+        raise ValueError("工作台续做只接受 .delivery-request.json")
+    request = _read_delivery_request(request_path, paths.project_root)
+    if request.get("kind") != "production":
+        raise ValueError("工作台续做只接受完整 production 请求")
+    raw = json.loads(request_path.read_text(encoding="utf-8"))
+    run_id = str(raw.get("workbench_run_id") or "")
+    identity_ref = str(raw.get("workbench_run_identity_path") or "")
+    attempt_id = str(raw.get("source_attempt_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", run_id) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+        raise ValueError("工作台续做请求缺少完整运行与候选身份")
+    identity_path = Path(identity_ref).resolve()
+    identity_path.relative_to(paths.log_dir.resolve())
+    if identity_path != request_path.with_name(request_path.name.replace(".delivery-request.json", ".identity.json")):
+        raise ValueError("工作台续做身份文件与请求不成对")
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    if identity.get("identity_schema") != 1 or identity.get("run_id") != run_id:
+        raise ValueError("工作台续做运行身份不匹配")
+    if not any(isinstance(attempt, dict) and attempt.get("run_id", run_id) == run_id
+               and attempt.get("source_attempt_id") == attempt_id
+               for attempt in identity.get("attempts", [])):
+        raise ValueError("工作台续做候选身份不在本次运行记录中")
+    marker_path = request_path.with_name(request_path.name.replace(".delivery-request.json", ".host-phase.json"))
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    request_sha256 = hashlib.sha256(request_path.read_bytes()).hexdigest()
+    if (marker.get("host_phase_schema") != 1 or marker.get("run_id") != run_id
+            or marker.get("source_attempt_id") != attempt_id
+            or marker.get("state") != "FAILED_BEFORE_NOTIFIER"
+            or marker.get("notifier_started") is not False
+            or marker.get("request_sha256") != request_sha256):
+        raise ValueError("缺少与该运行和当前输入指纹匹配的明确投稿前宿主失败回执")
+    for key, field in (("mp4_sha256", "mp4"), ("manifest_sha256", "manifest"),
+                       ("audio_qa_report_sha256", "audio_qa_report"),
+                       ("safety_report_sha256", "safety_report")):
+        value = request.get(field)
+        actual = hashlib.sha256(Path(str(value)).read_bytes()).hexdigest() if value else None
+        if marker.get(key) != actual:
+            raise ValueError(f"工作台续做 {field} 指纹与原宿主失败回执不一致")
+    from video_processing.db.database import PipelineDB
+    from video_processing.english_world.package_integrity import sha256_file
+    existing = PipelineDB(str(paths.project_root / "output/pipeline.db")).get_english_world_review_by_artifact(
+        sha256_file(Path(request["mp4"])))
+    if existing and existing.get("state") in {
+        "SUBMISSION_APPROVED", "SUBMITTING", "UNDER_REVIEW", "UNCERTAIN", "SUBMITTED_BOUND", "PUBLISHED",
+    }:
+        raise ValueError("该成片已有投稿或结果不明台账，工作台不得续做")
+    return request
 
 
 def _notify_failure(
@@ -996,6 +1120,8 @@ def _run_coordinator(
     excluded_youtube_ids: tuple[str, ...] = (),
     forced_youtube_id: str | None = None,
     product_intent: str = 'AUTO', product_id: str | None = None, product_title: str | None = None,
+    workbench_run_id: str | None = None,
+    workbench_run_identity_path: Path | None = None,
 ) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     from config.settings import settings
@@ -1048,6 +1174,10 @@ def _run_coordinator(
             str(paths.python_bin), str(paths.project_root / "scripts/english_world_programmatic_daily.py"),
             "--request", str(delivery_request_path),
         ]
+        if workbench_run_id:
+            command.extend(["--run-id", workbench_run_id])
+        if workbench_run_identity_path:
+            command.extend(["--run-identity-path", str(workbench_run_identity_path)])
         command.extend(['--product-intent', product_intent])
         if product_id is not None:
             command.extend(['--product-id', product_id])
@@ -1100,6 +1230,16 @@ def _run_coordinator(
             isolated_workdir.cleanup()
 
 
+def _create_workbench_run_identity(path: Path, payload: dict[str, Any]) -> None:
+    """新建而不覆盖运行身份；重用 ID 会拒绝并保留原回执。"""
+    if payload.get("identity_schema") != 1 or not re.fullmatch(r"[0-9a-f]{32}", str(payload.get("run_id") or "")):
+        raise ValueError("invalid workbench run identity payload")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+
+
 def _pending_auto_delivery_request(paths: RuntimePaths) -> Path | None:
     """仅续接有持久自动策略的新协议包；未知通知结果仍由步骤账本阻止重发。"""
     from video_processing.db.database import PipelineDB
@@ -1142,7 +1282,11 @@ def run(
     resume_delivery_request: Path | None = None,
     shadow_only: bool = False,
     force: bool = False,
+    workbench_run_id: str | None = None,
+    workbench_resume: bool = False,
 ) -> int:
+    if workbench_resume and (resume_delivery_request is None or job_id or shadow_only):
+        raise ValueError("工作台续做必须仅指定一个具名 delivery request")
     if shadow_only and (job_id or resume_delivery_request is not None):
         raise ValueError("shadow-only run cannot consume production jobs or delivery requests")
     paths.log_dir.mkdir(parents=True, exist_ok=True)
@@ -1154,6 +1298,22 @@ def run(
     delivery_request_path = run_log.with_suffix(
         ".shadow-request.json" if shadow_only else ".delivery-request.json"
     )
+    workbench_run_id = workbench_run_id or uuid.uuid4().hex
+    if not re.fullmatch(r"[0-9a-f]{32}", workbench_run_id):
+        raise ValueError("workbench_run_id must be a 32-character lowercase hex identifier")
+    identity_path = run_log.with_suffix(".identity.json")
+    identity = {
+        "identity_schema": 1,
+        "run_id": workbench_run_id,
+        "request_path": str(delivery_request_path.resolve()),
+        "source_attempt_id": None,
+        "attempts": [],
+        "provider": paths.coordinator_provider.lower(),
+        "started_at": datetime.now().astimezone().isoformat(),
+        "resume_delivery_request": str(resume_delivery_request.resolve()) if resume_delivery_request else None,
+        "production_job_id": job_id,
+    }
+    _create_workbench_run_identity(identity_path, identity)
     from video_processing.utils.production_recovery import write_context
     write_context(delivery_request_path, paths, retry_delay_seconds=retry_delay_seconds,
                   wait_for_lock_seconds=wait_for_lock_seconds, excluded_youtube_ids=excluded_youtube_ids,
@@ -1251,7 +1411,10 @@ def run(
                     raise ValueError("续接入口只接受 .delivery-request.json 请求文件")
                 original.relative_to(paths.log_dir.resolve())
                 receipt = original.with_name(original.name.replace(".delivery-request.json", ".delivery.json"))
-                code, _ = _deliver_request_from_host(paths, original, receipt, stream)
+                if workbench_resume:
+                    _validate_workbench_resume(paths, original)
+                code, _ = _deliver_request_from_host(paths, original, receipt, stream,
+                                                      manual_review_only=workbench_resume)
                 _write_status(status_path, "DELIVERY_RESUMED" if code == 0 else "FAILED_HOST_DELIVERY",
                               code, 0, run_log, response_path)
                 return code
@@ -1364,6 +1527,8 @@ def run(
                         product_intent=(production_job or {}).get('product_intent') or 'AUTO',
                         product_id=(production_job or {}).get('product_id'),
                         product_title=(production_job or {}).get('product_title'),
+                        workbench_run_id=workbench_run_id,
+                        workbench_run_identity_path=identity_path,
                     )
                 except subprocess.TimeoutExpired:
                     exit_code = 124
@@ -1575,6 +1740,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--log-dir", type=Path)
     parser.add_argument("--lock-dir", type=Path)
     parser.add_argument("--resume-delivery-request", type=Path, help="仅续接具名交付请求，绝不重跑制作")
+    parser.add_argument("--workbench-resume", action="store_true",
+                        help="工作台受限续做：只处理具名宿主明确的投稿前失败，并强制进入人工审核")
     parser.add_argument("--job-id", help="可选：消费一条 Telegram 已二次确认的制作请求")
     parser.add_argument(
         "--shadow-only",
@@ -1628,6 +1795,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["ENGLISH_WORLD_CODEX_MODEL"] = args.codex_model
     if args.resume_delivery_request and args.job_id:
         raise ValueError("resume delivery cannot be combined with a production job")
+    if args.workbench_resume and not args.resume_delivery_request:
+        raise ValueError("--workbench-resume requires --resume-delivery-request")
     if args.shadow_only and (args.resume_delivery_request or args.job_id):
         raise ValueError("shadow-only cannot be combined with production delivery or jobs")
     if args.max_attempts < 1:
@@ -1673,6 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
         resume_delivery_request=args.resume_delivery_request,
         shadow_only=args.shadow_only,
         force=args.force,
+        workbench_resume=args.workbench_resume,
     )
 
 

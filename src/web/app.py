@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| english-workbench-v1 | 2026-10-25 | Codex | 注入英语世界桌面研究、制作、审核投稿与具名待审核续做执行器。 |
 | demand-keepalive-v1 | 2026-10-25 | Codex | 按真实认证证据排期、跨重启退避与准确的准入等待原因。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
@@ -242,7 +243,13 @@ app.include_router(
 from web.runtime_configuration import create_runtime_configuration_router
 app.include_router(create_runtime_configuration_router(db,port=settings.dashboard_port))
 from web.english_world_console import create_english_console_router
-app.include_router(create_english_console_router(db, port=settings.dashboard_port))
+app.include_router(create_english_console_router(
+    db, port=settings.dashboard_port,
+    start_research=lambda job_id: _start_english_world_research(job_id),
+    start_production=lambda job_id: _start_english_world_production(job_id),
+    start_submission=lambda review_id: _start_english_world_submission(review_id),
+    start_resume=lambda request_path: _start_english_world_workbench_resume(request_path),
+))
 
 
 @app.on_event('startup')
@@ -444,6 +451,23 @@ def _start_english_world_production(job_id: str) -> None:
             )
 
     spawn_admitted(_run, role="english-production", object_key="english-job:" + job_id, name=f"english-production-{job_id[:8]}", waiting=True)
+
+
+def _start_english_world_workbench_resume(request_path: str) -> None:
+    """只把具名旧交付包续入审核待办；runner 必须强制 manual-review-only。"""
+    project_root = Path(__file__).parent.parent.parent
+    python_bin = project_root / ".venv" / "bin" / "python"
+    runner = project_root / "scripts" / "run_english_world_daily.py"
+
+    def _run() -> None:
+        result = run_admitted([str(python_bin), str(runner), "--resume-delivery-request", request_path,
+                               "--workbench-resume"], cwd=str(project_root), timeout=4*60*60,
+                              text=True, capture_output=True)
+        if result.returncode:
+            logging.getLogger(__name__).error("[EnglishWorld] workbench delivery resume failed: %s", result.stderr[-500:])
+
+    spawn_admitted(_run, role="english-workbench-resume", object_key="english-resume:"+Path(request_path).name,
+                   name="english-workbench-resume", continuation=True)
 
 
 def _start_english_world_submission(review_id: str) -> None:

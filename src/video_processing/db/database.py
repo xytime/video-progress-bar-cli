@@ -13,6 +13,7 @@
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
 | Version | Date       | Author                              | Description                                                                    |
+| workbench-v1 | 2026-10-25 | Codex | 注册桌面工作台 CAS 幂等审计、桌面授权来源及到期回收。 |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
@@ -238,9 +239,10 @@ from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
 from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
+from .english_world_workbench import EnglishWorldWorkbenchDAL
 
 
-class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -309,6 +311,7 @@ class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecover
             # 确保目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
+            self.initialize_english_world_workbench_schema()
             self.initialize_delivery_recovery()
             self.initialize_publishing_recovery()
         self._initializing_schema = False
@@ -8386,7 +8389,7 @@ class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecover
         """原子记录一条具名授权；不接受模糊文字匹配或终态重开。"""
         clean_id = (review_id or "").strip()
         clean_authorization = (authorization or "").strip().upper()
-        if clean_authorization not in {"TELEGRAM_REVIEW", "AUTO_POLICY"}:
+        if clean_authorization not in {"TELEGRAM_REVIEW", "AUTO_POLICY", "DESKTOP_WORKBENCH"}:
             raise ValueError("Invalid English World submission authorization")
         with self.get_connection() as conn:
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
@@ -8401,7 +8404,7 @@ class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecover
                    SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
                        approval_source = ?,
                        authorization_expires_at = CASE
-                           WHEN ? = 'TELEGRAM_REVIEW' THEN datetime('now', '+120 minutes')
+                           WHEN ? IN ('TELEGRAM_REVIEW','DESKTOP_WORKBENCH') THEN datetime('now', '+120 minutes')
                            ELSE NULL
                        END,
                        error_message = NULL, updated_at = CURRENT_TIMESTAMP
@@ -8472,7 +8475,7 @@ class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecover
                      AND (
                          approval_source = 'AUTO_POLICY'
                          OR (
-                             approval_source IN ('TELEGRAM_REVIEW', 'OPERATOR_RECOVERY')
+                             approval_source IN ('TELEGRAM_REVIEW', 'OPERATOR_RECOVERY', 'DESKTOP_WORKBENCH')
                              AND authorization_expires_at > CURRENT_TIMESTAMP
                          )
                      )""",
@@ -8714,7 +8717,7 @@ class PipelineDB(EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecover
                        error_message = '两小时人工投稿授权已过期；需要重新确认本条成片。',
                        updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'SUBMISSION_APPROVED'
-                     AND approval_source = 'TELEGRAM_REVIEW'
+                     AND approval_source IN ('TELEGRAM_REVIEW', 'DESKTOP_WORKBENCH')
                      AND authorization_expires_at <= CURRENT_TIMESTAMP""",
                 (clean_id,),
             )

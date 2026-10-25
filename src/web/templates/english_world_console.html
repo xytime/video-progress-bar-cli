@@ -1,24 +1,27 @@
 <!doctype html>
-<!-- Modification History: 1.0.0 | 2026-10-25 | Codex | 已确认 v4 英语世界管理台，真实数据只读。 -->
+<!-- Modification History: 2.0.0 | 2026-10-25 | Codex | v10 工作台、任务操作与证据抽屉。 -->
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>英语世界 · 视频运营工作台</title>
+<meta name="runtime-csrf" content="__RUNTIME_CSRF__"><title>英语世界 · 视频运营工作台</title>
 <script src="/static/js/topic_display_preferences.js?v=1"></script>
-<link rel="stylesheet" href="/static/css/dashboard.css?v=20261022-source-age">
-<link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
-<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261013-04">
-<link rel="stylesheet" href="/static/css/english_world_console.css?v=1">
-<script defer src="/static/js/console_navigation.js?v=english-world-1"></script>
-<script defer src="/static/js/english_world_console.js?v=1"></script>
-</head><body><main class="product-settings english-console">
-<header class="ew-header"><div><p class="ew-eyebrow">独立学习短视频</p><h1>英语世界</h1><p class="hint">管理制作进度、质量报告与平台记录</p></div><button disabled id="ew-refresh" type="button">刷新进度</button></header>
-<p id="ew-feedback" class="hint ew-feedback" role="status" aria-live="polite">页面正在准备；若长时间未显示，请刷新页面并确认浏览器允许运行脚本。</p>
-<section class="ew-metrics" aria-label="全局任务统计"><div><span>全部任务</span><strong id="count-all">—</strong></div><div><span>进行中</span><strong id="count-active">—</strong></div><div><span>待处理</span><strong id="count-attention">—</strong></div><div><span>已结束</span><strong id="count-done">—</strong></div></section>
-<p class="hint ew-count-note">全局统计不随筛选变化；失败与暂停同时计入待处理、已结束。</p>
-<details id="ew-schedule"><summary>查看日程与统计范围</summary><p id="ew-schedule-text" class="hint">尚未读取</p><p id="ew-coverage" class="hint"></p><p class="hint">刷新仅读取本地台账，不启动制作、重试或平台回查。</p></details>
-<section id="ew-list-view" aria-label="任务查找">
-<div class="ew-filterbar"><div class="ew-search"><label for="ew-search" class="sr-only">搜索标题或来源</label><input id="ew-search" type="search" placeholder="搜索标题或来源" maxlength="160"><button disabled id="ew-clear-search" type="button" hidden aria-label="清空搜索">清空</button></div><button disabled id="ew-more" type="button" aria-expanded="false" aria-controls="ew-extra">更多筛选</button><div id="ew-extra"><label for="ew-trigger" class="sr-only">触发方式</label><select id="ew-trigger"><option value="">全部触发方式</option><option value="manual">人工任务</option><option value="scheduled">定时运行</option><option value="auto">独立成片</option></select><label for="ew-date" class="sr-only">任务创建日期（北京时间）</label><input id="ew-date" type="date" aria-label="任务创建日期（北京时间）"><button disabled id="ew-reset" type="button">重置条件</button></div></div>
-<div class="ew-tabs" role="group" aria-label="任务状态"><button disabled type="button" data-category="all" aria-pressed="true">全部</button><button disabled type="button" data-category="active" aria-pressed="false">进行中</button><button disabled type="button" data-category="attention" aria-pressed="false">待处理</button><button disabled type="button" data-category="done" aria-pressed="false">已结束</button></div>
-</section>
-<div class="ew-workspace"><section class="ew-list-column" aria-label="任务列表"><p id="ew-results" class="hint" role="status"></p><div id="ew-tasks" aria-busy="true"></div><div class="ew-pagination"><button id="ew-prev" type="button" disabled>上一页</button><span id="ew-page" class="hint"></span><button id="ew-next" type="button" disabled>下一页</button></div></section><section id="ew-detail" class="ew-detail-column" aria-label="任务详情"><p class="hint">读取任务后显示详情。</p></section></div>
-<dialog id="ew-report" aria-labelledby="ew-report-heading"><div class="ew-dialog-header"><h2 id="ew-report-heading">证据报告</h2><button disabled id="ew-report-close" type="button" autofocus>关闭报告</button></div><div id="ew-report-body" aria-live="polite"></div></dialog>
+<link rel="stylesheet" href="/static/css/dashboard.css?v=20261022-source-age"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign"><link rel="stylesheet" href="/static/css/console_workspace.css?v=20261013-04"><link rel="stylesheet" href="/static/css/english_world_console.css?v=2">
+<script defer src="/static/js/console_navigation.js?v=english-world-2"></script><script defer src="/static/js/english_world_console.js?v=2"></script></head>
+<body><main class="product-settings english-console" id="ew-app">
+<header class="ew-header"><div><p class="ew-eyebrow">独立学习短视频 · 制作与核验</p><h1>英语世界</h1><p class="hint">查看任务阶段、处理阻塞，并核对成片与平台证据。</p></div><div class="ew-header-actions"><button id="ew-refresh" type="button" disabled>刷新</button><button id="ew-new" class="primary" type="button" disabled>新建研究</button></div></header>
+<p id="ew-feedback" class="ew-feedback hint" role="status" aria-live="polite">正在读取工作台…</p>
+<section class="ew-today" aria-labelledby="ew-today-title"><h2 id="ew-today-title">今日运行摘要</h2><div id="ew-summary" class="ew-summary"><p>正在读取最近运行、当前执行与下一计划。</p></div></section>
+<nav class="ew-views" aria-label="任务视图"><button type="button" data-view="attention" aria-pressed="true" disabled>待我处理</button><button type="button" data-view="all" aria-pressed="false" disabled>全部任务</button><button type="button" data-view="runs" aria-pressed="false" disabled>运行记录</button></nav>
+<section class="ew-list" aria-label="工作台任务列表">
+<div class="ew-toolbar"><label class="ew-search"><span class="sr-only">搜索标题、来源或任务 ID</span><input id="ew-q" type="search" maxlength="160" placeholder="搜索标题、来源或 ID"><button id="ew-q-clear" disabled type="button" aria-label="清空搜索" hidden>清空</button></label>
+<label><span class="sr-only">任务状态</span><select id="ew-status"><option value="">状态（全部）</option><option value="active">进行中</option><option value="waiting">等待处理</option><option value="failed">失败</option><option value="complete">已完成</option></select></label>
+<label><span class="sr-only">任务触发方式</span><select id="ew-trigger"><option value="">触发（全部）</option><option value="manual">人工</option><option value="scheduled">定时</option><option value="auto">自动</option></select></label>
+<label class="ew-date"><span class="sr-only">创建日期从</span><input id="ew-date-from" type="date" aria-label="创建日期从（北京时间）"><span aria-hidden="true">至</span><span class="sr-only">创建日期到</span><input id="ew-date-to" type="date" aria-label="创建日期到（北京时间）"></label>
+<button id="ew-clear-filters" disabled type="button" class="ew-clear-filters">清空条件</button><span id="ew-count" class="ew-count" role="status"></span></div>
+<div id="ew-chips" class="ew-chips" aria-label="当前筛选条件"></div><p id="ew-list-feedback" class="ew-list-feedback" role="status" aria-live="polite"></p>
+<div class="ew-table-wrap"><table class="ew-table"><caption class="sr-only">英语世界任务与运行记录</caption><thead><tr><th scope="col">标题与来源</th><th scope="col">当前步骤</th><th scope="col">阻塞或等待原因</th><th scope="col">最近活动</th><th scope="col">下一步</th></tr></thead><tbody id="ew-rows"><tr><td colspan="5">正在读取任务…</td></tr></tbody></table></div>
+<details id="ew-history" class="ew-history" hidden><summary><span id="ew-history-label">历史待处理</span><small>超过 7 天未解决</small></summary><div class="ew-table-wrap"><table class="ew-table"><caption class="sr-only">超过七天未处理的历史任务</caption><thead><tr><th scope="col">标题与来源</th><th scope="col">当前步骤</th><th scope="col">阻塞或等待原因</th><th scope="col">最近活动</th><th scope="col">下一步</th></tr></thead><tbody id="ew-history-rows"></tbody></table></div></details>
+<footer class="ew-pagination"><span id="ew-page-label"></span><div><button id="ew-prev" type="button" disabled>上一页</button><span id="ew-page"></span><button id="ew-next" type="button" disabled>下一页</button></div></footer></section>
+<dialog id="ew-drawer" class="ew-drawer" aria-labelledby="ew-drawer-title"><header class="ew-drawer-header"><div><h2 id="ew-drawer-title" tabindex="-1">任务详情</h2><p id="ew-drawer-meta" class="hint"></p></div><button id="ew-drawer-close" disabled type="button" aria-label="关闭任务详情">关闭</button></header><div id="ew-drawer-body" class="ew-drawer-body" aria-busy="false"><p class="hint">选择任务以读取详情。</p></div><footer id="ew-drawer-actions" class="ew-drawer-actions"></footer></dialog>
+<dialog id="ew-confirm" aria-labelledby="ew-confirm-title"><h2 id="ew-confirm-title">确认操作</h2><div id="ew-confirm-body"></div><p id="ew-confirm-feedback" role="status" aria-live="polite"></p><div class="ew-dialog-actions"><button id="ew-confirm-cancel" disabled type="button" autofocus>取消</button><button id="ew-confirm-go" disabled type="button" class="primary">继续</button></div></dialog>
+<dialog id="ew-report" aria-labelledby="ew-report-title"><header class="ew-report-header"><h2 id="ew-report-title">任务证据</h2><button id="ew-report-close" disabled type="button">关闭</button></header><div id="ew-report-body" class="ew-report-body"></div></dialog>
+<dialog id="ew-research" aria-labelledby="ew-research-title"><h2 id="ew-research-title">新建研究</h2><form id="ew-research-form" novalidate><label for="ew-research-url">YouTube 来源链接（可选）</label><input id="ew-research-url" type="url" maxlength="500" placeholder="https://www.youtube.com/watch?v=…" aria-describedby="ew-research-help ew-research-error"><p id="ew-research-help" class="hint">留空时按现有研究规则寻找候选；创建研究不会开始制作或投稿。</p><p id="ew-research-error" class="field-error" role="status"></p><div class="ew-dialog-actions"><button id="ew-research-cancel" disabled type="button" autofocus>取消</button><button id="ew-research-submit" type="submit" class="primary">创建研究</button></div></form></dialog>
 </main></body></html>

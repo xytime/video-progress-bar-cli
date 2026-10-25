@@ -156,3 +156,20 @@
 | Read-only list | english_world_console.js + EnglishConsole | 本地数据库与固定运行回执 | AND筛选、每页20、URL恢复 | test_english_world_console.py |
 
 统计明确限定最近1000个人工任务、1000成片和200次运行，按已知review/manifest关联去重；计数不随筛选变化，待处理与已结束可重叠。关键词忽略大小写和首尾空格，与状态/来源方式/北京创建日期同时生效；IME结束后300ms读取，清空即时，过期请求取消，空结果清除旧详情。刷新保留仍匹配的选择；HTTP故障保留旧数据并标当前未知。报告仅固定七类，本地文件限output目录、拒绝越界和外部链接，使用文件内容hash核实关联；缺失或不匹配不采纳通过，报告不能修改原质量门禁。
+
+## 英语世界可处理工作台 v10（2026-10-25 用户确认）
+
+此段取代上方 v4 的只读交互范围；既有 `console_navigation.js`、本机会话、同源校验和 `runtime_local_session` + `X-Runtime-CSRF` 继续有效。数据 API 为 `/api/english-world/workbench`、`/task`、固定类型 `/media?task=…&kind=video|cover|submission` 与 `/actions`。服务端资格是动作唯一依据；每次动作带当前 revision、UUID operation_id 与用户输入。提交中禁止连击，冲突保留输入并重读资格，读取失败清除旧详情和动作资格，超时保留同一 operation_id 核验，禁止生成第二操作。
+
+页面为今日运行摘要、待我处理/全部任务/运行记录、全宽任务表和任务原生 dialog 抽屉。搜索标题/来源/ID、状态、触发和创建日期范围使用 AND 组合；提交的筛选、页码、视图、历史折叠和选中任务写入 URL，支持后退、刷新和深链接。超过7天的未解决任务单独折叠并显示服务端总数。抽屉只有一个滚动内容面板，底部动作固定；阶段显示真实状态与时间，不按无心跳状态声称正在执行或估算进度。
+
+研究创建、候选选择、制作确认、审核批准、暂缓、具名失败步骤安全续做和人工登记结果均须原生确认框显示对象/版本/后果，初始焦点为取消。候选确认与制作确认分开。resume 的资格由服务端根据原输入身份、预算、未提交、维护和租约重新验证；当前执行器不支持时不得伪造可执行。`UNCERTAIN` 只允许查看提交证据及按当前身份登记人工结果，不提供一键重发。登记 public 必须提交服务器可验证的绑定原生 ID 与固定截图证据引用，登记只更新核验记录，不调用投稿器。
+
+成片只用受限 video 媒体通道；封面和提交证据按固定 kind 读取。报告要呈现状态、生成时间、身份核验、问题与建议；不能把文件名或历史关联当作质量通过。任务切换及详情读取失败清空上一任务的证据与动作权限。
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Select / Date | 原生 select、`input[type=date]` | `english_world_console.html` | 接受系统 popup 几何；日期按北京时间 | `tests/browser/test_english_world_console_browser.py` |
+| Navigation / Scrollbar | `console_navigation.js` / `dashboard.css` | 本合同 / DESIGN.md | 页面自然滚动、表格自身滚动、抽屉单滚动区 | 同上 |
+| Dialog / Feedback | 原生 dialog、页面 live region | 服务端版本与资格 | 取消首焦点、Escape关闭并恢复入口焦点 | 同上 |
+| List / Detail / Actions | `english_world_console.js` | 工作台 v1 API 与服务端动作回执 | URL恢复、分页20、revision+operation_id | 同上 |

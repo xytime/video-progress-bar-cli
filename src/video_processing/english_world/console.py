@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-25 | Codex | 展示身份绑定质量报告中的有限脱敏问题摘要。 |
+| 1.1.0 | 2026-10-25 | Codex | 为固定 run 日志配对身份 sidecar 并保留未绑定早期运行记录。 |
 | 1.0.0 | 2026-10-25 | Codex | 真实任务、自动运行失败、组合筛选分页与文件身份绑定报告。 |
 """
 from datetime import datetime, timezone
@@ -88,26 +90,31 @@ class EnglishConsole:
         # 只读取固定命名的协调器回执；原始日志/提示词/环境不暴露。
         logs = sorted(directory.glob('run_*.log'), reverse=True)
         warnings = []
-        for path in logs[:200]:
+        for path in logs:
             request = path.with_suffix('.delivery-request.json')
             try:
                 data = self.read(request) if request.exists() else {}
+                status_path = path.with_suffix('.status.json')
+                run_status = self.read(status_path) if status_path.exists() else {}
                 if data.get('manifest') and str(Path(data['manifest']).resolve()) in manifests:
                     continue
                 recorded = datetime.strptime(path.stem, 'run_%Y-%m-%d_%H%M%S_%f').replace(tzinfo=SHANGHAI).isoformat()
-                state = 'FAILED' if data.get('failure') else 'UNKNOWN'
+                phase = str(run_status.get('phase') or run_status.get('status') or '')
+                state = 'FAILED' if data.get('failure') or phase.startswith('FAILED_') else 'UNKNOWN'
                 record = {'id': path.stem, 'title': data.get('title') or '英语世界定时运行',
                           'state': state, 'created_at': recorded, 'updated_at': recorded,
                           'error_message': data.get('failure') or '暂无关联成片台账；运行结果待核实',
                           'mp4_path': data.get('mp4'), 'manifest_path': data.get('manifest'),
-                          '_request': str(request)}
+                          '_run_status': {'phase': phase, 'exit_code': run_status.get('exit_code')},
+                          '_request': str(request) if request.exists() else None,
+                          '_run_log': str(path)}
                 result.append(self.task(None, record, run=True))
             except (OSError, ValueError, TypeError):
                 warnings.append('一条定时运行回执无法读取，未作为成功记录展示')
         result.sort(key=lambda r: (r['updated_at'] or '', r['id']), reverse=True)
         coverage = {'jobs': snapshot['counts']['english_world_jobs'],
                     'reviews': snapshot['counts']['english_world_review_items'], 'run_logs': len(logs),
-                    'limited': any(n > 1000 for n in snapshot['counts'].values()) or len(logs) > 200}
+                    'limited': False}
         return result, coverage, sorted(set(warnings))
 
     def task(self, job, review, run=False):
@@ -213,9 +220,96 @@ class EnglishConsole:
                 for key in ('provider','model','effort','review_state','failure_kind','expected_final_word','observed_final_word','sample_rate','channels'):
                     if key in data and isinstance(data[key], (str,int,float,bool)):
                         lines.append(f'{key}：{clean(data[key])}')
+                issues = self._report_issues(kind, data) if binding else []
+                result['issues'] = issues
+                if binding and issues:
+                    lines.append(f'问题摘要（最多 {len(issues)} 条）：')
+                    lines.extend(issues)
+                elif binding and str(data.get('state') or data.get('status') or '').upper() in {'PASS', 'PASSED'}:
+                    lines.append('报告未列出未通过问题。')
+                elif not binding:
+                    lines.append('报告未绑定当前产物，问题摘要不可采纳。')
             except (OSError,ValueError,TypeError):
                 result['status'] = '证据缺失或不可读取'
                 lines.append('暂无可核验的对应报告；不会沿用其他任务的通过结论。')
+        return result
+
+    @staticmethod
+    def _report_issues(kind, data):
+        """从固定 schema 提取少量可读问题；不返回原始报告或任意路径。"""
+        def short(value, limit=180):
+            if value is None or isinstance(value, (dict, list)):
+                return ''
+            return clean(value).replace('\n', ' ').strip()[:limit]
+
+        entries = []
+        if kind == 'language':
+            nested = data.get('result') if isinstance(data.get('result'), dict) else {}
+            findings = nested.get('findings') or data.get('findings') or data.get('quality_warnings') or []
+            for finding in findings:
+                if not isinstance(finding, dict):
+                    continue
+                status, severity = short(finding.get('status'), 32), short(finding.get('severity'), 24)
+                if status.upper() in {'PASS', 'PASSED'} and severity.upper() not in {'P0', 'P1'}:
+                    continue
+                check = short(finding.get('check') or finding.get('target'), 64)
+                evidence, suggestion = short(finding.get('evidence')), short(finding.get('suggestion'))
+                parts = [f'[{severity or status or "问题"}] {check}' if check else '语言质量问题']
+                if evidence:
+                    parts.append('依据：'+evidence)
+                if suggestion:
+                    parts.append('建议：'+suggestion)
+                entries.append('；'.join(parts))
+        elif kind == 'audio':
+            nested = data.get('result') if isinstance(data.get('result'), dict) else data
+            failure = short(data.get('failure_kind') or nested.get('failure_kind') or data.get('error'), 100)
+            trailing = nested.get('trailing_words') if isinstance(nested.get('trailing_words'), list) else []
+            details = []
+            for word in trailing[:3]:
+                if isinstance(word, dict):
+                    label, start = short(word.get('word'), 48), short(word.get('start'), 20)
+                    if label:
+                        details.append(label+(f'（约 {start} 秒）' if start else ''))
+            if failure or data.get('passed') is False or nested.get('passed') is False:
+                entries.append('音频边界/识别：'+(failure or '报告未通过')+('；尾随词：'+'、'.join(details) if details else ''))
+        elif kind == 'visual':
+            categories = data.get('risk_categories')
+            if isinstance(categories, list):
+                for category in categories[:8]:
+                    value = (category.get('category') or category.get('name') or category.get('risk')) if isinstance(category, dict) else category
+                    label = short(value, 100)
+                    if label:
+                        entries.append('画面风险：'+label)
+        elif kind == 'safety':
+            matches = data.get('audit_matches')
+            if isinstance(matches, list):
+                for match in matches[:8]:
+                    if isinstance(match, dict):
+                        label = short(match.get('term') or match.get('matched') or match.get('category') or match.get('document'), 100)
+                        if label:
+                            entries.append('安全检查命中：'+label)
+            checks = data.get('checks')
+            if isinstance(checks, list):
+                for check in checks:
+                    if not isinstance(check, dict):
+                        continue
+                    for key, label in [('censorship','内容审核'), ('channel_policy','频道规则'), ('source_policy','来源规则')]:
+                        value = check.get(key)
+                        if not isinstance(value, dict) or not (value.get('hit') or value.get('blocked') or value.get('passed') is False):
+                            continue
+                        detail = short(value.get('level') or value.get('reason') or value.get('matched_term') or value.get('failure_kind'), 100)
+                        entries.append(label+'：'+(detail or '未通过'))
+        error = short(data.get('error') or data.get('reason'), 180)
+        if error:
+            entries.append('报告错误：'+error)
+        result, seen = [], set()
+        for entry in entries:
+            entry = clean(entry)[:300]
+            if entry and entry not in seen:
+                seen.add(entry)
+                result.append(entry)
+            if len(result) >= 8:
+                break
         return result
 
     def bind_report(self, record, manifest, data):

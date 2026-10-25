@@ -5,6 +5,7 @@
 PipelineManager、不会扫描任何待处理项，也不会为失败/未确认的提交自动重试。
 
 # Modification History
+| desktop-source-v1 | 2026-10-25 | Codex | 允许具名桌面审核授权进入同一投稿器安全门及两小时到期回收。 |
 | product-recovery-v1 | 2026-10-25 | Codex | 商品故障具名恢复核验完整未提交历史，独立授权只消费一次，保留原包与冻结次数。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -332,7 +333,7 @@ def _defer_product_wait(db: PipelineDB, review_id: str, attempt_id: str,
 
 def _manual_authorization_active(item: dict) -> bool:
     """人工或具名补发项只有在两小时 capability 有效期内才可绕过公共窗口。"""
-    if str(item.get("approval_source") or "") not in {"TELEGRAM_REVIEW", "OPERATOR_RECOVERY"}:
+    if str(item.get("approval_source") or "") not in {"TELEGRAM_REVIEW", "OPERATOR_RECOVERY", "DESKTOP_WORKBENCH"}:
         return False
     raw_expiry = str(item.get("authorization_expires_at") or "").strip()
     if not raw_expiry:

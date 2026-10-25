@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-25 | Codex | 验证绑定报告问题摘要及阶段错误的运行/候选身份隔离。 |
 | 1.0.0 | 2026-10-25 | Codex | 分页去重、早期失败、状态保护、身份绑定和本机权限。 |
 """
 import hashlib
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.console import EnglishConsole
+from video_processing.english_world.workbench import EnglishWorldWorkbench
 from web.english_world_console import create_english_console_router
 
 ORIGIN = 'http://127.0.0.1:9100'
@@ -116,6 +118,63 @@ def test_visual_and_safety_reports_use_own_files_and_all_fingerprints(console_da
     assert service.report('job:job1','visual')['status']=='关联未核实'
     timeline.write_text('{"changed":true}')
     assert service.report('job:job1','safety')['status']=='关联未核实'
+
+
+def test_quality_report_issues_are_summarized_only_when_bound(console_data):
+    db, output, package = console_data
+    video = package / 'english_world.mp4'
+    report = package / 'qa/language_qa.json'
+    report.write_text(json.dumps({
+        'state': 'FAIL', 'mp4_sha256': hashlib.sha256(video.read_bytes()).hexdigest(),
+        'findings': [{
+            'check': 'final_word', 'status': 'FAIL', 'severity': 'P1',
+            'evidence': '最后一个词缺失', 'suggestion': '人工确认字幕末词',
+        }],
+    }), encoding='utf-8')
+    service = EnglishConsole(db, output)
+
+    bound = service.report('job:job1', 'language')
+
+    assert bound['status'] == '身份一致 · 历史报告 FAIL'
+    assert len(bound['issues']) == 1
+    assert '[P1] final_word' in bound['issues'][0]
+    assert '最后一个词缺失' in bound['issues'][0]
+    assert '人工确认字幕末词' in bound['issues'][0]
+
+    report_data = json.loads(report.read_text(encoding='utf-8'))
+    report_data['mp4_sha256'] = '0' * 64
+    report.write_text(json.dumps(report_data), encoding='utf-8')
+    unbound = service.report('job:job1', 'language')
+
+    assert unbound['status'] == '关联未核实'
+    assert unbound['issues'] == []
+    assert '问题摘要不可采纳' in '\n'.join(unbound['lines'])
+
+
+def test_run_stage_errors_require_exact_run_and_source_attempt_binding(console_data):
+    db, output, package = console_data
+    journal = package / 'qa/stage_recovery.json'
+    run_id, attempt_id = 'a' * 32, 'b' * 32
+    journal.write_text(json.dumps({'attempts': [
+        {'run_id': 'c' * 32, 'source_attempt_id': attempt_id, 'stage': 'render',
+         'state': 'FAILED', 'error_class': 'WrongRun', 'message': 'unrelated run'},
+        {'run_id': run_id, 'source_attempt_id': 'd' * 32, 'stage': 'render',
+         'state': 'FAILED', 'error_class': 'WrongAttempt', 'message': 'unrelated candidate'},
+        {'run_id': run_id, 'source_attempt_id': attempt_id, 'stage': 'render',
+         'state': 'FAILED', 'error_class': 'RenderError', 'message': 'final encoder failed'},
+    ]}), encoding='utf-8')
+    workbench = EnglishWorldWorkbench(db, output)
+
+    steps = workbench._run_steps(
+        {'run_id': run_id},
+        {'source_attempt_id': attempt_id, 'stage_journal': str(journal)},
+    )
+
+    assert len(steps) == 1
+    assert steps[0]['id'] == 'render'
+    assert steps[0]['state'] == 'FAILED'
+    assert steps[0]['detail'] == 'RenderError · final encoder failed'
+    assert 'unrelated' not in steps[0]['detail']
 
 def test_http_session_peer_origin_bounds_and_fixed_report_types(console_api):
     client,_=console_api

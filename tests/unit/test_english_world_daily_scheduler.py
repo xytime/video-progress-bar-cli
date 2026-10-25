@@ -1281,7 +1281,10 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
     fake_codex = tmp_path / "codex"
     fake_python = tmp_path / "python"
     notifier = tmp_path / "notifier.py"
-    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\nsleep 30\n")
+    # Avoid env/bash startup overhead racing the intentionally short 1s timeout.
+    # The fake still logs the coordinator start before blocking, and the runner
+    # must still terminate it at the configured deadline.
+    _write_executable(fake_codex, f"#!/bin/sh\nprintf '%s\\n' codex >> {calls}\nexec /bin/sleep 30\n")
     _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
     notifier.write_text("# fake notifier\n", encoding="utf-8")
     log_dir = tmp_path / "logs"
