@@ -39,7 +39,9 @@ class EnglishProductRecoveryDAL:
         reason = ' '.join(str(reason or '').split())
         if not reason or len(reason) > 240:
             raise ValueError('商品恢复须有明确原因')
-        if (decision.get('task_id') != 'english-product-recovery:' + review_id
+        prior_grant = self.get_english_world_product_recovery(review_id)
+        expected_task = 'english-product-recovery:' + review_id + (':technical-retry' if prior_grant else '')
+        if (decision.get('task_id') != expected_task
                 or decision.get('attachment_version') != ENGLISH_PREFERRED_VERSION
                 or decision.get('context', {}).get('review_id') != review_id):
             raise ValueError('商品恢复必须绑定本审核项的新策略快照')
@@ -52,11 +54,18 @@ class EnglishProductRecoveryDAL:
         with self.get_connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute('SELECT * FROM english_world_review_items WHERE id=?', (review_id,)).fetchone()
-            if (not row or row['state'] != 'SUBMISSION_APPROVED' or row['approval_source'] != 'AUTO_POLICY'
+            if (not row or row['state'] != 'SUBMISSION_APPROVED' or row['approval_source'] != ('OPERATOR_RECOVERY' if prior_grant else 'AUTO_POLICY')
                     or row['submission_started_at'] or row['platform_post_id'] or row['platform_state'] or row['platform_url']):
                 raise ValueError('商品恢复只允许已批准且明确未提交的自动任务')
-            if conn.execute('SELECT 1 FROM english_world_product_recoveries WHERE review_id=?', (review_id,)).fetchone():
-                raise ValueError('本任务商品修复恢复授权已签发，不可再次扩充次数')
+            grant = conn.execute('SELECT * FROM english_world_product_recoveries WHERE review_id=?', (review_id,)).fetchone()
+            if bool(grant) != bool(prior_grant):
+                raise ValueError('商品恢复授权并发变化')
+            if grant:
+                original_payload = json.loads(grant['payload'])
+                if (original_payload.get('technical_retry') or not grant['consumed_at']
+                        or grant['expires_at'] <= conn.execute("SELECT datetime('now')").fetchone()[0]
+                        or source_decision != original_payload['decision']):
+                    raise ValueError('只允许同轮明确未提交故障的一次具名技术续跑')
             for value in (source_decision, decision):
                 frozen = conn.execute('SELECT payload FROM product_task_decisions WHERE task_id=?',
                                       (value['task_id'],)).fetchone()
@@ -77,6 +86,15 @@ class EnglishProductRecoveryDAL:
                             'cover_sha256', 'cover_provenance_sha256'):
                     if attempt[key] != row[key]:
                         raise ValueError('历史尝试与当前原包不一致')
+                attempt_source = source_decision
+                if grant and attempt['attempt_id'] != grant['attempt_id']:
+                    recorded = next((a for a in original_payload['attempts'] if a['attempt_id'] == attempt['attempt_id']), None)
+                    if recorded is None:
+                        raise ValueError('出现未审计的新尝试')
+                    attempt_source = original_payload['source_decision']
+                if grant and attempt['attempt_id'] == grant['attempt_id']:
+                    if attempt['finished_at'] > conn.execute("SELECT datetime('now','-60 seconds')").fetchone()[0]:
+                        raise ValueError('技术续跑须至少间隔一分钟')
                 evidence = Path(attempt['evidence_dir'])
                 hashes = {}
                 if attempt['uploader_exit_code'] == 11 and evidence.is_dir() and not any(evidence.iterdir()):
@@ -94,10 +112,10 @@ class EnglishProductRecoveryDAL:
                 if (progress.get('version') != 1 or progress.get('submit_intent') is not False
                         or progress.get('video') != str(Path(row['mp4_path']).resolve())
                         or wait.get('not_submitted') is not True or wait.get('submission_state') != 'NOT_SUBMITTED'
-                        or wait.get('task_key') != source_decision['task_id']
-                        or receipt.get('task_id') != source_decision['task_id']
-                        or wait.get('config_digest') != source_decision['config_digest']
-                        or receipt.get('config_digest') != source_decision['config_digest']
+                        or wait.get('task_key') != attempt_source['task_id']
+                        or receipt.get('task_id') != attempt_source['task_id']
+                        or wait.get('config_digest') != attempt_source['config_digest']
+                        or receipt.get('config_digest') != attempt_source['config_digest']
                         or receipt.get('state') != 'BLOCKED' or receipt.get('binding_confirmed') is not False
                         or receipt.get('reason') not in {'PRODUCT_CLEANUP_BUDGET_EXHAUSTED', 'PRODUCT_CLEANUP_OPERATION_TIMEOUT'}):
                     raise ValueError('商品恢复证据身份或未提交边界不完整')
@@ -107,6 +125,11 @@ class EnglishProductRecoveryDAL:
                 raise ValueError('没有可恢复的商品清理故障')
             payload = dict(reason=reason, operator='explicit-user-authorized', source_decision=source_decision,
                            decision=decision, attempts=proof, artifact_sha256=row['artifact_sha256'])
+            if grant:
+                original_payload['technical_retry'] = payload
+                conn.execute('UPDATE english_world_product_recoveries SET payload=? WHERE review_id=? AND payload=?',
+                             (json.dumps(original_payload, ensure_ascii=False), review_id, grant['payload']))
+                return dict(row)
             conn.execute("""INSERT INTO english_world_product_recoveries(review_id,payload,expires_at)
                 VALUES(?,?,datetime('now','+120 minutes'))""", (review_id, json.dumps(payload, ensure_ascii=False)))
             conn.execute("""UPDATE english_world_review_items SET approval_source='OPERATOR_RECOVERY',

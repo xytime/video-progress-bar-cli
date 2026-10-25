@@ -355,3 +355,48 @@ def test_final_binding_rejects_changed_attachment_id(page,tmp_path):
         binding_confirmed=True,unbound_confirmed=False,actual_product_id='123',actual_title=TARGET.title,
         actual_platform_product_id='999')))
     assert not finalize_product_before_submit(None,picker,tmp_path,require_bound=True)
+
+
+@pytest.mark.parametrize('status', ['不可售卖', '已下架', '已售罄', '售罄'])
+def test_native_unsellable_row_with_enabled_radio_uses_default(page, status):
+    unavailable = row().replace(f'<td>{TARGET.title}</td>', f'<td><span class="title">{TARGET.title}</span><span>{status}</span></td>')
+    page.set_content(form(unavailable + row('456', DEFAULT.title)))
+    picker = PlaywrightProductPicker(page)
+    assert picker.find(TARGET, timeout_ms=600) == ProductLookup.UNAVAILABLE
+    result = select_required_product(decision=ProductDecision(ProductRole.DEFAULT, 'test',
+        candidates=(TARGET, DEFAULT)), picker=picker, timeout_seconds=3)
+    assert result.binding_confirmed and result.actual == DEFAULT
+    assert result.fallback_reason == 'TARGET_UNAVAILABLE'
+
+
+def native_placeholder():
+    return '<div class="post-component-choose-wrap"><div class="content-wrap"><span class="placeholder">选择需要添加的商品</span></div></div><button>发表</button>'
+
+
+def test_current_native_placeholder_confirms_unbound_and_cleanup(page):
+    page.set_content(native_placeholder())
+    picker = PlaywrightProductPicker(page)
+    assert picker.read_binding(timeout_ms=500) is None
+    assert picker.cancel_and_clear(timeout_ms=500)
+    assert picker.ready_to_submit(timeout_ms=500)
+
+
+@pytest.mark.parametrize('extra', [card('999', '其他图书'), native_placeholder()])
+def test_placeholder_cannot_hide_conflicting_or_multiple_product_regions(page, extra):
+    page.set_content(native_placeholder() + extra)
+    picker = PlaywrightProductPicker(page)
+    if '其他图书' in extra:
+        assert picker.read_binding(timeout_ms=500) == ProductIdentity('999', '其他图书')
+    else:
+        with pytest.raises(BindingIdentityUnavailable):
+            picker.read_binding(timeout_ms=500)
+
+
+def test_css_disabled_native_add_button_is_never_clicked(page):
+    page.set_content(form(row()))
+    page.locator('#add').evaluate("b => {b.className='weui-desktop-btn_disabled';b.onclick=()=>window.addClicked=true}")
+    picker = PlaywrightProductPicker(page)
+    with pytest.raises(TimeoutError):
+        picker.select(TARGET, timeout_ms=300)
+    assert page.evaluate('window.addClicked === true') is False
+    assert picker.diagnostic_stage == 'CONFIRM_PRODUCT_SELECTION'

@@ -8449,7 +8449,9 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
             if retry and retry[0] and retry[0] > datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
                 return None
             recovery = conn.execute("SELECT * FROM english_world_product_recoveries WHERE review_id=?", (clean_id,)).fetchone()
-            if recovery and (recovery['consumed_at'] or recovery['expires_at'] <= datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')):
+            technical_retry = json.loads(recovery['payload']).get('technical_retry') if recovery else None
+            continuation_available = technical_retry and not technical_retry.get('attempt_id')
+            if recovery and ((recovery['consumed_at'] and not continuation_available) or recovery['expires_at'] <= datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')):
                 return None
             if settings.wechat_operations_enabled and not recovery:
                 eligible = conn.execute("SELECT id FROM english_world_review_items WHERE id=? AND state='SUBMISSION_APPROVED'", (clean_id,)).fetchone()
@@ -8484,7 +8486,12 @@ class PipelineDB(EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecov
             self._freeze_wechat_retry_chain_conn(conn, "english_world", clean_id)
             from uuid import uuid4
             attempt_id = uuid4().hex
-            if recovery:
+            if continuation_available:
+                recovery_payload = json.loads(recovery['payload'])
+                recovery_payload['technical_retry']['attempt_id'] = attempt_id
+                conn.execute('UPDATE english_world_product_recoveries SET payload=? WHERE review_id=?',
+                             (json.dumps(recovery_payload, ensure_ascii=False), clean_id))
+            elif recovery:
                 conn.execute("UPDATE english_world_product_recoveries SET consumed_at=CURRENT_TIMESTAMP,attempt_id=? WHERE review_id=? AND consumed_at IS NULL", (attempt_id, clean_id))
             conn.execute(
                 """INSERT INTO english_world_submission_attempts (

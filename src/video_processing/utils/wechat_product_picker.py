@@ -31,7 +31,8 @@ class BindingIdentityUnavailable(RuntimeError):
 _DOM = r"""
 const visible = e => !!e && !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
 const text = e => (e?.innerText || '').trim();
-const enabled = e => visible(e) && !e.disabled && e.getAttribute('aria-disabled') !== 'true';
+const enabled = e => visible(e) && !e.disabled && e.getAttribute('aria-disabled') !== 'true'
+    && !Array.from(e.classList).some(c => /(?:^|[-_])disabled$/.test(c));
 const dialogs = () => Array.from(scope.querySelectorAll('.weui-desktop-dialog, .ant-modal, [role="dialog"]'))
     .filter(d => visible(d) && /从橱窗添加商品|选择商品出现时机/.test(text(d)));
 const productDialogs = () => dialogs().filter(d => text(d).includes('从橱窗添加商品'));
@@ -56,7 +57,10 @@ const binding = () => {
         }
         return ids.size === 1 ? {product_id: [...ids][0], title: text(names[0])} : {unknown: true, missing_id: ids.size === 0, title: text(names[0])};
     }
-    if (cards.some(c => text(c).includes('选择需要添加的商品')) ||
+    const regions = Array.from(scope.querySelectorAll('.post-component-choose-wrap')).filter(visible);
+    const placeholders = regions.flatMap(r => Array.from(r.querySelectorAll('.content-wrap .placeholder')).filter(visible));
+    if ((!cards.length && regions.length === 1 && placeholders.length === 1 && text(placeholders[0]) === '选择需要添加的商品') ||
+        cards.some(c => text(c).includes('选择需要添加的商品')) ||
         Array.from(scope.querySelectorAll('.link-display-wrap')).some(e => visible(e) && text(e) === '选择链接'))
         return {unbound: true};
     return {unknown: true};
@@ -97,6 +101,10 @@ const lookup = prod => {
     const titles = [row, ...row.querySelectorAll('*')].filter(visible)
         .flatMap(e => [text(e), e.getAttribute('title')?.trim()]);
     if (!titles.includes(prod.title)) return {status: 'IDENTITY_CONFLICT'};
+    // 原生页面的不可售卖行仍有可点击单选框，须先读取明确销售状态。
+    const unavailable = Array.from(row.querySelectorAll('*')).some(e => visible(e)
+        && /^(?:不可售卖|已下架|已售罄|售罄)$/.test(text(e)));
+    if (unavailable) return {status: 'UNAVAILABLE', matched: true};
     const radio = row.querySelector('input[type="radio"]');
     if (!radio || radio.disabled || radio.getAttribute('aria-disabled') === 'true') return {status: 'UNAVAILABLE', matched: true};
     return {status: 'AVAILABLE', row, radio};
@@ -238,15 +246,19 @@ class PlaywrightProductPicker:
     def select(self, product: ProductIdentity, *, timeout_ms: int) -> None:
         end = self._end(timeout_ms)
         self._open(end)
+        self.diagnostic_stage = 'SELECT_PRODUCT_ROW'
         status = self._eval("const r = lookup(arg); if (r.status === 'AVAILABLE') r.radio.click(); return r.status;", end, vars(product))
         if status != "AVAILABLE":
             raise BindingIdentityUnavailable("PRODUCT_CHANGED_BEFORE_SELECTION")
+        self.diagnostic_stage = "WAIT_PRODUCT_ROW_SELECTION"
         self._poll("const ds = productDialogs(); if (ds.length !== 1) return false; const r = lookup(arg); return r.status === 'AVAILABLE' && r.radio.checked;", end, vars(product))
         observed = self._eval("return selectedIdentity();", end)
         if not observed or ProductIdentity(observed['product_id'], observed['title']) != product:
             raise BindingIdentityUnavailable("SELECTED_ACTUAL_ID_OR_TITLE_CONFLICT")
         self._clear_attestation()
+        self.diagnostic_stage = "CONFIRM_PRODUCT_SELECTION"
         self._poll(r"const d = productDialogs()[0]; const b = d && button(d, /^添加(?:\s*[（(]1[）)])?$/); if (!b) return false; b.click(); return true;", end)
+        self.diagnostic_stage = "WAIT_PRODUCT_BINDING"
         self._poll("""
             for (const d of dialogs().filter(d => text(d).includes('选择商品出现时机'))) {
                 const b = button(d, /^确认$/); if (b) b.click();

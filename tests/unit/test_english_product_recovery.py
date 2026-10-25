@@ -132,3 +132,66 @@ def test_recovery_request_still_stops_before_authorization_and_uploader_on_conte
     assert submitter.submit(key, product_recovery_reason='用户批准修复后恢复一轮重发') == 1
     assert db.get_english_world_product_recovery(key) is None
     assert len(db.list_english_world_submission_attempts(key)) == 3
+
+
+@pytest.fixture
+def recovery_failure(blocked):
+    db, key, old, new, root = blocked
+    authorize(blocked)
+    evidence = root / 'recovery-failure'
+    evidence.mkdir()
+    claim = db.claim_english_world_submission(key, evidence_dir=str(evidence))
+    item = db.get_english_world_review_item(key)
+    receipt = dict(required=True, binding_confirmed=False, state='BLOCKED',
+        reason='PRODUCT_CLEANUP_OPERATION_TIMEOUT', task_id=new['task_id'], config_digest=new['config_digest'])
+    wait = dict(not_submitted=True, submission_state='NOT_SUBMITTED', task_key=new['task_id'],
+        config_digest=new['config_digest'], reason=receipt['reason'])
+    for name, value in [('product_selection_receipt.json',receipt), ('product_wait.json',wait),
+                        ('submission_progress.json', dict(version=1, video=item['mp4_path'], submit_intent=False))]:
+        (evidence/name).write_text(json.dumps(value))
+    assert db.defer_english_world_product_wait(key, attempt_id=claim['_attempt_id'],
+        evidence_dir=str(evidence), receipt=receipt, wait_evidence=wait)
+    with db.get_connection() as conn:
+        conn.execute("UPDATE english_world_submission_attempts SET finished_at=datetime('now','-61 seconds') WHERE attempt_id=?", (claim['_attempt_id'],))
+    context = dict(new['context'], task_id=new['task_id'] + ':technical-retry')
+    retry = freeze_task_product_decision(db, context['task_id'], context,
+        Path(__file__).parents[2] / 'config/wechat_products.json')
+    return db, key, new, retry, evidence
+
+
+def test_same_round_named_technical_continuation_preserves_consumed_grant(recovery_failure):
+    db, key, source, retry, _ = recovery_failure
+    before = db.get_english_world_product_recovery(key)
+    db.authorize_english_world_product_recovery(key, reason='已修复原生不可售卖与占位结构，续跑同轮',
+        source_decision=source, decision=retry)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = list(pool.map(lambda _: db.claim_english_world_submission(key), range(4)))
+    assert len([r for r in claims if r]) == 1
+    after = db.get_english_world_product_recovery(key)
+    assert after['consumed_at'] == before['consumed_at']
+    assert after['attempt_id'] == before['attempt_id']
+    assert after['expires_at'] == before['expires_at']
+    assert after['payload']['technical_retry']['attempt_id'] != before['attempt_id']
+    with pytest.raises(ValueError):
+        db.authorize_english_world_product_recovery(key, reason='不许再次扩大次数', source_decision=source, decision=retry)
+
+
+@pytest.mark.parametrize('change', ['intent', 'receipt', 'interval', 'package', 'uncertain'])
+def test_continuation_still_requires_fresh_exact_unsubmitted_proof(recovery_failure, change):
+    db, key, source, retry, evidence = recovery_failure
+    if change == 'intent':
+        path = evidence/'submission_progress.json'
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), submit_intent=True)))
+    elif change == 'receipt':
+        (evidence/'submission_receipt.json').write_text('{}')
+    elif change == 'package':
+        Path(db.get_english_world_review_item(key)['mp4_path']).write_text('changed')
+    else:
+        with db.get_connection() as conn:
+            if change == 'interval':
+                conn.execute("UPDATE english_world_submission_attempts SET finished_at=CURRENT_TIMESTAMP WHERE review_id=?", (key,))
+            else:
+                conn.execute("UPDATE english_world_review_items SET state='UNCERTAIN' WHERE id=?", (key,))
+    with pytest.raises(ValueError):
+        db.authorize_english_world_product_recovery(key, reason='用户授权同轮续跑', source_decision=source, decision=retry)
+    assert 'technical_retry' not in db.get_english_world_product_recovery(key)['payload']

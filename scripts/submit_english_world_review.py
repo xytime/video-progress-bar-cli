@@ -114,7 +114,7 @@ def _product_task_decision(db: PipelineDB, item: dict) -> dict:
     recovery = (db.get_english_world_product_recovery(item['id'])
                 if item.get('approval_source') == 'OPERATOR_RECOVERY' else None)
     if recovery:
-        return recovery['payload']['decision']
+        return recovery['payload'].get('technical_retry', recovery['payload'])['decision']
     from video_processing.english_world.product_production import verify_product_production_context
     from video_processing.utils.wechat_product_task import freeze_task_product_decision, product_profile_scope
     state_path = _PROJECT_ROOT / 'output' / 'wechat_state.json'
@@ -410,7 +410,8 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None,
             if product_recovery_reason:
                 from video_processing.utils.wechat_product_task import freeze_task_product_decision
                 context = dict(product_decision['context'])
-                context.update(task_id='english-product-recovery:' + review_id,
+                existing_recovery = db.get_english_world_product_recovery(review_id)
+                context.update(task_id='english-product-recovery:' + review_id + (':technical-retry' if existing_recovery else ''),
                                production_task_id=context.get('production_task_id') or product_decision['task_id'])
                 replacement = freeze_task_product_decision(db, context['task_id'], context,
                                                           settings.wechat_product_policy_path)
