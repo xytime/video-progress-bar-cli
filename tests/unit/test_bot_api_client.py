@@ -78,6 +78,41 @@ class TestAddVideo:
         result = await api_client.add_video("https://youtu.be/abc123")
         assert result is None  # 降级处理，不崩溃
 
+    @pytest.mark.parametrize("code", ["MAINTENANCE", "UNKNOWN"])
+    @respx.mock
+    async def test_add_video_maintenance_is_rejected_once(self, api_client, code):
+        route = respx.post(f"{BASE_URL}/api/videos/add").mock(
+            return_value=httpx.Response(503, json={"detail": {
+                "code": code, "message": "维护状态不允许领取新工作",
+            }})
+        )
+        result = await api_client.add_video("https://youtu.be/QfmDtUxa7_4")
+        assert result["success"] is False
+        assert result["error_code"] == code
+        assert "尚未加入队列" in result["error"]
+        assert "无法连接" not in result["error"]
+        assert route.call_count == 1
+
+    @pytest.mark.parametrize("body", [
+        {"detail": {"code": "OTHER"}}, {"detail": "Unavailable"},
+        {"detail": {"code": []}}, ["MAINTENANCE"], {},
+    ])
+    @respx.mock
+    async def test_add_video_unknown_503_does_not_claim_rejection(self, api_client, body):
+        route = respx.post(f"{BASE_URL}/api/videos/add").mock(
+            return_value=httpx.Response(503, json=body)
+        )
+        assert await api_client.add_video("https://youtu.be/QfmDtUxa7_4") is None
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_add_video_non_json_503_returns_none(self, api_client):
+        route = respx.post(f"{BASE_URL}/api/videos/add").mock(
+            return_value=httpx.Response(503, text="Service Unavailable")
+        )
+        assert await api_client.add_video("https://youtu.be/QfmDtUxa7_4") is None
+        assert route.call_count == 1
+
 
 @pytest.mark.asyncio
 class TestGetVideos:

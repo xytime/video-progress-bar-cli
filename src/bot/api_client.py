@@ -94,6 +94,17 @@ class PipelineAPIClient:
                     payload["content_type"] = content_type
                 # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
                 resp = await c.post("/api/videos/add", json=payload, timeout=45.0)
+                # 维护门禁已明确拒绝入队，不能误报连接失败或自动重发。
+                if resp.status_code == 503:
+                    data = resp.json()
+                    detail = data.get("detail") if isinstance(data, dict) else None
+                    code = detail.get("code") if isinstance(detail, dict) else None
+                    messages = {
+                        "MAINTENANCE": "系统正在维护，本次视频尚未加入队列。请待维护结束后重试。",
+                        "UNKNOWN": "系统暂时无法确认运行状态，本次视频尚未加入队列。请待状态恢复后重试。",
+                    }
+                    if isinstance(code, str) and code in messages:
+                        return {"success": False, "error_code": code, "error": messages[code]}
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:

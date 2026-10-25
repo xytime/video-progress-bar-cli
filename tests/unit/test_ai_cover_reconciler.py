@@ -174,6 +174,35 @@ def test_failed_fallback_is_visible_and_not_hot_retried(tmp_path,monkeypatch):
     assert not (task.finish_dir/'resolution.json').exists()
 
 
+def test_maintenance_defers_without_terminal_cover_failure(tmp_path, monkeypatch, isolated_running_maintenance):
+    _, task, db = setup_task(tmp_path, monkeypatch, 33)
+    isolated_running_maintenance.enter('维护延期')
+    assert reconciler.reconcile() == 0
+    assert reconciler._render(task, None, db) is None
+    assert not (task.finish_dir / 'fallback_attempt.json').exists()
+    assert db.get_video_by_youtube_id('cover-guard')['status'] == 'AI_COVER_PENDING'
+
+
+@pytest.mark.parametrize('child_succeeded', [False, True])
+def test_maintenance_during_cover_child_defers_and_can_resume(tmp_path, monkeypatch, isolated_running_maintenance, child_succeeded):
+    _, task, db = setup_task(tmp_path, monkeypatch, 33)
+    def denied_child(command, **kwargs):
+        result = renderer(command, **kwargs) if child_succeeded else SimpleNamespace(
+            returncode=1, stderr='MaintenanceDenied', stdout='')
+        isolated_running_maintenance.enter('子进程启动时维护')
+        return result
+    monkeypatch.setattr(reconciler, 'run_process', denied_child)
+    assert reconciler.reconcile() == 0
+    assert not (task.finish_dir / 'fallback_attempt.json').exists()
+    assert (task.finish_dir / 'resolution.json').exists() is child_succeeded
+    assert db.get_video_by_youtube_id('cover-guard')['status'] == 'AI_COVER_PENDING'
+    state = isolated_running_maintenance.status()
+    isolated_running_maintenance.resume(state['version'], validated=True)
+    monkeypatch.setattr(reconciler, 'run_process', renderer)
+    assert reconciler.reconcile() == 1
+    assert db.get_video_by_youtube_id('cover-guard')['preparation_ready'] == 1
+
+
 def test_resolution_recovers_db_after_interruption_and_checks_hash(tmp_path,monkeypatch):
     queue,task,db=setup_task(tmp_path,monkeypatch,33)
     monkeypatch.setattr(reconciler,'run_process',renderer)

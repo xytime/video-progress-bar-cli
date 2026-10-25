@@ -214,6 +214,28 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
                 disable_slicing=True
             )
 
+    async def test_maintenance_http_response_reaches_user_without_offline_warning(self):
+        import httpx
+        import respx
+        from bot.api_client import PipelineAPIClient
+
+        update = MagicMock()
+        update.message.text = "https://youtu.be/QfmDtUxa7_4"
+        update.message.reply_text = AsyncMock()
+        client = PipelineAPIClient(base_url="http://localhost:8765", internal_api_token="t" * 32)
+        with respx.mock as transport, patch("bot.telegram_bot._api", client), patch(
+            "bot.telegram_bot._check_admin", return_value=True
+        ):
+            route = transport.post("http://localhost:8765/api/videos/add").mock(
+                return_value=httpx.Response(503, json={"detail": {"code": "MAINTENANCE"}})
+            )
+            await handle_youtube_url(update, MagicMock())
+        reply = update.message.reply_text.call_args.args[0]
+        self.assertIn("系统正在维护", reply)
+        self.assertIn("尚未加入队列", reply)
+        self.assertNotIn("无法连接", reply)
+        self.assertEqual(route.call_count, 1)
+
     async def test_cmd_status_uses_quality_report_with_keyboard(self):
         update = MagicMock()
         update.effective_user.id = 12345

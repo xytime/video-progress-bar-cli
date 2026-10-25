@@ -47,6 +47,7 @@ from video_processing.utils.subprocess_env import build_subprocess_env
 from video_processing.utils.cover_agy import run_process, QUALITY_VERSION
 from video_processing.utils.provider_circuit import ProviderCircuit
 from video_processing.utils.agy_background_auth import auth_ready, require_auth
+from video_processing.core.maintenance import running, MaintenanceDenied
 
 
 logger = logging.getLogger(__name__)
@@ -301,12 +302,19 @@ def _render_locked(
 
 
 def _render(task, visual_path, db=None, visual_source=None):
+    if not running():
+        return None
     with (task.finish_dir / "worker.lock").open("a+") as lock:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return None
-        return _render_locked(task, visual_path, db, visual_source)
+        try:
+            result = _render_locked(task, visual_path, db, visual_source)
+        except MaintenanceDenied:
+            return None
+        # 子进程也执行维护准入；维护拒绝只能延期，不能留下永久兜底失败标记。
+        return None if result is False and not running() else result
 
 
 def _recover_resolution(task, db):
@@ -340,7 +348,7 @@ def _mark_cover_ready(task, db):
 
 
 def reconcile() -> int:
-    if not settings.enable_codex_cover_queue:
+    if not settings.enable_codex_cover_queue or not running():
         return 0
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOCK_PATH.open("a+") as lock_file:
