@@ -6,6 +6,7 @@
   Modification History:
   | 2026-10-25 | Codex | 主行与分集共用封面组件，未投稿任务跨列表补位原图，投稿与历史记录保持证据边界。 |
   | 2026-10-25 | Codex | 待筛选素材缺少生成封面时展示 YouTube 原图，保留投稿封面来源边界。 |
+  | 2026-10-26 | Codex | 成片按共用准入显示可领取、资格阻塞和运行等待；频道分数线由后端提供。 |
   | 2026-10-25 | Codex | 封面由图片接口判断可用性，修复待发布、待核实和失败任务已有图却不显示。 |
   | 2026-10-25 | Codex | 授权读回、封面登录核实与人工投稿确认提示。 |
   | 2026-10-25 | Codex | 标签数量跟随筛选，清除恢复全频道与全时间，统一空列表提示。 |
@@ -300,7 +301,7 @@
       <div class="tabs-header">
         <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
         <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">待处理</button>
-        <button class="tab-btn" id="tab-ready" onclick="switchTab('ready')">待发布</button>
+        <button class="tab-btn" id="tab-ready" onclick="switchTab('ready')">成片待投</button>
         <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
         <button class="tab-btn" id="tab-wechat_deferred" onclick="switchTab('wechat_deferred')">待微信恢复</button>
         <button class="tab-btn" id="tab-review" onclick="switchTab('review')">待平台确认</button>
@@ -310,6 +311,7 @@
         <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">热词线索</button>
       </div>
 
+      <div id="ready-admission-summary" class="console-notice" role="status" hidden></div>
       <!-- 漏斗大盘下钻联动指示横幅 -->
       <div id="attention-filter-banner" class="console-notice" hidden><span>关注分类：<b id="attention-filter-label"></b> · 当前数据已刷新 · 根据现有错误记录分类，未知原因需判断</span><button type="button" onclick="filterState.attentionKind=null;document.getElementById('attention-filter-banner').hidden=true;loadVideos(1)">清除关注分类</button></div>
       <div id="funnel-active-banner" class="funnel-active-banner" style="display:none;">
@@ -812,7 +814,10 @@
     PENDING: ['待处理', 'PENDING'],
     NOT_QUEUED: ['未入队', 'PENDING', '尚未加入该平台发布队列'],
     QUEUED: ['排队中', 'PENDING', '已入队，尚未开始上传'],
-    READY_TO_PUBLISH: ['待发布', 'PENDING'],
+    READY_TO_PUBLISH: ['可领取', 'PENDING'],
+    QUALIFICATION_BLOCKED: ['资格阻塞', 'PENDING'],
+    READY_WAITING: ['等待准入', 'PENDING'],
+    RESULT_UNCERTAIN: ['结果待核实', 'UNCERTAIN'],
     PROCESSING: ['加工准备中', 'COPYWRITING'],
     PUBLISH_PRECHECK: ['发布前校验', 'PENDING'],
     DOWNLOADING: ['下载中', 'DOWNLOADING'],
@@ -880,7 +885,7 @@
   }
 
   function readyPublicationDetails(v) {
-    if (v.display_status !== 'READY_TO_PUBLISH') return '';
+    if (!['READY_TO_PUBLISH', 'READY_COOLDOWN', 'QUALIFICATION_BLOCKED', 'READY_WAITING', 'RESULT_UNCERTAIN'].includes(v.display_status)) return '';
     const parseUtc = text => new Date(text.includes('T') ? text : text.replace(' ', 'T') + 'Z');
     const ready = v.publication_ready_at ? parseUtc(v.publication_ready_at) : null;
     const minutes = ready && !isNaN(ready) ? Math.max(0, Math.floor((Date.now() - ready.getTime()) / 60000)) : null;
@@ -1545,11 +1550,25 @@
       _renderedVideoQuery = query;
 
       updateChannelOptions(d.filter_options?.channels);
+      const admissionSummary = document.getElementById('ready-admission-summary');
+      admissionSummary.hidden = currentTab !== 'ready';
+      if (currentTab === 'ready') {
+        const rows = d.videos || [];
+        const eligible = rows.filter(v => v.display_status === 'READY_TO_PUBLISH').length;
+        const blocked = rows.filter(v => v.display_status === 'QUALIFICATION_BLOCKED').length;
+        const waiting = rows.filter(v => v.display_status === 'READY_WAITING').length;
+        admissionSummary.replaceChildren(document.createTextNode(`本页成片：可领取 ${eligible} · 资格阻塞 ${blocked} · 等待准入 ${waiting}。成片完成不代表已通过发布检查。 `));
+        const reviewLink = document.createElement('a');
+        reviewLink.href = '/?view=publications&tab=review';
+        reviewLink.textContent = `结果待核实（${d.tab_counts?.review || 0}）`;
+        admissionSummary.append(reviewLink);
+      }
+
 
       if (d.tab_counts) {
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
-        document.getElementById('tab-ready').textContent = `待发布(${d.tab_counts.ready || 0})`;
+        document.getElementById('tab-ready').textContent = `成片待投(${d.tab_counts.ready || 0})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
         document.getElementById('tab-wechat_deferred').textContent = `待微信恢复(${d.tab_counts.wechat_deferred || 0})`;
         document.getElementById('tab-review').textContent = `本地受理 / 待确认(${d.tab_counts.review || 0})`;
@@ -1672,7 +1691,7 @@
           // 近期高互动是浏览面：显示既有评分，但绝不在此改变生产优先级。
           scoreControls = `<div class="score-display-wrap"><span class="video-score">${score || '未评分'}</span>${score ? ' 分' : ''}${scoreTimeInfo ? `<div class="desktop-score-age" title="${escapeAttr(scoreTimeInfo.tooltip)}">🕒 ${scoreTimeInfo.age}</div>` : ''}</div>`;
         } else if (hasScoreBtns) {
-          const thresholdWarn = isPending && score < 75 ? `<div style="font-size:0.75rem;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
+          const thresholdWarn = isPending && score < (v.publish_score_line ?? 75) ? `<div style="font-size:0.75rem;color:var(--orange);margin-top:2px;">⚠️ 低于${v.publish_score_line ?? 75}分准入线</div>` : '';
           scoreControls = `
             <div class="score-interactive-wrap">
               <div class="desktop-score-header">
@@ -1946,10 +1965,10 @@
         const scoreValStr = score != null ? `${score}<small>分</small>` : '—';
         const scoreStateTag = currentTab === 'high_likes'
           ? (v.engagement?.stage === 'ENG_LOW_SCORE' ? '<span class="mcm-tag mcm-tag-warn">低于入队线</span>' : '')
-          : (isPending && score < 75)
-          ? `<span class="mcm-tag mcm-tag-warn">低于75分暂停</span>`
-          : (score >= 75)
-          ? `<span class="mcm-tag mcm-tag-pass">${isPublished ? '已发布' : '达标入队'}</span>`
+          : (isPending && score < (v.publish_score_line ?? 75))
+          ? `<span class="mcm-tag mcm-tag-warn">低于${v.publish_score_line ?? 75}分准入线</span>`
+          : (score >= (v.publish_score_line ?? 75))
+          ? `<span class="mcm-tag mcm-tag-pass">${isPublished ? '已发布' : '分数过线'}</span>`
           : '';
 
         const mobileCardMetricsHtml = `
@@ -1957,7 +1976,7 @@
             <div class="mcm-stat mcm-score">
               <span class="mcm-label">打分</span>
               <div class="mcm-val-group">
-                <span class="mcm-val ${score >= 75 ? 'val-high' : 'val-low'}">
+                <span class="mcm-val ${score >= (v.publish_score_line ?? 75) ? 'val-high' : 'val-low'}">
                   <strong id="mcm-score-${v.youtube_id}">${scoreValStr}</strong>
                 </span>
                 ${scoreStateTag}
@@ -2029,6 +2048,7 @@
     } catch(e) {
       if (requestId !== _videoRequestId || e.name === 'AbortError') return;
       if (queryChanged) tbody.innerHTML = '<tr><td colspan="8" class="empty-state">列表加载失败，请重试刷新。</td></tr>';
+      if (currentTab === 'ready') document.getElementById('ready-admission-summary').textContent = '准入状态读取失败；旧结果不可作为执行依据，请重新读取。';
       console.warn('videos fetch error', e);
     } finally {
       if (requestId === _videoRequestId) {

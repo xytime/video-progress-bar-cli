@@ -137,7 +137,7 @@ def test_rescore_runner_uses_batch_and_records_missing_video(monkeypatch):
     monkeypatch.setattr(rescore_refresh, "settings", SimpleNamespace(
         youtube_data_api_key="test", youtube_data_api_timeout_sec=2,
         auto_publish_channel_min_scores={}, speech_channel_id_set=set(),
-        speech_publish_score_line=40,
+        speech_publish_score_line=40, enable_ready_metric_refresh=False,
     ))
 
     def fake_statistics(ids, **kwargs):

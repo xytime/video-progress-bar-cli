@@ -5,7 +5,7 @@
   const groups={waitlist:'topics',high_likes:'topics',hotwords:'topics',manual:'topics',queue:'production',active:'production',ready:'production',wechat_deferred:'production',error:'production',review:'publications',completed:'publications'};
   const titles={overview:'工作总览',topics:'选题中心',production:'生产队列',publications:'发布记录',operations:'配置与运维'};
   let view='overview', restoring=false, overviewGeneration=0, lastSuccess='', busy=false, capabilityGeneration=0;
-  const label={waitlist:'待筛选',active:'制作中',ready:'待发布',error:'异常记录',wechat_deferred:'待微信恢复',review:'本地受理／待核实'};
+  const label={waitlist:'待筛选',active:'制作中',ready:'成片待投',error:'异常记录',wechat_deferred:'待微信恢复',review:'本地受理／待核实'};
   const listURL=tab=>`/?view=${groups[tab]}&tab=${tab}&created_window=all`;
   const overview=document.createElement('section'); overview.id='workspace-overview'; overview.setAttribute('aria-label','工作总览');
   overview.innerHTML=`<div class="console-notice"><p id="console-search-state" role="status">正在核实关键词工作台状态…</p><a data-topic-entry href="/topic-candidates">YouTube 关键词采集 →</a></div>

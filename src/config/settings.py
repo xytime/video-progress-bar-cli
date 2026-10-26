@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | dashboard-public-origin-v1 | 2026-10-25 | Codex | 为英语世界声明可选、严格校验的受保护 HTTPS 公网 Origin。 |
@@ -610,6 +611,10 @@ class Settings(BaseSettings):
 
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
     speech_publish_score_line: int = 40
+    # 2026-10-26 用户明确批准；仅覆盖 TED/TEDx，不改变其它演讲频道。
+    ted_publish_score_line: int = Field(default=50, ge=50, le=50)
+    # 2026-10-26 操作者批准存量TED成片公开统计刷新；复用既有小时重评总预算。
+    enable_ready_metric_refresh: bool = True
     speech_channel_ids: str = (
         "UCt84aUC9OG6di8kSdKzEHTQ,UCLv7Gzc3VTO6ggFlXY0sOyw,"
         "UCzWwWbbKHg4aodl0S35R6XA,UC-EnprmCZ3OXyAoG7vjVNCA,"
@@ -880,7 +885,10 @@ class Settings(BaseSettings):
 
     @property
     def auto_publish_channel_min_scores(self) -> dict[str, int]:
-        return {cid: self.speech_publish_score_line for cid in self.speech_channel_id_set}
+        from config.publishing import TED_CHANNEL_IDS
+        lines = {cid: self.speech_publish_score_line for cid in self.speech_channel_id_set}
+        lines.update({cid: self.ted_publish_score_line for cid in TED_CHANNEL_IDS})
+        return lines
 
     @property
     def public_publish_window_ranges(self) -> list[tuple[int, int]]:

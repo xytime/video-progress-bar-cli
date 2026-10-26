@@ -9,6 +9,7 @@
 - 否则                                 → 比例评分 [0, 70]（永不进发布队列）
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date       | Author          | Description                                                  |
 |---------|------------|-----------------|--------------------------------------------------------------|
 | 0.4.0 | 2026-10-13 | Codex | 关键词定时采集、统一评分和受控准入隔离实现 |
@@ -23,10 +24,9 @@ HEAT_VIEW_THRESHOLD = 1500
 HEAT_LIKE_RATE_THRESHOLD = 3.0
 # 发布线：score >= 75 才进入 process_high_score_videos
 PUBLISH_SCORE_LINE = 75
-TED_AUTO_PUBLISH_CHANNEL_IDS = (
-    "UCAuUUnT6oDeKwE6v1NGQxug",  # TED
-    "UCsT0YIqwnpJCM-mx7-gSA4Q",  # TEDx Talks
-)
+from config.publishing import TED_CHANNEL_IDS
+
+TED_AUTO_PUBLISH_CHANNEL_IDS = TED_CHANNEL_IDS
 
 # 频道评分上限是发布策略的一部分，必须在统一写入入口执行，避免自动评分、
 # 人工调分、重算或审查复核从不同路径绕过。
@@ -78,5 +78,5 @@ def compute_policy_score(video, config):
     cutoff = getattr(config, "ted_auto_publish_after_id", 0)
     if (cutoff > 0 and (video.get("parent_id") or video.get("id", 0)) > cutoff
             and video.get("source") == "AUTO" and channel in TED_AUTO_PUBLISH_CHANNEL_IDS):
-        floor = max(floor, config.speech_publish_score_line)
+        floor = max(floor, config.ted_publish_score_line)
     return cap_channel_score(channel, max(score, floor))

@@ -1,6 +1,7 @@
 """TED/TEDx 新视频托底与存量隔离。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 批准最低分50，保留其它演讲线与严格点赞率门禁。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.1.0 | 2026-10-03 | Codex | 托底测试使用满足新增点赞率条件的指标，评分及历史隔离断言保持。 |
@@ -37,7 +38,7 @@ def test_ted_floor_only_admits_future_auto_videos(tmp_path, monkeypatch):
         for yid in ("old-ted", "new-ted", "new-tedx", "other", "discovery", "manual-lock")
     }
     assert scores == {
-        "old-ted": 0, "new-ted": 40, "new-tedx": 40,
+        "old-ted": 0, "new-ted": 50, "new-tedx": 50,
         "other": 0, "discovery": 0, "manual-lock": 5,
     }
 

@@ -928,7 +928,7 @@ def _queue_runner_loop(stop=None):
                 stop.wait(15)
                 continue
 
-            # 1. 普通频道 >=75；演讲/TED/高校频道 >= speech_publish_score_line
+            # 1. 普通频道75，TED/TEDx50，其它演讲频道复用各自配置线
             pending_videos = db.get_high_score_pending_videos(
                 min_score=75,
                 limit=1,
@@ -2003,58 +2003,55 @@ def _validate_video_list_query(
 
 
 def _attach_ready_publication_fields(videos: list[dict]) -> None:
-    """准备、执行、受理状态分层展示；占用者来自实际内核锁。"""
+    """只读真实资格与当前运行门禁；过期的文字原因不作为当前事实。"""
     import json
+    import time
     from video_processing.core.task_lease import read_lease_owner
     from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
-    import time
-
-    out = Path(__file__).resolve().parents[2] / "output"
     from video_processing.core.wechat_request_guard import WeChatRequestDeferred
+    from video_processing.utils.wechat_product_execution import blocked_product_task_keys
+
+    ready = [v for v in videos if v.get('status') == 'PUBLISH_PRECHECK'
+             or (v.get('status') == 'PENDING' and v.get('preparation_ready'))]
+    if not ready:
+        return
+    out = _OUT_DIR
+    excluded = blocked_product_task_keys(out, settings.wechat_product_policy_path)
+    facts = db.get_publication_eligibility([v['id'] for v in ready],
+        source_subtitle_retry_hours=settings.source_subtitle_retry_hours, excluded_product_tasks=excluded)
+    owner = read_lease_owner(canonical_wechat_session_lock_path(out / 'wechat_state.json'))
+    details = db.get_publication_queue_details([v['id'] for v in ready])
     try:
-        cooldown = _wechat_cooldown_guard().admission_view("")
-    except WeChatRequestDeferred:
-        cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
-    owner = read_lease_owner(canonical_wechat_session_lock_path(out / "wechat_state.json"))
-    details = db.get_publication_queue_details([v["id"] for v in videos if v.get("id")])
-    try:
-        runtime = json.loads((out / "ready_publications_status.json").read_text())
-        healthy = time.time() - float(runtime.get("heartbeat_at", 0)) < 30 and bool(read_lease_owner(out / "ready_publications.lock"))
+        runtime = json.loads((out / 'ready_publications_status.json').read_text())
+        healthy = time.time() - float(runtime.get('heartbeat_at', 0)) < 30 and bool(read_lease_owner(out / 'ready_publications.lock'))
     except (OSError, ValueError, TypeError):
         runtime, healthy = {}, False
-    for video in videos:
-        is_ready = video.get("status") == "PUBLISH_PRECHECK" or (video.get("status") == "PENDING" and video.get("preparation_ready"))
-        if not is_ready:
-            continue
+    soft = {'STATE','RECOVERY_OPERATION','COPYWRITER_BACKOFF','UPLOAD_BACKOFF','PREDECESSOR','PRODUCT_WAIT'}
+    for video in ready:
+        assessment = facts[video['id']]
+        blockers = list(assessment['blockers'])
+        prefix = video['youtube_id'] + (f"_s{video['slice_index']}" if video.get('slice_index') else '')
         try:
-            prefix = video['youtube_id'] + (f"_s{video['slice_index']}" if video.get('slice_index') else "")
             cooldown = _wechat_cooldown_guard().admission_view(prefix)
         except WeChatRequestDeferred:
-            cooldown = {"active": True, "reason": "冷却记录不可验证，请检查本地记录", "until": None}
-        detail = details.get(video.get("id"), {})
-        reason = video.get("publication_wait_reason") or "等待发布执行者领取"
-        cooldown_waiting = False
-        if video.get("publication_review_required"):
-            reason = "成片已就绪，等待人工复核通过"
-        elif settings.wechat_publishing_paused:
-            reason = "视频号发布已被人工暂停"
-        elif detail.get("predecessor"):
-            reason = f"等待前序切片 {detail['predecessor']} 完成发布"
-        elif detail.get("next_attempt_at") and detail['next_attempt_at'] > datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'):
-            reason = "上传前失败退避，到期自动重试"
-        elif cooldown["active"]:
-            cooldown_waiting = True
-            previous = "本次执行被平台限流；" if str(video.get("publication_wait_reason", "")).startswith("本次执行被平台限流") else ""
-            reason = previous + "加工完成 · 等待账号准入（冷却／额度／排队）：" + cooldown["reason"]
-        elif owner:
-            reason = f"同账号浏览器占用：{owner.get('video', '其他操作')}（{owner.get('stage', '浏览器操作')}，PID {owner.get('pid', '未知')}）"
-        elif not healthy:
-            reason = "发布执行者心跳缺失，等待恢复；成片已保留"
-        elif runtime.get("current_video") and runtime['current_video'] != video['youtube_id']:
-            reason = f"发布执行者正在处理 {runtime['current_video']}（{runtime.get('stage', '发布中')}）"
-        video.update(display_status="READY_COOLDOWN" if cooldown_waiting else "READY_TO_PUBLISH", publication_wait_reason=reason,
-                     publication_next_attempt_at=detail.get("next_attempt_at"), publication_owner=owner,
-                     publication_target="视频号", wechat_cooldown=cooldown)
+            cooldown = {'active':True, 'reason':'账号记录无法核实，等待恢复', 'blockers':[]}
+        if settings.wechat_publishing_paused:
+            blockers.append({'code':'PUBLISHING_PAUSED','reason':'视频号发布已被人工暂停'})
+        if not running():
+            blockers.append({'code':'MAINTENANCE','reason':'系统处于维护或停止状态'})
+        if cooldown['active']:
+            blockers.extend(cooldown.get('blockers') or [{'code':'ACCOUNT_WAIT','reason':cooldown['reason']}])
+        if owner:
+            blockers.append({'code':'BROWSER_BUSY','reason':f"同账号浏览器占用：{owner.get('video','其他操作')}（{owner.get('stage','浏览器操作')}）"})
+        if not healthy:
+            blockers.append({'code':'WORKER_UNAVAILABLE','reason':'发布执行者心跳缺失，等待恢复；成片已保留'})
+        hard = [b for b in assessment['blockers'] if b['code'] not in soft]
+        display = 'RESULT_UNCERTAIN' if any(b['code']=='SUBMISSION_PROTECTED' for b in blockers) else 'QUALIFICATION_BLOCKED' if hard else 'READY_WAITING' if blockers else 'READY_TO_PUBLISH'
+        reason = '；'.join(b['reason'] for b in blockers) if blockers else '通过当前准入检查，等待串行领取；提交前仍复验内容与素材'
+        video.update(display_status=display, publication_wait_reason=reason,
+            publication_eligibility=dict(assessment, eligible=not blockers, blockers=blockers),
+            publication_next_attempt_at=details.get(video['id'],{}).get('next_attempt_at'),
+            publication_owner=owner, publication_target='视频号', wechat_cooldown=cooldown)
 
 
 @app.get("/api/videos")
@@ -2098,6 +2095,7 @@ def get_videos(
     )
     videos, total_count = db.get_paginated_videos(tab, page, size, sort=sort, **filters)
     for video in videos:
+        video['publish_score_line'] = settings.auto_publish_channel_min_scores.get(video.get('channel_id'), 75)
         video['cover_provenance'] = db.get_cover_context(video['youtube_id'], video.get('slice_index') or 0)
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
     _attach_publish_display_fields(videos)
@@ -2120,6 +2118,10 @@ def get_videos(
         "total_pages": (total_count + size - 1) // size,
         "tab_counts": tab_counts,
         "filter_options": {"channels": db.get_video_filter_channels(tab, engagement_window_days)},
+        "publish_policy": {"ted_min_score": settings.ted_publish_score_line,
+            "speech_min_score": settings.speech_publish_score_line,
+            "ted_min_like_rate_pct": settings.ted_min_like_rate_pct,
+            "ready_metric_refresh_enabled": settings.enable_ready_metric_refresh},
     }
 
 
@@ -3002,7 +3004,7 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     # 自动触发：score 越过调度线，且抢占成功（原状态为 PENDING）
     # [Gemini_2.5_Pro_planning] DISCOVERY 视频不允许通过调分触发管线，防火墙保护
     triggered = False
-    publish_line = settings.speech_publish_score_line if video.get("channel_id") in settings.speech_channel_id_set else 75
+    publish_line = settings.auto_publish_channel_min_scores.get(video.get("channel_id"), 75)
     if not is_discovery and new_score >= publish_line and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
         if fresh:
@@ -3504,7 +3506,7 @@ def bypass_censor(
     # 2) 若 P0 曾写入黑名单墓碑，移除以允许继续处理（黑名单按视频 ID 维度，无切片粒度）
     db.remove_from_blacklist(youtube_id)
     # 3) 确保分数过调度线（P2 曾降权至 0；其余一般已过线）
-    if (video.get("score") or 0) < 75:
+    if (video.get("score") or 0) < settings.auto_publish_channel_min_scores.get(video.get("channel_id"),75):
         db.update_video_score(youtube_id, 100, force=True, slice_index=slice_index)
     # 4) 重置为 PENDING 并清除错误信息
     db.update_video_status(youtube_id, "PENDING", error_msg=None, slice_index=slice_index)
@@ -3672,7 +3674,7 @@ def retry_video(youtube_id: str, engagement_version: Optional[str] = None):
     db.update_video_status(youtube_id, "PENDING", error_msg=None)
 
     triggered = False
-    if video.get("score", 0) >= 75 and db.claim_video_for_processing(youtube_id):
+    if video.get("score", 0) >= settings.auto_publish_channel_min_scores.get(video.get("channel_id"),75) and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
         if fresh:
             _trigger_video_async(fresh)
@@ -3681,7 +3683,7 @@ def retry_video(youtube_id: str, engagement_version: Optional[str] = None):
     return {
         "success": True,
         "triggered": triggered,
-        "message": "已重置并立即重新触发" if triggered else "已重置为 PENDING，请将优先级提升至 ≥75 后触发",
+        "message": "已重置并立即重新触发" if triggered else f"已重置为 PENDING，当前频道准入分数线为{settings.auto_publish_channel_min_scores.get(video.get('channel_id'),75)}；其它门禁仍须通过",
     }
 
 
@@ -3728,7 +3730,7 @@ def retry_slice(youtube_id: str, slice_index: int):
 
     triggered = False
     # 手动重试：若分数 >= 75 且父视频存在，并且满足 Sequence Lock（前序子任务均已发布），则立即触发
-    if video.get("score", 0) >= 75:
+    if video.get("score", 0) >= settings.auto_publish_channel_min_scores.get(video.get("channel_id"),75):
         from video_processing.pipeline_manager import PipelineManager
         pm = PipelineManager()
         parent_file = pm._find_downloaded_video(youtube_id)
@@ -3827,7 +3829,7 @@ def reset_video_hard(youtube_id: str):
     db.update_video_status(youtube_id, "PENDING", error_msg=None)
 
     triggered = False
-    if video.get("score", 0) >= 75 and db.claim_video_for_processing(youtube_id):
+    if video.get("score", 0) >= settings.auto_publish_channel_min_scores.get(video.get("channel_id"),75) and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
         if fresh:
             _trigger_video_async(fresh)
@@ -3914,6 +3916,7 @@ def batch_delete_videos(req: BatchDeleteRequest):
     """[Gemini_2.5_Pro_planning]    批量删除视频记录（不含物理文件，除非可选）。
     
     # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | reply-recovery-v1 | 2026-10-25 | Codex | 移除迁移入口无条件冲突，策略页改走活动配置与本机权限。 |
 | filtered-counts-v1 | 2026-10-25 | Codex | 标签计数与列表筛选一致，验证频道、时间和清除筛选。 |
     | Version | Date | Author | Description |

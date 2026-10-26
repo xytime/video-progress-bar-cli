@@ -200,8 +200,9 @@ def test_queue_explains_ready_cooldown(api):
     _, db, _, _ = api
     rows = [db.get_video_by_youtube_id('one')]
     web_app._attach_ready_publication_fields(rows)
-    assert rows[0]['display_status'] == 'READY_COOLDOWN'
-    assert '加工完成 · 等待账号准入' in rows[0]['publication_wait_reason']
+    assert rows[0]['display_status'] == 'READY_WAITING'
+    assert 'PLATFORM_BACKOFF' in {b['code'] for b in rows[0]['publication_eligibility']['blockers']}
+    assert rows[0]['publication_wait_reason']
     assert rows[0]['wechat_cooldown']['business_code'] == -360
 
 

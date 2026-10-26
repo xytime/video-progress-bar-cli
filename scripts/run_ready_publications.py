@@ -1,6 +1,7 @@
 """独立成片发布执行者；不持加工锁，不受发布时间或重负载避让限制。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
@@ -163,6 +164,8 @@ def main(argv=None) -> int:
              "ted_source_cleanup_recipe": cleanup_recipe,
              "ted_min_like_rate_pct": settings.ted_min_like_rate_pct,
              "speech_publish_score_line": settings.speech_publish_score_line,
+             "ted_publish_score_line": settings.ted_publish_score_line,
+             "ready_metric_refresh_enabled": settings.enable_ready_metric_refresh,
              "subtitle_translation_total_timeout_seconds": settings.subtitle_translation_total_timeout_seconds,
              "google_translate_interval_seconds": settings.google_translate_interval_seconds,
              "youtube_auth_cooldown_seconds": settings.youtube_auth_cooldown_seconds,

@@ -8,6 +8,7 @@
 只动 AUTO 源、非手动锁分；只升不降地修正分数；全程日志。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date       | Author          | Description                              |
 |---------|------------|-----------------|------------------------------------------|
 | 1.0.0   | 2026-06-25 | Claude_Opus_4.8 | 一次性：刷新播放量重算，捞回被埋没爆款   |
@@ -53,14 +54,17 @@ def fetch_current(yid: str):
 
 
 @entry
-def main():
+def main(*, ready_only=False):
     db = PipelineDB()
     # 候选与黑名单过滤全部下沉至 DAL（单一真相源，杜绝手抄过滤漂移重发黑名单频道）
-    rows = db.get_rescore_candidates(
+    rows = [] if ready_only else db.get_rescore_candidates(
         days=8, limit=CAP, channel_min_scores=settings.auto_publish_channel_min_scores,
     )
 
-    print(f"[rescore] 候选 {len(rows)} 条（近 8 天、低于各自频道发布线），开始刷新…", flush=True)
+    ready_rows = db.get_ready_metric_refresh_candidates(limit=5) if settings.enable_ready_metric_refresh else []
+    ready_keys = {(r["youtube_id"], r.get("slice_index", 0)) for r in ready_rows}
+    rows = ready_rows + [r for r in rows if (r["youtube_id"], r.get("slice_index", 0)) not in ready_keys][:CAP-len(ready_rows)]
+    print(f"[rescore] 候选 {len(rows)} 条，含已批准老成片 {len(ready_rows)} 条；单轮总上限{CAP}，开始刷新…", flush=True)
     rescued, updated, failed = [], 0, 0
     statistics = {}
     if settings.youtube_data_api_key and rows:
@@ -79,17 +83,14 @@ def main():
             ticket.start()
             yid, si = row["youtube_id"], row["slice_index"]
             cv, cl = statistics.get(yid, (None, None)) if settings.youtube_data_api_key else fetch_current(yid)
-            result = db.record_rescore_attempt(yid, si or 0, cv, cl)
+            record = db.record_ready_metric_refresh if (yid, si or 0) in ready_keys else db.record_rescore_attempt
+            result = record(yid, si or 0, cv, cl)
             if cv is None:
                 failed += 1
             elif result is not None:
                 previous, new = result
                 updated += 1
-                publish_line = (
-                    settings.speech_publish_score_line
-                    if row.get("channel_id") in settings.speech_channel_id_set
-                    else 75
-                )
+                publish_line = settings.auto_publish_channel_min_scores.get(row.get("channel_id"), 75)
                 if previous < publish_line <= new:
                     rescued.append((new, cv, cl or 0, yid))
                     print(f"  ★捞回 分{new} 发布线{publish_line} 播放{cv} 赞{cl} {yid}（老分{previous}）", flush=True)
@@ -98,11 +99,14 @@ def main():
             if not settings.youtube_data_api_key and i < len(rows):
                 time.sleep(random.uniform(1.5, 3.0))
 
-    print(f"\n[rescore] 完成：扫描{len(rows)} 成功刷新{updated} 跨发布线{len(rescued)} 取不到{failed}", flush=True)
+    print(f"\n[rescore] 完成：扫描{len(rows)} 成功刷新{updated} 跨分数线{len(rescued)} 取不到{failed}；分数过线仍须通过点赞率及其它发布检查", flush=True)
     rescued.sort(reverse=True)
     for new, cv, cl, yid in rescued:
         print(f"  分{new}  播放{cv:>7}  赞{cl:>5}  {yid}", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="有界公开统计刷新，不调用制作或发布")
+    parser.add_argument('--ready-only', action='store_true', help='仅复查已批准范围的存量TED成片，单轮最多5项；不启动上传器')
+    main(ready_only=parser.parse_args().ready_only)

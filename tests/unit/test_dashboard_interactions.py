@@ -228,7 +228,7 @@ def test_missing_task_refreshes_stale_row(dashboard, action):
 def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, tmp_path):
     page, state = dashboard
     video = _video("ready-video")
-    video.update(display_status="READY_TO_PUBLISH", preparation_ready=1, score=90,
+    video.update(display_status="READY_WAITING", preparation_ready=1, score=90,
                  publication_ready_at="2026-09-23 00:00:00",
                  publication_last_attempt_at="2026-09-23 00:01:00",
                  publication_next_attempt_at="2026-09-23 00:20:00",
@@ -240,8 +240,8 @@ def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, t
     page.locator("#tab-ready").click()
     row = page.locator("#row-ready-video")
     row.wait_for()
-    assert page.locator("#tab-ready").inner_text() == "待发布(1)"
-    assert row.locator(".status-cell .desktop-only-status > .badge").inner_text() == "待发布"
+    assert page.locator("#tab-ready").inner_text() == "成片待投(1)"
+    assert row.locator(".status-cell .desktop-only-status > .badge").inner_text() == "等待准入"
     details = row.locator(".publication-wait-detail").inner_text()
     for text in ("视频号", "other-video", "PID 123", "就绪：", "已等待", "最近尝试：", "下次重试："):
         assert text in details

@@ -87,3 +87,7 @@ omitted:
 ### 2026-10-25 授权、封面认证与投稿回执修复
 
 沿用现有控制台令牌和原生 dialog。`operation_receipts.js/css` 统一拥有只读回执和封面认证反馈；原复核 dialog 保留审查证据、双重确认和持续结果。授权成功必须有审计编号和服务器回读；超时仅提供只读核实。封面状态展示检查时间，过期或检查失败显示待核实。人工投稿确认使用中性说明，不改台账事实或提供重发动作。
+
+## 成片待投资格（2026-10-26 用户授权）
+
+沿用 dashboard.css 主题、原生表格、行内状态与 console-notice。成片完成、当前可领取、资格阻塞、运行等待和提交结果待核实分别说明；现有发布记录入口拥有结果核实，不提供重投按钮。资格由 db/publication_eligibility.py 与执行器共同读取，页面不重建规则。分数线由 API 提供；TED50分仅改变TED/TEDx，点赞率、人工许可、历史隔离与提交防重保持。旧冷却文字不是当前状态。验证归 tests/unit/test_publication_eligibility.py 与 tests/browser/test_ready_eligibility_browser.py。

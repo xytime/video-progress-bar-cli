@@ -186,3 +186,7 @@
 - 认证：READY/AUTH_REQUIRED 仅五分钟内有效；无记录、过期或检查故障为 UNKNOWN。显式核实不运行模型、不弹 OAuth；恢复登录后可更新状态。
 - 投稿：只有同次同成片提交意图及点击返回证据，才显示“等待人工确认”；UNCERTAIN、平台原生 ID 和防重复门禁保持。证据缺失继续显示结果待核实。
 - 验收：隔离 Chromium + FastAPI/SQLite 覆盖成功、403、响应丢失、认证时效、移动端和键盘；生产 HTTPS 核实既有授权回执、真实认证重查及投稿提示，不新增投稿。
+
+## 成片待投资格（2026-10-26 用户授权）
+
+沿用 dashboard.css 主题、原生表格、行内状态与 console-notice。成片完成、当前可领取、资格阻塞、运行等待和提交结果待核实分别说明；现有发布记录入口拥有结果核实，不提供重投按钮。资格由 db/publication_eligibility.py 与执行器共同读取，页面不重建规则。分数线由 API 提供；TED50分仅改变TED/TEDx，点赞率、人工许可、历史隔离与提交防重保持。旧冷却文字不是当前状态。验证归 tests/unit/test_publication_eligibility.py 与 tests/browser/test_ready_eligibility_browser.py。

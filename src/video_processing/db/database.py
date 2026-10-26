@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | review-receipt-v1 | 2026-10-25 | Codex | 精确任务授权审计与启用标志单次只读回读，不受事件分页上限影响。 |
 | reply-coverage-v2 | 2026-10-25 | Codex | 活动优先与公平回补兼顾旧作品，持久保存原生评论续扫游标与活动证据。 |
 | reply-page-hint-v1 | 2026-10-25 | Codex | 依据已绑定作品顺序估计扫描起始页，仅辅助翻页，作品身份仍由原生响应严格核验。 |
@@ -239,13 +240,14 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
+from .publication_eligibility import PublicationEligibilityDAL
 from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
 from .compliance_remix import ComplianceRemixDAL
 
 
-class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -4159,13 +4161,13 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
             return {}
         marks = ','.join('?' for _ in video_ids)
         with self.get_connection() as conn:
-            rows = conn.execute(f"""SELECT pv.id, r.next_attempt_at,
+            rows = conn.execute(f"""SELECT pv.id, MAX(r.next_attempt_at) AS next_attempt_at,
                 (SELECT sib.youtube_id || '_s' || sib.slice_index FROM processed_videos sib
                  WHERE sib.parent_id = pv.parent_id AND sib.slice_index > 0 AND sib.slice_index < pv.slice_index
                    AND sib.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')
                  ORDER BY sib.slice_index LIMIT 1) AS predecessor
                 FROM processed_videos pv LEFT JOIN wechat_upload_retries r ON r.video_id = pv.id
-                WHERE pv.id IN ({marks})""", video_ids).fetchall()
+                WHERE pv.id IN ({marks}) GROUP BY pv.id""", video_ids).fetchall()
             return {row['id']: dict(row) for row in rows}
 
     def get_videos_by_status(self, status: str) -> List[Dict[str, Any]]:
@@ -5707,14 +5709,17 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         if stale_days is None:
             stale_days = settings.queue_stale_days
         days = max(1, int(stale_days))
+        line = self._engagement_score_line_sql().replace('pv.','')
         with self.get_connection() as conn:
             cursor = conn.execute(
-                """UPDATE processed_videos
+                f"""UPDATE processed_videos
                    SET status = 'IGNORED',
                        error_msg = COALESCE(error_msg, '超期排队批量放弃'),
                        updated_at = CURRENT_TIMESTAMP
                    WHERE status = 'PENDING'
-                     AND score >= 75
+                     AND IFNULL(preparation_ready,0)=0 AND publication_ready_at IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id=processed_videos.id)
+                     AND score >= ({line})
                      AND parent_id IS NULL
                      AND created_at < datetime('now', ?)
                      AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id)
@@ -5743,13 +5748,16 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
             ttl_days = settings.waitlist_ttl_days
         days = max(1, int(ttl_days))
         cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y%m%d")
+        line = self._engagement_score_line_sql().replace('pv.','')
         with self.get_connection() as conn:
             cursor = conn.execute(
-                """UPDATE processed_videos
+                f"""UPDATE processed_videos
                    SET status = 'EXPIRED',
                        updated_at = CURRENT_TIMESTAMP
                    WHERE status = 'PENDING'
-                     AND score < 75
+                     AND IFNULL(preparation_ready,0)=0 AND publication_ready_at IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id=processed_videos.id)
+                     AND score < ({line})
                      AND parent_id IS NULL
                      AND IFNULL(source, '') NOT IN ('DISCOVERY','COMPLIANCE_REMIX')
                      AND (
@@ -5898,7 +5906,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5,
                                       channel_min_scores: Optional[Dict[str, int]] = None,
                                       allow_deferred_predecessors: bool = False,
-                                      source_subtitle_retry_hours: int = 6,
+                                      source_subtitle_retry_hours: Optional[int] = None,
                                       ready_only: Optional[bool] = None,
                                       excluded_product_tasks: Collection[str] = ()) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
@@ -5908,138 +5916,38 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         rescore 重算）取「可发候选」的唯一咽喉。在此 SQL 层硬过滤 BLACKLISTED 频道与 blacklisted_videos
         墓碑视频，确保任何路径都绝不发布被拉黑频道的视频（含已在库的存量 PENDING）。
         """
-        threshold_clauses = ["pv.score >= ?"]
-        threshold_params: list[Any] = [min_score]
-        for channel_id, channel_min_score in (channel_min_scores or {}).items():
-            threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
-            threshold_params.extend([channel_id, channel_min_score])
-        if ready_only is True:
-            threshold_clauses.append(
-                """EXISTS (
-                    SELECT 1 FROM manual_publish_leases lease
-                    WHERE lease.video_id = pv.id
-                      AND lease.platform = 'wechat'
-                      AND lease.claimed_at IS NULL
-                      AND lease.revoked_at IS NULL
-                      AND COALESCE(lease.lease_state, 'ISSUED') IN ('ISSUED', 'CONSUMED_PREP')
-                      AND lease.expires_at > CURRENT_TIMESTAMP
-                      AND COALESCE(lease.hard_expires_at, lease.expires_at) > CURRENT_TIMESTAMP
-                      AND (lease.prep_deadline_at IS NULL OR lease.prep_deadline_at > CURRENT_TIMESTAMP)
-                )"""
-            )
-        threshold_sql = " OR ".join(threshold_clauses)
-        rate_sql, rate_params = self._ted_like_rate_filter()
-        terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED", "HISTORICAL_ARCHIVED"]
-        if allow_deferred_predecessors:
-            terminal_states.append("WECHAT_DEFERRED")
-        terminal_placeholders = ", ".join("?" for _ in terminal_states)
-        readiness = "" if ready_only is None else ("AND IFNULL(pv.preparation_ready, 0) = " + str(int(ready_only)))
-        query = f"""
-            SELECT pv.* FROM processed_videos pv
-            LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
-            WHERE pv.status = 'PENDING'
-              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
-                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING')) AND ({threshold_sql}) {readiness}
-              AND 'pipeline:' || pv.youtube_id || ':' || pv.slice_index NOT IN (SELECT value FROM json_each(?))
-              AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
-              AND {rate_sql}
-              AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
-                              WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
-              AND COALESCE(pv.source, 'AUTO') NOT IN ('DISCOVERY','COMPLIANCE_REMIX') AND keyword_allowed(pv.source,pv.youtube_id)
-              AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
-                              WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
-              AND IFNULL(pv.publication_review_required, 0) = 0
-              AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
-              AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
-              AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
-              AND NOT EXISTS (
-                  SELECT 1 FROM wechat_publications_historical_archive archive
-                  WHERE archive.video_id = pv.id
-              )
-              AND (
-                  COALESCE(pv.source_subtitle_status, 'PENDING') != 'UNAVAILABLE'
-                  OR pv.source_subtitle_checked_at <= datetime('now', ?)
-              )
-              AND (
-                pv.slice_index = 0
-                OR NOT EXISTS (
-                  SELECT 1 FROM processed_videos sib
-                  WHERE sib.parent_id = pv.parent_id
-                    AND sib.slice_index > 0
-                    AND sib.slice_index < pv.slice_index
-                    AND sib.status NOT IN ({terminal_placeholders})
-                )
-              )
-            ORDER BY COALESCE(pv.preparation_ready, 0) DESC, pv.score DESC LIMIT ?
-        """
+        gates = self._publication_gates(
+            min_score=min_score, channel_min_scores=channel_min_scores, ready_only=ready_only,
+            allow_deferred_predecessors=allow_deferred_predecessors,
+            source_subtitle_retry_hours=source_subtitle_retry_hours,
+            excluded_product_tasks=excluded_product_tasks)
+        condition = ' AND '.join('(' + sql + ')' for _, _, sql, _ in gates)
+        params = [p for _, _, _, args in gates for p in args]
+        if ready_only is not None:
+            condition += ' AND IFNULL(pv.preparation_ready,0) = ?'
+            params.append(int(ready_only))
         with self.get_connection() as conn:
-            if ready_only is True:
-                self.expire_manual_publish_leases(conn=conn)
-                conn.commit()
-            cursor = conn.execute(
-                query,
-                (*threshold_params, json.dumps(list(excluded_product_tasks)), *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
-                 *rate_params,
-                 f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
-            )
-            return [dict(row) for row in cursor.fetchall()]
+            rows = conn.execute(
+                "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
+                " ORDER BY IFNULL(pv.preparation_ready,0) DESC, CASE WHEN pv.preparation_ready=1 THEN julianday(COALESCE(pv.publication_ready_at,pv.created_at)) END ASC, pv.score DESC, pv.created_at, pv.id LIMIT ?",
+                (*params, max(1,int(limit)))).fetchall()
+            return [dict(row) for row in rows]
 
     def get_high_score_preparation_candidates(
-        self,
-        *,
-        min_score: int = 75,
-        limit: int = 1,
-        retry_hours: int = 6,
+        self, *, min_score: int = 75, limit: int = 1, retry_hours: Optional[int] = None,
         channel_min_scores: Optional[Dict[str, int]] = None,
     ) -> List[Dict[str, Any]]:
-        """取仅允许后台预加工的 AUTO 高分候选，不包含 DISCOVERY 或人工加急项。"""
-        threshold_clauses = ["pv.score >= ?"]
-        threshold_params: list[Any] = [min_score]
-        for channel_id, channel_min_score in (channel_min_scores or {}).items():
-            threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
-            threshold_params.extend([channel_id, channel_min_score])
-        threshold_sql = " OR ".join(threshold_clauses)
-        rate_sql, rate_params = self._ted_like_rate_filter()
-        query = f"""
-            SELECT pv.* FROM processed_videos pv
-            LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
-            WHERE pv.status = 'PENDING'
-              AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items recovery
-                              WHERE recovery.video_id=pv.id AND recovery.state IN ('RESERVED','WAITING','RUNNING'))
-              AND pv.source IN ('AUTO','KEYWORD') AND keyword_allowed(pv.source,pv.youtube_id)
-              AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
-                              WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
-              AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
-                              WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
-              AND IFNULL(pv.publication_review_required, 0) = 0
-              AND IFNULL(pv.preparation_ready, 0) = 0
-              AND ({threshold_sql})
-              AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
-              AND {rate_sql}
-              AND pv.channel_id NOT IN (
-                  SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
-              )
-              AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
-              AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
-              AND NOT EXISTS (
-                  SELECT 1 FROM wechat_publications_historical_archive archive
-                  WHERE archive.video_id = pv.id
-              )
-              AND (
-                  COALESCE(pv.source_subtitle_status, 'PENDING') != 'UNAVAILABLE'
-                  OR pv.source_subtitle_checked_at <= datetime('now', ?)
-              )
-            ORDER BY pv.score DESC, pv.created_at ASC
-            LIMIT ?
-        """
+        """预加工复用同一份候选门禁；仍只允许 AUTO/KEYWORD。"""
+        gates = self._publication_gates(min_score=min_score, channel_min_scores=channel_min_scores,
+                                        ready_only=False, source_subtitle_retry_hours=retry_hours)
+        condition = ' AND '.join('(' + sql + ')' for _, _, sql, _ in gates)
+        params = [p for _, _, _, args in gates for p in args]
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                query,
-                (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
-                 *rate_params,
-                 f"-{max(1, int(retry_hours))} hours", limit),
-            )
-            return [dict(row) for row in cursor.fetchall()]
+            rows = conn.execute(
+                "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
+                " AND IFNULL(pv.preparation_ready,0)=0 AND pv.source IN ('AUTO','KEYWORD') ORDER BY pv.score DESC,pv.created_at,pv.id LIMIT ?",
+                (*params, max(1,int(limit)))).fetchall()
+            return [dict(row) for row in rows]
 
     def get_rescore_candidates(
         self, days: int = 8, limit: int = 50,
@@ -6053,7 +5961,9 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         时间比较用 SQLite datetime('now')（UTC）对齐 created_at（CURRENT_TIMESTAMP 亦为 UTC），
         避免宿主本地时区（UTC+8）与库内 UTC 不一致造成的窗口边界漂移。
         """
-        thresholds = channel_min_scores or {}
+        thresholds = dict(settings.auto_publish_channel_min_scores)
+        thresholds.update(channel_min_scores or {})
+        thresholds.update({cid: settings.ted_publish_score_line for cid in TED_AUTO_PUBLISH_CHANNEL_IDS})
         score_line = (
             "CASE channel_id " + " ".join("WHEN ? THEN ?" for _ in thresholds) + " ELSE 75 END"
             if thresholds else "75"
@@ -6101,7 +6011,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         """记录一次抓取；成功时原子保存新统计与只升不降的自动分。"""
         with self.get_connection() as conn:
             row = conn.execute(
-                """SELECT score, channel_id FROM processed_videos
+                """SELECT * FROM processed_videos
                    WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'
                      AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
                      AND score < 75
@@ -6129,9 +6039,8 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
                 conn.commit()
                 return (old_score, old_score) if cursor.rowcount else None
 
-            proposed_score = cap_channel_score(
-                row["channel_id"], compute_auto_score(view_count, like_count),
-            )
+            from ..scoring import compute_policy_score
+            proposed_score = compute_policy_score(dict(row, view_count=view_count, like_count=like_count), settings)
             score_cap = CHANNEL_SCORE_CAPS.get(row["channel_id"], 100)
             signature = self._score_input_signature(row["channel_id"], view_count, like_count)
             cursor = conn.execute(
@@ -6187,7 +6096,8 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         from datetime import date
 
         date.fromisoformat(day_bj)
-        thresholds = channel_min_scores or {}
+        thresholds = dict(settings.auto_publish_channel_min_scores)
+        thresholds.update(channel_min_scores or {})
         with self.get_connection() as conn:
             intake = conn.execute(
                 """SELECT id, channel_id, score, status, error_msg, is_manually_scored
@@ -6722,6 +6632,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         self, tab: str, engagement_window_days: int, include_expired: bool = False
     ) -> tuple[str, List[Any]]:
         """返回列表 Tab 的基础谓词；调用方再安全叠加筛选且始终在分页前执行。"""
+        line = self._engagement_score_line_sql()
         if tab == 'completed':
             return """((pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED') AND pv.parent_id IS NULL)
                 OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
@@ -6748,7 +6659,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive a WHERE a.video_id = pv.id)""", []
         if tab == 'queue':
-            return """pv.status = 'PENDING' AND IFNULL(pv.preparation_ready, 0) = 0 AND pv.score >= 75 AND pv.parent_id IS NULL
+            return f"""pv.status = 'PENDING' AND IFNULL(pv.preparation_ready, 0) = 0 AND pv.score >= ({line}) AND pv.parent_id IS NULL
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         if tab == 'high_likes':
@@ -6756,7 +6667,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
             return "pv.upload_date >= ? AND pv.view_count > 500 AND pv.parent_id IS NULL", [since]
         if tab == 'waitlist':
             status_clause = "pv.status IN ('PENDING', 'EXPIRED')" if include_expired else "pv.status = 'PENDING'"
-            return f"""{status_clause} AND IFNULL(pv.preparation_ready, 0) = 0 AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'
+            return f"""{status_clause} AND IFNULL(pv.preparation_ready, 0) = 0 AND pv.score < ({line}) AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
                 AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         raise ValueError(f"Unknown video tab: {tab}")
@@ -6846,7 +6757,7 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         elif funnel_stage:
             stage_conditions = {
                 'ingested': "pv.parent_id IS NULL",
-                'qualified': "pv.score >= 75 AND pv.parent_id IS NULL",
+                'qualified': f"pv.score >= ({self._engagement_score_line_sql()}) AND pv.parent_id IS NULL",
                 'processed': "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') AND pv.parent_id IS NULL",
                 'published': "pv.status IN ('PUBLISHED', 'SUBMITTED_BOUND') AND pv.parent_id IS NULL",
                 'failed': "pv.status = 'FAILED' AND pv.parent_id IS NULL",
@@ -7294,15 +7205,11 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
         DISCOVERY（发现条目仅供「高赞」tab 浏览，受发现防火墙保护，绝不能被清空/拉黑）。
         集中在 DAL 内，避免业务层裸 SQL 与谓词漂移。
         """
+        condition, params = self._build_video_tab_condition('waitlist', 3)
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT youtube_id FROM processed_videos "
-                "WHERE status = 'PENDING' AND IFNULL(preparation_ready, 0) = 0 AND score < 75 AND parent_id IS NULL "
-                "AND IFNULL(source,'') != 'DISCOVERY' "
-                "AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id) "
-                "AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = processed_videos.id)"
-            )
-            return [row["youtube_id"] for row in cursor.fetchall()]
+            rows = conn.execute('SELECT pv.youtube_id FROM processed_videos pv WHERE '+condition+
+                ' AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id=pv.id)',params).fetchall()
+            return [r['youtube_id'] for r in rows]
 
     def get_slices_by_parent_yid(self, parent_yid: str) -> List[Dict[str, Any]]:
         """[Gemini_3.5_Flash_planning] 新增：按父任务 youtube_id 提取其下所有关联子切片元数据"""
@@ -7372,11 +7279,15 @@ class PipelineDB(ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL
             row = cursor.fetchone()
             ready_condition, _ = self._build_video_tab_condition('ready', 3)
             ready_count = conn.execute(f"SELECT COUNT(*) FROM processed_videos pv WHERE {ready_condition}").fetchone()[0]
+            list_counts = {}
+            for tab in ('waitlist','queue'):
+                condition, params = self._build_video_tab_condition(tab,3)
+                list_counts[tab] = conn.execute('SELECT COUNT(*) FROM processed_videos pv WHERE '+condition,params).fetchone()[0]
             if row:
                 return {
                     "ready": ready_count,
-                    "waitlist": row["waitlist"] or 0,
-                    "queue": row["queue"] or 0,
+                    "waitlist": list_counts["waitlist"],
+                    "queue": list_counts["queue"],
                     "active": row["active"] or 0,
                     "wechat_deferred": row["wechat_deferred"] or 0,
                     "local_accepted": row["local_accepted"] or 0,

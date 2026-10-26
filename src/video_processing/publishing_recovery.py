@@ -1,6 +1,7 @@
 """后台发布恢复服务；固定范围、审计恢复和正式流水线续跑。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-23 | Codex | 发布恢复控制台领域服务，保留审批、产物、互斥及提交防重。 |
@@ -150,6 +151,15 @@ class PublishingRecoveryService:
             blockers = self.guard.evaluate(task=task_paths(self.root, video)[0])["blockers"]
             item.update(eligible=True, category="recoverable" if blockers else "ready")
             item["blockers"] = blockers
+            if item['ready'] and state == 'PENDING':
+                from .utils.wechat_product_execution import blocked_product_task_keys
+                qualification = self.db.get_publication_eligibility([video['id']],
+                    source_subtitle_retry_hours=settings.source_subtitle_retry_hours,
+                    excluded_product_tasks=blocked_product_task_keys(self.out, settings.wechat_product_policy_path))[video['id']]
+                if not qualification['eligible']:
+                    item.update(eligible=False, category='qualification',
+                        reason='；'.join(b['reason'] for b in qualification['blockers']),
+                        blockers=qualification['blockers'] + blockers)
         item["artifacts"] = "成片已就绪；完整验证后直接发布检查" if item["ready"] else "保留有效缓存，从最早失效步骤续跑"
         item["stage"] = "发布检查" if item["ready"] else "加工续跑"
         return item

@@ -1,6 +1,7 @@
 """配置中心的完整发现目录；只读参数显式列出，不把静态候选冒充生效值。
 
 # Modification History
+| backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
@@ -90,7 +91,8 @@ def catalog(current):
             raw=current.domains()['interaction_controls']['automatic_replies_enabled']
             source='活动版本 interaction_controls；统一业务总开关的只读别名'
         spec=SETTING_FIELDS.get(name)
-        rows.append({'id':'setting:'+name,'name':spec[0] if spec else name,'group':spec[5] if spec else group(name),
+        titles={'ted_publish_score_line':'TED/TEDx 自动发布最低分','enable_ready_metric_refresh':'存量TED成片公开统计刷新（需批准范围）'}
+        rows.append({'id':'setting:'+name,'name':spec[0] if spec else titles.get(name,name),'group':spec[5] if spec else group(name),
              'current':('已设置（不展示）' if raw else '未设置') if hidden else _display(current.domains()['runtime_settings'][name] if managed else raw),
              'default':None if hidden else _display(default),'source':'活动版本 runtime_settings' if managed else source,
              'unit':spec[1] if spec else '见字段定义；未推断单位','range':[spec[2],spec[3]] if spec else None,
