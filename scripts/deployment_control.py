@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| partial-freeze-v1 | 2026-10-26 | Codex | 显式接续仅关闭闸门的中断，完整检查后交回原生恢复器。 |
 | 1.4.0 | 2026-10-20 | Codex | 独立安全维护回执可证明精确旧进程，保持原生部署和在途门禁 |
 | 1.2.0 | 2026-10-14 | Codex | 显式保留已完成阶段配置，拒绝配置转换混用 |
 | 1.3.0 | 2026-10-15 | Codex | 可引用已完成部署证明旧 worker 来源，精确身份只用于维护退役 |
@@ -27,11 +28,12 @@ from video_processing.core.maintenance_runtime import protection_snapshot
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=["plan", "apply", "status", "recover"])
+    parser.add_argument("action", choices=["plan", "apply", "status", "recover", "recover-partial-freeze"])
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--target")
     parser.add_argument("--tested-manifest", type=Path)
     parser.add_argument("--overlay", type=Path)
+    parser.add_argument("--expected-maintenance-version", type=int)
     retirement = parser.add_mutually_exclusive_group()
     retirement.add_argument("--retire-from-deployment", type=Path)
     retirement.add_argument("--retire-from-inspection", type=Path)
@@ -80,7 +82,11 @@ def main(argv=None):
         plan = read_json(directory / "plan.json")
         require(plan["schema"] == 1, "PLAN_SCHEMA_INVALID")
         deploy = Deployment(plan, directory, None if args.action == "status" else HostDeployment(plan, directory))
-        result = deploy.status() if args.action == "status" else deploy.run(recover=args.action == "recover")
+        if args.action == 'recover-partial-freeze':
+            require(args.expected_maintenance_version is not None, 'MAINTENANCE_VERSION_REQUIRED')
+            from recover_partial_freeze import complete_partial_freeze
+            complete_partial_freeze(deploy.adapter, args.expected_maintenance_version)
+        result = deploy.status() if args.action == "status" else deploy.run(recover=args.action in {"recover", "recover-partial-freeze"})
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as exc:
