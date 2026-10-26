@@ -5,6 +5,8 @@
 | --- | --- | --- | --- |
 | backlog-v1 | 2026-10-26 | Codex | 浏览器+FastAPI+真实临时账本，禁止业务写入和平台访问。 |
 """
+import re
+
 from playwright.sync_api import expect
 from tests.browser_fixtures import chromium  # noqa: F401
 
@@ -26,6 +28,9 @@ def test_ready_qualification_real_api_and_mobile(workspace):
     expect(row.locator('.publication-wait-detail')).to_be_visible()
     expect(row).to_contain_text('严格大于0.6%')
     expect(row).not_to_contain_text('跳过一次')
+    expect(row.locator('.plat-wechat')).to_contain_text('资格阻塞')
+    expect(row.locator('.plat-wechat')).not_to_have_attribute('title',re.compile('跳过一次'))
+    expect(row.locator('.plat-wechat')).to_have_attribute('title',re.compile('严格大于0.6%'))
     expect(page.locator('#ready-admission-summary a')).to_have_attribute('href','/?view=publications&tab=review')
     assert client.get('/api/videos?tab=ready').json()['publish_policy']['ted_min_score'] == 50
     page.locator('#video-filter-search').fill('zz-no-match')

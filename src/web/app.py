@@ -2052,6 +2052,10 @@ def _attach_ready_publication_fields(videos: list[dict]) -> None:
             publication_eligibility=dict(assessment, eligible=not blockers, blockers=blockers),
             publication_next_attempt_at=details.get(video['id'],{}).get('next_attempt_at'),
             publication_owner=owner, publication_target='视频号', wechat_cooldown=cooldown)
+        # 同一行的平台徽标和详情也须显示当前事实，不能继续引用持久化的旧冷却原因。
+        wechat = (video.get('platforms') or {}).get('wechat')
+        if wechat is not None:
+            wechat.update(display_state=display, error=reason)
 
 
 @app.get("/api/videos")
