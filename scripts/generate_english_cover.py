@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.3.5 | 2026-10-27 | Codex | 无摄影主视觉时使用 Pillow 插画封面，动态排版长标题并如实记录视觉来源。 |
 | 1.3.4 | 2026-09-23 | Codex | Pillow 封面按可读字号完整排版双语引语，禁止静默省略。 |
 | 1.3.2   | 2026-09-18 | Antigravity                    | 隔离渲染载荷与审校语义载荷，防止 visual_asset_path 破坏封面载荷一致性质检。 |
 | 1.3.1   | 2026-09-09 | Codex                          | Pillow 回退展示与词形/词元明确对应的音标。 |
@@ -117,6 +118,19 @@ def _fit_quote(draw, english, chinese):
     raise ValueError("完整双语引语超出封面可读区域；禁止省略或截断已审校文本")
 
 
+def _pillow_title_layout(draw, title_lines, font, *, width: int, x: int = 52, first_y: int = 206, line_step: int = 98):
+    """测量 Pillow 标题真实边界；拒绝超行数或越界标题，返回标题底边。"""
+    if not title_lines or len(title_lines) > 2:
+        raise ValueError("英语封面标题必须排入一至两行；禁止静默裁切")
+    boxes = []
+    for index, line in enumerate(title_lines):
+        box = draw.textbbox((x, first_y + index * line_step), str(line), font=font, stroke_width=2)
+        if box[0] < 48 or box[2] > width - 48:
+            raise ValueError("英语封面标题超出安全边距；禁止裁切")
+        boxes.append(box)
+    return boxes, max(box[3] for box in boxes)
+
+
 def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
     """浏览器受 macOS 阻断时，渲染同规格的英语报刊封面。"""
     width, height = 1080, 1260
@@ -136,16 +150,15 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
     draw.text((660, 142), str(layout.get("difficulty_tag") or "英语精读"), font=meta_font, fill="#8C7E72")
     draw.line((48, 176, width - 48, 176), fill="#D8CFC4", width=2)
 
-    title_font = _font(82, bold=True)
+    title_font = _font(84, bold=True)
     title_lines = list(layout.get("title_lines") or [layout.get("title") or "英语世界"])
-    title_y = 206
-    for line in title_lines[:2]:
-        draw.text((52, title_y), str(line), font=title_font, fill="#1E1A18", stroke_width=2, stroke_fill="#E7DED3")
-        title_y += 98
+    _, title_bottom = _pillow_title_layout(draw, title_lines, title_font, width=width)
+    for index, line in enumerate(title_lines):
+        draw.text((52, 206 + index * 98), str(line), font=title_font, fill="#1E1A18", stroke_width=2, stroke_fill="#E7DED3")
 
     quote_en_font, quote_zh_font, en_lines, zh_lines, en_step, zh_step = _fit_quote(
         draw, str(layout.get("quote_en") or ""), str(layout.get("quote_zh") or ""))
-    quote_y = max(402, title_y + 12)
+    quote_y = max(402, title_bottom + 24)
     draw.rounded_rectangle((48, quote_y, width - 48, quote_y + 248), radius=14, fill="#F3ECE0", outline="#E6DDD0", width=2)
     draw.rectangle((48, quote_y, 58, quote_y + 248), fill="#A53C2B")
     draw.text((82, quote_y + 22), "KEY SENTENCE · 精选原声金句", font=meta_font, fill="#A53C2B")
@@ -159,6 +172,12 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
         line_y += zh_step
 
     cards_y = quote_y + 276
+    cards_bottom = cards_y + 198
+    illustration_y = max(height - 326, cards_bottom + 24)
+    illustration_bottom_limit = height - 76
+    illustration_height = illustration_bottom_limit - illustration_y
+    if illustration_height < 160:
+        raise ValueError("英语封面标题和教学内容无法与插画同时排入安全区；禁止重叠或裁切")
     draw.text((48, cards_y), "本篇核心词汇", font=meta_font, fill="#8C7E72")
     for index, card in enumerate(list(layout.get("vocab_items") or [])[:2]):
         x0 = 48 + index * 492
@@ -173,7 +192,7 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
         draw.text((x0 + 24, cards_y + 150), str(card.get("level") or "英语学习"), font=_font(18, bold=True), fill="#785A18")
 
     # 纯抽象编辑插画：不使用原视频帧，也不使用网页截图。
-    illustration = Image.new("RGBA", (width - 96, 250), (0, 0, 0, 0))
+    illustration = Image.new("RGBA", (width - 96, illustration_height), (0, 0, 0, 0))
     art = ImageDraw.Draw(illustration)
     art.rounded_rectangle((0, 0, illustration.width - 1, illustration.height - 1), radius=18, fill="#EAF0ED", outline="#D5E0DA", width=2)
     art.ellipse((585, -85, 920, 250), fill="#9CBEB0")
@@ -182,7 +201,7 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
     art.line((88, 70, 505, 70), fill="#A53C2B", width=6)
     art.line((88, 116, 425, 116), fill="#A87914", width=6)
     art.line((88, 162, 348, 162), fill="#6E625A", width=6)
-    image.paste(illustration.filter(ImageFilter.GaussianBlur(0.15)), (48, height - 326), illustration)
+    image.paste(illustration.filter(ImageFilter.GaussianBlur(0.15)), (48, illustration_y), illustration)
     draw = ImageDraw.Draw(image)
     draw.line((48, height - 54, width - 48, height - 54), fill="#D8CFC4", width=2)
     draw.text((48, height - 42), "英语世界｜原声双语精读", font=meta_font, fill="#A53C2B")
@@ -275,17 +294,22 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     engine = CoverEngine()
-    try:
-        with _browser_render_deadline(args.browser_timeout_seconds):
-            layout = engine.generate(render_payload, str(args.output))
-        render_backend = "playwright"
-    except Exception as exc:
-        # launchd/Codex 沙箱下 Chromium 可能被 macOS MachPort 策略拒绝；
-        # 备用封面必须真正脱离浏览器，不能把同一故障伪装成“回退”。
-        print(f"Playwright cover render unavailable; using Pillow fallback: {exc}", file=sys.stderr)
+    if visual_asset is None:
+        # 没有通过验收的专门主视觉时，不渲染摄影模板的空背景层。
         layout = engine.plan(render_payload)
         _render_with_pillow_fallback(layout, args.output)
         render_backend = "pillow"
+    else:
+        try:
+            with _browser_render_deadline(args.browser_timeout_seconds):
+                layout = engine.generate(render_payload, str(args.output))
+            render_backend = "playwright"
+        except Exception as exc:
+            # Pillow 回退使用自己的编辑插画，不合成传入的摄影图；来源记录必须反映这一点。
+            print(f"Playwright cover render unavailable; using Pillow fallback: {exc}", file=sys.stderr)
+            layout = engine.plan(render_payload)
+            _render_with_pillow_fallback(layout, args.output)
+            render_backend = "pillow"
     payload_sha256 = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -313,14 +337,19 @@ def main() -> int:
                             "sha256": hashlib.sha256(visual_asset.read_bytes()).hexdigest(),
                             "manifest": str(args.visual_asset_manifest.resolve()) if args.visual_asset_manifest and args.visual_asset_manifest.is_file() else None,
                         }
-                        if visual_asset
+                        if visual_asset and render_backend == "playwright"
                         else None
+                    ),
+                    "visual_asset_disposition": (
+                        "used" if visual_asset and render_backend == "playwright"
+                        else "not_used_by_pillow_fallback" if visual_asset
+                        else "not_provided"
                     ),
                     "layout_policy": compliant_cover_layout_policy(),
                     "template_variant": layout["template_variant"],
                     "payload_sha256": payload_sha256,
                     "source_timeline_sha256": source_timeline_sha256,
-                    "generator": "scripts/generate_english_cover.py@1.3.4",
+                    "generator": "scripts/generate_english_cover.py@1.3.5",
                     "render_backend": render_backend,
                 },
                 ensure_ascii=False,

@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.3.2 | 2026-10-27 | Codex | 覆盖两行标题安全排布与超行拒绝。 |
+| 1.3.1 | 2026-10-27 | Codex | 覆盖无主视觉插画回退、真实主视觉渲染及回退来源准确性。 |
 | 1.1.0 | 2026-09-23 | Codex | 验证 Pillow 完整双语段落布局和溢出拒绝。 |
 | 1.3.0   | 2026-09-18 | Antigravity                    | 覆盖新语言契约下 AGY 封面生成与 approved_cover_payload 透传，以及封面渲染载荷隔离校验。 |
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
@@ -198,8 +200,8 @@ def test_long_chinese_title_is_balanced_into_two_lines():
     assert layout["title_lines"] == ["数据中心像一座", "电脑的房子"]
 
 
-def test_english_cover_cli_uses_pillow_when_playwright_is_unavailable(tmp_path, monkeypatch):
-    """浏览器权限被拒绝时，英语封面仍要生成可验证的本地非视频帧封面。"""
+def test_english_cover_cli_uses_pillow_when_visual_is_missing(tmp_path, monkeypatch):
+    """未提供主视觉时直接生成有编辑插画的 Pillow 封面，不调用摄影模板。"""
     timeline = {
         "headline_zh": "注意力也有能量预算",
         "headline_en": "Your Attention Has an Energy Budget",
@@ -218,14 +220,14 @@ def test_english_cover_cli_uses_pillow_when_playwright_is_unavailable(tmp_path, 
     timeline_path.write_text(json.dumps(timeline, ensure_ascii=False), encoding="utf-8")
     planner = CoverEngine()
 
-    class BrowserDeniedEngine:
+    class NoVisualEngine:
         def generate(self, _payload, _output):
-            raise PermissionError("Chromium MachPort denied")
+            raise AssertionError("无主视觉时不应渲染空摄影模板")
 
         def plan(self, payload):
             return planner.plan(payload)
 
-    monkeypatch.setattr(english_cover_cli, "CoverEngine", BrowserDeniedEngine)
+    monkeypatch.setattr(english_cover_cli, "CoverEngine", NoVisualEngine)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -238,7 +240,124 @@ def test_english_cover_cli_uses_pillow_when_playwright_is_unavailable(tmp_path, 
     assert english_cover_cli.main() == 0
     assert Image.open(output).size == (1080, 1260)
     assert validate_dedicated_cover_file(output, provenance)
-    assert json.loads(provenance.read_text(encoding="utf-8"))["render_backend"] == "pillow"
+    record = json.loads(provenance.read_text(encoding="utf-8"))
+    assert record["render_backend"] == "pillow"
+    assert record["visual_asset"] is None
+    assert record["visual_asset_disposition"] == "not_provided"
+    with Image.open(output) as image:
+        # 检查旧封面的空白主体区域整体；标题、引语与词卡等实际内容应覆盖显著面积。
+        region = image.crop((24, 132, 1056, 860))
+        non_background = sum(
+            1 for pixel in region.getdata()
+            if sum(abs(channel - base) for channel, base in zip(pixel, (251, 249, 244))) > 20
+        )
+        assert non_background / (region.width * region.height) > 0.25
+
+
+def test_english_cover_visual_provenance_tracks_actual_renderer(tmp_path, monkeypatch):
+    """真实主视觉走浏览器模板；浏览器失败转 Pillow 时 provenance 不谎报使用图片。"""
+    payload = {
+        "content_type": "ENGLISH_WORLD_SHORT", "title": "视觉来源测试",
+        "quote_en": "A clear visual supports the story.", "quote_zh": "清晰的视觉帮助理解故事。",
+        "difficulty_tag": "A2–B1 家庭精读", "audio_source": "英语新闻原声",
+        "date_str": "2026.10.27 今日外刊打卡",
+    }
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    visual = tmp_path / "visual.png"
+    Image.new("RGB", (1080, 1260), "#386B8C").save(visual)
+    planner = CoverEngine()
+
+    class VisualEngine:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+
+        def generate(self, render_payload, output_path):
+            assert render_payload["visual_asset_path"] == str(visual)
+            if self.fail:
+                raise PermissionError("Chromium unavailable")
+            Image.new("RGB", (1080, 1260), "#386B8C").save(output_path)
+            return {"template_variant": "cover_english_newspaper"}
+
+        def plan(self, render_payload):
+            return planner.plan(render_payload)
+
+    common_argv = [
+        "generate_english_cover.py", "--payload-file", str(payload_path),
+        "--visual-asset", str(visual),
+    ]
+    browser_cover, browser_provenance = tmp_path / "browser.jpg", tmp_path / "browser.json"
+    monkeypatch.setattr(english_cover_cli, "CoverEngine", VisualEngine)
+    monkeypatch.setattr(sys, "argv", common_argv + [
+        "--output", str(browser_cover), "--provenance-output", str(browser_provenance),
+    ])
+    assert english_cover_cli.main() == 0
+    browser_record = json.loads(browser_provenance.read_text(encoding="utf-8"))
+    assert browser_record["visual_asset"]["filename"] == visual.name
+    assert browser_record["visual_asset_disposition"] == "used"
+    expected_payload_sha = __import__("hashlib").sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert browser_record["payload_sha256"] == expected_payload_sha
+
+    pillow_cover, pillow_provenance = tmp_path / "pillow.jpg", tmp_path / "pillow.json"
+    monkeypatch.setattr(english_cover_cli, "CoverEngine", lambda: VisualEngine(fail=True))
+    monkeypatch.setattr(sys, "argv", common_argv + [
+        "--output", str(pillow_cover), "--provenance-output", str(pillow_provenance),
+    ])
+    assert english_cover_cli.main() == 0
+    pillow_record = json.loads(pillow_provenance.read_text(encoding="utf-8"))
+    assert pillow_record["render_backend"] == "pillow"
+    assert pillow_record["visual_asset"] is None
+    assert pillow_record["visual_asset_disposition"] == "not_used_by_pillow_fallback"
+    assert pillow_record["payload_sha256"] == expected_payload_sha
+
+
+def test_pillow_fallback_keeps_real_two_line_title_clear_of_quote_and_cards(tmp_path):
+    """真实双行长标题应完整显示，且不能被引语卡和词卡覆盖。"""
+    payload = {
+        "content_type": "ENGLISH_WORLD_SHORT", "title": "玲玲马戏团与默尔埃文斯乐队",
+        "quote_en": ("Children of all ages, Ringling Brothers and Barnum and Bailey present Merle Evans "
+                     "and his circus concert band. I want to try this fanfare. Give this fanfare first. "
+                     "And got it right out. We've got to get those runs."),
+        "quote_zh": ("各个年龄段的孩子们，玲玲兄弟与巴纳姆贝利马戏团隆重推出默尔·埃文斯和他的马戏团音乐会乐队。"
+                    "我想试一下这段号角曲。先来吹这段号角曲。一下子就吹顺了。我们必须拿下那些快速跑音。"),
+        "highlight_words": ["concert", "circus"],
+        "vocab_items": [
+            {"word": "concert", "ipa": "/'kɒnsət/", "meaning": "音乐会", "level": "外刊高频"},
+            {"word": "circus", "ipa": "/'sə:kəs/", "meaning": "马戏团", "level": "外刊高频"},
+        ],
+        "difficulty_tag": "★★☆☆☆ (中考 / KET / PET)", "vocab_stat": "本篇 3 个可学词",
+        "audio_source": "CBS Evening News 原声", "date_str": "2026.10.12 今日外刊打卡",
+    }
+    layout = CoverEngine().plan(payload)
+    assert len(layout["title_lines"]) == 2
+    output = tmp_path / "two-line-title.jpg"
+    english_cover_cli._render_with_pillow_fallback(layout, output)
+
+    draw = ImageDraw.Draw(Image.new("RGB", (1080, 1260)))
+    title_font = english_cover_cli._font(84, bold=True)
+    _, title_bottom = english_cover_cli._pillow_title_layout(
+        draw, layout["title_lines"], title_font, width=1080,
+    )
+    quote_y = max(402, title_bottom + 24)
+    cards_y = quote_y + 276
+    illustration_y = max(1260 - 326, cards_y + 198 + 24)
+    assert quote_y > title_bottom
+    assert illustration_y >= cards_y + 222
+    assert 1260 - 76 - illustration_y >= 160
+    with Image.open(output) as image:
+        assert image.size == (1080, 1260)
+        # 红色引语面板起点在标题实际像素底边下方。
+        assert image.getpixel((52, quote_y + 12))[0] > 120
+
+
+def test_pillow_fallback_rejects_more_than_two_title_lines():
+    draw = ImageDraw.Draw(Image.new("RGB", (1080, 1260)))
+    with pytest.raises(ValueError, match="一至两行"):
+        english_cover_cli._pillow_title_layout(
+            draw, ["第一行", "第二行", "第三行"], english_cover_cli._font(84, bold=True), width=1080,
+        )
 
 
 def test_generate_english_cover_isolates_visual_asset_from_payload_output(tmp_path, monkeypatch):

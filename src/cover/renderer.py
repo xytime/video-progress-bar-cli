@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
+| 1.6.1 | 2026-10-27 | Codex | 英语封面同时校验教学面板与标题、画布的相对边界，拒绝负坐标裁切。 |
 | 1.6.0 | 2026-10-20 | Codex | 普通封面采用已批准的 B 方案，实测词界排版并拒绝截字和安全区溢出。 |
 | 1.5.1 | 2026-09-23 | Codex | 英语封面截图前验证实际教学文本未溢出或被页脚覆盖。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
@@ -130,10 +131,15 @@ class HTMLRenderer:
                         const panel = document.querySelector('.bottom-study-panel');
                         if (!panel) return true;
                         const panelRect = panel.getBoundingClientRect();
+                        const title = document.querySelector('.title-section');
+                        const titleRect = title ? title.getBoundingClientRect() : null;
+                        if (panelRect.top < 0 || panelRect.bottom > innerHeight) return false;
+                        if (titleRect && panelRect.top < titleRect.bottom + 24) return false;
                         return [...document.querySelectorAll('.quote-container, .vocab-section')]
                           .every(el => {
                             const r = el.getBoundingClientRect();
-                            return r.left >= 0 && r.top >= panelRect.top && r.right <= innerWidth
+                            return r.left >= 0 && r.top >= panelRect.top && r.top >= 0
+                              && r.right <= innerWidth && r.bottom <= innerHeight
                               && r.bottom <= panelRect.bottom + 2 && el.scrollWidth <= el.clientWidth + 1;
                           });
                     }""")
