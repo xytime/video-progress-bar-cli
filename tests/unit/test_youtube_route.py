@@ -18,32 +18,24 @@ def config():
 
 
 def state():
-    node = config().youtube_download_required_node
-    rules = [{'type': 'DomainSuffix', 'payload': d, 'proxy': node}
-             for d in sorted(route._REQUIRED_SUFFIXES | route._REQUIRED_DOMAINS)]
-    rules.append({'type': 'Match', 'payload': '', 'proxy': node})
-    return {'/configs': {'mode': 'rule', 'mixed-port': 7890},
-            '/rules': {'rules': rules}, '/proxies/' + node: {'type': 'Hysteria2'}}
+    return {'/proxies/' + config().youtube_download_required_node: {'type': 'Hysteria2'}}
 
 
-@pytest.mark.parametrize('fault', ['404', 'timeout', 'proxy_down', 'global', 'paid_match', 'paid_earlier', 'group', 'disabled', 'missing'])
+@pytest.mark.parametrize('fault', ['404', 'timeout', 'proxy_down', 'other_node', 'direct', 'group', 'empty_chain', 'name_in_group_only'])
 def test_bad_route_never_transfers(monkeypatch, tmp_path, fault):
     data = state()
     def query(path, _config):
         if fault == '404':raise urllib.error.HTTPError('http://localhost', 404, 'missing', {}, None)
         if fault == 'timeout':raise TimeoutError()
         return data[path]
-    if fault == 'global':data['/configs']['mode'] = 'global'
-    if fault == 'paid_match':data['/rules']['rules'][-1]['proxy'] = 'Panda'
-    if fault == 'paid_earlier':data['/rules']['rules'].insert(0, {'type': 'ProcessName', 'payload': 'curl', 'proxy': 'Panda'})
     if fault == 'group':data['/proxies/hy2-ai.optionbank.us'] = {'type': 'Selector', 'all': ['Panda']}
-    if fault == 'disabled':data['/rules']['rules'][0]['extra'] = {'disabled': True}
-    if fault == 'missing':data['/rules']['rules'].pop(0)
     monkeypatch.setattr(route, '_controller_json', query)
-    def connect(*a, **k):
+    def probe(*args):
         if fault == 'proxy_down':raise ConnectionRefusedError()
-        return nullcontext()
-    monkeypatch.setattr(route.socket, 'create_connection', connect)
+        chains = {'other_node': ['Panda', 'PROXY'], 'direct': ['DIRECT'],
+                  'empty_chain': [], 'name_in_group_only': ['Panda', config().youtube_download_required_node]}
+        return {'chains': chains.get(fault, [config().youtube_download_required_node, 'PROXY'])}
+    monkeypatch.setattr(route, '_probe_youtube_connection', probe)
     calls = []
     options = DownloadOptions('yt-dlp', 'https://youtu.be/example', str(tmp_path/'source.%(ext)s'),
                               proxy_url=config().youtube_download_proxy, route_audit_path=tmp_path/'routes.jsonl')
@@ -57,12 +49,69 @@ def test_bad_route_never_transfers(monkeypatch, tmp_path, fault):
     assert evidence['downloader_reported_media_bytes'] is None
 
 
-def test_valid_policy_does_not_switch_any_global_group(monkeypatch):
-    data=state();calls=[]
-    monkeypatch.setattr(route, '_controller_json', lambda path, cfg: calls.append(path) or data[path])
-    monkeypatch.setattr(route.socket, 'create_connection', lambda *a, **k: nullcontext())
-    assert route.verify_youtube_route(config=config())['policy_verified']
-    assert calls == ['/configs', '/proxies/hy2-ai.optionbank.us', '/rules']
+@pytest.mark.parametrize('groups', [[], ['PROXY'], ['auto', 'GLOBAL']])
+def test_live_self_hosted_route_accepts_groups_without_reading_or_changing_rules(monkeypatch, groups):
+    calls = []
+    monkeypatch.setattr(route, '_controller_json', lambda path, cfg: calls.append(path) or state()[path])
+    monkeypatch.setattr(route, '_probe_youtube_connection',
+                        lambda *args: {'chains': [config().youtube_download_required_node, *groups]})
+    evidence = route.verify_youtube_route(config=config())
+    assert evidence['policy_verified']
+    assert evidence['verification'] == 'live_connection'
+    assert calls == ['/proxies/hy2-ai.optionbank.us']
+
+
+class ProbeSocket:
+    def __init__(self, response=b'HTTP/1.1 200 Connection established\r\n\r\n'):
+        self.response = response
+        self.closed = False
+        self.sent = b''
+
+    def __enter__(self):return self
+    def __exit__(self, *args):self.closed = True
+    def getsockname(self):return ('127.0.0.1', 54321)
+    def sendall(self, data):self.sent += data
+    def recv(self, size):
+        result, self.response = self.response[:size], self.response[size:]
+        return result
+
+
+@pytest.mark.parametrize('fault', [None, 'other_port', 'other_host', 'other_ip', 'other_destination', 'udp', 'duplicate', 'missing'])
+def test_probe_only_accepts_its_own_live_connection(monkeypatch, fault):
+    connection = ProbeSocket()
+    metadata = dict(sourceIP='127.0.0.1', sourcePort='54321', host='www.youtube.com', destinationPort='443', network='tcp')
+    changes = {'other_port': ('sourcePort', '12345'), 'other_host': ('host', 'other.example'),
+               'other_ip': ('sourceIP', '127.0.0.2'), 'other_destination': ('destinationPort', '80'), 'udp': ('network', 'udp')}
+    if fault in changes:
+        key, value = changes[fault]; metadata[key] = value
+    row = {'metadata': metadata, 'chains': [config().youtube_download_required_node, 'PROXY']}
+    rows = [] if fault == 'missing' else [row, row] if fault == 'duplicate' else [row]
+    monkeypatch.setattr(route.socket, 'create_connection', lambda *a, **kw: connection)
+    def wrap(sock, server_hostname):
+        assert sock is connection and server_hostname == 'www.youtube.com'
+        return nullcontext(sock)
+    monkeypatch.setattr(route.ssl, 'create_default_context', lambda: SimpleNamespace(wrap_socket=wrap))
+    def query(path, cfg):
+        assert not connection.closed and path == '/connections'
+        return {'connections': rows}
+    monkeypatch.setattr(route, '_controller_json', query)
+    endpoint = route.urlsplit(config().youtube_download_proxy)
+    if fault:
+        with pytest.raises(route.YoutubeRouteError, match='无法确认'):
+            route._probe_youtube_connection(config(), endpoint)
+    else:
+        assert route._probe_youtube_connection(config(), endpoint) == row
+    assert connection.closed
+    assert connection.sent == b'CONNECT www.youtube.com:443 HTTP/1.1\r\nHost: www.youtube.com:443\r\n\r\n'
+
+
+@pytest.mark.parametrize('response', [b'', b'HTTP/1.1 407 Proxy Authentication Required\r\n\r\n', b'x' * 8193])
+def test_probe_rejects_invalid_proxy_response(monkeypatch, response):
+    connection = ProbeSocket(response)
+    monkeypatch.setattr(route.socket, 'create_connection', lambda *a, **kw: connection)
+    with pytest.raises(route.YoutubeRouteError):
+        route._probe_youtube_connection(config(), route.urlsplit(config().youtube_download_proxy))
+    assert connection.closed
 
 
 def test_proxy_args_shared_by_native_curl_and_sections():

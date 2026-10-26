@@ -1,4 +1,4 @@
-"""YouTube 独立下载入口：只读核对 Clash，无法证明自建出口就拒绝传输。"""
+"""YouTube 独立下载入口：核对真实连接的自建出口，无法证明就拒绝获取。"""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,7 @@ import fcntl
 import logging
 import re
 import socket
+import ssl
 import time
 from pathlib import Path
 from typing import Callable, Mapping
@@ -15,8 +16,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
-_REQUIRED_SUFFIXES = {'youtube.com', 'youtu.be', 'googlevideo.com', 'ytimg.com', 'ggpht.com'}
-_REQUIRED_DOMAINS = {'youtubei.googleapis.com', 'youtube.googleapis.com'}
+_PROBE_HOST = 'www.youtube.com'
 
 
 class YoutubeRouteError(RuntimeError):
@@ -35,6 +35,44 @@ def _controller_json(path: str, config) -> dict:
         return json.load(response)
 
 
+def _probe_youtube_connection(config, endpoint) -> dict:
+    """只做 TLS 握手，用本次连接的源端口核对 Clash 实际节点，不获取视频。"""
+    with socket.create_connection((endpoint.hostname, endpoint.port), timeout=8) as connection:
+        source_ip, source_port = connection.getsockname()[:2]
+        connection.sendall(
+            f'CONNECT {_PROBE_HOST}:443 HTTP/1.1\r\nHost: {_PROBE_HOST}:443\r\n\r\n'.encode('ascii')
+        )
+        header = bytearray()
+        while not header.endswith(b'\r\n\r\n'):
+            chunk = connection.recv(1)
+            if not chunk or len(header) >= 8192:
+                raise YoutubeRouteError('YouTube 代理未返回有效的连接响应')
+            header.extend(chunk)
+        status = bytes(header).split(b'\r\n', 1)[0].split()
+        if len(status) < 2 or status[1] != b'200':
+            raise YoutubeRouteError('YouTube 代理拒绝建立连接')
+        # 完成真实握手后连接才进入 Clash 活跃连接表；保持打开直到回读完成。
+        with ssl.create_default_context().wrap_socket(connection, server_hostname=_PROBE_HOST):
+            for attempt in range(5):
+                rows = _controller_json('/connections', config).get('connections', [])
+                matches = []
+                for row in rows:
+                    metadata = row.get('metadata', {})
+                    if (str(metadata.get('sourcePort')) == str(source_port)
+                            and metadata.get('sourceIP') == source_ip
+                            and metadata.get('host', '').lower() == _PROBE_HOST
+                            and str(metadata.get('destinationPort')) == '443'
+                            and metadata.get('network') == 'tcp'):
+                        matches.append(row)
+                if len(matches) == 1:
+                    return matches[0]
+                if len(matches) > 1:
+                    break
+                if attempt < 4:
+                    time.sleep(0.1)
+    raise YoutubeRouteError('无法确认本次 YouTube 连接的实际出口，停止获取')
+
+
 def verify_youtube_route(*, config=None, expected_proxy: str | None = None) -> dict:
     config = config or settings
     proxy = expected_proxy or config.youtube_download_proxy
@@ -43,32 +81,22 @@ def verify_youtube_route(*, config=None, expected_proxy: str | None = None) -> d
         endpoint = urlsplit(proxy)
         if proxy != config.youtube_download_proxy or endpoint.scheme != 'http' or endpoint.hostname != '127.0.0.1' or endpoint.port != 7890 or endpoint.username or endpoint.password or endpoint.path not in ('', '/'):
             raise YoutubeRouteError('YouTube 下载必须使用本机 HTTP 代理 127.0.0.1:7890')
-        core = _controller_json('/configs', config)
-        if core.get('mode', '').lower() != 'rule' or 7890 not in (core.get('mixed-port'), core.get('port')):
-            raise YoutubeRouteError('Clash 必须处于规则模式且监听已指定代理端口')
         actual_node = _controller_json('/proxies/' + quote(node, safe=''), config)
         if actual_node.get('type') != 'Hysteria2' or actual_node.get('all') is not None:
             raise YoutubeRouteError('YouTube 目标必须是自建实体节点，不能是可切换策略组')
-        rules = _controller_json('/rules', config).get('rules', [])
-        suffixes, domains = set(), set()
-        # 只接受规则表最前方连续的自建域名规则；避免进程/IP/规则集抢先匹配。
-        for rule in rules:
-            if rule.get('proxy') != node or rule.get('type') not in ('Domain', 'DomainSuffix', 'DomainKeyword') or rule.get('extra', {}).get('disabled'):
-                break
-            if rule['type'] == 'DomainSuffix':suffixes.add(rule.get('payload', '').lower())
-            if rule['type'] == 'Domain':domains.add(rule.get('payload', '').lower())
-        if not _REQUIRED_SUFFIXES <= suffixes or not _REQUIRED_DOMAINS <= (domains | suffixes):
-            raise YoutubeRouteError('YouTube/CDN 必需域名未被优先固定到自建')
-        matches = [r for r in rules if r.get('type') == 'Match']
-        if len(matches) != 1 or matches[0].get('proxy') != node or rules[-1] != matches[0] or matches[0].get('extra', {}).get('disabled'):
-            raise YoutubeRouteError('Clash 默认兜底必须直接绑定自建，禁止猫熊或 DIRECT 回退')
-        with socket.create_connection(('127.0.0.1', 7890), timeout=2):pass
+        connection = _probe_youtube_connection(config, endpoint)
+        chains = connection.get('chains')
+        # Clash chains 从实际出口到上层策略组排列；允许任意分组，只验最终实体节点。
+        if not isinstance(chains, list) or not chains or chains[0] != node:
+            raise YoutubeRouteError('本次 YouTube 连接未经过指定自建 VPN，停止获取')
     except YoutubeRouteError:
         raise
     except Exception as exc:
         # 不把请求 URL、认证、签名媒体地址或外部响应体写进错误。
         raise YoutubeRouteError(f'YouTube 出口无法验收，停止获取：{type(exc).__name__}') from None
-    return {'mode': 'rule', 'proxy': proxy, 'required_node': node, 'policy_verified': True, 'checked_at': time.time()}
+    return {'proxy': proxy, 'required_node': node, 'policy_verified': True,
+            'verification': 'live_connection', 'probe_host': _PROBE_HOST,
+            'checked_at': time.time()}
 
 
 def youtube_cli_args(*, verify: bool = True) -> list[str]:
