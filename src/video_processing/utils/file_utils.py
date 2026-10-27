@@ -284,6 +284,10 @@ def read_subtitle_text(
     Returns:
         去标签后的字幕纯文本（多事件以换行拼接）；无字幕或读取失败返回空串。
     """
+    from .native_caption_source import approved_entry, review_text
+    stem = f"{youtube_id}_s{slice_index}" if slice_index else youtube_id
+    if approved_entry(stem):
+        return review_text(Path(output_dir) / f"{stem}_vertical.mp4")[:max_chars]
     try:
         import pysubs2
     except Exception:

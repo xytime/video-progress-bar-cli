@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| native-captions-v1 | 2026-10-27 | Codex | 单片摘要绑定保留原有中文字幕，复用原片并继续内容及发布门禁。 |
 | remix-entry-guard-v1 | 2026-10-25 | GPT-6.1 Sol | 普通加工及发布入口拒绝合规二创来源，保留独立审批边界。 |
 | manual-result-feedback-v1 | 2026-10-25 | Codex | 保留本次投稿动作证据，区分策略性人工确认与真实结果未知。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
@@ -2384,6 +2385,11 @@ class PipelineManager:
     def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
         from .processors.vocabulary_outro import valid_outro, valid_empty_receipt
         from .utils.vocabulary_outro_policy import read_record
+        from .utils.native_caption_source import approved_entry, validate_preserved
+        if approved_entry(prefix):
+            vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+            validate_preserved(vertical)
+            return vertical
         source = self._get_base_video_path(prefix, expected_duration)
         decision = read_record(self._OUT_DIR, prefix)
         if decision and not decision['enabled']:
@@ -3832,7 +3838,15 @@ class PipelineManager:
                 target_file = bound[0]
         except (ValueError, OSError, KeyError, TypeError) as exc:
             return f"加工素材绑定无效：{type(exc).__name__}"
-        subtitle_error = bilingual_ass_contract_error(target_file.with_suffix(".ass"))
+        from .utils.native_caption_source import approved_entry, validate_preserved
+        if approved_entry(prefix):
+            try:
+                validate_preserved(self._OUT_DIR / f"{prefix}_vertical.mp4", target_file)
+            except (ValueError, OSError) as exc:
+                return f"原字幕保留凭证无效：{exc}"
+            subtitle_error = None
+        else:
+            subtitle_error = bilingual_ass_contract_error(target_file.with_suffix(".ass"))
         if subtitle_error:
             return subtitle_error
 
@@ -4787,6 +4801,10 @@ class PipelineManager:
                 # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
                 # 字幕生成器使用 input_path.with_suffix，必须与真实输入路径一致（含切片）。
                 _ass_file = Path(target_file).with_suffix(".ass")
+                from .utils.native_caption_source import approved_entry, preserve, validate_preserved
+                native_captions = bool(approved_entry(prefix))
+                if native_captions:
+                    preserve(Path(target_file), vertical)
                 _cache_valid = False
                 try:
                     from .utils.video_metadata import get_video_duration_ffprobe
@@ -4799,7 +4817,10 @@ class PipelineManager:
                         _duration_error,
                     )
                     _expected_duration = None
-                if render_title_changed:
+                if native_captions:
+                    validate_preserved(vertical, Path(target_file))
+                    _cache_valid = True
+                elif render_title_changed:
                     logger.info("[CacheInvalid] %s 平台标题已变更，强制重渲视频头部。", prefix)
                 elif vertical.exists() and vertical.stat().st_size > 1_000_000:
                     _cache_valid = True  # 默认视为有效
@@ -4828,10 +4849,10 @@ class PipelineManager:
 
                 from .utils.render_source_binding import render_source_matches, bind_render_source, binding_path
                 from .processors.burned_caption_repair import render_receipt_matches
-                if _cache_valid and not render_receipt_matches(vertical, Path(target_file)):
+                if _cache_valid and not native_captions and not render_receipt_matches(vertical, Path(target_file)):
                     logger.info("[CacheInvalid] %s 缺少有效的原字幕处理凭证，不能复用旧叠字成片。", prefix)
                     _cache_valid = False
-                if _cache_valid and not render_source_matches(vertical, Path(target_file)):
+                if _cache_valid and not native_captions and not render_source_matches(vertical, Path(target_file)):
                     logger.info("[CacheInvalid] %s 加工素材与基础竖版绑定不匹配。", prefix)
                     _cache_valid = False
 
@@ -4963,7 +4984,7 @@ class PipelineManager:
                         return
 
                 canonical_ass = self._OUT_DIR / f"{prefix}.ass"
-                if _ass_file.resolve() != canonical_ass.resolve():
+                if not native_captions and _ass_file.resolve() != canonical_ass.resolve():
                     # 包括关闭裁剪后恢复原片，避免审查沿用上一版本的零起点字幕。
                     import shutil
                     temporary_ass = canonical_ass.with_suffix(".pending.ass")
@@ -4974,9 +4995,10 @@ class PipelineManager:
                 else:
                     binding_path(vertical).unlink(missing_ok=True)
 
-                self._process_insight_enrichment(
-                    prefix, yid, render_title, _ass_file, slice_index=slice_index,
-                )
+                if not native_captions:
+                    self._process_insight_enrichment(
+                        prefix, yid, render_title, _ass_file, slice_index=slice_index,
+                    )
 
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
                 self._report_runtime_stage(
@@ -5005,11 +5027,11 @@ class PipelineManager:
                 # 当 enable_subtitle_censorship 开启时，读取转录字幕全文一并送审，闭合
                 # 「标题/文案干净但语音内容敏感」的发布漏洞。读取失败返回空串则退化为原行为。
                 # 无论新渲染还是复用缓存，进入发布链前再次检查实际烧录字幕。
-                subtitle_error = bilingual_ass_contract_error(_ass_file)
+                subtitle_error = None if native_captions else bilingual_ass_contract_error(_ass_file)
                 if subtitle_error:
                     raise RuntimeError(f"[SubtitleInvalid] {subtitle_error}")
                 subtitle_text = ""
-                if settings.enable_subtitle_censorship:
+                if settings.enable_subtitle_censorship or native_captions:
                     subtitle_text = read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index)
                     if subtitle_text:
                         logger.info(f"[Censor] Subtitle body included for {prefix} ({len(subtitle_text)} chars)")
@@ -5019,10 +5041,10 @@ class PipelineManager:
                     return
 
                 # ── 2d. INTERACTION OVERLAY (Project Runway-CTA) ──────────────────
-                if settings.enable_interaction_overlay:
-                    self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
-
-                self._process_vocabulary_outro(prefix, yid, render_title, slice_index=slice_index)
+                if not native_captions:
+                    if settings.enable_interaction_overlay:
+                        self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
+                    self._process_vocabulary_outro(prefix, yid, render_title, slice_index=slice_index)
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
