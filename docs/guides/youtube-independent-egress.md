@@ -23,12 +23,17 @@ flowchart LR
 
 ## 运维
 
-在项目根目录只读检查：
+终端维护入口（项目 `./vhelp`、交互别名和全局 `~/.local/bin/vhelp` 均支持）：
 
 ```sh
-.venv/bin/python scripts/youtube_egress_service.py health
-launchctl print gui/$(id -u)/us.optionbank.video-egress
+vhelp youtube health    # 实际核验 YouTube 自建出口
+vhelp youtube status    # launchd 状态和 PID
+vhelp youtube start     # 启动已停止的服务
+vhelp youtube restart   # 重启，会中断当前下载
+vhelp youtube stop      # 停止并卸载；下次登录仍自动启动
 ```
+
+`status` 只证明服务状态，网络可用性以 `health` 为准。停止或重启前确认后台没有下载。`vhelp vpn` 转交现有 `vpn-switch`，只管理桌面客户端；富途 7899 是另一项可选服务，与此出口无关。全局旧 HY2 助手的显式统计/导出子命令保留，但默认帮助不再自动输出认证配置。
 
 首次安装使用 `scripts/youtube_egress_service.py install`，默认只预览，显式 `--execute` 才安装。传入已有节点文件和受信任内核的路径，不在命令行写凭据。已有安装会拒绝覆盖。运行配置的单一来源在 `settings.py`，对应 `.env.example` 的 `YOUTUBE_DOWNLOAD_PROXY`、`YOUTUBE_EGRESS_ROOT`、`YOUTUBE_EGRESS_INTERFACE` 和 `YOUTUBE_CONTROLLER_SOCKET`。
 
@@ -45,5 +50,7 @@ launchctl print gui/$(id -u)/us.optionbank.video-egress
 - 三种客户端状态分别下载 20 秒真实音视频，各生成 573,304 字节 MP4。完整视频及片段只作本地验收，不进入发布队列。
 - 切换结果、端口状态和媒体连接字节见 `roundtrip.json`，日常客户端最终恢复成功。
 - 测试与运行采用是两种证据：隔离回归测试清单由 TestRuns 保存；后台常驻进程是否采用新代码，以原生部署 COMPLETE 回执为准。
+- 本次原生部署已 COMPLETE：`/Volumes/EXT2T/AppDataOffload/ryusei/video-egress-deployment-20261027-r3`，计划 `fd0538d39080414baf4e7ec523604f45`；维护状态恢复 RUNNING，常驻进程采用版本已核对，收尾时出口 health 通过。
+- 本机采样：空闲约 55 秒，CPU 平均为单核的 0.09%，RSS 约 7–30 MiB；实际下载约 49 秒，CPU 平均 2.49%，RSS 约 17–28 MiB。属于短时实测，不能作为长期峰值上限。
 
 本次覆盖当前安装版本和当前网络模式，没有实测主机重启、任意第三方 TUN、防火墙变更或自建服务器失效后的跨节点切换。

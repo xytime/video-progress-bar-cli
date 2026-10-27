@@ -17,6 +17,40 @@
 # | 1.9.0   | 2026-09-23 | Antigravity                   | 新增 craft / antishit 极客架构守卫与防屎山代码度量速查 |
 # =======================================================================
 
+# 维护子命令仅在用户明确调用时执行；默认 vhelp 只打印手册。
+VHELP_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+case "${1:-help}" in
+  youtube)
+    if (( $# > 2 )); then
+      printf '用法: vhelp youtube [help|health|status|start|stop|restart]\n' >&2
+      exit 2
+    fi
+    case "${2:-help}" in
+      health) exec "$VHELP_ROOT/.venv/bin/python" "$VHELP_ROOT/scripts/youtube_egress_service.py" health ;;
+      status) exec launchctl print "gui/$(id -u)/us.optionbank.video-egress" ;;
+      start) exec launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/us.optionbank.video-egress.plist" ;;
+      stop) exec launchctl bootout "gui/$(id -u)/us.optionbank.video-egress" ;;
+      restart) exec launchctl kickstart -k "gui/$(id -u)/us.optionbank.video-egress" ;;
+      help|-h|--help)
+        printf '%s\n' 'YouTube 独立自建出口：127.0.0.1:9110' \
+          'vhelp youtube health   实际核验 YouTube 自建出口（推荐）' \
+          'vhelp youtube status   查看 launchd 状态和 PID，不等同网络可用' \
+          'vhelp youtube start    启动已停止的服务' \
+          'vhelp youtube restart  重启服务（会中断当前下载）' \
+          'vhelp youtube stop     停止并卸载服务（下次登录仍会自动启动）' \
+          '登录后自动启动、退出后自动拉起；无需启动猫熊或 Clash Mi。' \
+          '先确认后台没有下载，再执行停止或重启；操作后运行 health 验收。'
+        exit 0 ;;
+      *) printf '未知 YouTube 维护命令；请运行 vhelp youtube help\n' >&2; exit 2 ;;
+    esac ;;
+  vpn)
+    shift
+    if [[ "${1:-}" == help ]]; then shift; set -- --help "$@"; fi
+    exec "$HOME/.local/bin/vpn-switch" "$@" ;;
+  help|-h|--help) ;;
+  *) printf '用法: vhelp [help|youtube|vpn]；旧 HY2 统计/导出请用 ~/.local/bin/vhelp <原有子命令>\n' >&2; exit 2 ;;
+esac
+
 # 终端颜色代码
 BOLD="\033[1m"
 BLUE="\033[34m"
@@ -31,7 +65,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.8  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.10  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -192,35 +226,36 @@ echo -e "    ${GREEN}option buy  \"SPY 260507 735.00P\" --dry-run${RESET}   - �
 echo -e "\n${SEP}"
 
 # ================================================================
-# [4] 富途日本代理 (futu-mihomo) — 独立代理服务
+# [4] 网络出口与 VPN 维护
 # ================================================================
-echo -e "\n${BOLD}${YELLOW}[4] 富途日本代理 (futu-mihomo)${RESET}"
-echo -e "${DIM}FutuNiuniu.app 专用: 客户端连接经日本 hy2 节点出口; FutuOpenD/FutuD 不走 mihomo${RESET}"
-echo -e "${DIM}代理端口 :7899 (富途 SOCKS5 指向此) · 服务 com.user.futu-mihomo (launchd 开机自启)${RESET}"
+echo -e "\n${BOLD}${YELLOW}[4] 网络出口与 VPN 维护${RESET}"
+echo -e "  ${BOLD}YouTube 视频后台独立出口（:9110）:${RESET}"
+echo -e "    ${DIM}登录后自启、退出后自动拉起；不依赖猫熊或 Clash Mi，不更改系统代理。${RESET}"
+echo -e "    ${CYAN}vhelp youtube health${RESET}     - 实际验证 YouTube 经过指定自建节点"
+echo -e "    ${CYAN}vhelp youtube status${RESET}     - 查看服务状态及 PID（进程存活不等于网络可用）"
+echo -e "    ${GREEN}vhelp youtube start${RESET}      - 启动已停止的服务"
+echo -e "    ${CYAN}vhelp youtube restart${RESET}    - 重启；会中断当前下载"
+echo -e "    ${RED}vhelp youtube stop${RESET}       - 停止并卸载；下次登录仍会自动启动"
+echo -e "    ${DIM}停止/重启前先确认没有后台下载；操作后用 health 验收。${RESET}"
+echo -e "    ${DIM}无需检查桌面 7890/9090；自建节点故障时保留缓存，不回退其他出口。${RESET}"
+echo -e "    ${GREEN}维护说明: ${VHELP_ROOT}/docs/guides/youtube-independent-egress.md${RESET}"
 echo ""
-echo -e "  ${BOLD}📌 平时无需操作${RESET} ${DIM}— 开机自启 + 崩溃自动拉起, 富途打开即用${RESET}"
+echo -e "  ${BOLD}桌面网络切换（只影响桌面客户端，不切换上述后台出口）:${RESET}"
+echo -e "    ${CYAN}vhelp vpn health${RESET}                 - 检查当前桌面代理实际健康"
+echo -e "    ${CYAN}vhelp vpn daily${RESET} / ${CYAN}vhelp vpn self${RESET}  - 预览切换方案"
+echo -e "    ${GREEN}vhelp vpn daily --execute${RESET}        - 切回猫熊日常分流"
+echo -e "    ${GREEN}vhelp vpn self --execute${RESET}         - 切到 Clash Mi 自建应急模式"
+echo -e "    ${DIM}同义入口 vpn-switch；切换会尝试恢复失败前状态，结果以回执和 health 为准。${RESET}"
 echo ""
-echo -e "  ${BOLD}状态检查:${RESET}"
-echo -e "    ${CYAN}launchctl list | grep futu-mihomo${RESET}        ${DIM}# 有输出 = 在跑${RESET}"
-echo -e "    ${CYAN}lsof -nP -iTCP:7899 -sTCP:LISTEN${RESET}          ${DIM}# 看 7899 是否监听${RESET}"
-echo ""
-echo -e "  ${BOLD}🔄 换节点 / 连不上 / 出口不是日本 (一键修复):${RESET}"
-echo -e "    ${GREEN}双击 ~/Desktop/富途日本代理/刷新节点.command${RESET}"
-echo -e "    ${DIM}↳ 从 Clash Mi 最新订阅重抽日本 hy2 → 校验 → 重启 (校验失败自动保留旧配置, 不会断网)${RESET}"
-echo -e "    ${GREEN}盘后双击 ~/Desktop/富途日本代理/盘后修复-fakeip.command${RESET} ${DIM}# 修 172.19.* fake-ip 泄漏导致的断链${RESET}"
-echo ""
-echo -e "  ${BOLD}服务启停:${RESET}"
-echo -e "    ${CYAN}launchctl kickstart -k gui/501/com.user.futu-mihomo${RESET}                              ${DIM}# 重启${RESET}"
-echo -e "    ${RED}launchctl bootout   gui/501/com.user.futu-mihomo${RESET}                                 ${DIM}# 停止${RESET}"
-echo -e "    ${GREEN}launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.user.futu-mihomo.plist${RESET}      ${DIM}# 启动${RESET}"
-echo ""
-echo -e "  ${BOLD}富途接线 (一次性):${RESET} ${DIM}登出 → 登录界面 → 代理设置 → SOCKS5 / 127.0.0.1 / 7899 / 无账密${RESET}"
-echo -e "  ${BOLD}验证出口:${RESET} ${DIM}下行应显示 Japan${RESET}"
-echo -e "    ${CYAN}python3 -c \"import urllib.request,json;p=urllib.request.ProxyHandler({'http':'http://127.0.0.1:7899','https':'http://127.0.0.1:7899'});print(json.load(urllib.request.build_opener(p).open('http://ip-api.com/json/?fields=country,query',timeout=20)))\"${RESET}"
-echo ""
-echo -e "  ${BOLD}📖 完整维护手册:${RESET} ${GREEN}~/Desktop/富途日本代理/维护手册.md${RESET}"
-echo -e "    ${RED}⚠️  此服务 ≠ FutuOpenD${RESET}${DIM}: FutuOpenD 是行情网关 (:11111), 两者无关, 勿混淆。${RESET}"
-
+echo -e "  ${BOLD}富途日本代理（可选独立服务 :7899，与 YouTube 出口无关）:${RESET}"
+echo -e "    ${DIM}仅供 FutuNiuniu 客户端；FutuOpenD/FutuD 不走此代理。当前是否运行需查询。${RESET}"
+echo -e "    ${CYAN}launchctl print gui/\$(id -u)/com.user.futu-mihomo${RESET}    - 检查 state 和 pid"
+echo -e "    ${CYAN}lsof -nP -iTCP:7899 -sTCP:LISTEN${RESET}                     - 仅检查监听"
+echo -e "    ${GREEN}launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.user.futu-mihomo.plist${RESET}"
+echo -e "    ${CYAN}launchctl kickstart -k gui/\$(id -u)/com.user.futu-mihomo${RESET} - 重启"
+echo -e "    ${RED}launchctl bootout gui/\$(id -u)/com.user.futu-mihomo${RESET}      - 停止"
+echo -e "    ${DIM}LaunchAgent 为登录自启；端口监听不能证明日本出口，节点来源需单独核验。${RESET}"
+echo -e "    ${DIM}历史维护手册: ~/Desktop/富途日本代理/维护手册.md（旧订阅刷新步骤执行前需重新核对）${RESET}"
 echo -e "\n${SEP}"
 
 # ================================================================
@@ -288,6 +323,6 @@ echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/P
 echo -e "    ${BLUE}hub()${RESET}         { bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · 项目服务操作速查 v1.8${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · 项目服务操作速查 v1.10${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""
