@@ -14,6 +14,7 @@
 | 1.7.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 更新测试适配 GlossaryCard 灰色背景楷体独立卡片，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.8.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 更新双语字幕测试断言，匹配 Georgia/Hiragino 样式与 HTML 模版配色，标注 # [Gemini_3.5_Flash_planning] |
 | 1.9.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 更新释义卡断言匹配 build_glossary_text en_size 参数的\\fs标签输出；转移中文高亮到折行之后的新行为 |
+| 1.10.0  | 2026-10-27 | Codex | 竖屏样式测试直接使用真实 PreparedCaptions 和 ASS 排版入口，隔离源片定位职责且保留布局断言。 |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -25,6 +26,14 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../src')))
 
 from video_processing.processors.caption_processor import AutoCaptionProcessor
+from video_processing.processors.burned_caption_repair import PreparedCaptions
+
+
+def _build_layout_ass(processor, segments):
+    """布局单测已提供画幅，直接检查排版，不为虚构素材调用源字幕定位。"""
+    processor._prepared_captions = PreparedCaptions(
+        processor.input_path, None, 'synthetic', Path('synthetic-caption-plan.json'))
+    return processor._build_ass_file(segments)
 
 class TestCaptionProcessorRedBlueFixes:
     """
@@ -125,7 +134,7 @@ class TestCaptionProcessorRedBlueFixes:
         # [Claude_Sonnet_4.6_Thinking_planning] MarginV for vertical = 1200 (≈62.5% canvas).
         # Moved from 1000 to bring subtitles visually closer to GlossaryCard.
         # Overflow handled by per-segment dynamic font scaling, not by subtitle_top_y.
-        processor._generate_ass_file(segments=[])
+        _build_layout_ass(processor, [])
         assert "Default" in mock_subs_instance.styles
         style = mock_subs_instance.styles["Default"]
         assert style.marginv == 1200, f"Expected subtitle marginv (Y) to be 1200 for vertical video, got {style.marginv}"
@@ -151,7 +160,7 @@ class TestCaptionProcessorRedBlueFixes:
         # [Gemini_3.5_Flash_planning] MarginV for landscape 1920x1080 is dynamically calculated:
         # scaled new_h = 607, video_bottom_y = 350 + 607 = 957.
         # Subtitle starts at 957 + 90 = 1047 (just below the video in the black area, biased upwards).
-        processor_landscape._generate_ass_file(segments=[])
+        _build_layout_ass(processor_landscape, [])
         assert "Default" in mock_subs_instance_landscape.styles
         style_landscape = mock_subs_instance_landscape.styles["Default"]
         assert style_landscape.marginv == 1047, f"Expected subtitle marginv (Y) to be 1047 for landscape video, got {style_landscape.marginv}"
@@ -193,7 +202,7 @@ class TestCaptionProcessorRedBlueFixes:
         }]
 
         # Trigger generation
-        processor._generate_ass_file(segments=test_segments)
+        _build_layout_ass(processor, test_segments)
 
         # Assert events: 1 bilingual subtitle event + 1 GlossaryCard event
         assert len(mock_events) == 2, f"Expected 2 events (subtitle + GlossaryCard), got {len(mock_events)}"
@@ -246,7 +255,7 @@ class TestCaptionProcessorRedBlueFixes:
         )
 
         # Trigger generation
-        processor._generate_ass_file(segments=[])
+        _build_layout_ass(processor, [])
 
         assert "Default" in mock_subs_instance.styles
         style = mock_subs_instance.styles["Default"]
@@ -333,7 +342,7 @@ class TestCaptionProcessorRedBlueFixes:
                         "用于测试竖屏布局中的动态字体缩放功能，确保任何长度的内容都不会溢出字幕区。"),
             'vocab': {}
         }
-        processor._generate_ass_file(segments=[long_seg])
+        _build_layout_ass(processor, [long_seg])
 
         # Extract the generated dialogue text from the mock SSAEvent call
         assert len(mock_subs_instance.events) >= 1

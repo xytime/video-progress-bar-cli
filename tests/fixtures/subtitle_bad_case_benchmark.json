@@ -1,0 +1,154 @@
+{
+  "schema_version": "subtitle-bad-case-benchmark-v1",
+  "provenance": "Codex构造并冻结的合成主机门禁反例；未被人工审校，不冒充真实生产翻译",
+  "cases": [
+    {
+      "case_id": "clean-bucks-context-isolation",
+      "split": "regression",
+      "kind": "clean",
+      "expected_status": "clean",
+      "recipe": {
+        "context_text": "A separate fund is worth $115B.",
+        "overrides": [{"segment_number": 1, "text": "Oil is $115 bucks.", "translation": "油价为115美元。"}]
+      }
+    },
+    {
+      "case_id": "clean-equivalent-billion-unit",
+      "split": "holdout",
+      "kind": "clean",
+      "expected_status": "clean",
+      "recipe": {
+        "overrides": [{"segment_number": 49, "text": "Capital expenditure is $650 billion.", "translation": "资本支出为6500亿美元。"}]
+      }
+    },
+    {
+      "case_id": "sparse-magnitude-after-effective-repair",
+      "split": "regression",
+      "kind": "intentional_sparse_error",
+      "expected_status": "accepted_with_warnings",
+      "recipe": {
+        "repaired_segments": [1],
+        "overrides": [{"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"}]
+      }
+    },
+    {
+      "case_id": "unrepaired-magnitude-must-not-skip-repair",
+      "split": "regression",
+      "kind": "repair_required",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "overrides": [{"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"}]
+      }
+    },
+    {
+      "case_id": "identical-retry-is-not-effective-repair",
+      "split": "holdout",
+      "kind": "repair_required",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "repaired_segments": [1],
+        "repair_strategy": "identical_retry",
+        "overrides": [{"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"}]
+      }
+    },
+    {
+      "case_id": "sparse-event-direction-after-effective-repair",
+      "split": "holdout",
+      "kind": "intentional_sparse_error",
+      "expected_status": "accepted_with_warnings",
+      "recipe": {
+        "repaired_segments": [77],
+        "overrides": [{"segment_number": 77, "text": "MGX announced the final close of Fund I at $49 billion.", "translation": "MGX一期基金以490亿美元退出市场。"}]
+      }
+    },
+    {
+      "case_id": "sparse-missing-amount-after-effective-repair",
+      "split": "regression",
+      "kind": "intentional_sparse_error",
+      "expected_status": "accepted_with_warnings",
+      "recipe": {
+        "repaired_segments": [50],
+        "overrides": [{"segment_number": 50, "text": "Oil costs $115.", "translation": "油价依旧很高。"}]
+      }
+    },
+    {
+      "case_id": "four-errors-exceed-count-limit",
+      "split": "regression",
+      "kind": "widespread_error",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "repaired_segments": [1, 25, 50, 75],
+        "overrides": [
+          {"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"},
+          {"segment_number": 25, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"},
+          {"segment_number": 50, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"},
+          {"segment_number": 75, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"}
+        ]
+      }
+    },
+    {
+      "case_id": "two-errors-exceed-five-percent-of-short-video",
+      "split": "holdout",
+      "kind": "widespread_error",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "count": 20,
+        "repaired_segments": [1, 10],
+        "overrides": [
+          {"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"},
+          {"segment_number": 10, "text": "Oil costs $115.", "translation": "油价为1150亿美元。"}
+        ]
+      }
+    },
+    {
+      "case_id": "one-long-error-exceeds-duration-limit",
+      "split": "holdout",
+      "kind": "widespread_error",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "repaired_segments": [1],
+        "overrides": [{"segment_number": 1, "text": "Oil costs $115.", "translation": "油价为1150亿美元。", "start": 0, "end": 40}]
+      }
+    },
+    {
+      "case_id": "repeated-calque-is-not-one-deduped-error",
+      "split": "regression",
+      "kind": "widespread_error",
+      "expected_status": "needs_repair",
+      "recipe": {
+        "count": 40,
+        "source": "Keep this on your radar.",
+        "translation": "把它放在你的雷达上。",
+        "repaired_segments": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40]
+      }
+    },
+    {
+      "case_id": "missing-segment-never-tolerated",
+      "split": "regression",
+      "kind": "structural_error",
+      "expected_status": "invalid_structure",
+      "recipe": {"drop_last_translation": true}
+    },
+    {
+      "case_id": "empty-segment-never-tolerated",
+      "split": "holdout",
+      "kind": "structural_error",
+      "expected_status": "invalid_structure",
+      "recipe": {"overrides": [{"segment_number": 80, "translation": "   "}]}
+    },
+    {
+      "case_id": "placeholder-never-tolerated",
+      "split": "regression",
+      "kind": "structural_error",
+      "expected_status": "invalid_structure",
+      "recipe": {"overrides": [{"segment_number": 80, "translation": "[未翻译]"}]}
+    },
+    {
+      "case_id": "upstream-error-page-never-tolerated",
+      "split": "holdout",
+      "kind": "structural_error",
+      "expected_status": "invalid_structure",
+      "recipe": {"overrides": [{"segment_number": 10, "translation": "Error 500 (Server Error)!!1 That's an error. There was an error. Please try again later. That's all we know."}]}
+    }
+  ]
+}

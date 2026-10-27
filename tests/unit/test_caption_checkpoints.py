@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+import pysubs2
 
 from config.settings import settings
 from video_processing.processors.caption_processor import AutoCaptionProcessor
@@ -48,10 +49,17 @@ class SyntheticCaption(AutoCaptionProcessor):
         assert segments[0]['zh_text'] == '债券仍然重要。'
         if self.layout_failure:
             raise ValueError('原字幕定位失败')
-        return self.input_path.with_suffix('.ass')
+        path = self.input_path.with_suffix('.ass')
+        subtitles = pysubs2.SSAFile()
+        subtitles.events = [pysubs2.SSAEvent(start=0, end=2000,
+            text=r'{\fnGeorgia}Bonds still matter.\N{\fnHiragino Sans GB}债券仍然重要。')]
+        subtitles.save(str(path))
+        return path
 
     def _burn_subtitles(self, path):
         self.calls.append('render')
+        assert Path(path).is_file()
+        self.output_path.write_bytes(b'synthetic captioned video')
         return self.output_path
 
 

@@ -1,10 +1,11 @@
-"""字幕局部恢复的独立计划账本；仅保存宿主状态，不保存提示词或拒绝译文。
+"""字幕局部恢复的独立计划账本；保存宿主预算、原始质量观察与修复证据。
 
 依赖：codex_subtitle_provider → 本模块 → codex_text_provider；不访问任务库或音频。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| sparse-quality-v1 | 2026-10-27 | Codex | 持久保留修复执行与质量观察、未接受候选，复用仍重验结构且预算不重置。 |
 | 1.0.0 | 2026-10-27 | Codex | 为逐段恢复持久化有界请求、累计期限、降级位置与安全失败，独立文件锁保护续跑。 |
 """
 
@@ -18,6 +19,7 @@ import os
 from pathlib import Path
 import tempfile
 import time
+from copy import deepcopy
 
 from .codex_text_provider import CodexTextError, _safe_quality_details
 
@@ -180,4 +182,39 @@ class SubtitleRecoveryState:
     def mark_accepted(self, source_id: int) -> None:
         unit = self.data["units"].setdefault(str(source_id), {"attempts_used": 0})
         unit["accepted"] = True
+        unit.pop("rejected_candidate", None)
         self._write()
+
+    def record_repair(self, source_id: int, entry: dict) -> None:
+        """先于真实修复执行持久记账；不因重启伪造新的修复机会。"""
+        unit = self.data["units"].setdefault(str(source_id), {"attempts_used": 0})
+        unit.setdefault("repair_history", []).append(deepcopy(entry))
+        self._write()
+
+    def repair_history(self, source_id: int) -> list[dict]:
+        return deepcopy(self.data["units"].get(str(source_id), {}).get("repair_history", []))
+
+    def record_batch_repair(self, offset: int, count: int, entry: dict) -> None:
+        """拆批前保留拒绝候选，进程中断后仍可比较修复前后的同一来源。"""
+        histories = self.data.setdefault("batch_repair_history", {})
+        histories.setdefault(f"{offset}:{count}", []).append(deepcopy(entry))
+        self._write()
+
+    def batch_repair_history(self, offset: int, count: int) -> list[dict]:
+        return deepcopy(self.data.get("batch_repair_history", {}).get(f"{offset}:{count}", []))
+
+    def remember_rejected_candidate(self, source_id: int, payload: dict) -> None:
+        """待全片复核候选独立标注，绝不冒充已接受缓存。"""
+        unit = self.data["units"].setdefault(str(source_id), {"attempts_used": 0})
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        unit["rejected_candidate"] = {"payload": payload, "sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+        self._write()
+
+    def rejected_candidate(self, source_id: int) -> dict | None:
+        saved = self.data["units"].get(str(source_id), {}).get("rejected_candidate")
+        if not saved:
+            return None
+        encoded = json.dumps(saved["payload"], ensure_ascii=False, sort_keys=True, allow_nan=False)
+        if hashlib.sha256(encoded.encode()).hexdigest() != saved["sha256"]:
+            raise CodexTextError("recovery_state_invalid")
+        return deepcopy(saved["payload"])

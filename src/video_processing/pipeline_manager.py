@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕具名回执驱动持久退避和待修复，成功快照验证后收敛恢复账。 |
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | native-captions-v1 | 2026-10-27 | Codex | 单片摘要绑定保留原有中文字幕，复用原片并继续内容及发布门禁。 |
@@ -692,6 +693,27 @@ class PipelineManager:
             logger.error("Telegram review video did not receive API acceptance: file=%s state=%s error=%s", video_path.name, result.state, result.error_kind)
             return False
         return True
+
+    def drain_subtitle_quality_notifications(self, limit=4):
+        """质量告警独立持久发件箱；Telegram失败退避，不触发视频重复投稿。"""
+        from .utils.subtitle_quality_notifications import EVENT_TYPE, warning_dedupe_key, format_subtitle_quality_warning
+        delivered = 0
+        for row in self.db.claim_subtitle_quality_notifications(limit=limit):
+            try:
+                warning = row['warning']
+                result = send_telegram_text(event_type=EVENT_TYPE, priority='P1',
+                    text=format_subtitle_quality_warning(row['youtube_id'], row['slice_index'], warning),
+                    cooldown_seconds=10 * 365 * 24 * 3600, timeout_seconds=10,
+                    dedupe_key=warning_dedupe_key(row['youtube_id'], row['slice_index'], warning),
+                    db=self.db, token=self.telegram_token, chat_id=self.telegram_chat_id)
+                self.db.finish_subtitle_quality_notification(row['id'], row['claim_token'], result.state,
+                    message_id=result.message_id, error_kind=result.error_kind)
+                delivered += result.state in {'ACCEPTED', 'SUPPRESSED'}
+            except Exception as exc:
+                self.db.finish_subtitle_quality_notification(row['id'], row['claim_token'], 'UNKNOWN',
+                    error_kind=type(exc).__name__)
+                logger.warning('[SubtitleQuality] 告警投递未确认，已保存并退避：%s', type(exc).__name__)
+        return delivered
 
     def _build_telegram_review_copy(self, source_video: Path, prefix: str) -> Path | None:
         """把超限成片降为 Telegram 手机审核副本；失败只告警，绝不触发重新投稿。"""
@@ -1771,6 +1793,7 @@ class PipelineManager:
 
     def _expire_subtitle_recoveries(self) -> None:
         """在既有调度轮收敛过期等待；DAL 只返回首次状态转换。"""
+        self.drain_subtitle_quality_notifications()
         for recovery in self.db.expire_subtitle_recoveries():
             prefix = recovery['youtube_id']
             if recovery['slice_index']:
@@ -4926,6 +4949,17 @@ class PipelineManager:
                     _cache_valid = False
 
                 if _cache_valid:
+                    if not native_captions:
+                        from .utils.subtitle_failure_receipt import read_cached_quality_warning
+                        try:
+                            for warning in read_cached_quality_warning(Path(target_file), ass_path=_ass_file,
+                                                                       render_path=vertical):
+                                self.db.enqueue_subtitle_quality_notification(yid, slice_index, warning)
+                            self.drain_subtitle_quality_notifications()
+                        except (OSError, ValueError, KeyError, TypeError):
+                            logger.warning('[CacheInvalid] %s 字幕告警证据需重新验证。', prefix)
+                            _cache_valid = False
+                if _cache_valid:
                     logger.info(f"[SKIP] Transcribe checkpoint (subtitle contract verified): {vertical.name}")
                     self.db.update_video_status(yid, "PROCESSING", slice_index=slice_index)
                     self._report_runtime_stage(yid, 'RENDER_REUSED', slice_index=slice_index)
@@ -5072,6 +5106,11 @@ class PipelineManager:
                     completion = read_bound_receipt(subtitle_receipt, attempt_id=subtitle_attempt_id,
                         input_path=Path(target_file), input_sha256=subtitle_input_sha256,
                         started_at=subtitle_started_at, success=True)
+                    if completion is None and not requested(vertical):
+                        raise RuntimeError('字幕成功凭据缺失或绑定无效，不能确认字幕与告警交接；停止后续流程。')
+                    if completion and completion.get('quality_warning'):
+                        self.db.enqueue_subtitle_quality_notification(yid, slice_index, completion['quality_warning'])
+                        self.drain_subtitle_quality_notifications()
                     if completion and self.db.resolve_subtitle_recovery(video['id'], subtitle_input_sha256):
                         self.send_telegram_msg(f"✅ 字幕恢复完成\nYouTube ID: <code>{html.escape(prefix)}</code>\n正常字幕快照已验证；后续仍须通过原审查和发布门禁。")
 
@@ -5471,6 +5510,7 @@ class PipelineManager:
                 self._run_douyin_history_migration()
         self._dispatch_wechat_interaction_worker(log_prefix="daily")
         self.drain_pending_review_notifications(limit=5)
+        self.drain_subtitle_quality_notifications()
         self.wait_for_review_notifications(timeout=30.0)
         logger.info("--- Daily Pipeline Job Completed ---")
 

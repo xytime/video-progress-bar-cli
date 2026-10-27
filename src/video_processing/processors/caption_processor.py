@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
 | 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
 | 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
 | 1.39.0 | 2026-10-08 | Antigravity | 修复 _remaining_translation_budget 在 __new__ 单体实例中缺少 _translation_deadline 属性时的 AttributeError 缺陷。 |
@@ -56,6 +57,7 @@
 """
 import logging
 from copy import deepcopy
+from dataclasses import replace
 import re
 from pathlib import Path
 from typing import Callable, Optional, List, Dict, Any, Union
@@ -84,6 +86,7 @@ from ..utils.subtitle_translation_quality import (
 from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
 from ..utils.translation_quality_guard import QualityIssue, evaluate_translation_batch
 from ..utils.subtitle_failure_receipt import SubtitleTranslationFailure, safe_failure
+from ..utils.subtitle_quality_recovery import prepare_subtitle_candidate, sparse_quality_decision
 from ..utils.translation_model_pool import DynamicTranslationModelPool, PROFILES, classify_error
 from ..utils.deepseek_translation import (
     translate_batch_deepseek,
@@ -253,6 +256,16 @@ class AutoCaptionProcessor(VideoProcessorBase):
                                 translation=translation_contract(self, settings))
                 source_segments = deepcopy(segments)
                 saved = checkpoints.load('translation', contract, source_segments)
+                quality_warning = None
+                if saved and saved.get('quality_warning'):
+                    from ..utils.subtitle_failure_receipt import validate_quality_warning
+                    try:
+                        quality_warning = validate_quality_warning(saved['quality_warning'],
+                            segments=saved['segments'], input_sha256=checkpoints.source_digest,
+                            asr_sha256=fingerprint(source_segments), contract_sha256=fingerprint(contract))
+                    except (OSError, ValueError, KeyError, TypeError):
+                        logger.warning('[CaptionCheckpoint] 字幕告警/案例证据无效，不能复用为完成。')
+                        saved = None
                 if saved is not None:
                     segments = saved['segments']
                     self._translation_quality_audit = saved.get('quality_audit', [])
@@ -265,6 +278,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
                         exc.binding = dict(input_sha256=checkpoints.source_digest,
                                            asr_sha256=fingerprint(source_segments),
                                            contract_sha256=fingerprint(contract), stage='TRANSLATING')
+                        failed_candidate = getattr(self, '_last_subtitle_candidate', None)
+                        if failed_candidate and failed_candidate.quality_report:
+                            self._build_subtitle_quality_evidence(failed_candidate, source_segments,
+                                checkpoints.source_digest, fingerprint(contract))
                         if (exc.failure['category'] == 'quality' and exc.failure['quality_details']
                                 and str(self.detected_lang or self.src_lang).lower().split('-')[0] == 'en'):
                             from ..utils.subtitle_audio_review import review_failed_segments
@@ -278,22 +295,42 @@ class AutoCaptionProcessor(VideoProcessorBase):
                                 # 旁证不可用不能吞掉原故障、丢失段号或改变主恢复分类。
                                 logger.warning('[SubtitleDiagnosis] unavailable: %s', type(diagnostic_error).__name__)
                         raise
+                    selected = getattr(self, '_selected_subtitle_candidate', None)
+                    if selected and selected.quality_report:
+                        quality_warning = self._build_subtitle_quality_evidence(selected, source_segments,
+                            checkpoints.source_digest, fingerprint(contract))
                     checkpoints.save('translation', contract, segments, self.detected_lang,
-                                     source_segments, self._translation_quality_audit)
+                                     source_segments, self._translation_quality_audit,
+                                     quality_warning=quality_warning)
                 from ..utils.render_source_binding import digest
                 checkpoint_path = checkpoints.directory / 'translation.json'
                 self._subtitle_completion = dict(input_sha256=checkpoints.source_digest,
                     asr_sha256=fingerprint(source_segments), contract_sha256=fingerprint(contract),
                     checkpoint_path=str(checkpoint_path.resolve()), checkpoint_sha256=digest(checkpoint_path))
+                if quality_warning:
+                    self._subtitle_completion['quality_warning'] = quality_warning
             
             # 5. 生成 ASS 字幕 (双语样式)
             self._report_progress("ASS_GENERATING")
             ass_path = self._generate_ass_file(segments)
+            completion = getattr(self, '_subtitle_completion', None)
+            if completion:
+                from ..utils.subtitle_failure_receipt import caption_checkpoint_ass_comment
+                contents = ass_path.read_text(encoding='utf-8-sig')
+                ass_path.write_text(caption_checkpoint_ass_comment(completion) + '\n' + contents,
+                                    encoding='utf-8')
             logger.info(f"Generated ASS file: {ass_path}")
             
             # 6. 烧录字幕 (使用 ASS 滤镜)
             self._report_progress("VIDEO_RENDERING")
+            if completion:
+                from ..utils.subtitle_failure_receipt import begin_subtitle_render
+                planned_output = self.output_path or self.input_path.parent / f"{self.input_path.stem}_captioned{self.input_path.suffix}"
+                begin_subtitle_render(planned_output, self.input_path, ass_path, completion)
             final_output = self._burn_subtitles(ass_path)
+            if completion:
+                from ..utils.subtitle_failure_receipt import finish_subtitle_render
+                finish_subtitle_render(final_output, self.input_path, ass_path)
             logger.info(f"Subtitles burned to: {final_output}")
             self._report_progress("COMPLETE")
             
@@ -561,6 +598,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
+        self._selected_subtitle_candidate = None
+        self._last_subtitle_candidate = None
         self._translation_quality_audit = []
         failures = []
         self._translation_audit_run_id = self._start_translation_audit()
@@ -634,10 +673,16 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     self._write_translation_quality_report()
                 continue
 
-            if time.monotonic() >= self._translation_deadline:
+            if time.monotonic() >= self._translation_deadline and not candidate.repair_history:
                 logger.warning("[Translate] %s 超出整片预算，未选用候选。", provider)
                 break
             logger.info("[Translate] %s returned complete candidate (%s segments); checking quality.", provider, len(texts))
+            # 原生产时间轴不可缺；旧调用仅提供text时仍用原严格质量门，不能获得新增容错。
+            if all('start' in segment and 'end' in segment for segment in segments):
+                candidate = prepare_subtitle_candidate(candidate, segments,
+                    context_text=quality_context.source_context_text,
+                    repair=lambda current, targets: self._build_subtitle_targeted_repair(
+                        current, texts, translation_prompt_context, targets))
             decision = self._evaluate_translation_quality(
                 texts,
                 candidate.translations[:len(segments)],
@@ -645,6 +690,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 final_provider=final_provider,
                 quality_context=quality_context,
             )
+            if candidate.quality_report:
+                decision = sparse_quality_decision(candidate, final_provider=final_provider,
+                                                   quality_context=quality_context)
+            self._last_subtitle_candidate = candidate
             event = self._record_translation_quality_decision(
                 decision,
                 provider=candidate.provider,
@@ -841,8 +890,37 @@ class AutoCaptionProcessor(VideoProcessorBase):
     ) -> None:
         """应用最终选中的 provider-neutral 候选，并按需补齐 vocab。"""
         apply_translation_candidate(segments, candidate)
+        self._selected_subtitle_candidate = candidate
         if not candidate.supports_vocab:
             self._align_vocab_after_plain_translation(texts, segments, translation_context, candidate.provider)
+            if candidate.quality_report:
+                final = replace(candidate, vocabs=[segment.get('vocab') or {} for segment in segments])
+                final = prepare_subtitle_candidate(final, segments, context_text='\n'.join(texts))
+                apply_translation_candidate(segments, replace(final, supports_vocab=True))
+                self._selected_subtitle_candidate = final
+
+    def _build_subtitle_quality_evidence(self, candidate, source_segments, input_sha256, contract_sha256):
+        """原始坏例不可覆盖；证据存储成功后才完成带问题字幕快照。"""
+        from ..utils.subtitle_bad_cases import save_bad_case
+        report = candidate.quality_report
+        if report['status'] == 'clean' and not candidate.repair_history:
+            return None
+        payload = dict(input_sha256=input_sha256, asr_sha256=fingerprint(source_segments),
+            contract_sha256=contract_sha256, candidate_sha256=report['candidate_sha256'],
+            summary_sha256=report['summary_sha256'], report=report,
+            source_segments=source_segments, segments=source_segments,
+            translations=candidate.translations, vocabs=candidate.vocabs,
+            repair_history=candidate.repair_history, provider=candidate.provider, model=candidate.model,
+            context_text='\n'.join(segment['text'].strip() for segment in source_segments))
+        try:
+            reference = save_bad_case(settings.project_root / 'output' / 'subtitle_bad_cases', payload)
+        except (OSError, ValueError, TypeError):
+            raise SubtitleTranslationFailure([safe_failure('host', 'subtitle_bad_case_persistence', category='quality')]) from None
+        self._translation_quality_audit.append(dict(event='bad_case_saved', status=report['status'], bad_case=reference))
+        if report['status'] == 'accepted_with_warnings':
+            return dict(status=report['status'], report=report, candidate_sha256=report['candidate_sha256'],
+                        summary_sha256=report['summary_sha256'], bad_case=reference)
+        return None
 
     def _build_translation_candidate(
         self,
@@ -876,12 +954,31 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 request_timeout=settings.codex_text_request_timeout_seconds,
                 total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
                 batch_size=settings.codex_subtitle_batch_size,
+                allow_quality_candidate=True,
             )
         except Exception as exc:
             self._last_provider_error = f"codex_text:{getattr(exc, 'code', type(exc).__name__)}"
             self._last_provider_failure = safe_failure('codex', getattr(exc, 'code', 'provider_failure'),
                 retry_at=getattr(exc, 'retry_at', 0), quality_details=getattr(exc, 'quality_details', ()))
             logger.warning("[Translate] Codex candidate failed: %s", self._last_provider_error)
+            return None
+
+    def _build_subtitle_targeted_repair(self, candidate, texts, context, targets):
+        """只替换问题段，源文背景隔离；既有持久请求/时间预算继续累计。"""
+        from ..utils.codex_subtitle_provider import build_codex_subtitle_candidate
+        if not hasattr(settings, 'codex_text_command') or self._remaining_translation_budget() <= 0:
+            return None
+        try:
+            return build_codex_subtitle_candidate(
+                texts, context, state_dir=settings.default_output_dir / 'codex_text_cache',
+                command=settings.codex_text_command, model=settings.codex_text_model,
+                effort=settings.codex_text_effort,
+                request_timeout=settings.codex_text_request_timeout_seconds,
+                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
+                batch_size=settings.codex_subtitle_batch_size, allow_quality_candidate=True,
+                initial_candidate=candidate, repair_segment_numbers=targets)
+        except Exception as exc:
+            logger.warning('[Translate] targeted repair unavailable: %s', getattr(exc, 'code', type(exc).__name__))
             return None
 
     def _build_agy_candidate(

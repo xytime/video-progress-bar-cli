@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| sparse-quality-v1 | 2026-10-27 | Codex | 容错政策与案例存储纳入合同，完成快照绑定最终质量告警。 |
 | 1.1.0 | 2026-10-27 | Codex | 翻译恢复计划、回执及离线音频诊断实现纳入完成快照合同。 |
 | 1.0.0 | 2026-10-23 | Codex | 独立保存 ASR 与已通过质量门的翻译，供下游失败后续跑。 |
 """
@@ -28,6 +29,7 @@ TRANSLATION_MODULES = (
     'translation_prompt_constraints', 'vocab_helper', 'translation_helper', 'deepseek_translation',
     'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
     'subtitle_recovery_state', 'subtitle_failure_receipt', 'subtitle_audio_review', 'subtitle_audio_review_worker',
+    'subtitle_sparse_policy', 'subtitle_quality_recovery', 'subtitle_bad_cases',
 )
 TRANSLATION_SETTINGS = (
     'subtitle_translation_provider_order', 'enable_deepseek_vocab_fallback',
@@ -102,6 +104,9 @@ class CaptionCheckpoints:
                     or not isinstance(result.get('detected_lang'), (str, type(None)))
                     or not valid_segments(result['segments'], stage == 'translation', source)):
                 raise ValueError('identity, integrity or segment contract mismatch')
+            if stage == 'translation':
+                from .subtitle_failure_receipt import require_quality_warning_envelope
+                require_quality_warning_envelope(result)
             LOG.info('[CaptionCheckpoint] 复用已完成的 %s: %s', stage, path)
             return result
         except FileNotFoundError:
@@ -110,13 +115,15 @@ class CaptionCheckpoints:
             LOG.warning('[CaptionCheckpoint] %s 快照不完整或依赖变化，重新执行', stage)
         return None
 
-    def save(self, stage, contract, segments, detected_lang, source=None, quality_audit=None):
+    def save(self, stage, contract, segments, detected_lang, source=None, quality_audit=None, quality_warning=None):
         if not valid_segments(segments, stage == 'translation', source):
             raise ValueError('字幕完成快照结构不完整')
         if digest(self.source) != self.source_digest:
             raise ValueError('字幕处理期间源媒体变化，拒绝保存快照')
         result = dict(completed=True, segments=deepcopy(segments), detected_lang=detected_lang,
                       quality_audit=quality_audit or [])
+        if quality_warning is not None:
+            result['quality_warning'] = deepcopy(quality_warning)
         payload = dict(identity=self.identity, contract=contract, result=result,
                        result_sha256=fingerprint(result))
         self.directory.mkdir(parents=True, exist_ok=True)

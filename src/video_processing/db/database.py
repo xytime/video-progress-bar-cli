@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| sparse-quality-v1 | 2026-10-27 | Codex | 接入字幕质量告警持久发件箱，候选与问题摘要独立幂等。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 接入字幕持久失败链与领取冷却，保留全局重试和投稿账本。 |
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | review-receipt-v1 | 2026-10-25 | Codex | 精确任务授权审计与启用标志单次只读回读，不受事件分页上限影响。 |
@@ -243,13 +244,14 @@ from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
 from .publication_eligibility import PublicationEligibilityDAL
 from .subtitle_recovery import SubtitleRecoveryDAL, subtitle_recovery_gate_sql
+from .subtitle_quality_notifications import SubtitleQualityNotificationsDAL
 from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
 from .compliance_remix import ComplianceRemixDAL
 
 
-class PipelineDB(SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(SubtitleQualityNotificationsDAL, SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -322,6 +324,7 @@ class PipelineDB(SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemix
             self.initialize_delivery_recovery()
             self.initialize_publishing_recovery()
             self.initialize_subtitle_recovery()
+            self.initialize_subtitle_quality_notifications()
             self.initialize_compliance_remix()
         self._initializing_schema = False
         from ..core.maintenance import running

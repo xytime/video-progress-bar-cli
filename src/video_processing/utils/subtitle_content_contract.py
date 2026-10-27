@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| sparse-quality-v1 | 2026-10-27 | Codex | 补齐整段未翻译/待翻译占位词，容错仍不得接受结构缺失。 |
 | 1.1.0 | 2026-09-09 | Codex | 只检查中文字幕层，并以完整层文本识别被 ASS 换行拆开的错误页 |
 | 1.0.0 | 2026-09-09 | Codex | 拦截翻译占位符，并对实际输入旁的双语 ASS 做缓存与提交前校验 |
 """
@@ -19,7 +20,9 @@ def is_translation_placeholder(text: str) -> bool:
     """仅匹配整段占位语，不拦截正常句子对“承接上文”的讨论。"""
     plain = re.sub(r"\{[^}]*\}", "", text).replace(r"\N", " ").replace(r"\n", " ")
     plain = re.sub(r"\s+", "", plain).strip("（）()【】[]，,。.!！:：;；")
-    return plain in {"承接上文", "接上文", "同上", "译文同上", "翻译同上", "续上文"}
+    return plain.casefold() in {"承接上文", "接上文", "同上", "译文同上", "翻译同上", "续上文",
+                                "未翻译", "待翻译", "翻译缺失", "译文缺失",
+                                "translationmissing", "translationpending", "untranslated"}
 
 
 def _chinese_layer_text(event_text: str) -> str | None:
