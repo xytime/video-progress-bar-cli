@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-27 | Codex | 字幕质量合同隔离缓存身份，保存有界宿主拒绝信号并在原预算内重建失效缓存。 |
 | 1.1.0 | 2026-10-20 | Codex | 英语世界安全审核可显式附图，图片指纹纳入缓存身份；仍禁用工具。 |
 | 1.0.0 | 2026-10-03 | Codex | 独立 Luna 文字入口：最小环境、进程组期限、严格结构、单并发与用量回执。 |
 """
@@ -29,12 +30,32 @@ from config.settings import settings
 ECONOMY_MODELS = frozenset({"gpt-6-luna", "gpt-5.6-luna"})
 
 
-class CodexTextError(RuntimeError):
-    """仅包含安全分类，禁止回显 prompt、模型原文及 CLI 原始日志。"""
+def _safe_quality_details(details) -> list[dict]:
+    """只保留宿主生成的位置、分类与短事实信号，不接收正文或提示词字段。"""
+    safe = []
+    for detail in details or ():
+        if not isinstance(detail, dict):
+            continue
+        segment_number, source_id = detail.get("segment_number"), detail.get("source_id")
+        if type(segment_number) is not int or segment_number < 1 or type(source_id) is not int or source_id < 0:
+            continue
+        safe.append({
+            "segment_number": segment_number, "source_id": source_id,
+            **{key: str(detail.get(key, "")).replace("\n", " ").replace("\r", " ")[:120]
+               for key in ("code", "source_signal", "translation_signal")},
+        })
+        if len(safe) >= 10:
+            break
+    return safe
 
-    def __init__(self, code: str, retry_at: int = 0):
+
+class CodexTextError(RuntimeError):
+    """仅包含安全分类和宿主信号，禁止回显 prompt、模型原文及 CLI 原始日志。"""
+
+    def __init__(self, code: str, retry_at: int = 0, *, quality_details=()):
         self.code = code
         self.retry_at = retry_at
+        self.quality_details = _safe_quality_details(quality_details)
         super().__init__(f"codex_text:{code}")
 
 
@@ -126,14 +147,21 @@ def _run_codex_structured(
     validate: Callable[[dict], dict] | None = None,
     cache_prompt: str | None = None,
     images: tuple[Path, ...] = (),
+    cache_contract: str = "",
+    repair_cached_output: Callable[[str, CodexTextError], str] | None = None,
+    _request_audit: dict | None = None,
 ) -> CodexTextResult:
     """一次有界请求；只缓存经调用方质量合同接受的结果，不自动升级模型。"""
+    request_started = time.monotonic()
     if model not in ECONOMY_MODELS or effort not in {"low", "medium", "high"} or timeout_sec <= 0:
         raise CodexTextError("configuration")
     schema = strict_schema(schema)
     state_dir.mkdir(parents=True, exist_ok=True)
     image_hashes = [hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in images]
-    identity = json.dumps(["codex-text-v1", model, effort, cache_prompt or prompt, schema, image_hashes], ensure_ascii=False, sort_keys=True)
+    identity_parts = ["codex-text-v1", model, effort, cache_prompt or prompt, schema, image_hashes]
+    if cache_contract:
+        identity_parts.append(cache_contract)
+    identity = json.dumps(identity_parts, ensure_ascii=False, sort_keys=True)
     key = hashlib.sha256(identity.encode()).hexdigest()
     cached_path = state_dir / f"{key}.json"
     with (state_dir / "provider.lock").open("a+") as lock:
@@ -150,10 +178,20 @@ def _run_codex_structured(
             else:
                 try:
                     payload = validate(cached["payload"])
-                except Exception:
+                except Exception as exc:
                     cached_path.unlink(missing_ok=True)
-                    raise
-                return CodexTextResult(payload, model, {}, 0, True)
+                    if not isinstance(exc, CodexTextError) or repair_cached_output is None:
+                        raise
+                    if _request_audit is not None:
+                        _request_audit["cache_rejection"] = {
+                            "code": exc.code, "quality_details": _safe_quality_details(exc.quality_details),
+                        }
+                    prompt = repair_cached_output(prompt, exc)
+                    timeout_sec -= time.monotonic() - request_started
+                    if timeout_sec <= 0:
+                        raise CodexTextError("timeout") from None
+                else:
+                    return CodexTextResult(payload, model, {}, 0, True)
         cooldown = state_dir / f"{model}.cooldown.json"
         if cooldown.exists():
             try:
@@ -179,6 +217,8 @@ def _run_codex_structured(
             for path in images:
                 args.extend(["--image", str(Path(path).resolve())])
             args.append("-")
+            if _request_audit is not None:
+                _request_audit["executed_input_sha256"] = hashlib.sha256(prompt.encode()).hexdigest()
             result = _execute(args, prompt, directory, timeout_sec)
             if result.returncode:
                 code = _failure_code(result.stderr + result.stdout)
@@ -223,12 +263,15 @@ def run_codex_structured(prompt: str, **kwargs) -> CodexTextResult:
     receipt = {"provider": "codex", "model": kwargs.get("model", "gpt-5.6-luna"),
                "at": int(time.time()), "input_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
     try:
-        result = _run_codex_structured(prompt, **kwargs)
+        result = _run_codex_structured(prompt, _request_audit=receipt, **kwargs)
         receipt.update(status="SUCCEEDED", usage=result.usage, cached=result.cached)
         return result
     except BaseException as exc:
         receipt.update(status="FAILED", code=getattr(exc, "code", type(exc).__name__),
                        usage=getattr(exc, "usage", {}))
+        details = _safe_quality_details(getattr(exc, "quality_details", ()))
+        if details:
+            receipt["quality_details"] = details
         raise
     finally:
         receipt["duration_ms"] = int((time.monotonic() - started) * 1000)

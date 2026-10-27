@@ -11,6 +11,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 新增质量评估上下文载体，让审核与审计复用全片领域、事实、术语提示 |
 | 1.2.0   | 2026-07-05 | Codex  | 合并整片术语一致性检查结果，为后续字幕/标题统一审核预留入口 |
 | 1.3.0   | 2026-07-05 | Codex  | 改为 translation_quality_evaluator 的兼容门面，统一字幕/标题/文案审核内核 |
+| 1.4.0   | 2026-10-27 | Codex  | 显式转发跨批边界的真实相邻源句，保留金额校验依据 |
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def evaluate_subtitle_translation_candidate(
     context_text: str = "",
     quality_context: SubtitleTranslationQualityContext | None = None,
     enable_numeric_checks: bool = True,
+    next_source_text: str = "",
 ) -> SubtitleTranslationQualityDecision:
     """评估一个字幕 provider 候选，返回接受/降级/失败决策。"""
     return evaluate_translation_candidate(
@@ -47,4 +49,5 @@ def evaluate_subtitle_translation_candidate(
         context_text=context_text,
         quality_context=quality_context,
         enable_numeric_checks=enable_numeric_checks,
+        next_source_text=next_source_text,
     )

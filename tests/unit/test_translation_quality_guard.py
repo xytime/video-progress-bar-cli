@@ -10,10 +10,13 @@
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 $49B/49B fund 等 B/M/T 金融金额缩写 |
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写 |
 | 1.5.0   | 2026-07-06 | Codex  | 覆盖金额 mismatch 审计信号不使用科学计数法 |
+| 1.6.0   | 2026-10-27 | Codex  | 覆盖金额缩写词边界、普通美元译文、相邻字幕拆分单位与上下文金额隔离 |
 """
 
 import sys
 from pathlib import Path
+
+import pytest
 
 _src_root = Path(__file__).parent.parent.parent / "src"
 if str(_src_root) not in sys.path:
@@ -204,3 +207,112 @@ def test_amount_mismatch_signal_uses_readable_usd_format():
     assert issue.code == "NUMBER_MAGNITUDE_MISMATCH"
     assert issue.source_signal == "$4,200"
     assert "e+" not in issue.source_signal
+
+
+@pytest.mark.parametrize(("source", "amounts"), [
+    ("Brent surged through $115 bucks per barrel.", [115.0]),
+    ("Brent surged through $115\nbucks per barrel.", [115.0]),
+    ("Oil trades at $75 to $80 per barrel.", [75.0, 80.0]),
+    ("The $50 market order executed.", [50.0]),
+    ("The price is $20 today.", [20.0]),
+    ("The $115 billionaires club.", [115.0]),
+])
+def test_dollar_amount_units_do_not_consume_word_prefixes(source, amounts):
+    assert extract_fact_signal(source).amounts_usd == amounts
+
+
+@pytest.mark.parametrize(("source", "amount"), [
+    ("The fund raised $49B.", 49_000_000_000),
+    ("The fund raised US$49bn.", 49_000_000_000),
+    ("Credit balances exceeded $1.17 trillion.", 1_170_000_000_000),
+    ("The 49B AI fund closed.", 49_000_000_000),
+    ("The 49bn AI fund closed.", 49_000_000_000),
+    ("The fund received $5mn.", 5_000_000),
+])
+def test_complete_finance_units_remain_supported(source, amount):
+    assert extract_fact_signal(source).amounts_usd == [amount]
+
+
+@pytest.mark.parametrize(("translated", "amount"), [
+    ("每桶115美元。", 115),
+    ("每桶115美金。", 115),
+    ("共支付1,150美元。", 1150),
+    ("共支付1.15万美元。", 11500),
+    ("估值1,150亿美元。", 115_000_000_000),
+])
+def test_plain_chinese_dollar_amounts_are_checked(translated, amount):
+    assert extract_fact_signal(translated).amounts_usd == [amount]
+
+
+@pytest.mark.parametrize("translated", ["油价115美元。", "油价$115。"])
+def test_context_cannot_promote_a_real_small_dollar_price(translated):
+    result = evaluate_translation_pair(
+        "Oil is at $115.", translated,
+        context_text="Unrelated fund at $115 billion; oil is at $115.",
+    )
+    assert result.source_signal.amounts_usd == [115]
+    assert not result.issues
+
+
+@pytest.mark.parametrize("context", ["", "An unrelated fund raised $115 billion."])
+def test_real_dollar_to_billion_translation_error_still_blocks(context):
+    result = evaluate_translation_pair("Oil is at $115.", "油价1150亿美元。", context_text=context)
+    assert result.max_severity == "P0"
+    assert result.issues[0].code == "NUMBER_MAGNITUDE_MISMATCH"
+    assert result.issues[0].source_signal == "$115"
+    assert result.issues[0].translation_signal == "$115B"
+
+
+@pytest.mark.parametrize(("next_source", "translated", "amount"), [
+    ("billion in capital expenditure.", "投资6000亿美元。", 600_000_000_000),
+    ("million in capital expenditure.", "投资6亿美元。", 600_000_000),
+    ("bn in capital expenditure.", "投资6000亿美元。", 600_000_000_000),
+])
+def test_split_currency_unit_uses_only_the_actual_next_source(next_source, translated, amount):
+    result = evaluate_translation_pair(
+        "The platforms committed $600", translated, next_source_text=next_source,
+    )
+    assert result.source_signal.amounts_usd == [amount]
+    assert not result.issues
+
+
+@pytest.mark.parametrize("next_source", [
+    "bucks per barrel.",
+    "billionaires discussed it.",
+    "Elsewhere, a fund raised $600 billion.",
+    "to fund their purchases.",
+    "market prices remained stable.",
+    "",
+])
+def test_neighbor_or_context_without_a_split_unit_cannot_promote_amount(next_source):
+    result = evaluate_translation_pair(
+        "Oil costs $600", "油价600美元。", next_source_text=next_source,
+        context_text="Other assets are valued at $600 billion.",
+    )
+    assert result.source_signal.amounts_usd == [600]
+    assert not result.issues
+
+
+def test_split_unit_requires_the_original_source_to_end_in_a_bare_amount():
+    result = evaluate_translation_pair(
+        "Oil costs $600 today.", "油价今天600美元。", next_source_text="billion in other investments.",
+    )
+    assert result.source_signal.amounts_usd == [600]
+    assert not result.issues
+
+
+def test_batch_preserves_real_split_amount_and_blocks_wrong_translation():
+    source = ["The platforms committed $600", "billion in capital expenditure."]
+    passed = evaluate_translation_batch(source, ["平台承诺6000亿美元", "资本支出。"])
+    blocked = evaluate_translation_batch(source, ["平台承诺600美元", "资本支出。"])
+    assert not passed.blocking_issues
+    assert blocked.blocking_issues[0].code == "NUMBER_MAGNITUDE_MISMATCH"
+
+
+def test_batch_boundary_can_receive_the_actual_next_source():
+    result = evaluate_translation_batch(
+        ["The platforms committed $600"], ["平台承诺6000亿美元"],
+        next_source_text="billion in capital expenditure.",
+    )
+    assert result.results[0].source_signal.amounts_usd == [600_000_000_000]
+    assert not result.blocking_issues

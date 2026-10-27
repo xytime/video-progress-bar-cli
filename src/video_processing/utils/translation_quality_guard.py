@@ -16,6 +16,7 @@
 | 1.6.0   | 2026-07-09 | Codex  | 仅允许上下文补足事件语义，不再为单句金额检查继承全片金额，避免财经长字幕跨句错配导致 P0 误杀 |
 | 1.7.0   | 2026-07-09 | Codex  | 对被字幕切断的金额短语做窄范围补全：仅当本句出现裸数字而上下文出现同尾数带单位金额时，提升为带单位金额，避免 `$600` vs `$450B` 这类拆句误杀 |
 | 1.8.0   | 2026-07-13 | Codex  | 支持暂时禁用金额数量级检查，保留事件方向与空译文安全检查 |
+| 1.9.0   | 2026-10-27 | Codex  | 金额单位必须完整匹配；仅凭真实相邻字幕补全拆分单位，普通美元中文金额纳入校验 |
 """
 
 from __future__ import annotations
@@ -206,6 +207,7 @@ def evaluate_translation_pair(
     *,
     context_text: str = "",
     enable_numeric_checks: bool = True,
+    next_source_text: str = "",
 ) -> GuardResult:
     """评估一组原文/译文是否存在会改变事实的严重错误。
 
@@ -213,9 +215,10 @@ def evaluate_translation_pair(
         source_text: 单句、字幕片段或标题对应的源文本。
         translated_text: 待检查的中文译文。
         context_text: 可选的全局上下文；用于补充短字幕缺失的主题语义。
+        next_source_text: 实际相邻的下一条源字幕，仅用于补全句尾被切断的金额单位。
     """
     source_signal = _merge_source_with_context(
-        extract_fact_signal(source_text, lang="en"),
+        extract_fact_signal(_complete_split_amount_fragment(source_text, next_source_text), lang="en"),
         extract_fact_signal(context_text, lang="en") if context_text else None,
     )
     translation_signal = extract_fact_signal(translated_text, lang="zh")
@@ -238,6 +241,7 @@ def evaluate_translation_batch(
     *,
     context_text: str = "",
     enable_numeric_checks: bool = True,
+    next_source_text: str = "",
 ) -> BatchGuardSummary:
     """批量评估字幕片段，返回可直接用于阻断/告警的摘要。"""
     return BatchGuardSummary([
@@ -246,8 +250,12 @@ def evaluate_translation_batch(
             translated,
             context_text=context_text,
             enable_numeric_checks=enable_numeric_checks,
+            next_source_text=(
+                source_texts[index + 1]
+                if index + 1 < len(source_texts) else next_source_text
+            ),
         )
-        for source, translated in zip(source_texts, translated_texts)
+        for index, (source, translated) in enumerate(zip(source_texts, translated_texts))
     ])
 
 
@@ -268,48 +276,22 @@ def _merge_source_with_context(source_signal: FactSignal, context_signal: FactSi
     return FactSignal(
         event_type=event_type,
         money_flow=money_flow,
-        # 金额只能按“本句原文 ↔ 本句译文”比较。
-        # 若把整片上下文金额继承到当前句，会把别句的 600B/145B 拿来和本句 450B 比，
-        # 在财经长视频里制造跨句错配的 P0 误杀。全片级金额漂移仍由 consistency guard 负责。
-        # 但字幕切句会把 “$600” 与下一句 “billion” 拆开，导致本句只看到裸数字。
-        # 这里仅在“本句是小裸数、上下文里存在同尾数的带单位金额”时做窄范围补全，
-        # 不把上下文金额整体继承进来，避免重新引入跨句污染。
-        amounts_usd=_promote_split_amount_fragments(
-            source_signal.amounts_usd,
-            context_signal.amounts_usd,
-        ),
+        # 摘要中的同尾数金额不能证明本句省略单位；金额只来自本句与明确相邻的拆句边界。
+        amounts_usd=source_signal.amounts_usd,
         markers=markers,
     )
 
 
-def _promote_split_amount_fragments(
-    source_amounts: Sequence[float],
-    context_amounts: Sequence[float],
-) -> List[float]:
-    """把被字幕切断的裸数字金额提升为上下文中同尾数的带单位金额。"""
-    if not source_amounts or not context_amounts:
-        return list(source_amounts)
-
-    promoted: List[float] = []
-    multipliers = (
-        10_000,
-        100_000_000,
-        1_000_000,
-        1_000_000_000,
-        1_000_000_000_000,
-    )
-    for amount in source_amounts:
-        candidate = amount
-        if 0 < amount < 1_000_000:
-            for context_amount in context_amounts:
-                for multiplier in multipliers:
-                    if abs((amount * multiplier) - context_amount) / max(context_amount, 1.0) < 0.01:
-                        candidate = context_amount
-                        break
-                if candidate != amount:
-                    break
-        promoted.append(candidate)
-    return _dedupe_amounts(promoted)
+def _complete_split_amount_fragment(source_text: str, next_source_text: str) -> str:
+    """仅补全“本句末尾 $600 / 下一句开头 billion”这类有直接边界证据的单位。"""
+    if not next_source_text or not re.search(
+        r"(?:US)?\$\s*[0-9][0-9,]*(?:\.[0-9]+)?\s*$", source_text, re.IGNORECASE,
+    ):
+        return source_text
+    unit = re.match(rf"\s*({_english_amount_unit_pattern()})", next_source_text, re.IGNORECASE)
+    if unit is None:
+        return source_text
+    return f"{source_text.rstrip()} {unit.group(1)}"
 
 
 def _append_event_direction_issues(
@@ -449,7 +431,8 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
 
 
 def _english_amount_unit_pattern() -> str:
-    return r"trillion|billion|million|tn|bn|mn|[tmb]"
+    # 尤其不能把 $115 bucks / $75 to 中普通单词的首字母识别成 billion / trillion。
+    return r"(?:trillion|billion|million|tn|bn|mn|[tmb])(?!\w)"
 
 
 def _english_amount_multipliers() -> dict[str | None, int]:
@@ -473,7 +456,10 @@ def _normalize_english_amount_unit(unit: str | None) -> str | None:
 
 def _extract_chinese_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
-    pattern = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(万亿美元|亿美元|万美元|万亿|千亿|百亿|亿)\s*(?:美元|美金)?")
+    pattern = re.compile(
+        r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
+        r"(万亿美元|亿美元|万美元|万亿|千亿|百亿|亿|美元|美金)\s*(?:美元|美金)?"
+    )
     multipliers = {
         "万亿美元": 1_000_000_000_000,
         "亿美元": 100_000_000,
@@ -482,9 +468,13 @@ def _extract_chinese_amounts_usd(text: str) -> List[float]:
         "千亿": 100_000_000_000,
         "百亿": 10_000_000_000,
         "亿": 100_000_000,
+        "美元": 1,
+        "美金": 1,
     }
     for match in pattern.finditer(text):
-        amounts.append(float(match.group(1)) * multipliers[match.group(2)])
+        value = _parse_number(match.group(1))
+        if value is not None:
+            amounts.append(value * multipliers[match.group(2)])
     return amounts
 
 

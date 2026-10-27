@@ -3,11 +3,13 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-27 | Codex | 覆盖有界宿主拒绝回执、质量合同缓存隔离及失效缓存原预算重建。 |
 | fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.0 | 2026-10-03 | Codex | 覆盖真实故障路径、质量缓存和经济模型限制。 |
 """
 
 import fcntl
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -176,3 +178,72 @@ def test_images_pass_as_attachment_and_change_cache_identity(tmp_path, monkeypat
     args = calls[0][0]
     assert args[args.index('--image') + 1] == str(picture.resolve())
     assert args[args.index('view_image') - 1] == '--disable'
+
+
+def test_quality_receipt_keeps_only_bounded_host_details(tmp_path, monkeypatch):
+    monkeypatch.setattr(provider, "_execute", _executor())
+    details = [{"segment_number": index + 1, "source_id": index, "code": "NUMBER_MAGNITUDE_MISMATCH",
+                "source_signal": "$115", "translation_signal": "$115B", "prompt": "PRIVATE FULL PROMPT"}
+               for index in range(20)]
+    def reject(raw):
+        raise provider.CodexTextError("subtitle_quality_NUMBER_MAGNITUDE_MISMATCH", quality_details=details)
+    with pytest.raises(provider.CodexTextError):
+        _call(tmp_path, validate=reject)
+    receipt_text = (tmp_path / "requests.jsonl").read_text()
+    receipt = json.loads(receipt_text.splitlines()[-1])
+    assert len(receipt["quality_details"]) == 10
+    assert receipt["quality_details"][0] == {
+        "segment_number": 1, "source_id": 0, "code": "NUMBER_MAGNITUDE_MISMATCH",
+        "source_signal": "$115", "translation_signal": "$115B",
+    }
+    assert "PRIVATE" not in receipt_text and "touch forbidden" not in receipt_text
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_cache_contract_versions_are_isolated_without_deleting_other_cache(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(provider, "_execute", _executor(calls=calls))
+    _call(tmp_path, validate=lambda raw: raw)
+    _call(tmp_path, validate=lambda raw: raw, cache_contract="subtitle-facts-adjacent-v2")
+    result = _call(tmp_path, validate=lambda raw: raw, cache_contract="subtitle-facts-adjacent-v2")
+    assert len(calls) == 2 and result.cached
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_rejected_cached_quality_is_repaired_before_first_new_request(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(provider, "_execute", _executor({"title": "旧缓存"}, calls=calls))
+    _call(tmp_path, validate=lambda raw: raw)
+    monkeypatch.setattr(provider, "_execute", _executor({"title": "修正后"}, calls=calls))
+    details = [{"segment_number": 105, "source_id": 104, "code": "NUMBER_MAGNITUDE_MISMATCH",
+                "source_signal": "$115", "translation_signal": "$115B"}]
+    def validate(raw):
+        if raw["title"] == "旧缓存":
+            raise provider.CodexTextError("subtitle_quality_NUMBER_MAGNITUDE_MISMATCH", quality_details=details)
+        return raw
+    def repair(prompt, error):
+        return prompt + "\n宿主安全反馈：" + json.dumps(error.quality_details)
+    result = _call(tmp_path, validate=validate, repair_cached_output=repair)
+    assert result.payload == {"title": "修正后"} and not result.cached and len(calls) == 2
+    assert '"segment_number": 105' in calls[1][1]
+    assert 0 < calls[1][3] <= 5
+    receipt = json.loads((tmp_path / "requests.jsonl").read_text().splitlines()[-1])
+    assert receipt["status"] == "SUCCEEDED" and receipt["cache_rejection"]["quality_details"] == details
+    assert receipt["executed_input_sha256"] == hashlib.sha256(calls[1][1].encode()).hexdigest()
+    assert receipt["executed_input_sha256"] != receipt["input_sha256"]
+    cached = _call(tmp_path, validate=validate, repair_cached_output=repair)
+    assert cached.cached and len(calls) == 2
+
+
+def test_expired_budget_cannot_rebuild_rejected_cache(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(provider, "_execute", _executor(calls=calls))
+    _call(tmp_path, validate=lambda raw: raw)
+    clock = {"now": 0.0}
+    monkeypatch.setattr(provider.time, "monotonic", lambda: clock["now"])
+    def reject(raw):
+        clock["now"] = 6.0
+        raise provider.CodexTextError("subtitle_quality_NUMBER_MAGNITUDE_MISMATCH")
+    with pytest.raises(provider.CodexTextError, match="timeout"):
+        _call(tmp_path, validate=reject, repair_cached_output=lambda prompt, error: prompt)
+    assert len(calls) == 1 and not list(tmp_path.glob("*.json"))

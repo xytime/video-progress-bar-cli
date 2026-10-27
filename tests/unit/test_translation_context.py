@@ -11,6 +11,7 @@
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖长视频中段关键事实也会进入翻译上下文 |
 | 1.5.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn 金融金额缩写进入上下文金额提示 |
 | 1.6.0   | 2026-07-06 | Codex  | 覆盖小额美元事实提示不使用科学计数法 |
+| 1.7.0   | 2026-10-27 | Codex  | 覆盖真实油价字幕在跨段 bucks 开头时不生成虚假十亿美元上下文 |
 """
 
 import sys
@@ -126,3 +127,29 @@ def test_translation_context_formats_small_usd_amounts_without_scientific_notati
 
     assert "$4,200" in prompt_context
     assert "$4.2e+03" not in prompt_context
+
+
+def test_oil_price_video_context_does_not_invent_billion_dollar_barrels():
+    # AkTXAcMgO3E 的真实字幕边界：第6段末尾 $115，第7段开头 bucks。
+    context = build_translation_context([
+        "Brent crude oil just surged through $115",
+        "bucks per barrel. That's $115 a barrel on critical global oil benchmarks.",
+        "Revolving credit card balances sit at record levels above $1.17 trillion.",
+        "Families pay an extra $50 or $75 per tank.",
+        "The Fed can't aggressively cut policy rates with oil at $115.",
+        "Brent Crude hits $115 and factory selling prices exploded.",
+    ])
+    prompt_context = context.to_prompt_context()
+    assert "$115B" not in prompt_context
+    assert "$115" in prompt_context
+    assert "$1.17T" in prompt_context
+    assert "$50" in prompt_context
+    assert "$75" in prompt_context
+
+
+def test_context_keeps_a_genuinely_split_billion_dollar_fact():
+    context = build_translation_context([
+        "The platforms committed $600",
+        "billion in capital expenditure.",
+    ])
+    assert "$600B" in context.to_prompt_context()
