@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-28 | Codex | 有界规范化 OCR 框并保存原始坐标，校验逐帧断点后续扫。 |
 | 1.0.0 | 2026-10-27 | Codex | 渲染前识别源字幕，复用源摘要绑定证据，失败进入复核。 |
 """
 import base64
@@ -36,6 +37,9 @@ MAX_SCAN_SECONDS = 1200
 MAX_REVIEW_SECONDS = 900
 BATCH_SIZE = 6
 MAX_BATCHES = 72
+SCAN_VERSION = 'native-scan-v2'
+# Vision 可返回略微越界的边缘框；最多容忍各轴 1%，并仍要求有效可见面积。
+BOX_OVERSHOOT = .01
 
 
 class NativeCaptionReviewRequired(ValueError):
@@ -59,13 +63,13 @@ def vision_worker():
             worker.stdout.close()
 
 
-def observe(worker, frame):
+def observe(worker, frame, timeout=45):
     ok, png = cv2.imencode('.png', frame)
     if not ok:
         raise ValueError('OCR_FRAME_ENCODING')
     worker.stdin.write(base64.b64encode(png) + b'\n')
     worker.stdin.flush()
-    if not select.select([worker.stdout], [], [], 45)[0]:
+    if not select.select([worker.stdout], [], [], timeout)[0]:
         raise ValueError('OCR_TIMEOUT')
     data = json.loads(worker.stdout.readline())
     if not isinstance(data.get('rows'), list):
@@ -73,11 +77,57 @@ def observe(worker, frame):
     return data['rows']
 
 
+def normalize_row(row):
+    """仅规范化几何边界，不提升置信度，不丢弃无法解释的 OCR 结果。"""
+    try:
+        text, raw = row['text'].strip(), list(row['box'])
+        confidence = float(row['confidence'])
+        if (len(raw) != 4 or not math.isfinite(confidence) or not 0 <= confidence <= 1
+                or not all(isinstance(v, (int, float)) and math.isfinite(v)
+                           and -BOX_OVERSHOOT <= v <= 1 + BOX_OVERSHOOT for v in raw)):
+            raise ValueError('OCR_INVALID_ROW')
+        box = [min(1., max(0., v)) for v in raw]
+        if box[0] >= box[2] or box[1] >= box[3]:
+            raise ValueError('OCR_INVALID_ROW')
+        return dict(text=text, box=box, raw_box=raw, confidence=confidence)
+    except (KeyError, TypeError, AttributeError, OverflowError) as exc:
+        raise ValueError('OCR_INVALID_ROW') from exc
+
+
+def _load_partial(path, identity, timeline):
+    """旧版、损坏或错源断点不能被当成已扫描帧。"""
+    try:
+        envelope = json.loads(path.read_text())
+        state = envelope['state']
+        if (envelope['identity'] != identity or envelope['sha256'] != fingerprint(state)
+                or state['timeline'] != timeline):
+            return [], 0
+        index, runs = state['frame_count'], state['runs']
+        if type(index) is not int or not 0 <= index <= timeline['expected'] or not isinstance(runs, list):
+            return [], 0
+        for i, run in enumerate(runs):
+            normalized = normalize_row(dict(text=run['text'], box=run['box'], confidence=run['confidence']))
+            if (run['id'] != i or not run['text'] or normalized['box'] != run['box']
+                    or type(run['first']) is not int or type(run['last']) is not int
+                    or not 0 <= run['first'] < run['last'] <= index
+                    or run['chinese'] != bool(HAN.search(run['text']))):
+                return [], 0
+        return runs, index
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return [], 0
+
+
+def _save_partial(path, identity, timeline, runs, index):
+    state = dict(timeline=timeline, runs=runs, frame_count=index)
+    atomic_write_json(path, dict(identity=identity, state=state, sha256=fingerprint(state)))
+
+
 def scan(source, directory, progress):
     """扫描实际解码的每一帧；连续相同文字压缩成 run，不用抽帧推断覆盖率。"""
     from .burned_caption_repair import _probe
     probed_width, probed_height, probed_fps, duration = _probe(source)
-    identity = dict(source_sha256=digest(source), scanner_sha256=digest(VISION), version=VERSION)
+    identity = dict(source_sha256=digest(source), scanner_sha256=digest(VISION), version=VERSION,
+                    scan_version=SCAN_VERSION, router_sha256=digest(Path(__file__)))
     cache = directory / 'scan.json'
     if cache.is_file():
         try:
@@ -96,27 +146,40 @@ def scan(source, directory, progress):
             or abs(expected / fps - duration) > 1 / fps):
         capture.release()
         raise ValueError('SOURCE_TIMELINE_UNCERTAIN')
-    runs, active, index = [], {}, 0
+    timeline = dict(fps=fps, expected=expected, width=width, height=height)
+    partial = directory / 'partial-scan.json'
+    runs, index = _load_partial(partial, identity, timeline)
+    active = {(r['text'], tuple(round(v, 2) for v in r['box'])): r['id']
+              for r in runs if r['last'] == index}
     deadline = time.monotonic() + MAX_SCAN_SECONDS
     try:
+        # 顺序解码到已核验边界，不依赖压缩视频随机 seek 的帧定位精度。
+        for skipped in range(index):
+            if time.monotonic() > deadline:
+                raise ValueError('OCR_BUDGET_EXCEEDED')
+            if not capture.grab():
+                raise ValueError('SOURCE_INCOMPLETE_OR_CHANGED')
+            if skipped % max(1, round(fps * 5)) == 0:
+                progress('SOURCE_CAPTION_LOCATING')
         with vision_worker() as worker:
             while True:
+                if time.monotonic() > deadline:
+                    raise ValueError('OCR_BUDGET_EXCEEDED')
                 ok, frame = capture.read()
                 if not ok:
                     break
+                # 整帧验证成功才推进断点，避免失败帧污染已完成的 run。
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError('OCR_BUDGET_EXCEEDED')
+                rows = [normalize_row(row) for row in observe(worker, frame, timeout=min(45, remaining))]
                 if time.monotonic() > deadline:
                     raise ValueError('OCR_BUDGET_EXCEEDED')
-                rows = observe(worker, frame)
                 current = {}
                 for row in rows:
-                    text, box, confidence = row['text'].strip(), row['box'], float(row['confidence'])
+                    text, box, confidence = row['text'], row['box'], row['confidence']
                     if not text:
                         continue
-                    if (len(box) != 4 or not math.isfinite(confidence) or not 0 <= confidence <= 1
-                            or not all(math.isfinite(v) and -1 / size <= v <= 1 + 1 / size
-                                       for v, size in zip(box, (width, height, width, height)))):
-                        raise ValueError('OCR_INVALID_ROW')
-                    box = [min(1., max(0., v)) for v in box]
                     key = (text, tuple(round(v, 2) for v in box))
                     # OCR 框轻微移动会分成多个 run；保留每帧边界，宿主合并覆盖。
                     if key in active:
@@ -124,15 +187,21 @@ def scan(source, directory, progress):
                         run['last'], run['confidence'] = index + 1, min(confidence, run['confidence'])
                     else:
                         run = dict(id=len(runs), text=text, box=box, confidence=confidence,
-                                   chinese=bool(HAN.search(text)), first=index, last=index + 1)
+                                   raw_box=row['raw_box'], chinese=bool(HAN.search(text)),
+                                   first=index, last=index + 1)
                         runs.append(run)
+                    if row['raw_box'] != box:
+                        run.setdefault('boundary_adjustments', []).append(
+                            dict(frame=index, raw_box=row['raw_box']))
                     current[key] = run['id']
                 active = current
                 index += 1
                 if index % max(1, round(fps * 5)) == 0:
                     progress('SOURCE_CAPTION_LOCATING')
+                if index % max(1, round(fps * 30)) == 0:
+                    _save_partial(partial, identity, timeline, runs, index)
     except Exception:
-        atomic_write_json(directory / 'partial-scan.json', dict(identity=identity, frame_count=index, runs=runs))
+        _save_partial(partial, identity, timeline, runs, index)
         raise
     finally:
         capture.release()

@@ -2212,6 +2212,9 @@ class PipelineManager:
     @guarded("video", lambda self, cmd, yid, slice_index=0, **kw: f"{yid}:{slice_index}")
     def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, **kwargs):
         from .core.maintenance_child import child_continuation
+        # 先补齐业务环境，再附加维护凭据；否则原始 env 会绕过下层的 PATH 保底。
+        if kwargs.get("env") is None:
+            kwargs["env"] = _build_subprocess_env()
         with child_continuation(cmd, kwargs) as child_kwargs:
             return self._run_tracked_impl(cmd, yid, slice_index, **child_kwargs)
 
