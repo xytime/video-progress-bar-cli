@@ -1,6 +1,7 @@
 """上传前瞬态失败重试与文案金额告警测试。
 
 # Modification History
+| notification-guard-v2 | 2026-10-27 | Codex | UNKNOWN保持未送达且不重放，替换旧的未知后重发断言。 |
 | Version | Date | Author | Description |
 | ------- | ---- | ------ | ----------- |
 | 1.3.0 | 2026-08-22 | Codex | 覆盖 Telegram 手机审核视频的 HTTP 回执与视频上传载荷。 |
@@ -270,7 +271,7 @@ def test_manager_suppresses_duplicate_p1_notification(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
-def test_manager_retries_unknown_notification_instead_of_treating_it_as_delivered(monkeypatch, tmp_path):
+def test_manager_does_not_replay_unknown_notification_or_treat_it_as_delivered(monkeypatch, tmp_path):
     manager = _manager(tmp_path, "telegram-unknown")
     manager.telegram_token = "test-token"
     manager.telegram_chat_id = "test-chat"
@@ -294,8 +295,8 @@ def test_manager_retries_unknown_notification_instead_of_treating_it_as_delivere
     message = "❌ <b>Video Failed</b>\\nID: <code>telegram-unknown</code>\\nReason: timeout"
 
     assert not manager.send_telegram_msg(message)
-    assert manager.send_telegram_msg(message)
-    assert len(calls) == 2
+    assert not manager.send_telegram_msg(message)
+    assert len(calls) == 1
 
 
 def test_manager_dedupes_same_task_when_failure_reason_changes(monkeypatch, tmp_path):
