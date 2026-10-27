@@ -452,8 +452,11 @@ class Settings(BaseSettings):
     gemini_subtitle_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
 
     # 旧切组接口仅保留兼容；YouTube 获取使用显式代理与只读出口验收。
-    youtube_download_proxy: str = "http://127.0.0.1:7890"
+    youtube_download_proxy: str = "http://127.0.0.1:9110"
     youtube_download_required_node: str = "hy2-ai.optionbank.us"
+    youtube_egress_root: Path = Path.home() / ".local/share/video-egress"
+    youtube_egress_interface: str = "en0"
+    youtube_controller_socket: Path = Path.home() / ".local/share/video-egress/control.sock"
     clash_api_url: str = "http://127.0.0.1:9090"   # Clash 外部控制器地址
     clash_api_secret: Optional[str] = None          # CLASH_API_SECRET=...
     clash_proxy_group: str = "🌍 国外网站"           # 要切换的代理组

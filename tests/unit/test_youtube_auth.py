@@ -91,8 +91,8 @@ def test_cookie_validation_forwards_controlled_network_environment(tmp_path: Pat
     )
 
     assert result.ok is True
-    assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:7890"
-    assert captured["env"]["http_proxy"] == "http://127.0.0.1:7890"
+    assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:9110"
+    assert captured["env"]["http_proxy"] == "http://127.0.0.1:9110"
     assert captured["env"]["NO_PROXY"] == ""
 
 

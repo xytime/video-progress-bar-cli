@@ -25,7 +25,7 @@ def test_coordinator_success_preserves_explicit_proxy_and_exit(monkeypatch):
     commands=[]
     monkeypatch.setattr(cli, '_run_command', lambda cmd: commands.append(cmd) or subprocess.CompletedProcess(cmd, 7, '', ''))
     assert cli.main(['--skip-download', 'https://youtu.be/example']) == 7
-    assert commands[0][commands[0].index('--proxy')+1] == 'http://127.0.0.1:7890'
+    assert commands[0][commands[0].index('--proxy')+1] == 'http://127.0.0.1:9110'
     assert '--ignore-config' in commands[0]
 
 @pytest.mark.parametrize('args', [
@@ -53,6 +53,6 @@ def test_normalized_command_has_enforced_options_before_sources(monkeypatch, arg
     monkeypatch.setattr(cli, '_run_command', lambda cmd: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0, '', ''))
     assert cli.main(args) == 0
     _, options, sources = parseOpts(commands[0][1:], ignore_config_files=True)
-    assert options.proxy == 'http://127.0.0.1:7890'
+    assert options.proxy == 'http://127.0.0.1:9110'
     assert options.ignoreconfig is True
     assert sources == ['https://youtu.be/example']

@@ -12,9 +12,9 @@ from video_processing.utils.download_strategy import DownloadOptions, execute_do
 
 
 def config():
-    return SimpleNamespace(youtube_download_proxy='http://127.0.0.1:7890',
+    return SimpleNamespace(youtube_download_proxy='http://127.0.0.1:9110',
                            youtube_download_required_node='hy2-ai.optionbank.us',
-                           clash_api_url='http://127.0.0.1:9090', clash_api_secret='test')
+                           youtube_controller_socket='/private/test-egress/control.sock')
 
 
 def state():
@@ -76,7 +76,7 @@ class ProbeSocket:
         return result
 
 
-@pytest.mark.parametrize('fault', [None, 'other_port', 'other_host', 'other_ip', 'other_destination', 'udp', 'duplicate', 'missing'])
+@pytest.mark.parametrize('fault', [None, 'other_port', 'other_host', 'other_ip', 'other_destination', 'udp', 'duplicate', 'missing', 'null'])
 def test_probe_only_accepts_its_own_live_connection(monkeypatch, fault):
     connection = ProbeSocket()
     metadata = dict(sourceIP='127.0.0.1', sourcePort='54321', host='www.youtube.com', destinationPort='443', network='tcp')
@@ -85,7 +85,7 @@ def test_probe_only_accepts_its_own_live_connection(monkeypatch, fault):
     if fault in changes:
         key, value = changes[fault]; metadata[key] = value
     row = {'metadata': metadata, 'chains': [config().youtube_download_required_node, 'PROXY']}
-    rows = [] if fault == 'missing' else [row, row] if fault == 'duplicate' else [row]
+    rows = None if fault == 'null' else [] if fault == 'missing' else [row, row] if fault == 'duplicate' else [row]
     monkeypatch.setattr(route.socket, 'create_connection', lambda *a, **kw: connection)
     def wrap(sock, server_hostname):
         assert sock is connection and server_hostname == 'www.youtube.com'
@@ -149,7 +149,7 @@ def test_forced_urllib_proxy_does_not_consult_no_proxy(monkeypatch):
     monkeypatch.setenv('NO_PROXY', '*')
     req = Request('https://www.youtube.com/api/timedtext')
     route._ForcedProxyHandler({}).proxy_open(req, config().youtube_download_proxy, 'https')
-    assert req.host == '127.0.0.1:7890'
+    assert req.host == '127.0.0.1:9110'
     assert req._tunnel_host == 'www.youtube.com'
 
 

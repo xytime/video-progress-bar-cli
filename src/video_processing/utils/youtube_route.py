@@ -1,4 +1,10 @@
-"""YouTube 独立下载入口：核对真实连接的自建出口，无法证明就拒绝获取。"""
+"""YouTube 独立下载入口：核对真实连接的自建出口，无法证明就拒绝获取。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 2.0 | 2026-10-27 | Codex | 独立后台出口与 Unix 控制面，解除桌面客户端端口依赖。 |
+"""
 from __future__ import annotations
 
 import json
@@ -7,13 +13,15 @@ import logging
 import re
 import socket
 import ssl
+import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import quote, urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import ProxyHandler, build_opener
 
 from config.settings import settings
+from .youtube_egress import controller_json, proxy_endpoint
 
 logger = logging.getLogger(__name__)
 _PROBE_HOST = 'www.youtube.com'
@@ -24,15 +32,10 @@ class YoutubeRouteError(RuntimeError):
 
 
 def _controller_json(path: str, config) -> dict:
-    url = urlsplit(config.clash_api_url)
-    if url.scheme != 'http' or url.hostname != '127.0.0.1' or not url.port:
-        raise YoutubeRouteError('YouTube 出口检查只允许本机 Clash 控制器')
-    request = Request(config.clash_api_url.rstrip('/') + path)
-    if config.clash_api_secret:
-        request.add_header('Authorization', 'Bearer ' + config.clash_api_secret)
-    # 控制面直连回环，不能递归经过待验收的代理。
-    with build_opener(ProxyHandler({})).open(request, timeout=3) as response:
-        return json.load(response)
+    try:
+        return controller_json(path, Path(config.youtube_controller_socket).expanduser())
+    except (FileNotFoundError, ConnectionRefusedError):
+        raise YoutubeRouteError('独立 YouTube 出口服务未就绪；保留缓存等待恢复') from None
 
 
 def _probe_youtube_connection(config, endpoint) -> dict:
@@ -54,7 +57,7 @@ def _probe_youtube_connection(config, endpoint) -> dict:
         # 完成真实握手后连接才进入 Clash 活跃连接表；保持打开直到回读完成。
         with ssl.create_default_context().wrap_socket(connection, server_hostname=_PROBE_HOST):
             for attempt in range(5):
-                rows = _controller_json('/connections', config).get('connections', [])
+                rows = _controller_json('/connections', config).get('connections') or []
                 matches = []
                 for row in rows:
                     metadata = row.get('metadata', {})
@@ -78,13 +81,16 @@ def verify_youtube_route(*, config=None, expected_proxy: str | None = None) -> d
     proxy = expected_proxy or config.youtube_download_proxy
     node = config.youtube_download_required_node
     try:
-        endpoint = urlsplit(proxy)
-        if proxy != config.youtube_download_proxy or endpoint.scheme != 'http' or endpoint.hostname != '127.0.0.1' or endpoint.port != 7890 or endpoint.username or endpoint.password or endpoint.path not in ('', '/'):
-            raise YoutubeRouteError('YouTube 下载必须使用本机 HTTP 代理 127.0.0.1:7890')
+        endpoint = proxy_endpoint(proxy)
+        if proxy != config.youtube_download_proxy:
+            raise YoutubeRouteError('YouTube 下载入口与独立出口配置不一致')
         actual_node = _controller_json('/proxies/' + quote(node, safe=''), config)
         if actual_node.get('type') != 'Hysteria2' or actual_node.get('all') is not None:
             raise YoutubeRouteError('YouTube 目标必须是自建实体节点，不能是可切换策略组')
-        connection = _probe_youtube_connection(config, endpoint)
+        try:
+            connection = _probe_youtube_connection(config, endpoint)
+        except (OSError, ssl.SSLError):
+            raise YoutubeRouteError('独立出口未能建立 YouTube 连接；检查自建节点或目标服务') from None
         chains = connection.get('chains')
         # Clash chains 从实际出口到上层策略组排列；允许任意分组，只验最终实体节点。
         if not isinstance(chains, list) or not chains or chains[0] != node:
@@ -96,6 +102,7 @@ def verify_youtube_route(*, config=None, expected_proxy: str | None = None) -> d
         raise YoutubeRouteError(f'YouTube 出口无法验收，停止获取：{type(exc).__name__}') from None
     return {'proxy': proxy, 'required_node': node, 'policy_verified': True,
             'verification': 'live_connection', 'probe_host': _PROBE_HOST,
+            'service': 'independent-egress',
             'checked_at': time.time()}
 
 
@@ -123,6 +130,20 @@ class _ForcedProxyHandler(ProxyHandler):
 def youtube_opener():
     return build_opener(_ForcedProxyHandler({'http': settings.youtube_download_proxy,
                                             'https': settings.youtube_download_proxy}))
+
+
+def youtube_urlopen(request, *, timeout=20):
+    """频道 RSS / Data API 同样使用独立出口，不继承系统代理。"""
+    verify_youtube_route()
+    return youtube_opener().open(request, timeout=timeout)
+
+
+def run_youtube_metadata(command, *, timeout=180):
+    """元数据 CLI 的网络边界，业务采集器不自行选择代理。"""
+    from .subprocess_env import build_subprocess_env
+    return subprocess.run([command[0], *youtube_cli_args(), *command[1:]],
+                          capture_output=True, text=True, timeout=timeout,
+                          env=youtube_environment(build_subprocess_env()))
 
 
 def _reported_bytes(output) -> int | None:

@@ -42,6 +42,7 @@ from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
 from video_processing.utils.generated_content_validation import is_upstream_error_response
 from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_channel_catalog
+from video_processing.utils.youtube_route import run_youtube_metadata
 
 # 由 cron 每 30 分钟唤醒，但不再每轮访问所有频道。
 CORE_CHANNEL_IDS = {"UCTK_cv-y88CScoudcXnS1Ew"}  # Wall Street Truthbombs
@@ -338,7 +339,7 @@ def discover_high_like_videos(db: PipelineDB, *, progress=None):
                 *settings.get_yt_cookie_args()
             ]
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)  # [Claude_Opus_4.6_Thinking_planning] 120→180s，dateafter过滤需更多时间
+                result = run_youtube_metadata(cmd, timeout=180)
                 if result.returncode != 0:
                     report['failed'] += 1
                     print(f"  -> Search failed for '{keyword}' (exit={result.returncode})")

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 |---------|------------|--------|-------------|
+| 1.3.0 | 2026-10-27 | Codex | Data API 与 RSS 统一使用独立自建出口。 |
 | 1.1.0 | 2026-08-23 | Codex | 保留 UTC 精确源发布时间，供视频号原创声明按 24 小时判定 |
 | 1.2.0 | 2026-09-25 | Codex | 批量读取视频统计，供低成本重评候选复查 |
 | 1.0.0 | 2026-07-28 | Codex | 新增 Data API 主源与 RSS 降级，解除频道发现对 yt-dlp 反爬状态的依赖 |
@@ -20,7 +21,8 @@ import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .youtube_route import youtube_urlopen as urlopen
 import xml.etree.ElementTree as ET
 
 

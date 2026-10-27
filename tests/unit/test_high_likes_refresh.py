@@ -32,7 +32,7 @@ def test_collector_counts_only_actual_inserts_and_preserves_discovery(tmp_path, 
                         line('low-id', 500), line('old-id', date='20200101'),
                         line('missing-id', 'NA'), 'malformed'])
     monkeypatch.setattr(monitor, 'get_discovery_keywords', lambda: ['sample'])
-    monkeypatch.setattr(monitor.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=0, stdout=output))
+    monkeypatch.setattr(monitor, 'run_youtube_metadata', lambda *a, **k: SimpleNamespace(returncode=0, stdout=output))
     monkeypatch.setattr(monitor, '_translate_title_or_source', lambda yid, title: title)
     checkpoints = []
     report = monitor.discover_high_like_videos(db, progress=checkpoints.append)
@@ -55,7 +55,7 @@ def test_collector_distinguishes_empty_failure_and_timeout(monkeypatch):
         if 'ytsearch10:timeout' in cmd:
             raise subprocess.TimeoutExpired(cmd, 180)
         return SimpleNamespace(returncode=1 if 'ytsearch10:failed' in cmd else 0, stdout='')
-    monkeypatch.setattr(monitor.subprocess, 'run', search)
+    monkeypatch.setattr(monitor, 'run_youtube_metadata', search)
     report = monitor.discover_high_like_videos(None)
     assert (report['searches'], report['completed'], report['failed'], report['timeouts']) == (3, 3, 1, 1)
     assert report['added'] == report['candidates'] == 0

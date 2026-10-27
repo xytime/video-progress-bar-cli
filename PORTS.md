@@ -24,6 +24,7 @@ created_at: 2026-05-21T17:58:00+08:00
 | `8000` | **OptionSense** | Web UI 控制台 | `ui start` (OptionSense) |
 | `9100` | **Video-precessing** | Pipeline 仪表盘（局域网可访问） | `./vpanel ui start`（端口可经 `DASHBOARD_PORT` 覆盖；默认绑定 `0.0.0.0`，浏览器请求必须与当前访问地址同源） |
 | `9191` | **Video-precessing** | 视频预筛选隔离验收预览（仅本机、模拟响应、临时数据库） | 临时源码副本 `preview.py`，通过 `DASHBOARD_PORT=9191` 启动；不运行主控制台或流水线 |
+| `9110` | **Video-precessing** | 独立 YouTube 自建出口，仅 `127.0.0.1` | `us.optionbank.video-egress` LaunchAgent；`YOUTUBE_DOWNLOAD_PROXY`；控制面只使用私有 Unix socket |
 
 ## 保留/禁用端口（勿占）
 
