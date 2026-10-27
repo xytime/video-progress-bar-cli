@@ -137,6 +137,7 @@ Do not invoke bare pytest against the live checkout: collection imports settings
 
 These encode hard-won failures — violating them silently corrupts subtitles:
 
+- **已有中文字幕优先保留**：字幕处理前先核实源片是否已有完整、清晰、与对白对应的中文字幕（简体、繁体或中英双语均可）。确认后保留原字幕，不再叠加、遮盖或为替换字幕而修复画面；内容审核、封面及发布检查照常执行。中文标题、姓名牌或零星中文不算完整字幕；判断不清先复核并保留已有检查点。执行细则及当前自动化边界见 [原片中文字幕处理流程](docs/workflows/source-chinese-subtitles.md)。
 - **ASS line breaks**: pysubs2 does not honor Python `\n`. Run `text.replace('\n', '\\N')` before building any `SSAEvent`. `\N` is ASS's only forced line break.
 - **Order matters（中文 v1.5.0 起已更新）**: 中、英文都是 **先高亮、后折行**，但折行必须用 *tag-aware* 折行器——英文 `tag_aware_wrap`、中文 `tag_aware_wrap_zh`。二者把 `{...}` 标签视觉记为 0 宽、且把**完整高亮短语当不可分原子**，故 `\N` 既不会落进标签内部、也不会把生词词组（如「头条叙事」）从中间劈开。**切勿改回**「先 `textwrap.fill` 再 `apply_chinese_highlights`」的旧顺序——那会按字符任意断行劈断词组，使中文生词的连续子串匹配失败而漏标（中英高亮不对称 Bug，见 `subtitle_stylist.py` v1.5.0）。
 - **Bilingual margins are dynamic**: the Chinese layer's bottom margin must be computed from the English layer's actual wrapped line count (e.g. `margin_zh = 10 + en_lines*18 + 5`) — never a fixed offset, or layers overlap.
