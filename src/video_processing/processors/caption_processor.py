@@ -1,6 +1,7 @@
 """智能字幕处理器 - 提供语音转文字、翻译及ASS字幕生成功能
 
 # Modification History
+| native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
@@ -232,6 +233,17 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     segments = []
                 checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
+            # 普通流水线先核验已有中文字幕；独立教学/配音制作不隐式启用。
+            if getattr(self, 'preserve_source_chinese', False):
+                from .native_caption_router import route
+                from ..utils.native_caption_source import preserve
+                if getattr(self, 'tts_provider', None):
+                    raise ValueError('原字幕保留不能替代已指定的配音制作合同')
+                if route(self.input_path, self.output_path, segments, self._report_progress) == 'PRESERVE':
+                    preserve(self.input_path, self.output_path)
+                    self._report_progress('COMPLETE')
+                    return self.output_path
+
             # 4. 翻译 (如果提供了目标语言且不同于源语言)
             if self.target_lang and self.target_lang != self.src_lang:
                 contract = dict(asr_sha256=fingerprint(segments), src_lang=self.src_lang,

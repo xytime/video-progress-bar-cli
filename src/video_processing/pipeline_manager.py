@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | native-captions-v1 | 2026-10-27 | Codex | 单片摘要绑定保留原有中文字幕，复用原片并继续内容及发布门禁。 |
 | remix-entry-guard-v1 | 2026-10-25 | GPT-6.1 Sol | 普通加工及发布入口拒绝合规二创来源，保留独立审批边界。 |
 | manual-result-feedback-v1 | 2026-10-25 | Codex | 保留本次投稿动作证据，区分策略性人工确认与真实结果未知。 |
@@ -2385,8 +2386,8 @@ class PipelineManager:
     def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
         from .processors.vocabulary_outro import valid_outro, valid_empty_receipt
         from .utils.vocabulary_outro_policy import read_record
-        from .utils.native_caption_source import approved_entry, validate_preserved
-        if approved_entry(prefix):
+        from .utils.native_caption_source import requested, validate_preserved
+        if requested(self._OUT_DIR / f"{prefix}_vertical.mp4"):
             vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
             validate_preserved(vertical)
             return vertical
@@ -3838,11 +3839,12 @@ class PipelineManager:
                 target_file = bound[0]
         except (ValueError, OSError, KeyError, TypeError) as exc:
             return f"加工素材绑定无效：{type(exc).__name__}"
-        from .utils.native_caption_source import approved_entry, validate_preserved
-        if approved_entry(prefix):
+        from .utils.native_caption_source import requested, validate_preserved, preserved_source
+        if requested(self._OUT_DIR / f"{prefix}_vertical.mp4"):
             try:
+                target_file = preserved_source(self._OUT_DIR / f"{prefix}_vertical.mp4", target_file)
                 validate_preserved(self._OUT_DIR / f"{prefix}_vertical.mp4", target_file)
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError, KeyError, TypeError) as exc:
                 return f"原字幕保留凭证无效：{exc}"
             subtitle_error = None
         else:
@@ -3851,7 +3853,9 @@ class PipelineManager:
             return subtitle_error
 
         vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
-        if not vertical.is_file() or vertical.stat().st_size <= 1_000_000:
+        # 原样交付已校验源/成片摘要，短片可能不足 1MB；仍执行下方时长完整性检查。
+        minimum_size = 0 if requested(vertical) else 1_000_000
+        if not vertical.is_file() or vertical.stat().st_size <= minimum_size:
             return "缺少有效竖版成片"
         try:
             from .utils.video_metadata import get_video_duration_ffprobe
@@ -4801,9 +4805,11 @@ class PipelineManager:
                 # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
                 # 字幕生成器使用 input_path.with_suffix，必须与真实输入路径一致（含切片）。
                 _ass_file = Path(target_file).with_suffix(".ass")
-                from .utils.native_caption_source import approved_entry, preserve, validate_preserved
-                native_captions = bool(approved_entry(prefix))
+                from .utils.native_caption_source import requested, preserve, validate_preserved, preserved_source
+                native_captions = requested(vertical)
                 if native_captions:
+                    if submission_only:
+                        target_file = preserved_source(vertical, Path(target_file))
                     preserve(Path(target_file), vertical)
                 _cache_valid = False
                 try:
@@ -4896,6 +4902,7 @@ class PipelineManager:
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                         "--progress-file", str(progress_file),
+                        *(['--preserve-source-chinese'] if not video.get('tts_provider') else []),
                         *(['--copy-reused'] if copy_checkpoint_ready else []),
                     ]
                     # [Claude_Opus_4.8] 源视频「发布日期」毛玻璃戳：仅在开关开启且能取到合法 upload_date 时注入。
@@ -4983,6 +4990,10 @@ class PipelineManager:
                         )
                         return
 
+                # 子进程可能刚完成自动保留；必须在 ASS/增强层门禁前重新读取凭证。
+                native_captions = requested(vertical)
+                if native_captions:
+                    validate_preserved(vertical, Path(target_file))
                 canonical_ass = self._OUT_DIR / f"{prefix}.ass"
                 if not native_captions and _ass_file.resolve() != canonical_ass.resolve():
                     # 包括关闭裁剪后恢复原片，避免审查沿用上一版本的零起点字幕。
@@ -4990,7 +5001,7 @@ class PipelineManager:
                     temporary_ass = canonical_ass.with_suffix(".pending.ass")
                     shutil.copy2(_ass_file, temporary_ass)
                     temporary_ass.replace(canonical_ass)
-                if Path(target_file).parent.parent == self._OUT_DIR / "speech_opening":
+                if not native_captions and Path(target_file).parent.parent == self._OUT_DIR / "speech_opening":
                     bind_render_source(vertical, Path(target_file), _ass_file)
                 else:
                     binding_path(vertical).unlink(missing_ok=True)

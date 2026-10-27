@@ -50,6 +50,10 @@ def test_modified_artifacts_fail_closed(approved, target):
         data = json.loads(path.read_text())
         data['source_sha256'] = 'tampered'
         path.write_text(json.dumps(data))
+    elif target == 'approval':
+        data = json.loads(path.read_text())
+        data['sources']['demo']['review_text'] = 'changed review'
+        path.write_text(json.dumps(data))
     else:
         path.write_bytes(path.read_bytes() + b' ')
     with pytest.raises((ValueError, OSError)):
@@ -93,3 +97,33 @@ def test_final_selection_keeps_exact_source_and_rejects_tamper(approved):
     vertical.write_bytes(b'changed')
     with pytest.raises(ValueError):
         PipelineManager._get_published_video_path(manager, 'demo')
+
+
+def test_another_approval_does_not_invalidate_existing_video(approved):
+    source, vertical, approval = approved
+    native.preserve(source, vertical)
+    data = json.loads(approval.read_text())
+    data['sources']['another'] = {'user_confirmed': True, 'review_text': 'other'}
+    approval.write_text(json.dumps(data))
+    assert native.validate_preserved(vertical, source)
+
+
+def test_legacy_submitted_receipt_stays_unchanged(approved, monkeypatch):
+    source, vertical, approval = approved
+    legacy = approval.with_name('legacy.json')
+    legacy.write_bytes(approval.read_bytes())
+    monkeypatch.setattr(native, 'LEGACY_APPROVALS', legacy)
+    vertical.write_bytes(source.read_bytes())
+    receipt = native.receipt_path(vertical)
+    receipt.write_text(json.dumps(dict(version=1, mode='preserve_native_captions',
+                                      approval_sha256=digest(legacy), source_sha256=digest(source))))
+    before = receipt.read_bytes()
+    data = json.loads(approval.read_text())
+    data['sources']['another'] = {'user_confirmed': True}
+    approval.write_text(json.dumps(data))
+    native.preserve(source, vertical)
+    assert receipt.read_bytes() == before
+    data['sources']['demo']['review_text'] = 'tamper'
+    approval.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        native.validate_preserved(vertical, source)

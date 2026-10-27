@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "sources": {
+    "5Fi-oCg2WxQ": {
+      "user_confirmed": true,
+      "confirmed_at": "2026-10-27",
+      "instruction": "这个视频原本就有中文字幕，所以我们没有必要再叠加",
+      "source_sha256": "0a707a652adec536202c2db69364900c41f7790198ab118877c7be629737a309",
+      "review_text_origin": "已绑定同一源片的完整 ASR 和中文译文，仅供内容审查，不代表新增烧录字幕",
+      "review_text": "Some people said that AI is here is going to be the end of software.\n有人说，AI 的到来将意味着软件的终结。\nIt's going to be end of tools company.\n也将意味着工具公司的终结。\nIt's exactly the opposite.\n事实恰恰相反。\nAI is here, there'll be more users of\nAI 已经到来，使用这些工具的人会更多，\nthese tools that we created over time than ever before.\n比以往任何时候都多。\nEvery single tools company will now become an AI company.\n现在每一家工具公司都将成为 AI 公司。\nThere'll be an agents company,\n将会出现代理公司，\nnot only where they offer tools,\n它们不仅提供工具，\nbut they'll offer you specially optimized agents\n还会为你提供专门优化的代理，\nthat are incredibly good at using their tools.\n这些代理非常擅长使用它们的工具。\nCanes and CrowdStrike and the so Iqvius,\nCanes、CrowdStrike 和 Iqvius，\nand just about every enterprise company out there are all building agents,\n以及几乎所有企业公司都在构建代理，\nand we're just delighted to be working with them.\n我们很高兴能与它们合作。\nBuilding agents is not that hard.\n构建代理并没有那么难。\nIt's got five components.\n它由五个组件组成。\nIt's got the model, the harness.\n包括模型和 harness。\nBoth of them have closed and open versions,\n这两者都有闭源和开放版本，\nbut the open shell secure runtime,\n还有开放式 shell 和安全运行时，\nand then most importantly,\n然后最重要的是，\nthe knowledge and tools and those knowledge and tools belong to you.\n知识和工具，而这些知识和工具属于你。\nThat's your expertise.\n那就是你的专业知识。"
+    }
+  }
+}

@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 1.9.0 | 2026-10-27 | Codex | 普通流水线可在翻译前分流原片中文字幕，独立制作默认不启用。 |
 | 1.8.0 | 2026-10-23 | Codex | 心跳保留已复用步骤，让字幕定位/渲染与转录分开展示。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，提供 cli 主入口与 edge/indextts 选择 |
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-cosy 参数，支持阿里云百炼 CosyVoice 配音服务，标有 # [Gemini_3.5_Flash_planning] |
@@ -119,7 +120,8 @@ def _build_progress_reporter(progress_file: Path | None):
 @click.option('--source-date', default=None, help='Source video publish date (YYYY-MM-DD) for the frosted date stamp in the top-left corner. Vertical mode only.')  # [Claude_Opus_4.8]
 @click.option('--progress-file', type=click.Path(path_type=Path), default=None, help='Optional atomic stage heartbeat file for the parent pipeline.')
 @click.option('--copy-reused', is_flag=True, help='Report an already verified copywriting checkpoint.')
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file, copy_reused=False):
+@click.option('--preserve-source-chinese', is_flag=True, help='Check existing Chinese captions before translation; uncertain sources require review.')
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file, copy_reused=False, preserve_source_chinese=False):
     """Generate and burn bilingual subtitles for a video."""
     progress_reporter = _build_progress_reporter(progress_file)
     if progress_reporter is not None:
@@ -158,6 +160,9 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
             )
             mode_str = "Standard"
         
+        if preserve_source_chinese and (not vertical or output is None):
+            raise click.UsageError('--preserve-source-chinese requires --vertical and --output')
+        processor.preserve_source_chinese = preserve_source_chinese
         click.echo(f"Starting auto-captioning for: {input_path}")
         click.echo(f"Mode: {mode_str}")
         click.echo(f"Configuration: Model={model}, Src={src_lang}, Target={target_lang}, Device={device}, Style={style}")
