@@ -16,7 +16,7 @@
 | 1.6.0   | 2026-07-09 | Codex  | 仅允许上下文补足事件语义，不再为单句金额检查继承全片金额，避免财经长字幕跨句错配导致 P0 误杀 |
 | 1.7.0   | 2026-07-09 | Codex  | 对被字幕切断的金额短语做窄范围补全：仅当本句出现裸数字而上下文出现同尾数带单位金额时，提升为带单位金额，避免 `$600` vs `$450B` 这类拆句误杀 |
 | 1.8.0   | 2026-07-13 | Codex  | 支持暂时禁用金额数量级检查，保留事件方向与空译文安全检查 |
-| 1.9.0   | 2026-10-27 | Codex  | 金额单位必须完整匹配；仅凭真实相邻字幕补全拆分单位，普通美元中文金额纳入校验 |
+| 1.9.0   | 2026-10-27 | Codex  | 完整单位与真实相邻字幕补全；自然中文金额、精确同值去重及逐段全部金额锚点覆盖校验 |
 """
 
 from __future__ import annotations
@@ -208,6 +208,7 @@ def evaluate_translation_pair(
     context_text: str = "",
     enable_numeric_checks: bool = True,
     next_source_text: str = "",
+    require_amount_coverage: bool = False,
 ) -> GuardResult:
     """评估一组原文/译文是否存在会改变事实的严重错误。
 
@@ -216,6 +217,7 @@ def evaluate_translation_pair(
         translated_text: 待检查的中文译文。
         context_text: 可选的全局上下文；用于补充短字幕缺失的主题语义。
         next_source_text: 实际相邻的下一条源字幕，仅用于补全句尾被切断的金额单位。
+        require_amount_coverage: 显式要求本句美元事实在对应译文保留金额或等价数字锚点。
     """
     source_signal = _merge_source_with_context(
         extract_fact_signal(_complete_split_amount_fragment(source_text, next_source_text), lang="en"),
@@ -227,6 +229,10 @@ def evaluate_translation_pair(
     _append_event_direction_issues(issues, source_signal, translation_signal)
     if enable_numeric_checks:
         _append_amount_issues(issues, source_signal, translation_signal)
+        if require_amount_coverage:
+            _append_missing_amount_issues(
+                issues, source_signal, translation_signal, source_text, translated_text, next_source_text,
+            )
 
     return GuardResult(
         issues=issues,
@@ -242,6 +248,7 @@ def evaluate_translation_batch(
     context_text: str = "",
     enable_numeric_checks: bool = True,
     next_source_text: str = "",
+    require_amount_coverage: bool = False,
 ) -> BatchGuardSummary:
     """批量评估字幕片段，返回可直接用于阻断/告警的摘要。"""
     return BatchGuardSummary([
@@ -250,6 +257,7 @@ def evaluate_translation_batch(
             translated,
             context_text=context_text,
             enable_numeric_checks=enable_numeric_checks,
+            require_amount_coverage=require_amount_coverage,
             next_source_text=(
                 source_texts[index + 1]
                 if index + 1 < len(source_texts) else next_source_text
@@ -374,6 +382,69 @@ def _append_amount_issues(
             return
 
 
+def _append_missing_amount_issues(
+    issues: List[QualityIssue], source_signal: FactSignal, translation_signal: FactSignal,
+    source_text: str, translated_text: str, next_source_text: str,
+) -> None:
+    """逐一检查本句金额锚点；已有数量级问题沿用原门禁，不重复分类。"""
+    if not source_signal.amounts_usd or any(
+        issue.code in {"NUMBER_MAGNITUDE_MISMATCH", "NUMBER_MAGNITUDE_SUSPECT"}
+        for issue in issues
+    ):
+        return
+    numeric_anchors = list(translation_signal.amounts_usd)
+    for match in re.finditer(r"(?<![0-9A-Za-z_])([0-9][0-9,]*(?:\.[0-9]+)?)(?![0-9A-Za-z_])", translated_text):
+        suffix = translated_text[match.end():]
+        if _has_non_amount_suffix(suffix) or re.match(
+            rf"\s*(?:{_chinese_amount_unit_pattern()}|美元|美金|{_english_amount_unit_pattern()})",
+            suffix, re.IGNORECASE,
+        ):
+            # 已带单位的数只贡献规范化金额，不能把100万的系数100再当成裸$100。
+            continue
+        value = _parse_number(match.group(1))
+        if value is not None:
+            numeric_anchors.append(value)
+
+    # 本句 $600 / 下一句 billion 时，本句译文仍可只保留裸 600，单位归下一时间槽。
+    split_amount = split_raw = None
+    completed = _complete_split_amount_fragment(source_text, next_source_text)
+    if completed != source_text:
+        raw = re.search(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", source_text)
+        split_raw = _parse_number(raw.group(1))
+        split_amount = split_raw * _english_amount_multipliers()[completed.rsplit(" ", 1)[1].lower()]
+
+    for amount in source_signal.amounts_usd:
+        equivalents = [amount]
+        if split_amount is not None and _same_numeric_amount(amount, split_amount):
+            equivalents.append(split_raw)
+        if any(_same_numeric_amount(anchor, expected) for anchor in numeric_anchors for expected in equivalents):
+            continue
+        issues.append(QualityIssue(
+            severity="P0", code="NUMBER_AMOUNT_MISSING",
+            message="本句原文的美元金额在对应译文中没有金额或等价数值锚点，可能跨段串句或遗漏事实。",
+            source_signal=_format_usd(amount), translation_signal="amount_not_in_segment",
+            suggested_fix="只翻译本段源文本，将本段金额留在对应时间槽；不要从相邻段借用或搬移事实。",
+        ))
+
+
+def _same_numeric_amount(left: float, right: float) -> bool:
+    return abs(left - right) <= max(1e-9, max(abs(left), abs(right)) * 1e-9)
+
+
+def _has_non_amount_suffix(text: str) -> bool:
+    # 万人、万桶等计数也不能把系数当作美元锚点；美元/桶的金额仍由货币单位确定。
+    return bool(re.match(
+        rf"\s*(?:{_chinese_amount_unit_pattern()}\s*)?"
+        r"(?:[%％]|(?:个)?(?:百分点|基点|年份|年|股|人|桶|倍)|个|bp(?:s)?\b)",
+        text, re.IGNORECASE,
+    ))
+
+
+def _chinese_amount_unit_pattern() -> str:
+    # 先匹配完整复合量词，不能把“千万/百万/百分点”的第一个字当金额单位。
+    return r"(?:万亿|千亿|百亿|十亿|亿|千万|百万|十万|万|千|百|十)(?![十百千万亿])"
+
+
 def _extract_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
     amounts.extend(_extract_english_amounts_usd(text))
@@ -394,6 +465,9 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
         if value is None:
             continue
         unit = _normalize_english_amount_unit(match.group(2))
+        if unit is None and re.match(rf"\s*{_chinese_amount_unit_pattern()}", text[match.end():]):
+            # $115万等混合写法交给中文单位规范化，不能同时产生一个伪裸$115锚点。
+            continue
         amounts.append(value * multipliers[unit])
 
     bare_money_cues = (
@@ -458,20 +532,27 @@ def _extract_chinese_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
     pattern = re.compile(
         r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
-        r"(万亿美元|亿美元|万美元|万亿|千亿|百亿|亿|美元|美金)\s*(?:美元|美金)?"
+        rf"({_chinese_amount_unit_pattern()}|美元|美金)\s*(?:美元|美金)?"
     )
     multipliers = {
-        "万亿美元": 1_000_000_000_000,
-        "亿美元": 100_000_000,
-        "万美元": 10_000,
         "万亿": 1_000_000_000_000,
         "千亿": 100_000_000_000,
         "百亿": 10_000_000_000,
+        "十亿": 1_000_000_000,
         "亿": 100_000_000,
+        "千万": 10_000_000,
+        "百万": 1_000_000,
+        "十万": 100_000,
+        "万": 10_000,
+        "千": 1_000,
+        "百": 100,
+        "十": 10,
         "美元": 1,
         "美金": 1,
     }
     for match in pattern.finditer(text):
+        if _has_non_amount_suffix(text[match.end(1):]):
+            continue
         value = _parse_number(match.group(1))
         if value is not None:
             amounts.append(value * multipliers[match.group(2)])
@@ -483,7 +564,7 @@ def _dedupe_amounts(amounts: Sequence[float]) -> List[float]:
     for amount in amounts:
         if amount <= 0:
             continue
-        if any(abs(amount - existing) / max(amount, existing) < 0.01 for existing in unique):
+        if any(_same_numeric_amount(amount, existing) for existing in unique):
             continue
         unique.append(amount)
     return unique
