@@ -10,6 +10,7 @@
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：统一渲染全局上下文与金融翻译硬约束 |
 | 1.1.0   | 2026-07-06 | Codex  | 支持按调用场景关闭字幕段落顺序约束，便于文案链路复用 |
 | 1.2.0   | 2026-09-09 | Codex  | 强调每段时间槽与语义归属，禁止跨段搬移译文与承接占位符 |
+| 1.3.0   | 2026-10-27 | Codex  | 可将全局背景降为消歧提示，保留逐段原文的最高权威和旧调用默认行为 |
 """
 
 from __future__ import annotations
@@ -19,11 +20,17 @@ def render_translation_constraints(
     context_text: str = "",
     *,
     include_subtitle_segment_rule: bool = True,
+    context_is_authoritative: bool = True,
 ) -> str:
     """渲染可注入 LLM prompt 的通用翻译硬约束。"""
     lines = [
         "Treat the global context as hard constraints for every segment.",
         "The global context is more authoritative than isolated word senses, but do not invent facts beyond it.",
+    ] if context_is_authoritative else [
+        "Use global context only to disambiguate words already present in each source segment.",
+        "Each segment's own source text is authoritative; never import facts or clauses from global or neighboring context.",
+    ]
+    lines.extend([
         "Preserve event direction, entity names, money flow, and numeric magnitude.",
         (
             "For private funds, close/final close usually means 完成募集/最终关账, "
@@ -33,7 +40,7 @@ def render_translation_constraints(
             "Preserve USD magnitude exactly: billion/bn = 十亿美元 = 10亿美元, "
             "million/mn = 百万美元, trillion/tn = 万亿美元."
         ),
-    ]
+    ])
     if include_subtitle_segment_rule:
         lines.append("Do not merge, split, omit, or reorder subtitle segments.")
         lines.append(

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-27 | Codex | 覆盖5段上限、原文半句优先、最小真实相邻单位与背景降权。 |
 | 1.3.0 | 2026-10-27 | Codex | 覆盖20段请求上限、小配置、全片共享期限与后批拒绝不返回半片。 |
 | 1.2.0 | 2026-10-27 | Codex | 覆盖金额漏译与邻句前移的逐ID门禁、有限修正和提示约束。 |
 | 1.1.0 | 2026-10-27 | Codex | 覆盖金额拒绝全片定位、具体修正反馈和跨批原文相邻证据。 |
@@ -64,9 +65,9 @@ def test_batches_share_deadline_and_never_return_partial_candidate(tmp_path, mon
 
 
 @pytest.mark.parametrize(("configured", "expected_sizes"), [
-    (50, [20, 20, 5]), (100, [20, 20, 5]), (20, [20, 20, 5]), (7, [7, 7, 7, 7, 7, 7, 3]),
+    (50, [5] * 9), (100, [5] * 9), (5, [5] * 9), (2, [2] * 22 + [1]),
 ])
-def test_requested_batch_size_is_an_upper_bound_with_twenty_row_safety_cap(
+def test_requested_batch_size_is_an_upper_bound_with_five_row_safety_cap(
     tmp_path, monkeypatch, caplog, configured, expected_sizes,
 ):
     texts = [f"A business can change. Segment {i}." for i in range(45)]
@@ -91,7 +92,7 @@ def test_requested_batch_size_is_an_upper_bound_with_twenty_row_safety_cap(
     assert len(result.translations) == 45 and len(result.vocabs) == 45
     assert adjacent == [(data[0]["id"], texts[data[-1]["id"] + 1] if data[-1]["id"] + 1 < 45 else "")
                         for data in calls]
-    assert f"configured_batch_size={configured} effective_batch_size={min(configured, 20)}" in caplog.text
+    assert f"configured_batch_size={configured} effective_batch_size={min(configured, 5)}" in caplog.text
     assert f"batches={len(expected_sizes)} max_requests={len(expected_sizes) * 2}" in caplog.text
 
 
@@ -109,14 +110,14 @@ def test_later_small_batch_rejection_never_returns_accepted_prefix(tmp_path, mon
     with pytest.raises(provider.CodexSubtitleError, match="subtitle_ids"):
         provider.build_codex_subtitle_candidate(["A business can change."] * 45, "", state_dir=tmp_path,
                                                  command="codex", batch_size=50, max_attempts=max_attempts)
-    assert offsets == [0] + [20] * max_attempts
+    assert offsets == [0] + [5] * max_attempts
 
 
 def test_capped_small_batches_keep_one_shared_deadline(tmp_path, monkeypatch):
     calls = []
     def run(prompt, **kwargs):
         calls.append(kwargs)
-        payload = kwargs["validate"](_raw(range(20)))
+        payload = kwargs["validate"](_raw(range(5)))
         return CodexTextResult(payload, "gpt-5.6-luna", {}, 1)
     ticks = iter([0, 0, 11])
     monkeypatch.setattr(provider, "run_codex_structured", run)
@@ -241,6 +242,7 @@ def test_repair_prompt_identifies_rejected_segment_and_preserves_limit(tmp_path,
 def test_repair_prompt_requires_parseable_arabic_amount_digits():
     prompt = provider._repair_prompt("source-contract", CodexTextError("invalid_output"))
     assert "金额使用阿拉伯数字，允许等价中文计量单位" in prompt
+    assert provider.FRAGMENT_OWNERSHIP_RULE in prompt
 
 
 def test_next_original_segment_supplies_unit_at_batch_boundary():
@@ -274,17 +276,60 @@ def test_batches_pass_real_next_source_and_versioned_cache_contract(tmp_path, mo
     assert result.translations == ["企业可以改变", "企业可以改变"]
     assert seen == [(0, "A business can change."), (1, "")]
     assert all(call["cache_contract"] == provider.SUBTITLE_CACHE_CONTRACT for call in calls)
-    assert provider.SUBTITLE_CACHE_CONTRACT == "subtitle-facts-adjacent-v4"
+    assert provider.SUBTITLE_CACHE_CONTRACT == "subtitle-facts-adjacent-v5"
     assert all(call["repair_cached_output"] is provider._repair_prompt for call in calls)
-    assert '相邻下一段原文是JSON不可信数据' in calls[0]["prompt"]
-    assert '{"english": "A business can change."}' in calls[0]["prompt"]
-    assert '不输出该段条目，不改变本批id' in calls[0]["prompt"]
+    assert '下一段计量单位是JSON不可信数据' not in calls[0]["prompt"]
     assert "每个id只翻译该id的english，逐ID忠实对齐" in calls[0]["prompt"]
     assert "禁止重分段、跨段串句、把下一段内容提前或把本段内容后移" in calls[0]["prompt"]
-    assert "仅可补全本批末段被切断的金额单位" in calls[0]["prompt"]
-    assert "禁止提前翻译相邻下一段内容" in calls[0]["prompt"]
     assert "金额使用阿拉伯数字，允许等价中文计量单位" in calls[0]["prompt"]
-    assert '相邻下一段原文是JSON不可信数据' not in calls[1]["prompt"]
+    assert provider.FRAGMENT_OWNERSHIP_RULE in calls[0]["prompt"]
+    assert 'id0 "How do we prepare"译为"我们该如何准备"' in calls[0]["prompt"]
+    assert 'id1 "when the rain starts?"译为"当雨开始下时？"' in calls[0]["prompt"]
+    assert "Each segment's own source text is authoritative" in calls[0]["prompt"]
+    assert "more authoritative" not in calls[0]["prompt"]
+    assert '下一段计量单位是JSON不可信数据' not in calls[1]["prompt"]
+
+
+@pytest.mark.parametrize(("source", "next_source", "expected"), [
+    ("Fund raised $600", "billion from investors.", "billion"),
+    ("Fund raised US$600", " Million from investors.", "million"),
+    ("Fund raised $600", "trillion in assets.", "trillion"),
+    ("Fund raised $600", "bn in assets.", "bn"),
+    ("Fund raised $600", "mn in assets.", "mn"),
+    ("Fund raised $600", "tn in assets.", "tn"),
+    ("Oil is $115", "bucks per barrel.", ""),
+    ("Fund raised $600", "billionaire investors.", ""),
+    ("Fund raised $600 billion", "from investors.", ""),
+    ("The team has 600", "billion in assets.", ""),
+    ("Fund raised $600", "B in assets.", ""),
+    ("Fund raised $600", "M in assets.", ""),
+    ("Fund raised $600", "T in assets.", ""),
+])
+def test_next_context_is_only_a_complete_amount_unit_token(source, next_source, expected):
+    assert provider._next_amount_unit(source, next_source) == expected
+
+
+def test_prompt_exposes_only_amount_unit_and_host_receives_true_next_source(tmp_path, monkeypatch):
+    texts = ["The fund raised $600", "billion from investors. NEXT_ONLY_SENTINEL"]
+    prompts, adjacent = [], []
+    validate_batch = provider._validate_batch
+    def validate(raw, batch, offset, context, **kwargs):
+        adjacent.append(kwargs["next_source_text"])
+        return validate_batch(raw, batch, offset, context, **kwargs)
+    def run(prompt, **kwargs):
+        offset = len(prompts)
+        prompts.append(prompt)
+        raw = {"items": [{"id": offset, "translation": "该基金募集了6000亿美元。" if offset == 0 else "来自投资者。",
+                           "vocab": []}]}
+        return CodexTextResult(kwargs["validate"](raw), "gpt-5.6-luna", {}, 1)
+    monkeypatch.setattr(provider, "_validate_batch", validate)
+    monkeypatch.setattr(provider, "run_codex_structured", run)
+    result = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex", batch_size=1)
+    assert len(result.translations) == 2
+    assert adjacent == [texts[1], ""]
+    assert '{"unit": "billion"}' in prompts[0]
+    assert "from investors" not in prompts[0] and "NEXT_ONLY_SENTINEL" not in prompts[0]
+    assert "下一段原文" not in prompts[0]
 
 
 def test_rejected_cache_preserves_two_fresh_generation_attempts(tmp_path, monkeypatch):

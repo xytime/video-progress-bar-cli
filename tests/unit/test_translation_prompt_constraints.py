@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：覆盖共享翻译生产硬约束渲染 |
 | 1.1.0   | 2026-07-06 | Codex  | 覆盖非字幕调用可关闭字幕段落顺序约束 |
+| 1.2.0   | 2026-10-27 | Codex  | 验证消歧背景模式不覆盖逐段原文权威，默认调用保持原约束 |
 """
 
 import sys
@@ -45,3 +46,13 @@ def test_render_translation_constraints_can_skip_subtitle_segment_rule():
 
     assert "Preserve entities." in rendered
     assert "Do not merge, split, omit, or reorder subtitle segments" not in rendered
+
+
+def test_context_can_be_advisory_without_overriding_each_source_fragment():
+    rendered = render_translation_constraints("Preserve entities.", context_is_authoritative=False)
+    assert "only to disambiguate words already present in each source segment" in rendered
+    assert "Each segment's own source text is authoritative" in rendered
+    assert "hard constraints" not in rendered and "more authoritative" not in rendered
+    assert "Preserve entities." in rendered
+    assert "Preserve USD magnitude exactly" in rendered
+    assert "Each segment owns its original time slot" in rendered
