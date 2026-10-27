@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-23 | Codex | 增量失败时间、预览绑定、幂等批次与逐项领取／取消。 |
+| subtitle-recovery-v1 | 2026-10-27 | Codex | 发布恢复等待与启动事务复核字幕冷却，禁止清账绕过。 |
 """
 from __future__ import annotations
 
@@ -218,6 +219,8 @@ class PublishingRecoveryDAL:
                     WHERE operation_id=? AND state IN ('RESERVED','WAITING','RUNNING'))""",
                           (time.time(), row["operation_id"], row["operation_id"]))
                 return None
+            if self._subtitle_blocker_in(c, video["id"]):
+                return None
             if not flags["active_lease"]:
                 c.execute("""INSERT INTO manual_publish_leases(lease_id,video_id,platform,issued_by,issued_via,
                     expires_at)
@@ -248,8 +251,14 @@ class PublishingRecoveryDAL:
 
     def publishing_recovery_task_wait(self, video_id):
         with self.get_connection() as c:
+            subtitle = self._subtitle_blocker_in(c, video_id)
+            if subtitle and subtitle['state'] == 'NEEDS_REPAIR':
+                # 兼容旧时间接口；实际放行始终由启动事务的同一门禁决定。
+                return time.time() + 86400
             values = [r[0] for table in ("copywriter_deferred", "wechat_upload_retries")
                       for r in c.execute(f"SELECT strftime('%s',next_attempt_at) FROM {table} WHERE video_id=? AND next_attempt_at>CURRENT_TIMESTAMP", (video_id,))]
+            if subtitle:
+                values.append(subtitle['next_attempt_at'])
             return max((float(v) for v in values), default=None)
 
     def reset_proven_upload_backoff(self, video_id):

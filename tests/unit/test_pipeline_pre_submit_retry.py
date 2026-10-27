@@ -64,20 +64,20 @@ def test_curl_ssl_timeout_is_a_retryable_pre_submit_failure(tmp_path):
     assert row["retry_count"] == 1
 
 
-def test_all_subtitle_translation_providers_failure_is_retryable_before_submission(tmp_path):
+def test_untyped_subtitle_failure_cannot_bypass_persistent_recovery_receipt(tmp_path):
     manager = _manager(tmp_path, "subtitle-provider-outage")
     manager.db.update_video_status("subtitle-provider-outage", "TRANSCRIBING")
     manager.send_telegram_msg = lambda _message: None
 
-    assert manager._requeue_transient_pre_submission_failure(
+    assert not manager._requeue_transient_pre_submission_failure(
         "subtitle-provider-outage",
         "测试标题",
         "All subtitle translation providers failed or were blocked.",
     )
 
     row = manager.db.get_video_by_youtube_id("subtitle-provider-outage")
-    assert row["status"] == "PENDING"
-    assert row["retry_count"] == 1
+    assert row["status"] == "TRANSCRIBING"
+    assert row["retry_count"] == 0
 
 
 def test_caption_watchdog_timeout_is_retryable_before_submission(tmp_path):

@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕具名回执驱动持久退避和待修复，成功快照验证后收敛恢复账。 |
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | native-captions-v1 | 2026-10-27 | Codex | 单片摘要绑定保留原有中文字幕，复用原片并继续内容及发布门禁。 |
 | remix-entry-guard-v1 | 2026-10-25 | GPT-6.1 Sol | 普通加工及发布入口拒绝合规二创来源，保留独立审批边界。 |
@@ -291,7 +292,6 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "that’s an error",
     "please try again later",
     "temporarily unavailable",
-    "all subtitle translation providers failed",
     "字幕阶段看门狗终止",
     "auto-caption timed out",
     "字幕转录/翻译/渲染超时",
@@ -574,6 +574,10 @@ class PipelineManager:
         normalized = " ".join(html.unescape(re.sub(r"<[^>]+>", "", text)).split())
         lowered = normalized.lower()
         policies = (
+            ("字幕恢复：等待续跑", "subtitle_waiting", "P1"),
+            ("字幕恢复：需修复", "subtitle_needs_repair", "P1"),
+            ("字幕恢复需要修复", "subtitle_needs_repair", "P1"),
+            ("字幕恢复完成", "subtitle_resolved", "P1"),
             ("pipeline batch started", "batch_started", "P2"),
             ("copy numeric review", "copy_numeric_review", "P2"),
             ("pre-submit auto retry scheduled", "pre_submit_retry", "P2"),
@@ -969,6 +973,50 @@ class PipelineManager:
                 f"ID: <code>{html.escape(prefix)}</code>\n"
                 f"Title: {html.escape(title)}\nReason: {match[2]}\n"
                 "冷却期间不重复调用、不切换付费 API。"
+            )
+        return True
+
+    def _consume_subtitle_failure(self, yid, title, error, *, slice_index, receipt_path,
+                                 attempt_id, input_path, input_sha256, started_at):
+        """本次字幕交接优先于通用瞬态重试；任何投稿证据或核验失败都不回队。"""
+        if error.returncode not in {75, 78}:
+            return False
+        from .utils.subtitle_failure_receipt import read_bound_receipt
+        from .utils.render_source_binding import digest
+        from .publishing_recovery import has_account_submission
+        from .core.wechat_request_guard import WeChatRequestGuard
+        receipt = read_bound_receipt(receipt_path, attempt_id=attempt_id, input_path=input_path,
+                                     input_sha256=input_sha256, started_at=started_at)
+        if receipt is None:
+            return False
+        video = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+        if not video:
+            return False
+        try:
+            prefixes = {yid if not slice_index else f'{yid}_s{slice_index}',
+                        yid if not slice_index else f'{yid}_part{slice_index}'}
+            if any(self._wechat_submission_evidence_paths(prefix) for prefix in prefixes):
+                return False
+            if has_account_submission(WeChatRequestGuard(self._OUT_DIR / 'wechat_state.json').snapshot(), video):
+                return False
+        except Exception:
+            logger.error('[SubtitleRecovery] 投稿保护证据不可读取，停止自动恢复 %s', yid)
+            return False
+        state = self.db.record_subtitle_failure(yid, slice_index, receipt, str(receipt_path), digest(receipt_path))
+        if not state:
+            return False
+        logger.warning('[SubtitleRecovery] %s state=%s code=%s due=%s',
+                       yid, state['state'], state['code'], state.get('next_attempt_at'))
+        if state.get('notify'):
+            prefix = yid if not slice_index else f'{yid}_s{slice_index}'
+            waiting = state['state'] == 'WAITING'
+            action = f"等待冷却后续跑：{state.get('next_attempt_at')}" if waiting else '需修复；停止自动重复调用'
+            ids = ', '.join(str(d['segment_number']) for d in receipt['quality_details']) or '见诊断回执'
+            self.send_telegram_msg(
+                f"⚠️ <b>字幕恢复：{'等待续跑' if waiting else '需修复'}</b>\n"
+                f"YouTube ID: <code>{html.escape(prefix)}</code>\nTitle: {html.escape(title or '')}\n"
+                f"{html.escape(action)}\n代码：{html.escape(state['code'])}；段号：{html.escape(ids)}\n"
+                f"通过批次及原文时间轴已保留。证据：{html.escape(str(receipt_path))}"
             )
         return True
 
@@ -1721,6 +1769,19 @@ class PipelineManager:
 
     # ── 批量触发 ──────────────────────────────────────────────────────────────
 
+    def _expire_subtitle_recoveries(self) -> None:
+        """在既有调度轮收敛过期等待；DAL 只返回首次状态转换。"""
+        for recovery in self.db.expire_subtitle_recoveries():
+            prefix = recovery['youtube_id']
+            if recovery['slice_index']:
+                prefix += f"_s{recovery['slice_index']}"
+            self.send_telegram_msg(
+                '⚠️ <b>字幕恢复需要修复</b>\n'
+                f"YouTube ID: <code>{html.escape(prefix)}</code>\n自动恢复已超过24小时；成功批次和历史预算已保留。\n"
+                f"错误：{html.escape(recovery['code'])}\n"
+                f"证据：{html.escape(recovery['last_receipt_path'])}"
+            )
+
     def process_high_score_videos(self, limit: Optional[int] = 5):
         """拉取高分视频进入加工流转，自动循环处理全部队列和切片任务直至清空。
 
@@ -1734,6 +1795,7 @@ class PipelineManager:
         | 2.0.0 | 2026-09-23 | Antigravity               | 单任务懒抢占：每轮仅 claim 1 个就绪视频并立即处理，消除批量抢占导致 0B DOWNLOADING 假死 |
         """
         logger.info(f"Starting pipeline run loop (batch limit={limit}).")
+        self._expire_subtitle_recoveries()
         total_processed = 0
         batch_limit = max(1, int(limit)) if limit is not None else None
         attempted_targets: set[tuple[str, int]] = set()
@@ -1826,6 +1888,7 @@ class PipelineManager:
 
     def prepare_high_score_videos(self, limit: int = 1) -> int:
         """预加工高分 AUTO 候选，成片就绪后交给独立发布执行者。"""
+        self._expire_subtitle_recoveries()
         if settings.is_us_market_guard_window():
             logger.info("[MarketGuard] 美股盘中，跳过后台视频预加工。")
             return 0
@@ -4892,6 +4955,12 @@ class PipelineManager:
                         raise InterruptedError("SIGTERM received before transcription")
                     self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                     progress_file = self._OUT_DIR / f"{prefix}_caption_progress.json"
+                    import uuid
+                    from .utils.render_source_binding import digest
+                    subtitle_attempt_id = uuid.uuid4().hex
+                    subtitle_receipt = self._OUT_DIR / 'subtitle_recovery' / prefix / f'{subtitle_attempt_id}.json'
+                    subtitle_input_sha256 = digest(Path(target_file))
+                    subtitle_started_at = time.time()
                     try:
                         progress_file.unlink(missing_ok=True)
                     except OSError as exc:
@@ -4903,6 +4972,8 @@ class PipelineManager:
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                         "--progress-file", str(progress_file),
                         *(['--preserve-source-chinese'] if not video.get('tts_provider') else []),
+                        "--subtitle-receipt", str(subtitle_receipt),
+                        "--subtitle-attempt-id", subtitle_attempt_id,
                         *(['--copy-reused'] if copy_checkpoint_ready else []),
                     ]
                     # [Claude_Opus_4.8] 源视频「发布日期」毛玻璃戳：仅在开关开启且能取到合法 upload_date 时注入。
@@ -4943,6 +5014,13 @@ class PipelineManager:
                             timeout=_AUTO_CAPTION_TIMEOUT_SEC,
                             progress_path=progress_file,
                         )
+                    except subprocess.CalledProcessError as exc:
+                        if self._consume_subtitle_failure(yid, title, exc, slice_index=slice_index,
+                            receipt_path=subtitle_receipt, attempt_id=subtitle_attempt_id,
+                            input_path=Path(target_file), input_sha256=subtitle_input_sha256,
+                            started_at=subtitle_started_at):
+                            return
+                        raise
                     except _CaptionProgressTimeout as exc:
                         breach = exc.breach
                         reason = (
@@ -4989,6 +5067,13 @@ class PipelineManager:
                             f"Renderer exceeded {_AUTO_CAPTION_TIMEOUT_SEC // 60} minutes and was terminated."
                         )
                         return
+
+                    from .utils.subtitle_failure_receipt import read_bound_receipt
+                    completion = read_bound_receipt(subtitle_receipt, attempt_id=subtitle_attempt_id,
+                        input_path=Path(target_file), input_sha256=subtitle_input_sha256,
+                        started_at=subtitle_started_at, success=True)
+                    if completion and self.db.resolve_subtitle_recovery(video['id'], subtitle_input_sha256):
+                        self.send_telegram_msg(f"✅ 字幕恢复完成\nYouTube ID: <code>{html.escape(prefix)}</code>\n正常字幕快照已验证；后续仍须通过原审查和发布门禁。")
 
                 # 子进程可能刚完成自动保留；必须在 ASS/增强层门禁前重新读取凭证。
                 native_captions = requested(vertical)

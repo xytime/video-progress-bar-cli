@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| subtitle-recovery-v1 | 2026-10-27 | Codex | 接入字幕持久失败链与领取冷却，保留全局重试和投稿账本。 |
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | review-receipt-v1 | 2026-10-25 | Codex | 精确任务授权审计与启用标志单次只读回读，不受事件分页上限影响。 |
 | reply-coverage-v2 | 2026-10-25 | Codex | 活动优先与公平回补兼顾旧作品，持久保存原生评论续扫游标与活动证据。 |
@@ -241,13 +242,14 @@ MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 from .delivery_recovery import DeliveryRecoveryDAL
 from .publishing_recovery import PublishingRecoveryDAL
 from .publication_eligibility import PublicationEligibilityDAL
+from .subtitle_recovery import SubtitleRecoveryDAL, subtitle_recovery_gate_sql
 from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
 from .compliance_remix import ComplianceRemixDAL
 
 
-class PipelineDB(PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -319,6 +321,7 @@ class PipelineDB(PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWork
             self.initialize_english_world_workbench_schema()
             self.initialize_delivery_recovery()
             self.initialize_publishing_recovery()
+            self.initialize_subtitle_recovery()
             self.initialize_compliance_remix()
         self._initializing_schema = False
         from ..core.maintenance import running
@@ -4229,7 +4232,8 @@ class PipelineDB(PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWork
                 "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
                 "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
-                "WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)",
+                "WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP) "
+                "AND " + subtitle_recovery_gate_sql("processed_videos.id"),
                 (youtube_id, slice_index)
             )
             conn.commit()

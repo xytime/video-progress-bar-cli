@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-27 | Codex | 验证真实执行前预算回调与缓存、锁、冷却的零消耗边界。 |
 | 1.1.0 | 2026-10-27 | Codex | 覆盖有界宿主拒绝回执、质量合同缓存隔离及失效缓存原预算重建。 |
 | fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
 | 1.0.0 | 2026-10-03 | Codex | 覆盖真实故障路径、质量缓存和经济模型限制。 |
@@ -247,3 +248,34 @@ def test_expired_budget_cannot_rebuild_rejected_cache(tmp_path, monkeypatch):
     with pytest.raises(provider.CodexTextError, match="timeout"):
         _call(tmp_path, validate=reject, repair_cached_output=lambda prompt, error: prompt)
     assert len(calls) == 1 and not list(tmp_path.glob("*.json"))
+
+
+def test_before_execute_counts_only_fresh_execution_including_rejected_cache(tmp_path, monkeypatch):
+    calls, admissions = [], []
+    monkeypatch.setattr(provider, "_execute", _executor(calls=calls))
+    arguments = dict(validate=lambda raw: raw, before_execute=lambda: admissions.append(1))
+    _call(tmp_path, **arguments)
+    cached = _call(tmp_path, **arguments)
+    assert cached.cached and len(calls) == len(admissions) == 1
+    def reject(raw):
+        raise provider.CodexTextError("quality_rejected")
+    with pytest.raises(provider.CodexTextError, match="quality_rejected"):
+        _call(tmp_path, validate=reject, before_execute=arguments["before_execute"],
+              repair_cached_output=lambda prompt, error: prompt)
+    assert len(calls) == len(admissions) == 2
+
+
+def test_budget_denial_and_existing_cooldown_do_not_execute_or_report_execution(tmp_path, monkeypatch):
+    calls, admissions = [], []
+    monkeypatch.setattr(provider, "_execute", _executor(calls=calls))
+    def deny():
+        admissions.append(1)
+        raise provider.CodexTextError("request_budget_exhausted")
+    with pytest.raises(provider.CodexTextError, match="request_budget_exhausted"):
+        _call(tmp_path, before_execute=deny)
+    receipt = json.loads((tmp_path / "requests.jsonl").read_text().splitlines()[-1])
+    assert "executed_input_sha256" not in receipt and calls == []
+    (tmp_path / "gpt-5.6-luna.cooldown.json").write_text(json.dumps({"retry_at": 99999999999}))
+    with pytest.raises(provider.CodexTextError, match="cooldown"):
+        _call(tmp_path, before_execute=deny)
+    assert admissions == [1] and calls == []

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-27 | Codex | 真实执行前允许调用方持久领取预算，缓存、锁和冷却不消耗请求次数。 |
 | 1.2.0 | 2026-10-27 | Codex | 字幕质量合同隔离缓存身份，保存有界宿主拒绝信号并在原预算内重建失效缓存。 |
 | 1.1.0 | 2026-10-20 | Codex | 英语世界安全审核可显式附图，图片指纹纳入缓存身份；仍禁用工具。 |
 | 1.0.0 | 2026-10-03 | Codex | 独立 Luna 文字入口：最小环境、进程组期限、严格结构、单并发与用量回执。 |
@@ -149,6 +150,7 @@ def _run_codex_structured(
     images: tuple[Path, ...] = (),
     cache_contract: str = "",
     repair_cached_output: Callable[[str, CodexTextError], str] | None = None,
+    before_execute: Callable[[], None] | None = None,
     _request_audit: dict | None = None,
 ) -> CodexTextResult:
     """一次有界请求；只缓存经调用方质量合同接受的结果，不自动升级模型。"""
@@ -217,6 +219,8 @@ def _run_codex_structured(
             for path in images:
                 args.extend(["--image", str(Path(path).resolve())])
             args.append("-")
+            if before_execute is not None:
+                before_execute()
             if _request_audit is not None:
                 _request_audit["executed_input_sha256"] = hashlib.sha256(prompt.encode()).hexdigest()
             result = _execute(args, prompt, directory, timeout_sec)

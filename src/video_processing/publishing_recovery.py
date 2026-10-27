@@ -5,6 +5,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-23 | Codex | 发布恢复控制台领域服务，保留审批、产物、互斥及提交防重。 |
+| subtitle-recovery-v1 | 2026-10-27 | Codex | 展示字幕退避与待修复原因，恢复批次不绕过字幕链或永久占用等待。 |
 """
 from __future__ import annotations
 
@@ -116,6 +117,7 @@ class PublishingRecoveryService:
         video, flags = record["video"], record["flags"]
         prefix = prefix_for(video)
         state = video["status"]
+        subtitle = self.db.subtitle_recovery_blocker(video["id"])
         raw_reason = video.get("error_msg") or video.get("publication_wait_reason") or ""
         content_gate = bool(re.search(r"Censorship[ _]P[012]|Social Unrest Review|Channel Policy Reject|政策敏感拦截|频道策略限制|平台题材风险", raw_reason, re.I))
         quality_gate = bool(re.search(r"需人工处理|门禁|商品绑定|PRODUCT_.*BLOCK|COPY_QUALITY|停止出片|原字幕位置或文字不确定|整片 [AB].*安全位置|TRANSLATION_QUALITY", raw_reason, re.I))
@@ -143,6 +145,9 @@ class PublishingRecoveryService:
             item.update(reason="需要登录，完成后台扫码登录后重新预览", href="/?view=operations")
         elif video.get("publication_review_required"):
             item.update(reason="内容审批尚未完成，请先在审核队列处理", href="/?view=production&tab=review")
+        elif subtitle:
+            item.update(reason=subtitle['reason'], subtitle_recovery=subtitle,
+                        next_attempt_at=subtitle['next_attempt_at'], href="/?view=production&tab=error")
         elif quality_gate or (content_gate and not video.get("bypass_censorship")):
             item.update(reason="质量、内容或商品门禁需先处理：" + item["reason"], href="/?view=production&tab=error")
         elif state not in {"FAILED", "PENDING", "WECHAT_DEFERRED"}:
@@ -253,6 +258,12 @@ class PublishingRecoveryService:
             if revision(video) != item["current_revision"]:
                 self.db.update_publishing_recovery_item(item["id"], "SKIPPED", "预览后任务已变化，未执行")
                 continue
+            subtitle = self.db.subtitle_recovery_blocker(video['id'])
+            if subtitle:
+                self.db.update_publishing_recovery_item(
+                    item['id'], 'ATTENTION' if subtitle['state'] == 'NEEDS_REPAIR' else 'WAITING',
+                    subtitle['reason'], next_at=subtitle['next_attempt_at'])
+                continue
             classified = self.classify(record, self.guard.snapshot(), operation_id=item["operation_id"])
             if not classified["eligible"]:
                 self.db.update_publishing_recovery_item(item["id"], "SKIPPED", classified["reason"])
@@ -306,6 +317,10 @@ class PublishingRecoveryService:
         elif state in PROTECTED or self.db.publishing_recovery_video(video["id"])["flags"]["submission_protected"]:
             result = "PUBLISHED" if state in {"PUBLISHED", "COMPLETED"} else "SUBMITTED_UNVERIFIED"
             self.db.update_publishing_recovery_item(item["id"], result, "已有发表动作或提交证据，停止重投；平台结果以人工核实为准")
+        elif (subtitle := self.db.subtitle_recovery_blocker(video['id'])):
+            self.db.update_publishing_recovery_item(
+                item['id'], 'ATTENTION' if subtitle['state'] == 'NEEDS_REPAIR' else 'WAITING',
+                subtitle['reason'], next_at=subtitle['next_attempt_at'], refresh_revision=True)
         elif state in {"PENDING", "WECHAT_DEFERRED"}:
             self.db.update_publishing_recovery_item(item["id"], "WAITING", video.get("publication_wait_reason") or video.get("error_msg") or "等待正式调度", refresh_revision=True)
         elif state in ACTIVE and after_restart:

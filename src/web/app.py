@@ -3668,6 +3668,10 @@ def retry_video(youtube_id: str, engagement_version: Optional[str] = None):
     if submission_guard:
         return {"success": False, "error": submission_guard}
 
+    subtitle_blocker = db.subtitle_recovery_blocker(video['id'])
+    if subtitle_blocker:
+        return {"success": False, "error": subtitle_blocker['reason'], "subtitle_recovery": subtitle_blocker}
+
     retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING"}
     if video.get("status") not in retryable:
         return {
@@ -3722,6 +3726,10 @@ def retry_slice(youtube_id: str, slice_index: int):
     submission_guard = _wechat_submission_guard_reason(video)
     if submission_guard:
         return {"success": False, "error": submission_guard}
+
+    subtitle_blocker = db.subtitle_recovery_blocker(video['id'])
+    if subtitle_blocker:
+        return {"success": False, "error": subtitle_blocker['reason'], "subtitle_recovery": subtitle_blocker}
 
     retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING"}
     if video.get("status") not in retryable:

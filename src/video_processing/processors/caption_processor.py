@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
 | 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
 | 1.39.0 | 2026-10-08 | Antigravity | 修复 _remaining_translation_budget 在 __new__ 单体实例中缺少 _translation_deadline 属性时的 AttributeError 缺陷。 |
 | 1.38.0 | 2026-10-05 | Codex | 全供应商共享字幕预算，Google 逐段检查点与完整候选日志。 |
@@ -81,7 +82,8 @@ from ..utils.subtitle_translation_quality import (
     evaluate_subtitle_translation_candidate,
 )
 from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
-from ..utils.translation_quality_guard import QualityIssue
+from ..utils.translation_quality_guard import QualityIssue, evaluate_translation_batch
+from ..utils.subtitle_failure_receipt import SubtitleTranslationFailure, safe_failure
 from ..utils.translation_model_pool import DynamicTranslationModelPool, PROFILES, classify_error
 from ..utils.deepseek_translation import (
     translate_batch_deepseek,
@@ -257,9 +259,32 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     self._report_progress('TRANSLATION_REUSED')
                 else:
                     self._report_progress("TRANSLATING")
-                    segments = self._translate_segments(segments)
+                    try:
+                        segments = self._translate_segments(segments)
+                    except SubtitleTranslationFailure as exc:
+                        exc.binding = dict(input_sha256=checkpoints.source_digest,
+                                           asr_sha256=fingerprint(source_segments),
+                                           contract_sha256=fingerprint(contract), stage='TRANSLATING')
+                        if (exc.failure['category'] == 'quality' and exc.failure['quality_details']
+                                and str(self.detected_lang or self.src_lang).lower().split('-')[0] == 'en'):
+                            from ..utils.subtitle_audio_review import review_failed_segments
+                            self._report_progress('SUBTITLE_DIAGNOSING')
+                            try:
+                                exc.evidence = review_failed_segments(
+                                    self.input_path, source_segments, exc.failure['quality_details'],
+                                    checkpoints.directory / 'diagnostics',
+                                )
+                            except Exception as diagnostic_error:
+                                # 旁证不可用不能吞掉原故障、丢失段号或改变主恢复分类。
+                                logger.warning('[SubtitleDiagnosis] unavailable: %s', type(diagnostic_error).__name__)
+                        raise
                     checkpoints.save('translation', contract, segments, self.detected_lang,
                                      source_segments, self._translation_quality_audit)
+                from ..utils.render_source_binding import digest
+                checkpoint_path = checkpoints.directory / 'translation.json'
+                self._subtitle_completion = dict(input_sha256=checkpoints.source_digest,
+                    asr_sha256=fingerprint(source_segments), contract_sha256=fingerprint(contract),
+                    checkpoint_path=str(checkpoint_path.resolve()), checkpoint_sha256=digest(checkpoint_path))
             
             # 5. 生成 ASS 字幕 (双语样式)
             self._report_progress("ASS_GENERATING")
@@ -537,6 +562,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
         self._translation_quality_audit = []
+        failures = []
         self._translation_audit_run_id = self._start_translation_audit()
         translation_context = build_translation_context(texts)
         translation_prompt_context = translation_context.to_prompt_context()
@@ -574,6 +600,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 break
             final_provider = idx == len(provider_order) - 1
             self._last_provider_error = ""
+            self._last_provider_failure = None
             attempt_started = time.monotonic()
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
             duration_ms = int((time.monotonic() - attempt_started) * 1000)
@@ -582,6 +609,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
                 error = self._last_provider_error or contract_error
                 error_class = classify_error(error)
+                failures.append(self._last_provider_failure or safe_failure(
+                    provider, error_class if error_class != 'unknown' else contract_error.split(':', 1)[0],
+                    category={'rate_limit': 'quota', 'network': 'network', 'budget_exhausted': 'budget',
+                              'auth_or_permission': 'authentication', 'region_restricted': 'authentication',
+                              'billing': 'authentication'}.get(error_class, 'unavailable')))
                 pool.record_failure(provider, error, category=error_class)
                 self._record_translation_attempt(
                     provider, idx + 1, "FAILED", duration_ms, error_class=error_class, error_message=error,
@@ -628,6 +660,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
             quality_score = max(0.0, 100.0 - len(decision.warning_issues) * 8.0 - len(decision.blocking_issues) * 30.0)
             if decision.should_fallback or decision.should_fail:
                 pool.record_failure(provider, decision.blocking_summary(), category="quality_blocked")
+                batch_quality = evaluate_translation_batch(texts, candidate.translations,
+                    context_text=quality_context.source_context_text, require_amount_coverage=True)
+                details = [dict(segment_number=i+1, source_id=i, code=issue.code,
+                                source_signal=issue.source_signal, translation_signal=issue.translation_signal)
+                           for i, result in enumerate(batch_quality.results) for issue in result.issues
+                           if issue.severity == 'P0']
+                failures.append(safe_failure(provider.lower(), 'subtitle_quality_blocked',
+                                             quality_details=details, category='quality'))
 
             attempt_status = "BLOCKED" if decision.should_fallback or decision.should_fail else "SUCCEEDED"
             self._record_translation_attempt(
@@ -667,9 +707,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
             if outcome.should_fail:
                 self._write_translation_quality_report()
-                raise VideoProcessingError(
-                    f"Translation quality guard blocked {candidate.provider} output: {decision.blocking_summary()}"
-                )
+                self._finish_translation_audit('FAILED', None, None, 'quality_blocked', bool(idx), segments,
+                                               error_class='quality_blocked', error_message=decision.blocking_summary())
+                raise SubtitleTranslationFailure(failures,
+                    f"Translation quality guard blocked {candidate.provider} output: {decision.blocking_summary()}")
 
         outcome = arbiter.finish()
         if outcome.should_use_candidate:
@@ -688,7 +729,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
             "FAILED", None, None, "all_providers_failed", bool(provider_order), segments,
             error_class="all_providers_failed", error_message="All subtitle translation providers failed or were blocked.",
         )
-        raise VideoProcessingError("All subtitle translation providers failed or were blocked.")
+        if not failures:
+            snapshot = pool.snapshot()
+            due = [int(snapshot.get(p, {}).get('cooldown_until', 0)) for p in configured_providers
+                   if snapshot.get(p, {}).get('cooldown_until', 0) > time.time()]
+            failures.append(safe_failure('host', 'providers_cooldown', retry_at=min(due) if due else 0))
+        if time.monotonic() >= self._translation_deadline:
+            failures.append(safe_failure('host', 'translation_budget_exhausted'))
+        raise SubtitleTranslationFailure(failures)
 
     def _record_selected_gemini_model_quality(self, candidate: SubtitleTranslationCandidate, score: float, state_path: Optional[Path]) -> None:
         if candidate.provider.lower() != "gemini" or not candidate.model:
@@ -831,6 +879,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
             )
         except Exception as exc:
             self._last_provider_error = f"codex_text:{getattr(exc, 'code', type(exc).__name__)}"
+            self._last_provider_failure = safe_failure('codex', getattr(exc, 'code', 'provider_failure'),
+                retry_at=getattr(exc, 'retry_at', 0), quality_details=getattr(exc, 'quality_details', ()))
             logger.warning("[Translate] Codex candidate failed: %s", self._last_provider_error)
             return None
 

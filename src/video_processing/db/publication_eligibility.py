@@ -4,11 +4,13 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | backlog-v1 | 2026-10-26 | Codex | 共用全部候选门禁、就绪先到先领及有界存量指标刷新。 |
+| subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕持久冷却与待修复链在 LIMIT 前共用过滤。 |
 """
 import json
 
 from config.settings import settings
 from ..scoring import TED_AUTO_PUBLISH_CHANNEL_IDS, compute_policy_score
+from .subtitle_recovery import subtitle_recovery_gate_sql
 
 
 class PublicationEligibilityDAL:
@@ -58,6 +60,8 @@ class PublicationEligibilityDAL:
              "'pipeline:'||pv.youtube_id||':'||pv.slice_index NOT IN (SELECT value FROM json_each(?))", (json.dumps(list(excluded_product_tasks)),)),
             ('COPYWRITER_BACKOFF', '文案阶段退避尚未到期',
              'NOT EXISTS (SELECT 1 FROM copywriter_deferred c WHERE c.video_id=pv.id AND c.next_attempt_at>CURRENT_TIMESTAMP)', ()),
+            ('SUBTITLE_RECOVERY', '字幕翻译正在冷却或需要修复后恢复',
+             subtitle_recovery_gate_sql('pv.id'), ()),
             ('UPLOAD_BACKOFF', '上传前失败退避尚未到期，到期后重检',
              'NOT EXISTS (SELECT 1 FROM wechat_upload_retries r WHERE r.video_id=pv.id AND r.next_attempt_at>CURRENT_TIMESTAMP)', ()),
             ('SOURCE_SUBTITLE', '源字幕检查未通过，等待下一次有界重检',

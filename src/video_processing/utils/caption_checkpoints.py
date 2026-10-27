@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-27 | Codex | 翻译恢复计划、回执及离线音频诊断实现纳入完成快照合同。 |
 | 1.0.0 | 2026-10-23 | Codex | 独立保存 ASR 与已通过质量门的翻译，供下游失败后续跑。 |
 """
 from copy import deepcopy
@@ -26,6 +27,7 @@ TRANSLATION_MODULES = (
     'translation_entity_guard',
     'translation_prompt_constraints', 'vocab_helper', 'translation_helper', 'deepseek_translation',
     'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
+    'subtitle_recovery_state', 'subtitle_failure_receipt', 'subtitle_audio_review', 'subtitle_audio_review_worker',
 )
 TRANSLATION_SETTINGS = (
     'subtitle_translation_provider_order', 'enable_deepseek_vocab_fallback',

@@ -799,6 +799,10 @@ class PipelineAgent:
         """
         # [Gemini_3.5_Flash_High_planning]
         try:
+            video = self.db.get_video_by_youtube_id(youtube_id)
+            blocker = self.db.subtitle_recovery_blocker(video['id']) if video else None
+            if blocker:
+                return json.dumps({"ok": False, "error": blocker['reason'], "subtitle_recovery": blocker}, ensure_ascii=False)
             self.db.update_video_status(youtube_id, "PENDING", error_msg=None)
             return json.dumps({"ok": True, "message": f"Video {youtube_id} reset to PENDING"})
         except Exception as e:
