@@ -160,3 +160,17 @@ def test_a_layout_failure_rebuilds_entire_clip_from_original(tmp_path,monkeypatc
     assert processor._prepared_captions.mode=='B' and processor._prepared_captions.video==source
     assert json.loads(processor._prepared_captions.plan.read_text())['placement']['side']=='above'
     assert len(pysubs2.load(str(ass)).events)==1
+
+
+@pytest.mark.parametrize("box", [[.0444444365,.7125,.9944444365,.75625], [0,.7125,1,.75625]])
+def test_full_width_verified_dialogue_uses_actual_repair_quality(box):
+    frames=[[dict(text="and I think it is crazy",confidence=1,box=box)]]
+    selected,center=repair._classify(frames,[dict(start=0,end=1,text="and I think it is crazy")],1)
+    assert selected==[[box]] and center==pytest.approx((box[1]+box[3])/2)
+
+
+@pytest.mark.parametrize("box", [[-.01,.7125,.99,.75625], [0,.7125,1.01,.75625], [.04,.7,.99,.8]])
+def test_outside_or_too_tall_dialogue_still_blocks(box):
+    with pytest.raises(ValueError,match="安全修补边界"):
+        repair._classify([[dict(text="and I think it is crazy",confidence=1,box=box)]],
+                         [dict(start=0,end=1,text="and I think it is crazy")],1)

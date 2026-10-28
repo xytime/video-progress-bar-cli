@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.3.1 | 2026-10-28 | Codex | 允许位于画面内的全宽对白字幕，仍按实际掩膜面积与纹理决定修补或避让。 |
 | 2.3.0 | 2026-10-23 | Codex | 单片已确认独立字幕区绑定原片、完整时间轴、版式和实现凭证。 |
 | 2.2.0 | 2026-10-23 | Codex | 对齐百分比与数字写法；用双向 ASR 轨迹区分字幕、孤帧 OCR 错误与画面文字。 |
 | 2.1.0 | 2026-10-23 | Codex | 相邻帧合框证据确认同基线拆出的单字形，保留未知文字阻断。 |
@@ -346,7 +347,7 @@ def _classify(frames, segments, fps):
                        max(r['box'][2] for r in pair), max(r['box'][3] for r in pair)]
             if (row["confidence"] < .75 and not stable_ocr) or not matches:
                 raise ValueError(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}")
-            if box[3] - box[1] > .08 or box[2] - box[0] > .94:
+            if box[3] - box[1] > .08 or not (0 <= box[0] < box[2] <= 1):
                 raise ValueError("原字幕字形范围超出可安全修补边界")
             chosen.append(box)
             boxes.append(box)
