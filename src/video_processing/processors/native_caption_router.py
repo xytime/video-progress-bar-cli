@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-28 | Codex | 低置信度疑似汉字也提供对应实拍帧，允许凭视觉证据排除 OCR 假阳性。 |
 | 1.2.0 | 2026-10-28 | Codex | 修复有效越界框、OCR 写读超时与内存累积；长片按源预算，核验接收完整负证据。 |
 | 1.1.0 | 2026-10-28 | Codex | 有界规范化 OCR 框并保存原始坐标，校验逐帧断点后续扫。 |
 | 1.0.0 | 2026-10-27 | Codex | 渲染前识别源字幕，复用源摘要绑定证据，失败进入复核。 |
@@ -283,10 +284,9 @@ def review(source, segments, scanned, directory, progress):
                 and r['first'] / scanned['fps'] < segment['end'] and r['chinese']]
         groups = {}
         for row in rows:
-            # 低分原文仍交给语义审查；宿主不允许用它证明完整字幕，无需重复传图。
-            if row['confidence'] >= .50:
-                key = (row['text'], tuple(round(v, 1) for v in row['box']))
-                groups.setdefault(key, []).append(row)
+            # 低分也必须给实际对应帧；只给乱码不给图，会把可排除的误识别锁死为 UNCERTAIN。
+            key = (row['text'], tuple(round(v, 1) for v in row['box']))
+            groups.setdefault(key, []).append(row)
         if len(groups) + 3 > 24:
             raise ValueError('VISUAL_REVIEW_BUDGET_EXCEEDED')
         prepared.append((rows, groups))
@@ -306,7 +306,11 @@ def review(source, segments, scanned, directory, progress):
             for index, segment in enumerate(segments[offset:stop], offset):
                 start, end = segment['start'], segment['end']
                 rows, groups = prepared[index]
-                item = dict(segment_id=index, speech=segment['text'], start=start, end=end, rows=rows)
+                # 逐帧坐标修正审计留在本地证据；模型只需正文、位置、可信度和完整区间。
+                # 长 run 的 boundary_adjustments 可达数万项，不能挤占语义提示词预算。
+                review_rows = [{key: row[key] for key in
+                    ('id', 'text', 'box', 'confidence', 'first', 'last')} for row in rows]
+                item = dict(segment_id=index, speech=segment['text'], start=start, end=end, rows=review_rows)
                 first = max(0, math.floor(start * scanned['fps']))
                 last = min(scanned['frame_count'], math.ceil(end * scanned['fps']))
                 if first >= last or end > scanned['frame_count'] / scanned['fps'] + 1 / scanned['fps']:
@@ -355,6 +359,10 @@ def review(source, segments, scanned, directory, progress):
             '准确表达该段 speech，数字、否定和关键实体无误，且是对白字幕而非标题、幻灯片、'
             '词汇表或姓名牌；run_ids 必须引用该段实际对应的所有中文字幕 run。'
             'ABSENT 仅当整段证据能确定没有对白中文字幕（纯英文、仅标题亦可），run_ids 必须为空。'
+            '低置信度汉字也提供了对应实拍帧。逐一对照该 run 的 box 所在区域：若画面清楚显示'
+            '是衣物纹理、图案、英文或其它非中文字幕，可据实际画面排除 OCR 假阳性，并在 reason'
+            '说明 run 编号及可见内容；这些误识别不要求判为 UNCERTAIN。不能仅因低置信度排除；'
+            '若画面确有模糊汉字或无法辨认，仍须 UNCERTAIN。'
             '发现部分中文字幕、漏字、错译、模糊、OCR 漏识别、无法确认时必须 UNCERTAIN，不能 ABSENT。'
             '汉字不等于中文，日语字幕不得认作中文。不能从一张图片推断全段。不要补写字幕或猜测。\n'
             + json.dumps(batch, ensure_ascii=False)
@@ -371,7 +379,7 @@ def review(source, segments, scanned, directory, progress):
             command=settings.codex_text_command, model=settings.codex_text_model,
             effort=settings.codex_text_effort,
             timeout_sec=settings.codex_text_request_timeout_seconds,
-            images=tuple(images), validate=validate, cache_contract=VERSION + '-complete-evidence-v2',
+            images=tuple(images), validate=validate, cache_contract=VERSION + '-complete-evidence-v3',
         )
         results.extend(result.payload['reviews'])
     return results

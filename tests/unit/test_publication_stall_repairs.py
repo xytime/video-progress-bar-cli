@@ -240,3 +240,26 @@ def test_long_review_receives_complete_negative_evidence_without_144_segment_cap
 def test_parent_budget_scales_with_source_frame_count(monkeypatch):
     monkeypatch.setattr(burned_caption_repair, '_probe', lambda _: (1080, 1920, 60., 1200.))
     assert router.processing_budget(Path('unused.mp4')) > 72000
+
+
+def test_low_confidence_false_positive_has_its_actual_frame(scan_fixture, monkeypatch):
+    from types import SimpleNamespace
+    import cv2
+    source, directory = scan_fixture
+    segments = [dict(start=0, end=.8, text='Only English')]
+    scanned = dict(fps=10, frame_count=8, runs=[dict(id=79, text='FA元', first=2, last=3,
+        chinese=True, confidence=.3, box=[.6, .6, .9, .95],
+        boundary_adjustments=[dict(frame=2, raw_box=[-.001, 0, .9, .95])] * 10000)])
+    def provider(prompt, **kwargs):
+        item = json.loads(prompt.split('\n', 1)[1])[0]
+        assert item['rows'][0]['confidence'] == .3
+        assert 'boundary_adjustments' not in item['rows'][0]
+        assert len(scanned['runs'][0]['boundary_adjustments']) == 10000
+        visual = item['visual_runs'][0]
+        assert visual['run_ids'] == [79]
+        actual = cv2.imread(str(kwargs['images'][visual['image_index']]))
+        assert abs(float(actual.mean()) - 50) < 5
+        return SimpleNamespace(payload=dict(reviews=[dict(segment_id=0, decision='ABSENT',
+            run_ids=[], visual_verified_run_ids=[], reason='visible pattern, not Chinese')]))
+    monkeypatch.setattr(router, 'run_codex_structured', provider)
+    assert router.review(source, segments, scanned, directory, lambda _: None)[0]['decision'] == 'ABSENT'
