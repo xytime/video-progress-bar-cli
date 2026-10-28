@@ -70,6 +70,27 @@ def test_missing_completion_and_tools_are_not_success(tmp_path, monkeypatch, eve
     assert not list(tmp_path.glob("*.json"))
 
 
+def test_recovered_stream_requires_terminal_completion_and_valid_payload(tmp_path, monkeypatch):
+    events = [{'type': 'error', 'message': 'Reconnecting... Connection reset by peer'},
+              {'type': 'item.completed', 'item': {'type': 'error', 'message': 'Reconnected'}},
+              {'type': 'item.completed', 'item': {'type': 'agent_message'}},
+              {'type': 'turn.completed', 'usage': {'output_tokens': 20}}]
+    monkeypatch.setattr(provider, '_execute', _executor(events=events))
+    assert _call(tmp_path).payload['title'] == '制造业的新可能'
+
+
+@pytest.mark.parametrize('events', [
+    [{'type': 'error', 'message': 'Reconnecting...'}],
+    [{'type': 'error'}, {'type': 'turn.failed'}, {'type': 'turn.completed'}],
+    [{'type': 'error'}, {'type': 'item.completed', 'item': {'type': 'command_execution'}},
+     {'type': 'turn.completed'}],
+])
+def test_transport_notice_never_overrides_failure_or_tool_use(tmp_path, monkeypatch, events):
+    monkeypatch.setattr(provider, '_execute', _executor(events=events))
+    with pytest.raises(provider.CodexTextError):
+        _call(tmp_path)
+
+
 @pytest.mark.parametrize("payload", [{}, {"title": 7}, {"title": "中文", "extra": True}])
 def test_invalid_structure_fails_closed(tmp_path, monkeypatch, payload):
     monkeypatch.setattr(provider, "_execute", _executor(payload))

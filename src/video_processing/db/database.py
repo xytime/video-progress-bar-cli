@@ -420,6 +420,47 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             return rows
 
     @staticmethod
+    def maintenance_fail_stopped_preparation(path, records, *, expected_version):
+        """显式对账已停止的提交前 PROCESSING 任务；不重新入队，不接受任何平台账本。
+
+        此维护专用事务与备份入口一样不走业务准入：必须持控制锁、已排空、版本一致，
+        且调用方提供的精确旧 PID 已不存在。冻结来源和旧进程停止回执由运维调用者保管。
+        """
+        from ..core.maintenance import gate, MaintenanceDenied
+        control = gate()
+        if not records or len({r['youtube_id'] for r in records}) != len(records):
+            raise ValueError('INTERRUPTED_RECORDS_INVALID')
+        with control._locked():
+            state = control._read()
+            active, unknown = control._leases()
+            if state['state'] != 'MAINTENANCE' or state['version'] != expected_version or active or unknown:
+                raise MaintenanceDenied('NOT_VERIFIED_IDLE')
+            with closing(sqlite3.connect(path, timeout=2)) as conn, conn:
+                conn.execute('BEGIN IMMEDIATE')
+                for record in records:
+                    if type(record['pid']) is not int or record['pid'] < 1:
+                        raise ValueError('INTERRUPTED_PID_INVALID')
+                    try:
+                        os.kill(record['pid'], 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        raise ValueError('INTERRUPTED_PID_PRESENT')
+                    row = conn.execute(
+                        "SELECT id, status, updated_at, source FROM processed_videos WHERE youtube_id=? AND slice_index=0",
+                        (record['youtube_id'],)).fetchone()
+                    if not row or row[1] != 'PROCESSING' or row[2] != record['updated_at'] or row[3] == 'COMPLIANCE_REMIX':
+                        raise ValueError('INTERRUPTED_STATE_CHANGED')
+                    for table in ('wechat_publications', 'wechat_publications_historical_archive',
+                                  'wechat_submission_attempts', 'douyin_publications', 'kuaishou_publications'):
+                        if conn.execute(f'SELECT 1 FROM {table} WHERE video_id=? LIMIT 1', (row[0],)).fetchone():
+                            raise ValueError('INTERRUPTED_PUBLICATION_EXISTS')
+                    conn.execute("UPDATE processed_videos SET status='FAILED', process_pid=NULL, "
+                                 "error_msg=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                                 ('[RecoveryInterrupted] 修复字幕识别期间停止旧等待任务；已有检查点保留，未提交。', row[0]))
+                return [r['youtube_id'] for r in records]
+
+    @staticmethod
     def maintenance_backup(source: Path, destination: Path) -> dict:
         """独占新备份目标，包含 WAL；不初始化/迁移源数据库，失败不覆盖旧备份。"""
         import hashlib

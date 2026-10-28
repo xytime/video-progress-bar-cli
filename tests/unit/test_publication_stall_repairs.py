@@ -51,6 +51,8 @@ def test_environment_prepared_before_real_maintenance_wrapper(monkeypatch, isola
     [.015509769383022575, .9426619326746428, .9985643119245264, 1.001772409910225],
     [.6014953179215331, .44716042386211186, 1.0093732876633543, .7140269382799722],
     [-.000202896640778355, -.0019031906998459025, .06895289774131699, .02690319105555905],
+    [.17516883153010915, -.011506644822921741, .32711283701945854, .14376271307028032],
+    [-.02, 0, 1, 1], [0, 0, 1.02, 1],
 ])
 def test_real_vision_edge_coordinates_preserve_confidence_and_raw_box(box):
     row = router.normalize_row(dict(text='原始文字', box=box, confidence=.30000001192092896))
@@ -60,7 +62,7 @@ def test_real_vision_edge_coordinates_preserve_confidence_and_raw_box(box):
 
 
 @pytest.mark.parametrize('box,confidence', [
-    ([-.02, 0, 1, 1], .9), ([0, 0, 1.02, 1], .9),
+    ([1.02, 0, 2, 1], .9), ([0, 1.02, 1, 2], .9),
     ([.7, 0, .2, 1], .9), ([-.005, 0, -.001, 1], .9),
     ([0, 0, float('nan'), 1], .9), ([0, 0, 1, 1], float('inf')),
     ([0, 0, 1, 1], 1.1), ([0, 0], .9),
@@ -149,6 +151,7 @@ def test_round_deadline_does_not_commit_over_budget_frame(scan_fixture, monkeypa
         return []
     monkeypatch.setattr(router, 'observe', slow_observe)
     monkeypatch.setattr(router, 'MAX_SCAN_SECONDS', .01)
+    monkeypatch.setattr(router, 'SCAN_SECONDS_PER_FRAME', 0)
     with pytest.raises(ValueError, match='OCR_BUDGET_EXCEEDED'):
         router.scan(source, directory, lambda _: None)
     checkpoint = json.loads((directory / 'partial-scan.json').read_text())
@@ -160,10 +163,80 @@ def test_bad_row_does_not_partially_commit_frame(scan_fixture, monkeypatch):
     source, directory = scan_fixture
     def invalid_observe(worker, frame, **kwargs):
         return [dict(text='正常框', box=[0, 0, .5, .5], confidence=.9),
-                dict(text='异常框', box=[0, 0, 2, 1], confidence=.9)]
+                dict(text='异常框', box=[2, 0, 3, 1], confidence=.9)]
     monkeypatch.setattr(router, 'observe', invalid_observe)
     with pytest.raises(ValueError, match='OCR_INVALID_ROW'):
         router.scan(source, directory, lambda _: None)
     checkpoint = json.loads((directory / 'partial-scan.json').read_text())
     assert checkpoint['state']['frame_count'] == 0
     assert checkpoint['state']['runs'] == []
+
+
+def test_large_frame_write_is_also_deadline_bound():
+    import subprocess
+    import sys
+    import time
+    worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)'],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    started = time.monotonic()
+    try:
+        frame = np.random.default_rng(1).integers(0, 256, (512, 512, 3), dtype=np.uint8)
+        with pytest.raises(ValueError, match='OCR_TIMEOUT'):
+            router.observe(worker, frame, timeout=.2)
+        assert time.monotonic() - started < 3
+    finally:
+        worker.kill()
+        worker.wait(timeout=3)
+        worker.stdin.close()
+        worker.stdout.close()
+
+
+def test_recycle_worker_and_retry_same_frame_without_losing_coverage(scan_fixture, monkeypatch):
+    from contextlib import contextmanager
+    source, directory = scan_fixture
+    workers, visits = [], []
+    @contextmanager
+    def worker():
+        identity = len(workers)
+        workers.append(identity)
+        yield identity
+    def observe(identity, frame, **kwargs):
+        index = round(float(frame.mean()) / 25)
+        visits.append(index)
+        if identity == 0 and index == 1:
+            raise ValueError('OCR_TIMEOUT')
+        return []
+    monkeypatch.setattr(router, 'vision_worker', worker)
+    monkeypatch.setattr(router, 'observe', observe)
+    monkeypatch.setattr(router, 'WORKER_FRAME_LIMIT', 2)
+    result = router.scan(source, directory, lambda _: None)
+    assert result['frame_count'] == 8
+    assert visits == [0, 1, 1, 2, 3, 4, 5, 6, 7]
+    assert len(workers) == 5
+
+
+def test_long_review_receives_complete_negative_evidence_without_144_segment_cap(scan_fixture, monkeypatch):
+    from types import SimpleNamespace
+    source, directory = scan_fixture
+    segments = [dict(start=0, end=.8, text='Only English') for _ in range(145)]
+    scanned = dict(fps=10, frame_count=8, runs=[dict(id=0, text='ENGLISH', first=0, last=8,
+                                                 chinese=False, confidence=.9, box=[0, 0, 1, 1])])
+    def provider(prompt, **kwargs):
+        batch = json.loads(prompt.split('\n', 1)[1])
+        for item in batch:
+            assert item['scan_coverage']['scanned_frames'] == 8
+            assert item['scan_coverage']['failed_frames'] == 0
+            assert item['scan_coverage']['chinese_run_count'] == 0
+            assert item['other_text_examples'] == ['ENGLISH']
+            assert [x['frame'] for x in item['context_images']] == [0, 3, 7]
+            assert item['rows'] == []
+        assert all(p.is_file() for p in kwargs['images'])
+        return SimpleNamespace(payload=dict(reviews=[dict(segment_id=x['segment_id'], decision='ABSENT',
+            run_ids=[], visual_verified_run_ids=[], reason='complete evidence') for x in batch]))
+    monkeypatch.setattr(router, 'run_codex_structured', provider)
+    assert len(router.review(source, segments, scanned, directory, lambda _: None)) == 145
+
+
+def test_parent_budget_scales_with_source_frame_count(monkeypatch):
+    monkeypatch.setattr(burned_caption_repair, '_probe', lambda _: (1080, 1920, 60., 1200.))
+    assert router.processing_budget(Path('unused.mp4')) > 72000

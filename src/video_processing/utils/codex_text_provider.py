@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-28 | Codex | 接受流重连后有终态且通过结构/质量合同的输出，不把恢复提示当最终失败。 |
 | 1.3.0 | 2026-10-27 | Codex | 真实执行前允许调用方持久领取预算，缓存、锁和冷却不消耗请求次数。 |
 | 1.2.0 | 2026-10-27 | Codex | 字幕质量合同隔离缓存身份，保存有界宿主拒绝信号并在原预算内重建失效缓存。 |
 | 1.1.0 | 2026-10-20 | Codex | 英语世界安全审核可显式附图，图片指纹纳入缓存身份；仍禁用工具。 |
@@ -231,12 +232,21 @@ def _run_codex_structured(
                 raise CodexTextError(code, retry_at)
             usage = {}
             completed = False
+            transport_notice = False
             try:
                 for line in result.stdout.splitlines():
                     event = json.loads(line)
-                    if event.get("type") in {"error", "turn.failed"}:
+                    if event.get("type") == "turn.failed":
                         raise CodexTextError("unavailable")
+                    if event.get("type") == "error":
+                        # CLI 会把可恢复的流重连也记为 error。只有最终 turn.completed、
+                        # 工具禁用检查和结构/质量校验共同通过，才接受恢复后的输出。
+                        transport_notice = True
+                        continue
                     item = event.get("item", {})
+                    if item.get("type") == "error":
+                        transport_notice = True
+                        continue
                     if item.get("type") not in {None, "agent_message", "reasoning"}:
                         raise CodexTextError("tool_use_rejected")
                     if event.get("type") == "turn.completed":
@@ -244,7 +254,7 @@ def _run_codex_structured(
                         usage = {key: value for key, value in event.get("usage", {}).items()
                                  if key.endswith("tokens") and isinstance(value, int)}
                 if not completed:
-                    raise CodexTextError("incomplete")
+                    raise CodexTextError("unavailable" if transport_notice else "incomplete")
                 raw = json.loads(output_path.read_text(encoding="utf-8"))
                 Draft202012Validator(schema).validate(raw)
             except (ValueError, OSError, ValidationError):

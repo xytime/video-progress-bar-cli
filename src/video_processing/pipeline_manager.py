@@ -7,6 +7,7 @@
 | native-captions-v1 | 2026-10-27 | Codex | 单片摘要绑定保留原有中文字幕，复用原片并继续内容及发布门禁。 |
 | remix-entry-guard-v1 | 2026-10-25 | GPT-6.1 Sol | 普通加工及发布入口拒绝合规二创来源，保留独立审批边界。 |
 | manual-result-feedback-v1 | 2026-10-25 | Codex | 保留本次投稿动作证据，区分策略性人工确认与真实结果未知。 |
+| caption-recovery-v1 | 2026-10-28 | Codex | 原片字幕扫描按实际帧数与核验批次分配父任务和阶段预算。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
@@ -2231,6 +2232,7 @@ class PipelineManager:
         popen_kwargs = kwargs.copy()
         timeout = popen_kwargs.pop("timeout", None)
         progress_path = popen_kwargs.pop("progress_path", None)
+        caption_stage_limits = popen_kwargs.pop("caption_stage_limits", {})
         if popen_kwargs.pop("capture_output", False):
             popen_kwargs["stdout"] = subprocess.PIPE
             popen_kwargs["stderr"] = subprocess.PIPE
@@ -2273,7 +2275,7 @@ class PipelineManager:
                     started_at=time.time(),
                     startup_timeout_seconds=_CAPTION_STARTUP_TIMEOUT_SEC,
                     heartbeat_timeout_seconds=_CAPTION_HEARTBEAT_TIMEOUT_SEC,
-                    stage_timeout_seconds=_CAPTION_STAGE_TIMEOUT_SEC,
+                    stage_timeout_seconds={**_CAPTION_STAGE_TIMEOUT_SEC, **caption_stage_limits},
                     default_stage_timeout_seconds=_CAPTION_DEFAULT_STAGE_TIMEOUT_SEC,
                 )
 
@@ -5040,6 +5042,12 @@ class PipelineManager:
                         logger.warning(f"[TTS] Unknown tts_provider={_tts_provider!r} for {prefix}, skipping TTS")
                     render_env = _build_subprocess_env()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
+                    caption_budget = _AUTO_CAPTION_TIMEOUT_SEC
+                    caption_stage_limits = {}
+                    if "--preserve-source-chinese" in render_cmd:
+                        from .processors.native_caption_router import processing_budget
+                        caption_budget = processing_budget(Path(target_file))
+                        caption_stage_limits["SOURCE_CAPTION_LOCATING"] = caption_budget
                     try:
                         self._run_tracked(
                             render_cmd,
@@ -5048,7 +5056,8 @@ class PipelineManager:
                             capture_output=True,
                             cwd=str(self._PRJ_ROOT),
                             env=render_env,
-                            timeout=_AUTO_CAPTION_TIMEOUT_SEC,
+                            timeout=caption_budget,
+                            caption_stage_limits=caption_stage_limits,
                             progress_path=progress_file,
                         )
                     except subprocess.CalledProcessError as exc:
