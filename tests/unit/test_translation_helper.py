@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-29 | Codex | 验证真实 Google 挑战页停止整批、缓存保留及无敏感报文的类型分类。 |
 | 1.1.0 | 2026-10-05 | Codex | 逐段限流恢复、节流和跨次检查点保留。 |
 | 1.0.0 | 2026-08-31 | Codex | 覆盖 Google 终级兜底的受信 TLS、单请求时限与整片预算边界。 |
 """
@@ -142,3 +143,39 @@ def test_shared_deadline_stops_google_before_any_request(monkeypatch):
     assert th._google_translate_batch(["one"], deadline=99.0, error_out=errors) == [""]
     translator.translate.assert_not_called()
     assert "budget exhausted" in errors[-1]
+
+
+@pytest.mark.parametrize('redirect', [False, True])
+def test_google_challenge_response_is_closed_without_translation_or_redirect_bypass(monkeypatch, redirect):
+    response = MagicMock(
+        status_code=302 if redirect else 200,
+        url='https://translate.google.com/m' if redirect else 'https://www.google.com/sorry/index',
+        headers={'Location': 'https://www.google.com/sorry/index' if redirect else ''})
+    monkeypatch.setattr(th.requests, 'get', lambda *a, **k: response)
+    with pytest.raises(th._GoogleUpstreamChallenge):
+        th._VerifiedGoogleRequests(deadline=th.time.monotonic()+10).get('https://translate.google.com/m')
+    response.close.assert_called_once()
+
+
+def test_google_challenge_stops_remaining_rows_and_keeps_valid_cache(tmp_path, monkeypatch):
+    translator = MagicMock()
+    translator.translate.side_effect = ['第一段', th._GoogleUpstreamChallenge('private URL and body')]
+    monkeypatch.setattr(th, 'GoogleTranslator', lambda **kwargs: translator)
+    monkeypatch.setattr(th.time, 'sleep', lambda seconds: None)
+    errors = []
+    assert th._google_translate_batch(['one','two','three'], cache_dir=tmp_path,
+                                      error_out=errors) == ['第一段','','']
+    assert translator.translate.call_count == 2
+    assert errors == ['Google upstream challenge: rate_limit']
+    translator.translate.reset_mock()
+    translator.translate.side_effect = ['第二段','第三段']
+    assert th._google_translate_batch(['one','two','three'], cache_dir=tmp_path) == ['第一段','第二段','第三段']
+    assert [call.args[0] for call in translator.translate.call_args_list] == ['two','three']
+
+
+@pytest.mark.parametrize('error,expected', [
+    (requests.Timeout('private body'), 'network'),
+    (requests.ConnectionError('private body'), 'network'),
+])
+def test_google_network_type_does_not_depend_on_provider_error_wording(error, expected):
+    assert th._google_failure_category(error) == expected

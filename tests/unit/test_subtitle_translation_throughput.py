@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-29 | Codex | 覆盖长片后备未准入时实际传输失败及累计预算的保留。 |
 | 1.0.0 | 2026-10-29 | Codex | 覆盖后备机会、累计耗尽、原子候选绑定、坏批拒绝和截断连接恢复。 |
 """
 import http.client
@@ -315,6 +316,34 @@ def test_only_service_failures_keep_remaining_budget_without_creating_fresh_plan
     paths = list((tmp_path / 'output').glob('subtitle_candidate_cache/subtitle-attempt-budget-v1/*/budget.json'))
     assert len(paths) == 1
     state = json.loads(paths[0].read_text())
+    assert state['terminal'] is False
+    assert 0 <= state['used_seconds'] < 5
+
+
+@pytest.mark.parametrize('kind,category', [
+    ('network', 'network'), ('quota', 'quota'), ('authentication', 'authentication'),
+])
+def test_unadmitted_long_codex_fallback_does_not_mask_service_failure_or_close_budget(
+        tmp_path, monkeypatch, kind, category):
+    from video_processing.utils.subtitle_failure_receipt import SubtitleTranslationFailure
+    calls = []
+    def build(processor, provider, texts, context):
+        calls.append(provider)
+        if kind == 'network':
+            raise http.client.IncompleteRead(b'private body', 100)
+        raise urllib.error.HTTPError('https://private', 429 if kind == 'quota' else 401,
+                                     'private body', {}, None)
+    processor = _processor_fixture(tmp_path, monkeypatch, ['google', 'codex'], build)
+    with pytest.raises(SubtitleTranslationFailure) as result:
+        processor._translate_segments([{'text': 'Hello world.'}] * 197)
+    assert calls == ['google']
+    assert result.value.failure['category'] == category
+    assert all(item['code'] != 'candidate_not_admitted_budget' for item in result.value.failures)
+    assert processor._translation_throughput_events[-1]['action'] == 'not_admitted'
+    ledgers = list((tmp_path / 'output').glob(
+        'subtitle_candidate_cache/subtitle-attempt-budget-v1/*/budget.json'))
+    assert len(ledgers) == 1
+    state = json.loads(ledgers[0].read_text())
     assert state['terminal'] is False
     assert 0 <= state['used_seconds'] < 5
 

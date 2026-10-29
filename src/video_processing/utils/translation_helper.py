@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 | ------- | ---------- | -------------------------- | ----------- |
+| 1.5.1 | 2026-10-29 | Codex | Google 验证挑战立即停止整批并保留缓存；网络及认证按异常类型分类。 |
 | 1.5.0 | 2026-10-29 | Codex | 原硬合同占位语不写入或复用 Google 行缓存，保持后续全片质量门。 |
 | 1.4.0   | 2026-10-05 | Codex | 逐段节流和有界退避，保留已完成缓存，供应商共用截止时间。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块 |
@@ -25,6 +26,7 @@ import time
 from contextlib import contextmanager
 from typing import List
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -45,6 +47,24 @@ logger = logging.getLogger(__name__)
 
 _SEP = "\n###\n"
 _GOOGLE_TRANSLATOR_LOCK = threading.RLock()
+
+
+class _GoogleUpstreamChallenge(requests.RequestException):
+    """真实 Google 验证页；不把 302/200 伪报为 HTTP 429，也不尝试绕过。"""
+
+
+def _google_failure_category(error):
+    if isinstance(error, _GoogleUpstreamChallenge) or type(error).__name__ == 'TooManyRequests':
+        return 'rate_limit'
+    if isinstance(error, requests.HTTPError) and error.response is not None:
+        status = error.response.status_code
+        if status == 429:
+            return 'rate_limit'
+        if status in {401, 403}:
+            return 'auth_or_permission'
+    if isinstance(error, (requests.Timeout, requests.ConnectionError)):
+        return 'network'
+    return classify_error(str(error))
 
 
 def _google_translate_timeout() -> tuple[int, int]:
@@ -73,7 +93,17 @@ class _VerifiedGoogleRequests:
         read_timeout = min(configured_read_timeout, remaining_seconds - connect_timeout)
         kwargs["verify"] = True
         kwargs["timeout"] = (connect_timeout, read_timeout)
-        return requests.get(*args, **kwargs)
+        response = requests.get(*args, **kwargs)
+        # 请求可已跳到验证页，或显式不跟随时在 Location 中指向验证页。
+        for value in (getattr(response, 'url', None), response.headers.get('Location')):
+            if not isinstance(value, str):
+                continue
+            location = urlsplit(value)
+            if (location.hostname in {'google.com', 'www.google.com', 'translate.google.com'}
+                    and location.path.startswith('/sorry/')):
+                response.close()
+                raise _GoogleUpstreamChallenge('Google upstream challenge: rate_limit')
+        return response
 
     def __getattr__(self, name: str):
         return getattr(requests, name)
@@ -204,12 +234,13 @@ def _google_translate_batch(
                         write_json_atomically(cache_path, results)
                     break
                 except Exception as exc:
-                    category = classify_error(str(exc))
-                    # deep-translator TooManyRequests 的消息不总含 HTTP 429。
-                    if type(exc).__name__ == "TooManyRequests":
-                        category = "rate_limit"
+                    category = _google_failure_category(exc)
                     logger.warning("[TransHelper] Google segment %s/%s attempt %s failed: %s",
                                    index + 1, len(texts), attempt + 1, category)
+                    if isinstance(exc, _GoogleUpstreamChallenge):
+                        if error_out is not None:
+                            error_out.append('Google upstream challenge: rate_limit')
+                        return results
                     if category not in {"rate_limit", "network"} or attempt >= settings.google_translate_max_retries:
                         if error_out is not None:
                             error_out.append(f"Google segment {index + 1}/{len(texts)}: {category}: {str(exc)[:240]}")

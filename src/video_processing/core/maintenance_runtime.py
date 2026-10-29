@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-29 | Codex | 补齐既有发布执行器依赖的加载指纹、空白浏览器能力检查及有界退避接口。 |
 | preparation-dispatch-v1 | 2026-10-29 | Codex | 登记预加工派发角色；源锁、资源槽及等待票据继续阻止未排空迁移。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 将发布恢复执行者纳入原生维护归属与排空检查。 |
 | 1.1.0 | 2026-10-18 | AGY | 增加加载时模块指纹 loaded_modules_hash、空白上下文浏览器能力预检与有界退避、以及通用受控 stop_worker |
@@ -44,6 +45,94 @@ def code_hash():
         value.update(str(path.relative_to(root)).encode())
         value.update(path.read_bytes())
     return value.hexdigest()
+
+
+BROWSER_CAPABILITY_BACKOFF_SCHEDULE = (120, 300, 900)
+
+
+LOADED_SOURCE_HASH = code_hash()
+
+
+def loaded_modules_hash() -> str:
+    """计算当前进程已加载项目模块文件的确定性 SHA-256 摘要。"""
+    root = Path(__file__).resolve().parents[3].resolve()
+    module_paths: set[Path] = set()
+    for mod in list(sys.modules.values()):
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file:
+            continue
+        try:
+            resolved = Path(mod_file).resolve()
+            if resolved.suffix == ".py" and resolved.is_relative_to(root) and resolved.is_file():
+                module_paths.add(resolved)
+        except OSError:
+            continue
+    digest = hashlib.sha256()
+    for path in sorted(module_paths):
+        try:
+            digest.update(str(path.relative_to(root)).encode("utf-8"))
+            digest.update(path.read_bytes())
+        except OSError:
+            continue
+    return digest.hexdigest()
+
+
+def compute_browser_capability_backoff_seconds(failure_count: int) -> int:
+    """浏览器能力预检失败后的有界指数退避秒数（120s -> 300s -> 900s）。"""
+    idx = min(max(int(failure_count) - 1, 0), len(BROWSER_CAPABILITY_BACKOFF_SCHEDULE) - 1)
+    return int(BROWSER_CAPABILITY_BACKOFF_SCHEDULE[idx])
+
+
+def verify_browser_launch_capability(*, timeout_seconds: float = 15.0, probe_runner=None) -> dict:
+    """使用空白本地上下文验证 Playwright Chromium 启动、空白页打开与资源清理能力。
+
+    严格不接触生产 wechat_state.json 与 .wechat_browser_profile。
+    """
+    checked_at = time.time()
+    if probe_runner is not None:
+        try:
+            ok, reason = probe_runner()
+            return {"ok": bool(ok), "checked_at": checked_at, "reason": None if ok else str(reason or "BROWSER_CAPABILITY_UNAVAILABLE")}
+        except Exception as exc:
+            return {"ok": False, "checked_at": checked_at, "reason": f"BROWSER_CAPABILITY_UNAVAILABLE: {type(exc).__name__}: {exc}"}
+
+    root = Path(__file__).resolve().parents[3]
+    python_bin = str(root / ".venv" / "bin" / "python")
+    probe_code = (
+        "from playwright.sync_api import sync_playwright\n"
+        "with sync_playwright() as p:\n"
+        "    browser = p.chromium.launch(headless=True)\n"
+        "    try:\n"
+        "        ctx = browser.new_context()\n"
+        "        page = ctx.new_page()\n"
+        "        page.goto('about:blank', timeout=5000)\n"
+        "        ctx.close()\n"
+        "    finally:\n"
+        "        browser.close()\n"
+    )
+    try:
+        res = subprocess.run(
+            [python_bin, "-c", probe_code],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if res.returncode == 0:
+            return {"ok": True, "checked_at": checked_at, "reason": None}
+        err_tail = ((res.stderr or "") + "\n" + (res.stdout or "")).strip()[-300:]
+        return {
+            "ok": False,
+            "checked_at": checked_at,
+            "reason": f"BROWSER_CAPABILITY_UNAVAILABLE (code={res.returncode}): {err_tail}",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "checked_at": checked_at,
+            "reason": f"BROWSER_CAPABILITY_UNAVAILABLE: {type(exc).__name__}: {exc}",
+        }
 
 
 def process_birth(pid):

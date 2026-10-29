@@ -666,6 +666,9 @@ def test_review_cli_records_fresh_completion_and_local_failure(tmp_path, monkeyp
     from scripts import english_world_language as language
     from video_processing.study_cards import language_review_service as service
     from video_processing.study_cards.language_protocol import atomic_json, read_json, digest
+    # 本例只验证本地审校执行回执，供应商路由有独立测试。
+    from config.settings import settings
+    monkeypatch.setattr(settings, "english_world_codex_fallback", False)
     timeline = tmp_path / "timeline.json"
     atomic_json(timeline, {})
     atomic_json(tmp_path / "qa/source_evidence.json", {"source_sha256": "source", "caption_sha256": "caption",

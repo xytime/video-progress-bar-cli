@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1 | 2026-10-29 | Codex | 历史成功样本冻结旧模式；新增失败事件触发器仍须完整回滚并拒绝旧工具写入。 |
 | 1.0 | 2026-10-13 | Codex | 授权目标及禁止自动入队的针对性验收 |
 """
 import importlib.util
@@ -30,6 +31,10 @@ def record(tmp_path):
     path = tmp_path / "pipeline.db"
     business = BusinessDB(str(path))
     with sqlite3.connect(path) as conn:
+        # 一次性 10/13 工具的契约禁止任何触发器副作用；10/23 新增失败事件
+        # 已有单独的拒绝用例覆盖，历史成功路径使用当时无失败事件触发器的模式。
+        conn.execute("DROP TRIGGER publishing_failed_update")
+        conn.execute("DROP TRIGGER publishing_failed_insert")
         values = dict(dal.TARGET, title="需人工复核的原任务", channel_id="test", score=99)
         conn.execute(f"INSERT INTO processed_videos ({','.join(values)}) VALUES ({','.join('?' for _ in values)})", list(values.values()))
         conn.execute("INSERT INTO processed_videos(id,youtube_id,title,channel_id,status) VALUES (5788,'unrelated','title','test','PENDING')")
@@ -214,3 +219,19 @@ def test_continuation_never_advances_after_unverified_step(tmp_path, monkeypatch
         assert result['state']=='COMPLETE' and actions==list(module.STEPS)
         with pytest.raises(DeploymentDenied, match='CONTINUATION_ALREADY_ATTEMPTED'):
             module.continue_stopped(tmp_path)
+
+
+def test_new_failure_audit_trigger_is_refused_without_mutation(record):
+    path, _, before = record
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TRIGGER publishing_failed_update AFTER UPDATE OF status ON processed_videos
+            WHEN NEW.status='FAILED' BEGIN
+              UPDATE processed_videos SET failed_at=CURRENT_TIMESTAMP WHERE id=NEW.id;
+              INSERT INTO publishing_failure_events(video_id,status,reason,failed_at)
+                VALUES(NEW.id,NEW.status,NEW.error_msg,CURRENT_TIMESTAMP);
+            END""")
+    with pytest.raises(sqlite3.DatabaseError):
+        dal.PipelineDB.hold_authorized_orphan(path, before)
+    assert dal.PipelineDB.repair_snapshot(path) == before
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM publishing_failure_events").fetchone() == (0,)

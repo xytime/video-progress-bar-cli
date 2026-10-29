@@ -8,6 +8,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-29 | Codex | 两个精确已审查前代合同，完整质量复核后原子升级完成快照。 |
+| 1.0.1 | 2026-10-29 | Codex | 审查未准入故障归因与 Google 挑战即停差异后更新精确目标；质量模块与全片复核不变。 |
 """
 from copy import deepcopy
 
@@ -102,7 +103,7 @@ MANIFEST = {
             }
         }
     ],
-    "target_methods": "77be96c40608550a08872a56dab7700683e84a50d7fa9666cc8c11dd7f8b5212",
+    "target_methods": "40f8decece6ad22a741190b6ae2e997056bb51329975ff2e60386a1d6489d67a",
     "target_modules": {
         "subtitle_translation_provider": "b664893df8f1db61fe1e0f7c7bcc19aa32f136dd25b049d6c5f7a97692b53184",
         "subtitle_translation_quality": "db36ba5f3be0fe50e29911abc25e9b1ce0a850db5c8b3a4e138829a70e196a6f",
@@ -116,7 +117,7 @@ MANIFEST = {
         "translation_entity_guard": "99080c6074620a8b2ae23e617aafcc368268522bb4f23cf9263ab121f1d4a6ff",
         "translation_prompt_constraints": "90401ceafbf8a184520b9c5ee9008e0f753d5e5acdcf8c71a88ba0bbda765c97",
         "vocab_helper": "84fe7d2c303f20f12fcd3a7563449644d4d64c89ef02d8a121ed07c023bdedfb",
-        "translation_helper": "f705fe99b8a389758e8621592b04db1b22155e197ea5009c7d37caa96cccf8bb",
+        "translation_helper": "bb965eaa8cdccd1e556cea3e6e2b07311902a3e542ea4ede5f5a2327e4be9507",
         "deepseek_translation": "113ec14031b3ca7dfd4ac17afc177ffbed90bd5d216b0cc0e529e7b29cba1e54",
         "translation_model_pool": "a60ca0dc373d2c63ffa54def5acfa2d07e4e1b74b36ba7092342121039a4ac73",
         "agy_provider": "2fbe28d6cea7ab67f5bc8a9cd56ee2f068d134027436be89d0c08d8d715cb404",

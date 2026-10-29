@@ -3,12 +3,14 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-29 | Codex | 每例恢复配置并隔离默认账号账本，防止热加载策略和冷却状态跨测试污染。 |
 | 1.2.0 | 2026-10-12 | Codex | 既有业务测试显式初始化独立维护状态，不改变生产缺失闭锁 |
 | 1.1.0 | 2026-09-08 | Codex | 业务配置导入前检查一次性源码根和实际沙盒拒绝，禁止裸 pytest 触碰正式库 |
 | 1.0.0 | 2026-07-28 | Codex | 默认关闭公开视频提交窗口守卫，避免发布类单测依赖当前时钟 |
 """
 
 import json
+import copy
 from pathlib import Path
 
 import pytest
@@ -46,7 +48,22 @@ from config.settings import settings
 
 
 @pytest.fixture(autouse=True)
-def isolated_running_maintenance(tmp_path, monkeypatch):
+def settings_snapshot():
+    original = copy.deepcopy(settings.__dict__)
+    yield
+    settings.__dict__.clear()
+    settings.__dict__.update(original)
+
+
+@pytest.fixture
+def isolated_default_output(tmp_path, monkeypatch, settings_snapshot):
+    output = tmp_path / 'default-output'
+    output.mkdir()
+    monkeypatch.setattr(type(settings), 'default_output_dir', property(lambda _: output))
+
+
+@pytest.fixture(autouse=True)
+def isolated_running_maintenance(tmp_path, monkeypatch, settings_snapshot):
     from video_processing.core.maintenance import MaintenanceGate
     path = tmp_path / "maintenance" / "state.json"
     monkeypatch.setattr(settings, "maintenance_state_path", path)
@@ -58,7 +75,7 @@ def isolated_running_maintenance(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def disable_public_publish_windows_by_default():
+def disable_public_publish_windows_by_default(settings_snapshot):
     previous = settings.enable_public_publish_windows
     settings.enable_public_publish_windows = False
     try:

@@ -275,6 +275,7 @@ def test_product_wait_no_longer_blocks_unsubmitted_task_but_preserves_artifacts(
     assert task['task_id'] in blocked_product_task_keys(tmp_path,active)
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     from scripts import run_ready_publications as worker
     from video_processing.utils.wechat_product_execution import product_observation_generation
@@ -338,6 +339,7 @@ def test_queued_manual_stock_wait_and_disabled_block_preserve_original(tmp_path,
         assert product_task_preflight(task,tmp_path,'media')  # 平台当前库存核验决定，不拿历史0代替实时结果。
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_english_ready_wait_filter_entire_queue_before_limit(tmp_path,monkeypatch):
     import hashlib
     from types import SimpleNamespace

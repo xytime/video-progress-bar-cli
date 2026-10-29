@@ -104,7 +104,8 @@ def test_disk_failure_and_untrusted_origin(import_setup,monkeypatch):
 
 def test_concurrent_import_only_one_wins(import_setup):
     client,active,path,doc=import_setup
-    a=request_body(client,doc);second=deepcopy(doc);second['pages'][1]['items'][1]['title']='另一批商品'
+    # 两份内容各自有效：只变更新增商品，避免先触发已配置同 ID 改名门禁。
+    a=request_body(client,doc);second=deepcopy(doc);second['pages'][1]['items'][-1]['title']='另一批商品'
     b=request_body(client,second)
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses=list(pool.map(lambda body:client.post('/api/product-settings/catalog/import',json=body).status_code,[a,b]))

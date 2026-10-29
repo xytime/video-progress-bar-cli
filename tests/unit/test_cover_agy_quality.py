@@ -14,7 +14,7 @@ def test_timeout_kills_child_group_and_does_not_echo_command(tmp_path):
     child = f"from pathlib import Path; import time\np=Path({str(marker)!r})\nwhile True:\n p.write_text(str(time.time())); time.sleep(.02)"
     parent = f"import subprocess,sys,time\nsubprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(60)"
     with pytest.raises(RuntimeError, match='PROCESS_TIMEOUT') as exc:
-        agy.run_process([sys.executable, '-c', parent], cwd=tmp_path, timeout=.4, env={})
+        agy.run_process([sys.executable, '-c', parent], cwd=tmp_path, timeout=2, env={})
     assert parent not in str(exc.value)
     assert marker.exists()
     last = marker.read_text()

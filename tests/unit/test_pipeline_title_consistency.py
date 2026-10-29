@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                          |
 |---------|------------|-------------------------------------|----------------------------------------------------------------------|
+| 1.4.0 | 2026-10-29 | Codex | 渲染替身提供实际 ASR、翻译及本次成功回执，保留完整父进程守卫。 |
 | 1.3.0 | 2026-09-09 | Codex | 渲染替身生成真实 ASS；坏字幕须在封面/发布前被拒绝 |
 | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 新增切片进度标题测试（v2.9.0）: "AI写代码 3/9"                          |
 | 1.2.0   | 2026-08-24 | Codex                               | 双标题缺失触发未提交任务重写文案，并使平台标题重渲、封面展示标题重建。      |
@@ -20,6 +21,7 @@
 
 import os
 import sys
+import json
 import pytest
 import pysubs2
 from pathlib import Path
@@ -33,13 +35,19 @@ from video_processing.db.database import PipelineDB
 
 
 @pytest.fixture
-def pm_env(tmp_path):
+def pm_env(tmp_path, monkeypatch):
     """构建带临时 DB 和 output 目录的 PipelineManager 环境。"""
     db_path = tmp_path / "test_title.db"
     db = PipelineDB(str(db_path))
     pm = PipelineManager(db_path=str(db_path))
     pm._OUT_DIR = tmp_path
     pm._PRJ_ROOT = Path(__file__).parent.parent.parent
+    from config.settings import settings
+    from video_processing.core.video_groups import VIDEO_GROUPS
+    policy = tmp_path / 'outro-disabled.json'
+    policy.write_text(json.dumps(dict(schema_version=1, enabled=False,
+        profiles={group: dict(enabled=False, channel_ids=[]) for group in VIDEO_GROUPS})))
+    monkeypatch.setattr(settings, 'vocabulary_outro_policy_path', policy)
     return pm, db, tmp_path
 
 
@@ -179,7 +187,8 @@ class TestRenderTitleConsistency:
 
         # Cover 生成也需要 mock（subprocess.run）
         with patch("video_processing.pipeline_manager.subprocess.run") as mock_sub:
-            mock_sub.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            # 同一外部边界也承担 ffprobe；空输出会在渲染前被时间轴守卫拒绝。
+            mock_sub.return_value = MagicMock(returncode=0, stdout=b'{"streams":[{"width":1280,"height":720,"avg_frame_rate":"30/1","r_frame_rate":"30/1","duration":"1"}],"format":{"duration":"1"}}', stderr=b"")
             video_dict = {
                 "youtube_id": yid,
                 "title": "A Computer That Writes Code",
@@ -244,13 +253,29 @@ class TestRenderTitleConsistency:
                 chinese = "正常译文" if valid_subtitles else "（承接上文）"
                 subs.append(pysubs2.SSAEvent(start=0, end=1000, text=r"{\fnGeorgia}English\N{\fnHiragino Sans GB}" + chinese))
                 subs.save(str(source.with_suffix(".ass")))
+                # 模拟子进程的完整输出合同，不能靠绕过父进程成功凭据守卫。
+                from video_processing.utils.caption_checkpoints import CaptionCheckpoints, fingerprint
+                from video_processing.utils.render_source_binding import digest
+                from video_processing.utils.subtitle_failure_receipt import write_success_receipt
+                asr = [dict(start=0, end=1, text='English')]
+                translated = [dict(**asr[0], zh_text=chinese)]
+                store = CaptionCheckpoints(source, dict(model='test-render-boundary'))
+                contract = dict(asr_sha256=fingerprint(asr), target_lang='zh-CN')
+                store.save('asr', store.identity['asr'], asr, 'en')
+                store.save('translation', contract, translated, 'en', asr)
+                checkpoint = store.directory / 'translation.json'
+                write_success_receipt(cmd[cmd.index('--subtitle-receipt') + 1],
+                    cmd[cmd.index('--subtitle-attempt-id') + 1], source,
+                    dict(input_sha256=digest(source), asr_sha256=fingerprint(asr),
+                         contract_sha256=fingerprint(contract), checkpoint_path=str(checkpoint),
+                         checkpoint_sha256=digest(checkpoint)))
             return MagicMock(returncode=0, stdout="", stderr="")
 
         pm._run_tracked = mock_run_tracked
         with patch("video_processing.pipeline_manager.subprocess.run") as mock_sub:
-            mock_sub.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            mock_sub.return_value = MagicMock(returncode=0, stdout=b'{"streams":[{"width":1280,"height":720,"avg_frame_rate":"30/1","r_frame_rate":"30/1","duration":"1"}],"format":{"duration":"1"}}', stderr=b"")
             pm._process_single_video(
-                {"youtube_id": yid, "title": "Original title", "slice_index": 0, "disable_slicing": 1},
+                dict(db.get_video_by_youtube_id(yid, 0), disable_slicing=1),
                 preparation_only=True,
             )
 

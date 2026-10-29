@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| compatibility-v1 | 2026-10-29 | Codex | 补回既有只读评分资格接口，沿用配置分数线，不改变准入流程。 |
 | journal-outcome-v1 | 2026-10-29 | Codex | 整片尝试只从数据库明确失败/复核取终态，观测读取故障不影响业务。 |
 | preparation-dispatch-v1 | 2026-10-29 | Codex | 默认关闭的允许名单预加工队列、阶段资源与本地完成隔离；投稿路径保持原守卫。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
@@ -2598,6 +2599,20 @@ class PipelineManager:
             journal = StageJournal(self._OUT_DIR / '.stage-events' / 'delivery' / (task_hash+'.jsonl'),
                                    task_id=key, attempt_id='delivery', role='delivery')
         journal.emit('delivery_evidence', outcome=outcome)
+
+    def _is_auto_publish_score_eligible(self, video: Dict[str, Any]) -> bool:
+        """沿用常规75分及现有频道配置；供只读资格消费者共用。"""
+        raw_score = video.get("score")
+        if raw_score is None:
+            return True
+        score = int(raw_score)
+        if score >= 75:
+            return True
+        channel_id = str(video.get("channel_id") or "")
+        channel_min_scores = getattr(settings, "auto_publish_channel_min_scores", None) or {}
+        if channel_id and channel_id in channel_min_scores:
+            return score >= int(channel_min_scores[channel_id])
+        return False
 
     def _mark_ready_and_enqueue_wallstreet(self, yid: str, slice_index: int):
         """正常版先就绪；二创只持久入队，不能在此等待策划或渲染。"""

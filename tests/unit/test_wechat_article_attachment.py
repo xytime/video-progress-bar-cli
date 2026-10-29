@@ -766,6 +766,7 @@ def test_g2_finalize_none_succeeds_with_consistent_tasks_and_downgrade(tmp_path)
     assert readback["article_task_id"] == "task_art_ok"
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_p1_uploader_switch_disabled_rejects_explicit_article_arguments(tmp_path, monkeypatch):
     """P1 门禁：enable_wechat_article_link=False 时，显式文章参数被严格拦截，禁止绕过，不启动浏览器。"""
     from scripts.wechat_uploader import run_uploader

@@ -48,7 +48,7 @@ Mach 许可仅匹配 `org.chromium.Chromium.MachPortRendezvousServer.<数字PID>
 
 研报测试包装真实 Playwright 输出方法来读取 DOM，不替换渲染结果；检查完整关键文本、已加载图片、无水平溢出、字体加载状态，以及 PDF 单页尺寸/可提取中文。`sandbox/qa/media/` 保存合成视频、字幕、帧、PNG/PDF、DOM 与散列收据。全量通过仍不等于生产内容质量、在线翻译可用性或平台交付；图像/PDF 需要目视复核。
 
-边界：此工具适用于当前 macOS 开发主机，不是跨平台容器、恶意代码执行服务或资源配额系统。超时清理工具创建的进程组；自行创建新会话的后代仍继承沙盒限制，但不承诺被组清理覆盖。它不消除测试内部状态污染，也不证明平台发布成功。大规模渲染和模型性能测试仍应避开线上加工。
+边界：此工具适用于当前 macOS 开发主机，不是跨平台容器、恶意代码执行服务或资源配额系统。runner 每20ms观察内核父子链，记录 PID 与进程 birth；退出时只回收归属已核实且 birth 未变的进程，包括已观察的自行 setsid 后代，不向无关进程或重用 PID 发信号。收据保留 observed/killed/remaining，残留不为空则显式失败。真实启动探针验证独立会话子进程已回收、同场无关 canary 仍存活；探针失败时不启动 pytest。没有观察到的瞬时双重 fork 不在覆盖承诺内，子孙仍继承 OS 沙盒。该工具不消除测试内部状态污染，也不证明平台发布成功。大规模渲染和模型性能测试仍应避开线上加工。
 
 ## Version History
 | Version | Date | Author | Description |
@@ -57,3 +57,4 @@ Mach 许可仅匹配 `org.chromium.Chromium.MachPortRendezvousServer.<数字PID>
 | 1.1 | 2026-09-08 | Unknown_Model_fast | 增加明确浏览器模式、依赖快照、IPC 例外和真实边界/截图验收 |
 | 1.2 | 2026-09-08 | Unknown_Model_fast | 补齐离线模型、固定语音、真实字幕烧录及研报产物验收 |
 | 1.3 | 2026-09-19 | Codex | 精确纳入评论策略公开种子，继续拒绝其余 data 运行内容 |
+| 1.4 | 2026-10-29 | Codex | 观察并核对真实后代 birth，回收已观察的独立会话；记录实际清理及无关进程保护探针。 |

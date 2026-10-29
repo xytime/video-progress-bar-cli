@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.11.2 | 2026-10-29 | Codex | 恢复生产已有的保活告警兼容接口；不新增巡航调用或平台访问。 |
 | 1.11.1 | 2026-10-21 | Codex | 公开归档兼容同原生 ID 的已发表组件凭据，逐项核验公开、处理与预约状态。 |
 | 1.10.0 | 2026-10-09 | Codex | 复用已有每分钟巡航恢复二创队列。 |
 | 1.9.2 | 2026-10-06 | Codex | 英语世界回查区分平台拒绝与 UI 未确认，停止受限作品后续尝试。 |
@@ -804,6 +805,155 @@ def _trim_log_to_recent_days(
         if temp_path.is_file():
             temp_path.unlink(missing_ok=True)
         return False
+
+
+KEEPALIVE_ALERT_STATE_PATH = PROJECT_ROOT / "output" / "wechat_keepalive_alert_state.json"
+KEEPALIVE_ALERT_COOLDOWN_SEC = 14400.0
+
+
+def _read_keepalive_alert_state(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_keepalive_alert_state_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def check_wechat_keepalive_watchdog_health(
+    *,
+    now_ts: float | None = None,
+    state_path: str | Path | None = None,
+    alert_state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """独立巡检微信保活看门狗是否超期（不依赖 UI 面板访问或流水线执行）。
+
+    去重与重试规则：
+    1. 持久化状态至 output/wechat_keepalive_alert_state.json；
+    2. 仅当 Telegram API 实际返回发送成功 (state == 'ACCEPTED') 时才更新 last_alert_sent_at；
+       若网络/发送失败，保持 last_alert_sent_at 不变，下一轮（15 分钟后）自动重试；
+    3. 同一 (alert_type, credential_generation) 冷却窗口为 4 小时 (14400s)；
+    4. 当保活恢复正常 (HEALTHY) 且此前处于 active_alert 状态时，自动清除告警标记并发送恢复回执。
+    """
+    from video_processing.core.wechat_auth_state import (
+        evaluate_wechat_keepalive_overdue,
+        read_wechat_auth_state,
+    )
+    from video_processing.telegram_delivery import send_text
+
+    now = float(now_ts if now_ts is not None else time.time())
+    state_file = Path(state_path) if state_path is not None else (PROJECT_ROOT / "output" / "wechat_state.json")
+    alert_file = Path(alert_state_path) if alert_state_path is not None else KEEPALIVE_ALERT_STATE_PATH
+
+    auth_state = read_wechat_auth_state(state_file)
+    maint_state = "RUNNING"
+    try:
+        from video_processing.core.maintenance import gate
+        snap = gate().snapshot()
+        maint_state = str(snap.get("state") or "RUNNING")
+    except Exception:
+        maint_state = "RUNNING"
+
+    eval_result = evaluate_wechat_keepalive_overdue(
+        auth_state,
+        state_file_exists=state_file.is_file(),
+        now_ts=now,
+        maintenance_state=maint_state,
+    )
+    persisted = _read_keepalive_alert_state(alert_file)
+    cred_gen = auth_state.get("credential_generation") or "none"
+
+    if not eval_result.get("alert_required"):
+        if eval_result.get("status") == "HEALTHY" and persisted.get("active_alert"):
+            try:
+                send_text(
+                    event_type="wechat.keepalive.recovered",
+                    priority="P2",
+                    text=(
+                        "🟢 <b>WeChat 保活看门狗已恢复正常</b>\n"
+                        f"状态：{html.escape(str(eval_result.get('reason') or ''))}"
+                    ),
+                    timeout_seconds=10,
+                )
+            except Exception:
+                pass
+            _write_keepalive_alert_state_atomic(
+                alert_file,
+                {
+                    "active_alert": False,
+                    "alert_type": None,
+                    "credential_generation": cred_gen,
+                    "last_alert_sent_at": None,
+                    "recovered_at": now,
+                },
+            )
+            eval_result["recovered"] = True
+        return eval_result
+
+    alert_type = str(eval_result.get("status") or "KEEPALIVE_OVERDUE")
+    last_sent = persisted.get("last_alert_sent_at")
+    same_incident = (
+        persisted.get("active_alert") is True
+        and persisted.get("alert_type") == alert_type
+        and persisted.get("credential_generation") == cred_gen
+    )
+    if (
+        same_incident
+        and isinstance(last_sent, (int, float))
+        and (now - float(last_sent)) < KEEPALIVE_ALERT_COOLDOWN_SEC
+    ):
+        eval_result["suppressed_by_cooldown"] = True
+        return eval_result
+
+    reason_text = html.escape(str(eval_result.get("reason") or ""))
+    defer_text = html.escape(str(auth_state.get("defer_reason") or "无"))
+    msg = (
+        f"🚨 <b>WeChat 保活看门狗逾期告警 ({html.escape(alert_type)})</b>\n"
+        f"原因：{reason_text}\n"
+        f"最近推迟原因：{defer_text}\n"
+        "请检查 Web UI 看门狗线程或执行 <code>./vpanel ui status</code>。"
+    )
+    sent_ok = False
+    try:
+        delivery = send_text(
+            event_type=f"wechat.keepalive.{alert_type.lower()}",
+            priority="P1",
+            text=msg,
+            timeout_seconds=10,
+        )
+        sent_ok = getattr(delivery, "state", "") == "ACCEPTED"
+    except Exception as exc:
+        logging.warning("[KeepaliveMonitor] Telegram alert send failed: %s", exc)
+        sent_ok = False
+
+    _write_keepalive_alert_state_atomic(
+        alert_file,
+        {
+            "active_alert": True,
+            "alert_type": alert_type,
+            "credential_generation": cred_gen,
+            "last_alert_attempt_at": now,
+            "last_alert_sent_at": now if sent_ok else (last_sent if same_incident else None),
+            "last_send_succeeded": sent_ok,
+        },
+    )
+    eval_result["alert_sent"] = sent_ok
+    return eval_result
 
 
 @entry

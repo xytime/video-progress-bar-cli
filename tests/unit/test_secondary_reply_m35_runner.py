@@ -14,6 +14,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| throughput-test-repair | 2026-10-29 | Codex | 使用真实通知函数签名，并固定人工审批夜间场景；不改生产策略。 |
 | scan-timer-regression | 2026-10-25 | Codex | 审批回调与场景共用合成时钟，避免固定日期七天后测试被宿主时间误判过期。 |
 | 1.0.0 | 2026-10-17 | Antigravity | 初始创建：覆盖 M3.5 全部核心模块与 SR-01~SR-04 / CR-01~CR-04 回归测试 |
 """
@@ -152,6 +153,9 @@ def test_telegram_approval_transport_persists_message_id_and_checks_accepted(tmp
     captured_calls = []
 
     def fake_send_text(text, **kwargs):
+        import inspect
+        from video_processing.telegram_delivery import send_text
+        inspect.signature(send_text).bind(text=text, **kwargs)
         captured_calls.append({"text": text, "kwargs": kwargs})
         return TelegramDeliveryResult(
             state="ACCEPTED",
@@ -171,7 +175,7 @@ def test_telegram_approval_transport_persists_message_id_and_checks_accepted(tmp
     )
     assert ok is True, msg
     assert len(captured_calls) == 1
-    assert captured_calls[0]["kwargs"]["parse_mode"] == "HTML"
+    assert captured_calls[0]["kwargs"]["event_type"] == "wechat_secondary_reply_approval"
     kb = captured_calls[0]["kwargs"]["reply_markup"]["inline_keyboard"]
     assert kb[0][0]["callback_data"].startswith(f"rep:{tid}:")
 
@@ -342,6 +346,11 @@ def test_agy_secondary_reply_provider_guardrails_and_schema_validation(monkeypat
 # ---------------------------------------------------------------------------
 
 def test_tick_runner_phases_watermark_anti_reentrancy_night_window_and_backoff(tmp_path, monkeypatch):
+    # 本例验证人工审批及夜间禁发，显式固定场景，不能由仓库运营策略热加载改写。
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path/"manual-policy.json")
+    monkeypatch.setattr(settings, "wechat_reply_approval_mode", "manual")
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "08:30")
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "01:00")
     db = PipelineDB(db_path=str(tmp_path / "tick_runner.db"))
     _seed_published_post(db, TEST_POST)
 

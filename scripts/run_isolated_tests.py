@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-29 | Codex | 记录真实后代 birth 并回收已观察的独立后台会话，清理失败显式失败。 |
 | 1.0.0 | 2026-09-08 | Codex | 收集前隔离配置、源码、输出、网络和子进程；保留快照与真实退出收据 |
 | 1.1.0 | 2026-09-08 | Codex | 显式浏览器模式复制运行依赖，保留版本收据与原有默认隔离 |
 | 1.2.0 | 2026-09-08 | Codex | 显式媒体模式复制已校验离线模型，浏览器使用标准快照缓存布局 |
@@ -141,21 +142,52 @@ def run_child(command, cwd, environment, log_path, timeout):
                                        start_new_session=True)
         except OSError as exc:
             return {"exit_code": 127, "error_type": type(exc).__name__}
+        # 持续记录内核归属，覆盖 Web 测试启动的 start_new_session 后台执行器。
+        from test_process_tree import ProcessTree
+        tree = ProcessTree(process.pid)
         try:
-            code = process.wait(timeout=timeout)
+            while process.poll() is None:
+                tree.capture()
+                if time.monotonic() - started >= timeout:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                time.sleep(.02)
+            code = process.returncode
         except subprocess.TimeoutExpired:
             code = 124
         except KeyboardInterrupt:
             code = 130
         finally:
-            # 仅清理本工具创建的进程组；自行 setsid 的后代仍受沙盒约束，
-            # 但不承诺在此组清理覆盖范围内。
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+            cleanup = tree.cleanup()
             process.wait()
-    return {"exit_code": code, "seconds": round(time.monotonic() - started, 3)}
+    return {"exit_code": code if not cleanup['remaining'] else 3,
+            "seconds": round(time.monotonic() - started, 3), "process_cleanup": cleanup}
+
+
+def process_lifecycle_probe(run_root, environment, evidence):
+    """宿主测试实际 setsid 后代回收；沙盒内无全局子进程枚举权限。"""
+    from test_process_tree import ProcessTree
+    import textwrap
+    target = run_root/'lifecycle-child.json'
+    unrelated = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(30)'],
+                                 cwd=run_root, env=environment)
+    code = textwrap.dedent("""
+        import subprocess, sys, time, json
+        child = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(30)'], start_new_session=True)
+        open(sys.argv[1], 'w').write(json.dumps(child.pid))
+        time.sleep(.5)
+    """)
+    try:
+        result = run_child([sys.executable, '-I', '-c', code, str(target)], run_root, environment,
+                           evidence/'process-lifecycle.log', 5)
+        child_pid = json.loads(target.read_text())
+        result['detached_child_reaped'] = child_pid in result['process_cleanup']['killed']
+        result['unrelated_survived'] = unrelated.poll() is None
+        result['ok'] = (result['exit_code'] == 0 and result['detached_child_reaped']
+                        and result['unrelated_survived'] and not result['process_cleanup']['remaining'])
+        return result
+    finally:
+        unrelated.kill()
+        unrelated.wait()
 
 
 def boundary_probe(canary):
@@ -236,6 +268,9 @@ def execute_run(args, source, evidence, receipt):
     environment = child_environment(repo, run_root)
     if browser is not None:
         environment["PLAYWRIGHT_BROWSERS_PATH"] = str(run_root / "browser")
+    receipt['process_lifecycle_probe'] = process_lifecycle_probe(run_root, environment, evidence)
+    if not receipt['process_lifecycle_probe']['ok']:
+        return 3
     prefix = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable]
     print(f"隔离测试证据: {evidence}", flush=True)
     probe = run_child(prefix + ["-I", "-c", boundary_probe(canary)], repo, environment,

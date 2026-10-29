@@ -985,8 +985,8 @@ class TestStopVideoApi:
             response = client.post("/api/videos/retry-recent?hours=24")
 
         assert response.status_code == 200
-        assert response.json()["count"] == 0
-        assert response.json()["skipped_platform_guard"] == 1
+        assert response.json()["success"] is False
+        assert response.json()["confirmation_required"] is True
         assert tmp_db.get_video_by_youtube_id(yid)["status"] == "FAILED"
 
     def test_orphaned_publishing_is_recorded_as_unbound_not_failed(self, tmp_db):

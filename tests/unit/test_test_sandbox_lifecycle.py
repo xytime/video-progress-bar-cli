@@ -1,4 +1,10 @@
-"""测试副本回收与宿主证据保留，不导入生产运行配置。"""
+"""测试副本回收与宿主证据保留，不导入生产运行配置。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-29 | Codex | 验证未知 birth 或 PID 重用时拒绝信号，真实后台子进程由 runner canary 另验。 |
+"""
 
 import importlib.util
 import json
@@ -7,6 +13,8 @@ import sys
 
 import pytest
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 
 spec = importlib.util.spec_from_file_location(
     "sandbox_lifecycle_runner", Path(__file__).resolve().parents[2] / "scripts/run_isolated_tests.py"
@@ -97,3 +105,18 @@ def test_cleanup_failure_is_recorded_without_following_root_link(tmp_path):
     assert outside.is_dir()
     assert receipt["cleanup"]["status"] == "failed"
     assert receipt["exit_code"] == 3
+
+
+
+def test_pid_reuse_and_unknown_birth_never_receive_signal(monkeypatch):
+    from test_process_tree import ProcessTree
+    from types import SimpleNamespace
+    tree = object.__new__(ProcessTree)
+    tree.owners = {10001: (1, 2), 10002: (3, 4)}
+    monkeypatch.setattr(tree, 'capture', lambda: None)
+    monkeypatch.setattr(tree, 'info', lambda pid: SimpleNamespace(seconds=9, micros=9) if pid == 10001 else None)
+    calls = []
+    import test_process_tree
+    monkeypatch.setattr(test_process_tree.os, 'kill', lambda *args: calls.append(args))
+    assert tree.cleanup()['killed'] == []
+    assert calls == []

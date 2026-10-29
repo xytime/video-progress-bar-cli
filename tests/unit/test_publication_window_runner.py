@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.2 | 2026-10-29 | Codex | 窗口派发夹具独立执行者心跳目录，避免整库启动的就绪 worker 改变单测分支。 |
 | 1.9.1 | 2026-09-25 | Codex | 验证公开回读双凭据与 24 小时零确认提醒。 |
 | 1.8.5 | 2026-09-20 | Antigravity | 覆盖持久化日志降频过滤器与保留 N 日日志修剪功能。 |
 | 1.8.4 | 2026-09-18 | Antigravity | 覆盖英语世界专属发布窗口 is_english_world_publish_window 派发判定。 |
@@ -33,7 +34,19 @@ import pytest
 
 import scripts.run_publication_window as runner
 
+pytestmark = pytest.mark.usefixtures('isolated_default_output')
 
+
+@pytest.fixture
+def isolated_dispatch_root(tmp_path, monkeypatch):
+    # 其他 API 测试可能在整库沙盒启动真实 ready worker；这里验证的是旧窗口兜底分支。
+    # 为其提供独立空根，保留真实的 worker 心跳/锁检测，不伪造准入结果。
+    project = tmp_path / 'window-project'
+    (project / 'output').mkdir(parents=True)
+    monkeypatch.setattr(runner, 'PROJECT_ROOT', project)
+
+
+@pytest.mark.usefixtures('isolated_dispatch_root')
 @pytest.mark.parametrize("returncode, expected_level", [(0, None), (10, "INFO"), (1, "ERROR")])
 def test_deferred_submission_exit_is_not_reported_as_failure(monkeypatch, caplog, returncode, expected_level):
     from types import SimpleNamespace
@@ -135,6 +148,7 @@ def test_runner_records_pipeline_stage_context(monkeypatch, tmp_path: Path):
     assert status["stage_started_at"] <= status["ended_at"]
 
 
+@pytest.mark.usefixtures('isolated_dispatch_root')
 def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
     class FakeDB:
         def restore_expired_english_world_operator_recoveries(self):

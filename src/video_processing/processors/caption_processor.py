@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.42.1 | 2026-10-29 | Codex | 未准入候选单独归档，避免覆盖实际服务故障并误封恢复预算。 |
 | 1.42.0 | 2026-10-29 | Codex | 默认关闭的候选预算/上下文批暂存，传输分类及 ASR/翻译/烧录资源阶段交接。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
 | 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
@@ -686,6 +687,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._last_subtitle_candidate = None
         self._translation_quality_audit = []
         failures = []
+        not_admitted_failures = []
         self._translation_audit_run_id = self._start_translation_audit()
         translation_context = build_translation_context(texts)
         translation_prompt_context = translation_context.to_prompt_context()
@@ -751,7 +753,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     remaining_batches=inventories.get(provider, {}).get('remaining_batches', 0),
                     probe=admission.probe))
                 if not admission.allowed:
-                    failures.append(safe_failure('host', 'candidate_not_admitted_budget'))
+                    not_admitted_failures.append(safe_failure('host', 'candidate_not_admitted_budget'))
                     continue
                 self._translation_provider_deadline = time.monotonic() + admission.seconds
                 self._active_batch_cache = caches.get(provider)
@@ -929,6 +931,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
             "FAILED", None, None, "all_providers_failed", bool(provider_order), segments,
             error_class="all_providers_failed", error_message="All subtitle translation providers failed or were blocked.",
         )
+        # 未执行的后备候选不覆盖真实网络/限流/认证/质量结果；只有全部未准入才终止计划。
+        if not failures and not_admitted_failures:
+            failures.extend(not_admitted_failures)
         if not failures:
             snapshot = pool.snapshot()
             due = [int(snapshot.get(p, {}).get('cooldown_until', 0)) for p in configured_providers

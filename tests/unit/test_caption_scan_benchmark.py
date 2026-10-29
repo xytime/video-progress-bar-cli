@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-29 | Codex | 长片全帧相同但性能退化时不得授予整体门禁或生产许可。 |
 | 1.0.0 | 2026-10-29 | Codex | 路径/覆盖拒绝、微样本帧像素、清洁环境与完整 runs 判等。 |
 """
 import importlib.util
@@ -95,6 +96,25 @@ def test_gold_only_reports_text_frames_and_does_not_invent_semantic_review():
     assert facts['chinese_frame_presence_equal']
     assert facts['observed_chinese_frames'] == [1]
     assert not facts['semantic_gold']
+
+
+def test_slow_long_form_equivalence_never_claims_performance_acceptance(tmp_path):
+    sample = dict(sample='long', kind='full-source', frames=18000, fps=30.,
+                  width=96, height=64, duration_seconds=600.)
+    scan = dict(frame_count=18000, fps=30., width=96, height=64, runs=[])
+    runs = []
+    for index in range(6):
+        directory = tmp_path/str(index)
+        directory.mkdir()
+        benchmark.write_new(directory/'complete-scan.json', scan)
+        runs.append(dict(sample='long', mode='baseline' if index%2 == 0 else 'candidate',
+                         exit_code=0, scan_wall_seconds=10 if index%2 == 0 else 12,
+                         directory=str(directory)))
+    report = benchmark.summarize([sample], runs)
+    assert report['long_form_full_frame_equivalence_passed']
+    assert report['samples'][0]['candidate_reduction_fraction'] < 0
+    assert not report['long_form_gate_passed']
+    assert not report['production_enable_allowed']
 
 
 def test_synthetic_gold_refuses_missing_glyphs_before_ocr():

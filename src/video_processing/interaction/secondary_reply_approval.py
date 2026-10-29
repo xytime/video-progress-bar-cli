@@ -10,6 +10,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-29 | Codex | 修复现有执行器缺失接口与 Telegram 参数契约；保留两小时审批有效期，事后通告核实账本。 |
 | 1.2.0 | 2026-10-17 | Antigravity | M3.5: 新增真实 TelegramApprovalTransport（对接 telegram_delivery.send_text 回执账本）与 build_default_approval_transport，支持持久化 approval_message_id |
 | 1.1.0 | 2026-10-17 | Antigravity | 收回裸 SQL 为 db.get_audience_comment、强制要求可信审批传输通道并拒绝 local_operator/local-cli 伪身份 (R3/R4) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复 Telegram 审批发送、防重放消费、HTML 转义与 64B callback_data 防护 |
@@ -100,14 +101,13 @@ class TelegramApprovalTransport:
             raise ApprovalTransportError("TELEGRAM_BOT_TOKEN_NOT_CONFIGURED")
 
         result = self._send_fn(
-            text,
-            parse_mode="HTML",
+            text=text,
+            event_type="wechat_secondary_reply_approval",
+            priority="P1",
             chat_id=clean_chat,
             token=bot_token,
             reply_markup={"inline_keyboard": inline_keyboard},
-            workflow="wechat_secondary_reply_approval",
-            step="approval_card",
-            ref_key=f"secondary_reply_task:{task_id or 0}",
+            dedupe_key=f"secondary_reply_task:{task_id or 0}:{secrets.token_hex(8)}",
             db=self._db,
         )
         state = getattr(result, "state", None)
@@ -311,6 +311,132 @@ def dispatch_approval_request(
     except Exception as exc:
         logger.error("[SecondaryReplyApproval] 审批消息推送异常: %s", exc)
         return False, f"TRANSPORT_ERROR: {exc}"
+
+
+def auto_approve_and_bind_task(
+    db: PipelineDB,
+    task_id: int,
+    *,
+    approver_telegram_id: Optional[str] = None,
+    approver_chat_id: Optional[str] = None,
+    admin_ids_override: Optional[str] = None,
+    expected_account_key: Optional[str] = None,
+    allow_fixture_drafts: bool = False,
+    expiry_hours: int = 2,
+    now_utc: Optional[datetime.datetime] = None,
+) -> Tuple[bool, str]:
+    """在 hybrid_auto（自动回复+事后通告）模式下，为合规草稿绑定并原子消费服务端批准凭据。
+
+    保持与人工点击审批完全一致的哈希绑定（源评论哈希、草稿版本、正文哈希、白名单身份与有效期），
+    确保后续 record_secondary_reply_submit_intent 防篡改门禁不被旁路。
+    """
+    configured_approver = str(approver_telegram_id or settings.wechat_reply_approver_telegram_id or "").strip()
+    configured_chat = str(approver_chat_id or settings.wechat_reply_approver_chat_id or "").strip()
+    if not configured_approver or not configured_chat:
+        return False, "APPROVER_NOT_CONFIGURED"
+    if configured_chat.startswith("local-cli:"):
+        return False, "INVALID_APPROVER_CHAT_ID"
+    if not is_authorized_approver(configured_approver, admin_ids_override=admin_ids_override):
+        return False, "APPROVER_NOT_IN_WHITELIST"
+
+    task = db.get_secondary_reply_task(task_id)
+    if not task:
+        return False, "TASK_NOT_FOUND"
+    if expected_account_key is not None and (not expected_account_key or task.get("account_key") != expected_account_key):
+        return False, "ACCOUNT_MISMATCH"
+    if task.get("provider") == "rule_secondary_provider" and not allow_fixture_drafts:
+        return False, "FIXTURE_PROVIDER_DRAFT_NOT_APPROVABLE"
+
+    base_now = now_utc or datetime.datetime.now(datetime.timezone.utc)
+    if base_now.tzinfo is None:
+        base_now = base_now.replace(tzinfo=datetime.timezone.utc)
+    now_iso = base_now.strftime("%Y-%m-%d %H:%M:%S")
+    expires_iso = (base_now + datetime.timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    token = secrets.token_urlsafe(16)
+
+    bound = db.bind_reply_task_approval_request(
+        task_id=task_id,
+        approval_token=token,
+        expires_at_iso=expires_iso,
+        approver_id=configured_approver,
+        approver_chat_id=configured_chat,
+        expected_account_key=expected_account_key,
+    )
+    if not bound:
+        return False, "FAILED_TO_BIND_TOKEN"
+
+    return db.consume_reply_task_approval(
+        task_id=task_id,
+        token=token,
+        approver_id=configured_approver,
+        chat_id=configured_chat,
+        action="APPROVE",
+        expected_account_key=expected_account_key,
+        now_utc_iso=now_iso,
+    )
+
+
+def dispatch_post_reply_notification(
+    db: PipelineDB,
+    task_id: int,
+    *,
+    transport: Optional[Any],
+    chat_id: str,
+    reply_id: str = "",
+) -> Tuple[bool, str]:
+    """在二级回复成功发送并经独立回读确认为 VERIFIED 后，向管理员推送事后通告卡片。"""
+    if transport is None:
+        return False, "TRANSPORT_UNAVAILABLE"
+    clean_chat = str(chat_id or "").strip()
+    if not clean_chat or clean_chat.startswith("local-cli:"):
+        return False, "INVALID_CHAT_ID"
+    task = db.get_secondary_reply_task(task_id)
+    if not task:
+        return False, "TASK_NOT_FOUND"
+    native_id = str(task.get("platform_reply_comment_id") or "").strip()
+    if task.get("status") != "VERIFIED" or not native_id or (reply_id and reply_id != native_id):
+        return False, "REPLY_NOT_VERIFIED"
+    audience_comment = db.get_audience_comment(
+        task["account_key"], task["platform_post_id"], task["comment_id"]
+    )
+    nick = html.escape((audience_comment or {}).get("nickname") or "匿名观众")
+    content = html.escape((audience_comment or {}).get("content") or "")
+    esc_zh = html.escape(task.get("chinese_reply") or "")
+    esc_en = html.escape(task.get("english_reply") or "")
+    esc_style = html.escape(task.get("style") or "")
+    esc_reply_id = html.escape(str(reply_id or task.get("platform_reply_comment_id") or ""))
+    post_id = str(task.get("platform_post_id") or "")
+    short_post = html.escape(post_id[:24] + "..." if len(post_id) > 24 else post_id)
+
+    lines = [
+        "✅ <b>视频号二级回复已发送并回读核实</b>",
+        f"🎬 <b>作品 ID</b>: <code>{short_post}</code>",
+        f"👤 <b>观众昵称</b>: {nick}",
+        f"💬 <b>观众评论</b>:\n<blockquote>{content}</blockquote>",
+        f"🎨 <b>回复风格</b>: {esc_style}",
+        "📝 <b>已发送正文 (双语)</b>:",
+        f"<blockquote>{esc_zh}\n{esc_en}</blockquote>",
+        f"🆔 <b>平台回复 ID</b>: <code>{esc_reply_id}</code>",
+    ]
+    msg_html = "\n".join(lines)
+    try:
+        try:
+            res = transport.send_approval_message(
+                chat_id=clean_chat,
+                text=msg_html,
+                inline_keyboard=[],
+                task_id=task_id,
+            )
+        except TypeError:
+            res = transport.send_approval_message(
+                chat_id=clean_chat,
+                text=msg_html,
+                inline_keyboard=[],
+            )
+        return (True, "NOTIFIED") if res else (False, "TRANSPORT_REJECTED")
+    except Exception as exc:
+        logger.warning("[SecondaryReplyApproval] 事后通告推送异常 (不影响已核实的平台回复): %s", exc)
+        return False, f"NOTIFY_ERROR: {exc}"
 
 
 def handle_approval_callback(

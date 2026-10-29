@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-29 | Codex | 文件传输夹具与旧 v3 缓存兼容，保留原完整帧失效及续扫断言。 |
 | 1.0.0 | 2026-10-29 | Codex | 无实际 OCR/模型的同像素、失效、断点及编码回归。 |
 """
 from contextlib import nullcontext
@@ -42,6 +43,7 @@ def native_scan(tmp_path, monkeypatch):
     source, directory = make_video(tmp_path)
     monkeypatch.setattr(burned, '_probe', lambda _: (64, 64, 10., .8))
     monkeypatch.setattr(native, 'vision_worker', lambda: nullcontext(None))
+    monkeypatch.setattr(native, 'file_worker', lambda _: nullcontext(None))
     return source, directory
 
 
@@ -192,6 +194,32 @@ def test_png_experiment_keeps_all_pixels(compression):
     assert ok and np.array_equal(frame, cv2.imdecode(encoded, cv2.IMREAD_COLOR))
 
 
+@pytest.mark.parametrize('partial', [False, True])
+def test_file_transport_keeps_previous_exact_scan_namespace(native_scan, monkeypatch, partial):
+    source, directory = native_scan
+    previous = directory / 'native-scan-v3-exact'
+    previous.mkdir()
+    calls, failing = [], [partial]
+    def observe(worker, frame, **kwargs):
+        value = round(float(frame.mean()))
+        calls.append(value)
+        if value == 60 and failing[0]:
+            raise ValueError('OCR_BUDGET_EXCEEDED')
+        return []
+    monkeypatch.setattr(native, 'observe', observe)
+    if partial:
+        with pytest.raises(ValueError):
+            native._scan_frames(source, previous, lambda _:None, optimized=True, file_transport=False)
+    else:
+        native._scan_frames(source, previous, lambda _:None, optimized=True, file_transport=False)
+    failing[0] = False
+    calls.clear()
+    monkeypatch.setattr(native.settings, 'native_caption_scan_optimization_enabled', True)
+    assert native.scan(source, directory, lambda _:None)['frame_count'] == 8
+    assert calls == ([60,90] if partial else [])
+    assert not (directory/'native-scan-v4-file').exists()
+
+
 def test_chunk_integrity_contiguous_prefix_and_orphan_rejection(tmp_path):
     identity, timeline = dict(version='test'), dict(expected=610)
     observations = [dict(rows=[], faces=[]) for _ in range(610)]
@@ -282,7 +310,7 @@ def test_native_yield_occurs_only_after_valid_prefix_was_saved(native_scan, monk
         envelope = json.loads((directory/'checkpoints'/'manifest.json').read_text())
         assert envelope['sha256'] == fingerprint(envelope['state'])
         assert envelope['state']['frame_count'] == 2
-        assert contract == 'native-scan-v3-exact'
+        assert contract == 'native-scan-v4-file'
         raise PreparationYielded('test yield')
     monkeypatch.setattr(native, 'checkpoint_boundary', yield_boundary)
     with pytest.raises(PreparationYielded):

@@ -154,4 +154,6 @@ def test_submitter_passes_approved_policy_to_uploader(tmp_path, monkeypatch):
     assert submitter.submit(item["id"]) == 0
     assert len(calls) == 1
     saved = db.get_english_world_review_item(item["id"])
-    assert saved["state"] == "UNDER_REVIEW" and saved["platform_post_id"] == "export/current-attempt"
+    # 当前商品合同不接受该不完整无商品回执：保留原生 ID，但不得推断受理或重投。
+    assert saved["state"] == "UNCERTAIN" and saved["platform_post_id"] == "export/current-attempt"
+    assert db.claim_english_world_submission(item["id"]) is None

@@ -24,6 +24,8 @@ from video_processing.pipeline_manager import PipelineManager
 from video_processing.utils.file_utils import clean_partial_downloads, media_streams
 from scripts.run_ready_publications import dispatch_once
 
+pytestmark = pytest.mark.usefixtures('isolated_default_output')
+
 
 def manager_at(tmp_path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))

@@ -10,6 +10,8 @@ import pytest
 from playwright._impl._errors import TargetClosedError
 from video_processing.core.cover_policy import compliant_cover_layout_policy
 
+pytestmark = pytest.mark.usefixtures('isolated_default_output')
+
 
 def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path: Path):
     from scripts.wechat_uploader import run_uploader

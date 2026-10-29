@@ -6,6 +6,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-29 | Codex | 将长片全帧等价与整体门禁分开，避免相同但更慢的结果被标成性能验收通过。 |
+| 1.1.0 | 2026-10-29 | Codex | 显式完整原片模式，以逐字节副本及逐帧摘要补齐长片对照，不扩大默认微样本范围。 |
 | 1.0.0 | 2026-10-29 | Codex | 无密钥源码副本、无损小样、三轮交错扫描及资源/等价收据。 |
 """
 from __future__ import annotations
@@ -110,6 +112,47 @@ def lossless_clip(frames, target, fps, size):
     return dict(frames=len(hashes), fps=fps, width=width, height=height,
                 duration_seconds=len(hashes)/fps, decoded_pixel_sha256=hashes,
                 clip_sha256=hashlib.sha256(target.read_bytes()).hexdigest())
+
+
+def file_hash(path):
+    value = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024*1024), b''):
+            value.update(block)
+    return value.hexdigest()
+
+
+def full_source_sample(source, target):
+    """原片逐字节副本，不转码、不缩放；完整解码建立逐帧摘要。"""
+    import cv2
+    before = file_hash(source)
+    stat = source.stat()
+    shutil.copyfile(source, target)
+    if file_hash(target) != before or file_hash(source) != before:
+        raise ValueError('原片复制期间变化')
+    capture = cv2.VideoCapture(str(target))
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    width, height = (int(capture.get(key)) for key in (cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT))
+    expected = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    hashes = []
+    try:
+        if not capture.isOpened() or not math.isfinite(fps) or fps <= 0 or min(width,height) <= 0:
+            raise ValueError('完整原片不可读')
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame.shape != (height,width,3) or str(frame.dtype) != 'uint8':
+                raise ValueError('完整原片像素格式变化')
+            hashes.append(frame_hash(frame))
+    finally:
+        capture.release()
+    if len(hashes) != expected or file_hash(source) != before:
+        raise ValueError('完整原片帧数或源摘要变化')
+    return dict(frames=expected, fps=fps, width=width, height=height, duration_seconds=expected/fps,
+                decoded_pixel_sha256=hashes, clip_sha256=before, source_sha256=before,
+                source=str(source), source_size=stat.st_size, source_mtime_ns=stat.st_mtime_ns,
+                first_frame=0, source_full_hash_performed=True, kind='full-source')
 
 
 def extract_sample(source, target, seconds, first_frame):
@@ -366,12 +409,16 @@ def summarize(samples, runs, *, rounds=ROUNDS):
         if sample['kind'] == 'synthetic' and scans:
             item['gold_facts'] = gold_facts(sample, scans[0])
         summaries.append(item)
-    return dict(samples=summaries, long_form_gate_passed=False, production_enable_allowed=False,
-                limitation='最多0.5秒微样本；无完整长片、语义 gold 或持久资源验收；开关须继续关闭')
+    long_form = any(s['kind'] == 'full-source' and s['duration_seconds'] >= 600 for s in samples)
+    return dict(samples=summaries, long_form_gate_passed=False,
+                long_form_full_frame_equivalence_passed=(long_form and rounds == ROUNDS
+                    and all(x['full_runs_equal'] for x in summaries)), production_enable_allowed=False,
+                limitation='完整长片仅证明OCR全帧等价；语义 gold、真实翻译及成片吞吐仍独立验收；开关须继续关闭')
 
 
 def arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--full-source', action='store_true', help='显式执行完整原片副本，保留全部帧；可能耗时数小时')
     parser.add_argument('--source', action='append', default=[], help='显式源文件绝对路径，可重复')
     parser.add_argument('--output', help='EXT2T 上尚不存在的独立验收目录')
     parser.add_argument('--seconds', type=float, default=.5)
@@ -389,6 +436,8 @@ def arguments(argv):
     if (not args.output or not (args.source or args.synthetic) or not math.isfinite(args.seconds)
             or not 0 < args.seconds <= MAX_SECONDS or args.first_frame < 0 or args.timeout <= 0):
         parser.error('需要显式 source 或 synthetic、output；seconds 必须在 (0,0.5]、first-frame 非负、timeout 为正')
+    if args.full_source and (args.first_frame or args.synthetic or args.probe_only):
+        parser.error('full-source 不接受起始偏移、synthetic 或 probe-only')
     if args.probe_only and (len(args.source) != 1 or args.synthetic or not args.run_ocr):
         parser.error('probe-only 必须恰好一个显式source、run-ocr，不能混合synthetic')
     return args
@@ -412,9 +461,9 @@ def main(argv=None):
                               worker_count=1, semantic_review_performed=False))
     samples = []
     for source in sources:
-        target = root/'clips'/f'{source.stem}.avi'
-        samples.append(dict(extract_sample(source, target, args.seconds, args.first_frame),
-                            clip=str(target), sample=source.stem))
+        target = root/'clips'/(source.name if args.full_source else f'{source.stem}.avi')
+        sample = full_source_sample(source, target) if args.full_source else extract_sample(source, target, args.seconds, args.first_frame)
+        samples.append(dict(sample, clip=str(target), sample=source.stem))
     if args.synthetic:
         samples.extend(synthetic_samples(root/'clips', args.font))
     rounds = 1 if args.probe_only else ROUNDS

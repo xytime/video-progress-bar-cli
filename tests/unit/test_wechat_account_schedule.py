@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-29 | Codex | 对齐自动回读禁用契约；有回执仍不自动查询，也不重投。 |
 | 1.1.0 | 2026-10-24 | Codex | 不同英语冻结包不得共用文件名身份，同包仍拒绝重投且通用别名不变。 |
 | 1.0.0 | 2026-10-21 | Codex | 模拟时钟验证优先、总量、重启、旧查询关闭和防重发。 |
 """
@@ -47,7 +48,7 @@ def start(path, task, purpose="发布"):
 def test_old_205_queries_cancelled_without_queue(tmp_path, clock):
     path = tmp_path / 'state.json'
     for i in range(205):
-        with pytest.raises(WeChatRequestDeferred, match="旧作品"):
+        with pytest.raises(WeChatRequestDeferred, match="自动查询已停用"):
             start(path, str(i % 9), "状态核对")
     row = WeChatRequestGuard(path).snapshot()
     assert row['schedule']['sessions'] == []
@@ -101,7 +102,7 @@ def test_stable_twenty_and_minimum_interval(tmp_path, clock):
         start(path, 'twentyfirst')
 
 
-def test_receipt_binding_and_three_bounded_checks_no_resend(tmp_path, clock):
+def test_receipt_binding_disables_automatic_checks_and_blocks_resend(tmp_path, clock):
     path = tmp_path / 'state.json'
     submitted = clock[0]
     guard = start(path, 'video')
@@ -110,15 +111,16 @@ def test_receipt_binding_and_three_bounded_checks_no_resend(tmp_path, clock):
     clock[0] += 900
     with pytest.raises(WeChatRequestDeferred, match="禁止再次上传"):
         start(path, 'video')
-    with pytest.raises(WeChatRequestDeferred, match="尚未到"):
+    with pytest.raises(WeChatRequestDeferred, match="自动查询已停用"):
         start(path, 'native', '状态核对')
     for offset in (3600, 21600, 86400):
         clock[0] = submitted + offset
-        start(path, 'native', '状态核对')
+        with pytest.raises(WeChatRequestDeferred, match="自动查询已停用"):
+            start(path, 'native', '状态核对')
     clock[0] += 900
     with pytest.raises(WeChatRequestDeferred):
         start(path, 'native', '状态核对')
-    assert WeChatRequestGuard(path).snapshot()['schedule']['publications']['native']['checks'] == 3
+    assert WeChatRequestGuard(path).snapshot()['schedule']['publications']['native']['checks'] == 0
 
 
 def test_pending_intent_alone_blocks_resend(tmp_path, clock):
@@ -185,7 +187,7 @@ def test_unlocked_context_fails_before_navigation(clock):
         guard_wechat_context(object())
 
 
-def test_new_receipt_dispatch_is_verify_only_and_stops_when_public(tmp_path, clock, monkeypatch):
+def test_new_receipt_dispatch_makes_no_platform_request_when_readback_disabled(tmp_path, clock, monkeypatch):
     from types import SimpleNamespace
     from scripts import wechat_scheduled_readback as worker
     path = tmp_path / 'output/wechat_state.json'
@@ -204,8 +206,9 @@ def test_new_receipt_dispatch_is_verify_only_and_stops_when_public(tmp_path, clo
         (evidence / 'management_readback.json').write_text(json.dumps({'platform_post_id': 'native', 'state': 'PUBLISHED'}))
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(worker.subprocess, 'run', run)
-    assert worker.reconcile_new_submissions(tmp_path)
+    assert not worker.reconcile_new_submissions(tmp_path)
     clock[0] += 3600
     assert not worker.reconcile_new_submissions(tmp_path)
-    assert len(commands) == 1
-    assert guard.snapshot()['schedule']['publications']['native']['state'] == 'PUBLISHED'
+    assert commands == []
+    assert guard.snapshot()['schedule']['publications']['native']['checks'] == 0
+    assert guard.snapshot()['schedule']['publications']['native'].get('state') != 'PUBLISHED'

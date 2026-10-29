@@ -52,7 +52,7 @@ def test_notify_wechat_login_success_desktop_quick():
         mock_send.assert_called_once()
         kwargs = mock_send.call_args.kwargs
         assert kwargs["event_type"] == "WECHAT_LOGIN_RENEWED"
-        assert kwargs["priority"] == "NORMAL"
+        assert kwargs["priority"] == "P1"
         assert kwargs["cooldown_seconds"] == 30
         assert "桌面快捷授权（免扫码）" in kwargs["text"]
         assert "wechat_state.json" in kwargs["text"]

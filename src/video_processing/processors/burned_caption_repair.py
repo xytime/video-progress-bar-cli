@@ -418,7 +418,7 @@ def _locate_chunked(source, segments, directory, fps, progress, *, metrics=None,
                         worker, worker_frames = workers.enter_context(_vision()), 0
                     metrics.values['ocr_calls'] += 1
                     observation = _observe(worker, frame, metrics=metrics,
-                        png_compression=getattr(settings, 'caption_scan_png_compression', 3) if optimized else None)
+                        png_compression=None)
                     worker_frames += 1
                     with metrics.measure('normalize_seconds'):
                         validate_observation(observation)

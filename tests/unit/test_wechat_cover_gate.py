@@ -13,6 +13,7 @@
 | 1.7.0 | 2026-07-31 | Codex | 直接识别可见 toast，避免正文读取滞后造成假失败 |
 """
 
+import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -56,6 +57,7 @@ class _ToastPage(_Page):
         return super().locator(selector)
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_missing_requested_cover_stops_before_browser_launch(tmp_path: Path):
     video = tmp_path / "video.mp4"
     copy = tmp_path / "copy.txt"
@@ -74,6 +76,7 @@ def test_missing_requested_cover_stops_before_browser_launch(tmp_path: Path):
     playwright.assert_not_called()
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_no_cover_refuses_platform_default_video_frame_before_browser_launch(tmp_path: Path):
     video = tmp_path / "video.mp4"
     copy = tmp_path / "copy.txt"
@@ -91,6 +94,7 @@ def test_no_cover_refuses_platform_default_video_frame_before_browser_launch(tmp
     playwright.assert_not_called()
 
 
+@pytest.mark.usefixtures('isolated_default_output')
 def test_existing_cover_without_non_frame_provenance_stops_before_browser_launch(tmp_path: Path):
     video = tmp_path / "video.mp4"
     copy = tmp_path / "copy.txt"

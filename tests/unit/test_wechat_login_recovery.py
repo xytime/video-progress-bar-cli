@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-09-03 | Codex | 覆盖 Telegram 触发的扫码成功后也续投唯一合格英语世界登录失败项。 |
 """
 
+import pytest
 
 def test_restore_login_required_after_wechat_login_resets_all_rows(monkeypatch):
     import web.app
@@ -113,6 +114,7 @@ def test_dal_restore_login_required_skips_submission_evidence(tmp_path):
         "submitted-video": "LOGIN_REQUIRED",
         "unbound-video": "LOGIN_REQUIRED",
     }
+@pytest.mark.usefixtures('isolated_default_output')
 def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 

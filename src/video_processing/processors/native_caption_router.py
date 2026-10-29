@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-29 | Codex | 独立 v4 无损文件传输，保留旧识别器及缓存，不改变任何识别参数。 |
 | 1.3.0 | 2026-10-29 | Codex | 默认关闭的严格同像素复用、独立扫描证据及墙钟断点计时。 |
 | 1.2.1 | 2026-10-28 | Codex | 低置信度疑似汉字也提供对应实拍帧，允许凭视觉证据排除 OCR 假阳性。 |
 | 1.2.0 | 2026-10-28 | Codex | 修复有效越界框、OCR 写读超时与内存累积；长片按源预算，核验接收完整负证据。 |
@@ -28,6 +29,7 @@ import cv2
 
 from config.settings import settings
 from ..core.preparation_resources import resource_stage, checkpoint_boundary, PreparationYielded, active_context
+from ..utils.caption_vision_transport import file_worker, observe_file, CONTRACT as TRANSPORT_CONTRACT
 from ..utils.caption_checkpoints import valid_segments
 from ..utils.codex_text_provider import run_codex_structured
 from ..utils.file_utils import write_json_atomically as atomic_write_json
@@ -41,6 +43,7 @@ from ..utils.source_caption_contract import (
 )
 
 VISION = Path(__file__).parents[1] / 'utils/native_caption_vision.js'
+FILE_VISION = VISION.with_name('native_caption_file_vision.js')
 HAN = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff]')
 MAX_SCAN_SECONDS = 1200
 SCAN_SECONDS_PER_FRAME = 1
@@ -85,6 +88,8 @@ def vision_worker():
 
 
 def observe(worker, frame, timeout=45, *, metrics=None, png_compression=None):
+    if hasattr(worker, 'caption_frame_path'):
+        return observe_file(worker, frame, timeout=timeout, metrics=metrics)['rows']
     deadline = time.monotonic() + timeout
     encoded_at = time.monotonic()
     if png_compression is not None:
@@ -202,20 +207,33 @@ def _select_scan(source, directory, progress, metrics):
             data = None  # 旧大缓存将在原引擎重验，不让选择器同时保留另一份解码对象。
             if valid_legacy:
                 return _scan_frames(source, directory, progress, metrics=metrics)
-        directory = directory / 'native-scan-v3-exact'
+        previous = directory / 'native-scan-v3-exact'
+        previous_identity = dict(identity, scan_version='native-scan-v3-exact', reuse_contract=EXACT_CONTRACT)
+        for path in (previous/'scan.json', previous/'checkpoints'/'manifest.json'):
+            try:
+                envelope = json.loads(path.read_text())
+                state = envelope.get('scan', envelope.get('state'))
+                if envelope['identity'] == previous_identity and envelope['sha256'] == fingerprint(state):
+                    return _scan_frames(source, previous, progress, optimized=True, metrics=metrics, file_transport=False)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        directory = directory / 'native-scan-v4-file'
         directory.mkdir(parents=True, exist_ok=True)
     return _scan_frames(source, directory, progress, optimized=optimized, metrics=metrics)
 
 
-def _scan_frames(source, directory, progress, *, optimized=False, metrics=None):
+def _scan_frames(source, directory, progress, *, optimized=False, metrics=None, file_transport=True):
     """扫描实际解码的每一帧；连续相同文字压缩成 run，不用抽帧推断覆盖率。"""
     metrics = metrics or ScanMetrics('OCR_NATIVE')
     from .burned_caption_repair import _probe
     probed_width, probed_height, probed_fps, duration = _probe(source)
     identity = dict(source_sha256=digest(source), scanner_sha256=digest(VISION), version=VERSION,
                     scan_version=SCAN_VERSION)
+    scan_version = 'native-scan-v4-file' if file_transport else 'native-scan-v3-exact'
     if optimized:
-        identity.update(scan_version='native-scan-v3-exact', reuse_contract=EXACT_CONTRACT)
+        identity.update(scan_version=scan_version, reuse_contract=EXACT_CONTRACT)
+        if file_transport:
+            identity.update(transport_contract=TRANSPORT_CONTRACT, file_scanner_sha256=digest(FILE_VISION))
     cache = directory / 'scan.json'
     if cache.is_file():
         try:
@@ -290,8 +308,9 @@ def _scan_frames(source, directory, progress, *, optimized=False, metrics=None):
                     raise ValueError('SOURCE_INCOMPLETE_OR_CHANGED')
             if skipped % max(1, round(fps * 5)) == 0:
                 progress('SOURCE_CAPTION_LOCATING')
+        worker_factory = (lambda: file_worker(FILE_VISION)) if optimized and file_transport else vision_worker
         with ExitStack() as workers:
-            worker, worker_frames = workers.enter_context(vision_worker()), 0
+            worker, worker_frames = workers.enter_context(worker_factory()), 0
             while True:
                 if time.monotonic() > deadline:
                     raise ValueError('OCR_BUDGET_EXCEEDED')
@@ -311,14 +330,11 @@ def _scan_frames(source, directory, progress, *, optimized=False, metrics=None):
                 if not reused:
                     if worker_frames >= WORKER_FRAME_LIMIT:
                         workers.close()
-                        worker, worker_frames = workers.enter_context(vision_worker()), 0
+                        worker, worker_frames = workers.enter_context(worker_factory()), 0
                     for attempt in range(2):
                         try:
                             metrics.values['ocr_calls'] += 1
                             options = dict(timeout=min(45, remaining), metrics=metrics)
-                            if optimized:
-                                options.update(metrics=metrics, png_compression=getattr(
-                                    settings, 'caption_scan_png_compression', 3))
                             raw_rows = observe(worker, frame, **options)
                             with metrics.measure('normalize_seconds'):
                                 rows = [normalize_row(row) for row in raw_rows]
@@ -328,7 +344,7 @@ def _scan_frames(source, directory, progress, *, optimized=False, metrics=None):
                                            {'OCR_TIMEOUT', 'OCR_UNAVAILABLE'}):
                                 raise
                             workers.close()
-                            worker, worker_frames = workers.enter_context(vision_worker()), 0
+                            worker, worker_frames = workers.enter_context(worker_factory()), 0
                             progress('SOURCE_CAPTION_LOCATING')
                             remaining = deadline - time.monotonic()
                             if remaining <= 0:
@@ -353,7 +369,7 @@ def _scan_frames(source, directory, progress, *, optimized=False, metrics=None):
                     with metrics.measure('checkpoint_seconds'):
                         save_checkpoint()
                     cadence.saved(index)
-                    checkpoint_boundary('native-scan-v3-exact' if optimized else SCAN_VERSION)
+                    checkpoint_boundary(scan_version if optimized else SCAN_VERSION)
     except PreparationYielded:
         metrics.finish(index, resumed_frames=resumed_frames, outcome='yielded')
         raise
