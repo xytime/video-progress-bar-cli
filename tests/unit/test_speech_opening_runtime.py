@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-30 | Codex | 纯标准库真实槽夹具跳过 site 启动，避免全库负载把尚未 exec 的后代误当作清理验证。 |
 | 1.0.0 | 2026-10-09 | Codex | 关闭全局开关仍终止后代；保护终态绑定和未完成任务。 |
 """
 import os
@@ -132,7 +133,7 @@ def test_forced_group_timeout_releases_nested_ffmpeg_slot(tmp_path, monkeypatch,
     pm = PipelineManager.__new__(PipelineManager)
     slot, events = tmp_path / "slot", tmp_path / "events"
     fake = tmp_path / "ffmpeg-review"
-    fake.write_text(f"#!{sys.executable}\n" +
+    fake.write_text(f"#!{sys.executable} -S\n" +
         "import os,signal,sys,time\n" +
         ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "") +
         "with open(sys.argv[1],'a') as f: f.write(str(os.getpid())+'\\n'); f.flush()\n"
@@ -144,7 +145,8 @@ def test_forced_group_timeout_releases_nested_ffmpeg_slot(tmp_path, monkeypatch,
         "g._DIRECTORY=Path(sys.argv[1]); g.install(); "
         "subprocess.run([sys.argv[2],sys.argv[3],sys.argv[4]],check=True)"
     )
-    args = [sys.executable, "-c", wrapper, str(slot), str(fake), str(events), "10"]
+    # 本测试显式安装真实槽；-S 只省去虚拟环境启动钩子，不替换槽/锁实现。
+    args = [sys.executable, "-S", "-c", wrapper, str(slot), str(fake), str(events), "10"]
     env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
            "PYTHONDONTWRITEBYTECODE": "1"}
     try:

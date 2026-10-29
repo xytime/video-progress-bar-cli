@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-10-30 | Codex | 实际 DNS 日志时间戳及请求编号不得伪装 HTTP 401/429，真实状态继续冷却。 |
 | 1.2.0 | 2026-10-27 | Codex | 验证真实执行前预算回调与缓存、锁、冷却的零消耗边界。 |
 | 1.1.0 | 2026-10-27 | Codex | 覆盖有界宿主拒绝回执、质量合同缓存隔离及失效缓存原预算重建。 |
 | fallback-v1 | 2026-10-20 | Codex | 验证独立备用通道及其预算、输入、证据与失败关闭边界。 |
@@ -130,6 +131,27 @@ def test_failure_receipt_and_cooldown_hide_raw_logs(tmp_path, monkeypatch, messa
     with pytest.raises(provider.CodexTextError, match="cooldown"):
         _call(tmp_path)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('message,classification', [
+    ('2026-10-29T15:42:31.135401Z ERROR request timed out; failed to lookup address information', 'unavailable'),
+    ('2026-10-29T15:42:31.135429Z ERROR connection reset by peer', 'unavailable'),
+    ('request_id=abc401def trace=4290 bytes=401', 'unavailable'),
+    ('HTTP/1.1 401 Unauthorized', 'authentication'),
+    ('unexpected status 401', 'authentication'),
+    ('status_code=429', 'quota'),
+    ('{"status_code":401}', 'authentication'),
+    ('HTTP status: 429 Too Many Requests', 'quota'),
+    ('status code: 429', 'quota'),
+])
+def test_failure_classification_requires_http_context(tmp_path, monkeypatch, message, classification):
+    monkeypatch.setattr(provider, '_execute', _executor(code=1, error=message))
+    with pytest.raises(provider.CodexTextError) as denied:
+        _call(tmp_path)
+    assert denied.value.code == classification
+    cooldown = json.loads((tmp_path / 'gpt-5.6-luna.cooldown.json').read_text())
+    assert cooldown['code'] == classification
+    assert '135401' not in json.dumps(cooldown)
 
 
 def test_busy_lock_and_flagship_rejected_before_request(tmp_path, monkeypatch):

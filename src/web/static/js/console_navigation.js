@@ -1,3 +1,4 @@
+/* Modification History: 1.0.2 | 2026-10-30 | Codex | 恢复当前导航分组标记，使既有折叠菜单显示选中分组。 */
 /* Modification History: 1.0.1 | 2026-10-21 | Codex | 独立预筛选入口与选题分区定位。 */
 /** 共享工作台导航。2026-10-12 Codex：v0.3 五区导航、原生抽屉与草稿离开保护。 */
 (() => {
@@ -31,7 +32,9 @@
   const wide=matchMedia('(min-width: 1025px)'); wide.addEventListener('change',()=>{if(wide.matches&&drawer.open)drawer.close();});
   function select(view) {
     nav.querySelectorAll('a').forEach(a=>a.removeAttribute('aria-current'));
+    nav.querySelectorAll('.console-nav-group').forEach(group=>group.classList.remove('is-active-group'));
     const active=nav.querySelector(`[data-section="${view}"]`); if(active)active.setAttribute('aria-current','page');
+    if(active)active.closest('.console-nav-group').classList.add('is-active-group');
     nav.querySelectorAll('.console-subnav a').forEach(a=>{
       const url=new URL(a.href);
       if(root ? url.pathname==='/' && url.searchParams.get('tab')===new URL(location.href).searchParams.get('tab') && view==='topics' : url.pathname===location.pathname) a.setAttribute('aria-current','page');

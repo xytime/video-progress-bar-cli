@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.1 | 2026-10-30 | Codex | 登录页面契约隔离策略及离线传输，账户许可与限流由专门浏览器用例验证。 |
 | 1.3.0 | 2026-10-03 | Codex | 真实浏览器回归独立复用页初始化二十五秒后才展示上传控件的会话保存。 |
 | 1.2.0 | 2026-10-03 | Codex | 覆盖官方登录路由延迟跳转，确认跳转前已记录扫码等待证据且复用验证仍必须通过。 |
 | 1.1.0 | 2026-10-03 | Codex | 回归扫码页保留创建地址且授权晚于十五秒时，仍须等待正向控件和独立复用成功才保存。 |
@@ -11,6 +12,14 @@
 from tests.browser_fixtures import chromium
 from scripts.wechat_uploader import _try_wechat_quick_login
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def legacy_page_contract(monkeypatch, tmp_path, isolated_default_output):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "unused-scheduler-policy.json")
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setattr(settings, "wechat_operations_enabled", False)
 
 
 @pytest.mark.parametrize("login_route", ["/platform/post/create", "/platform/login"])
@@ -373,7 +382,8 @@ def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
                 orig_ctx = browser.new_context
                 def _new_ctx(*c_args, **c_kwargs):
                     ctx = orig_ctx(*c_args, **c_kwargs)
-                    ctx.route("**/*", handle_route)
+                    # 保证本地 HTML 传输不会被后注册的 context continue_ 绕过。
+                    ctx.on("page", lambda page: page.route("**/*", handle_route))
                     return ctx
                 mock_b = MagicMock()
                 mock_b.new_context = _new_ctx

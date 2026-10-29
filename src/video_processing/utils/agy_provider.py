@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.5 | 2026-10-30 | Codex | 空成功结果保留明确地域错误分类，状态码须有语境，避免时间戳误判。 |
 | 1.4.4 | 2026-10-20 | Codex | 关闭会返回空成功的 CLI 内部计时，由宿主超时识别基础设施故障。 |
 | 1.4.3 | 2026-10-15 | Antigravity | 自动映射已退役 gemini-3.7-flash-high 模型别名，并细分 model unavailable / location ineligible 脱敏分类。 |
 | 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
@@ -21,6 +22,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 from typing import Any, Dict, Optional
@@ -103,6 +105,10 @@ def run_agy_structured(
         raise AgyProviderError("agy returned invalid JSON envelope") from exc
     structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
     if not isinstance(structured, dict):
+        # CLI 可能把真实生成错误包装为 exit=0；只恢复既有明确地域分类，
+        # 其他空结果仍为无效输出，不能因初始化警告触发供应商兜底。
+        if _safe_failure_category(result.stderr) == "location ineligible":
+            raise AgyProviderError("agy returned no structured_output: location ineligible")
         raise AgyProviderError("agy returned no structured_output")
     if include_usage:
         return {"structured_result": structured, "usage": envelope.get("usage")}
@@ -117,13 +123,18 @@ def _safe_failure_category(value: str | None) -> str:
         return "local startup blocked"
     if "invalid_argument" in text and ("schema" in text or "function_declarations" in text):
         return "invalid schema"
-    if "eligibility check failed" in text or "not currently available in your location" in text:
+    if any(token in text for token in ("eligibility check failed", "not currently available in your location",
+                                      "location_not_eligible", "user location is not supported")):
         return "location ineligible"
     if any(token in text for token in ("model unavailable", "unknown model", "unsupported model", "model not found")):
         return "model unavailable"
-    if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
+    def status(code):
+        return re.search(rf"\b(?:http(?:/\d(?:\.\d)?)?|status(?:_code)?|code)\s*[=:]?\s*{code}\b", text)
+
+    if status(429) or re.search(r"\b429\s+too many requests\b|\bquota\b|\brate limit\b|\bresource_exhausted\b", text):
         return "rate limit"
-    if any(token in text for token in ("401", "403", "permission", "unauthorized")):
+    if (status(401) or status(403)
+            or re.search(r"\b(?:401\s+unauthorized|403\s+(?:forbidden|permission denied)|permission_denied|unauthorized)\b", text)):
         return "permission"
     if any(token in text for token in ("timeout", "timed out")):
         return "timeout"

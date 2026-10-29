@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.2 | 2026-10-30 | Codex | 真实 AGY 脱敏错误贯穿候选、模型池及任务回执，缺批后备不覆盖地区拒绝。 |
 | 1.0.1 | 2026-10-29 | Codex | 覆盖长片后备未准入时实际传输失败及累计预算的保留。 |
 | 1.0.0 | 2026-10-29 | Codex | 覆盖后备机会、累计耗尽、原子候选绑定、坏批拒绝和截断连接恢复。 |
 """
@@ -360,6 +361,43 @@ def test_throughput_does_not_relax_existing_full_candidate_quality_gate(tmp_path
         processor._translate_segments(segments)
     assert failure.value.failure['category'] == 'quality'
     assert 'zh_text' not in segments[0]
+
+
+@pytest.mark.parametrize('exit_code', [0, 17])
+def test_agy_native_region_error_reaches_recovery_receipt_and_cooldown(tmp_path, monkeypatch, exit_code):
+    import video_processing.processors.caption_processor as module
+    from video_processing.utils import agy_provider
+    from video_processing.utils.subtitle_failure_receipt import SubtitleTranslationFailure
+    calls = []
+
+    def native_result(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=exit_code, stdout='{"status":"SUCCESS"}',
+            stderr='HTTP 403 LOCATION_NOT_ELIGIBLE: User location is not supported')
+
+    def build(processor, provider, texts, context):
+        assert provider == 'agy'
+        return module.AutoCaptionProcessor._build_agy_candidate(processor, texts, context)
+
+    processor = _processor_fixture(tmp_path, monkeypatch, ['agy', 'codex'], build)
+    module.settings.agy_command = 'fixture-agy'
+    module.settings.agy_subtitle_model = 'gemini-3.5-flash'
+    module.settings.agy_timeout_sec = 90
+    monkeypatch.setattr(agy_provider.subprocess, 'run', native_result)
+    with pytest.raises(SubtitleTranslationFailure) as result:
+        processor._translate_segments([{'text': 'Hello world.'}] * 123)
+    assert len(calls) == 1
+    assert result.value.failure == dict(provider='agy', code='region_restricted',
+        category='authentication', retry_at=0, quality_details=[])
+    pool = json.loads((tmp_path / 'output' / 'translation_model_pool.json').read_text())
+    assert pool['agy']['last_error_class'] == 'region_restricted'
+    assert pool['agy']['cooldown_until'] > __import__('time').time() + 21590
+    assert processor._translation_throughput_events[-1]['action'] == 'not_admitted'
+    ledgers = list((tmp_path / 'output').glob(
+        'subtitle_candidate_cache/subtitle-attempt-budget-v1/*/budget.json'))
+    assert len(ledgers) == 1
+    state = json.loads(ledgers[0].read_text())
+    assert state['terminal'] is False and state['used_seconds'] < 5
 
 
 @pytest.mark.parametrize('kind,category,pool_category', [

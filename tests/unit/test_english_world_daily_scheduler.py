@@ -3,6 +3,7 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 2.38.1 | 2026-10-30 | Codex | 协调器超时夹具给真实准入子进程五秒启动窗口，仍杀三十秒阻塞、禁止重试并核验持久失败。 |
 # | 2.33.0 | 2026-09-10 | Codex | 覆盖日更协调器显式模型参数，避免回退至耗尽默认模型。 |
 # | 2.32.0 | 2026-09-10 | Codex | 覆盖协调器递归入口与宿主运行态伪失败请求的拒绝边界。 |
 # | 2.31.4 | 2026-09-10 | Codex | 覆盖正式时间线 source_youtube_id 与宿主交付绑定兼容。 |
@@ -1281,9 +1282,8 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
     fake_codex = tmp_path / "codex"
     fake_python = tmp_path / "python"
     notifier = tmp_path / "notifier.py"
-    # Avoid env/bash startup overhead racing the intentionally short 1s timeout.
-    # The fake still logs the coordinator start before blocking, and the runner
-    # must still terminate it at the configured deadline.
+    # 真实准入包装器在全库负载下可能超过一秒才 exec 到夹具；
+    # 五秒窗口仍必须终止三十秒阻塞，并记录且仅调用一次协调器/通知器。
     _write_executable(fake_codex, f"#!/bin/sh\nprintf '%s\\n' codex >> {calls}\nexec /bin/sleep 30\n")
     _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
     notifier.write_text("# fake notifier\n", encoding="utf-8")
@@ -1293,7 +1293,7 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
-        "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "1",
+        "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "5",
         "--coordinator-provider", provider, "--agy-bin", str(fake_codex),
         "--skip-source-access-preflight",
     ]

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-10-30 | Codex | HTTP 状态码必须有状态语境，避免时间戳或请求编号误触发认证及限流冷却。 |
 | 1.4.0 | 2026-10-28 | Codex | 接受流重连后有终态且通过结构/质量合同的输出，不把恢复提示当最终失败。 |
 | 1.3.0 | 2026-10-27 | Codex | 真实执行前允许调用方持久领取预算，缓存、锁和冷却不消耗请求次数。 |
 | 1.2.0 | 2026-10-27 | Codex | 字幕质量合同隔离缓存身份，保存有界宿主拒绝信号并在原预算内重建失效缓存。 |
@@ -17,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import tempfile
@@ -127,9 +129,14 @@ def _execute(args: list[str], prompt: str, directory: Path, timeout: float) -> s
 
 def _failure_code(text: str) -> str:
     lowered = text.lower()
-    if any(word in lowered for word in ("usage limit", "rate limit", "quota", "429", "credits")):
+    # stderr 含 RFC3339 小数时间戳和 UUID；裸数字子串并不是 HTTP 响应。
+    def status(code):
+        return bool(re.search(
+            rf'\b(?:http(?:/\d(?:\.\d)?)?\s+|(?:http\s+)?status(?:[\s_-]+code)?[\s\"\x27:=]+)'
+            rf'{code}\b|\b{code}\s+(?:unauthorized|too many requests)\b', lowered))
+    if status(429) or re.search(r'\b(?:usage limit|rate limit|quota|credits)\b', lowered):
         return "quota"
-    if any(word in lowered for word in ("401", "unauthorized", "not logged", "authentication")):
+    if status(401) or re.search(r'\b(?:unauthorized|not logged|authentication)\b', lowered):
         return "authentication"
     if "model" in lowered and any(word in lowered for word in ("not supported", "not found", "unavailable")):
         return "model_unavailable"

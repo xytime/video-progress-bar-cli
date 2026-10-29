@@ -3,11 +3,13 @@
 # Modification History
 | Version | Date       | Author      | Description                                                                  |
 |---------|------------|-------------|------------------------------------------------------------------------------|
+| 1.0.1 | 2026-10-30 | Codex | 使用真实隔离账户锁与许可验证上下文，保留无许可拒绝规则。 |
 | 1.0.0   | 2026-09-28 | Antigravity | 真实 Chromium 验证两独立微信上下文的基础配置/UA/指纹完全一致，以及 Cookie 与 localStorage 严格身份隔离。 |
 """
 
 import json
 from pathlib import Path
+import pytest
 
 from tests.browser_fixtures import chromium
 from video_processing.core.wechat_browser_context import (
@@ -15,9 +17,18 @@ from video_processing.core.wechat_browser_context import (
     WECHAT_VIEWPORT,
     create_wechat_context,
 )
+from video_processing.core.wechat_session_lock import WeChatSessionLock
 
 
-def test_wechat_browser_contexts_configuration_parity_and_identity_isolation(chromium, tmp_path):
+@pytest.fixture
+def account_session(tmp_path, monkeypatch):
+    from config.settings import settings
+    monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
+    with WeChatSessionLock(tmp_path / "account.json", purpose="发布", video="isolated-context-parity"):
+        yield
+
+
+def test_wechat_browser_contexts_configuration_parity_and_identity_isolation(chromium, tmp_path, account_session):
     """验证由 create_wechat_context 创建的两个独立浏览器上下文：
     1. 基础环境配置（Viewport、User-Agent、webdriver、window.chrome、plugins、languages 等）严格一致；
     2. 会话身份存储（Cookies、localStorage）完全独立隔离，互不串扰。

@@ -31,8 +31,9 @@ UTC = datetime.timezone.utc
 
 
 @pytest.fixture(autouse=True)
-def _test_submission_window(monkeypatch):
+def _test_submission_window(monkeypatch, tmp_path, isolated_default_output):
     from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path / "unused-reply-policy.json")
     monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00", raising=False)
     monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:59", raising=False)
     monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 0, raising=False)
@@ -184,7 +185,8 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
     lease_token = claimed["lease_token"]
 
     def before_submit():
-        ok, _ = db.record_secondary_reply_submit_intent(task_id, lease_token)
+        ok, reason = db.record_secondary_reply_submit_intent(task_id, lease_token)
+        assert ok, reason
         return ok
 
     # 执行第一次提交
@@ -197,7 +199,7 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
         video_title="深度解读视频",
         before_submit=before_submit,
     )
-    assert status == "VERIFIED"
+    assert status == "VERIFIED", err
     assert err is None
     assert evidence is not None
 

@@ -7,7 +7,10 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.4 | 2026-10-30 | Codex | 接续地域分类的当前目标摘要，旧合同不变且仍完整离线复核。 |
+| 1.0.3 | 2026-10-30 | Codex | 精确审查 AGY 空成功地域错误与状态码分类修复，保留前代摘要及完整质量门。 |
 | 1.0.0 | 2026-10-29 | Codex | 两个精确已审查前代合同，完整质量复核后原子升级完成快照。 |
+| 1.0.2 | 2026-10-30 | Codex | 审查 HTTP 错误分类修复后更新当前目标摘要，原质量合同与前代摘要不变。 |
 | 1.0.1 | 2026-10-29 | Codex | 审查未准入故障归因与 Google 挑战即停差异后更新精确目标；质量模块与全片复核不变。 |
 """
 from copy import deepcopy
@@ -119,10 +122,10 @@ MANIFEST = {
         "vocab_helper": "84fe7d2c303f20f12fcd3a7563449644d4d64c89ef02d8a121ed07c023bdedfb",
         "translation_helper": "bb965eaa8cdccd1e556cea3e6e2b07311902a3e542ea4ede5f5a2327e4be9507",
         "deepseek_translation": "113ec14031b3ca7dfd4ac17afc177ffbed90bd5d216b0cc0e529e7b29cba1e54",
-        "translation_model_pool": "a60ca0dc373d2c63ffa54def5acfa2d07e4e1b74b36ba7092342121039a4ac73",
-        "agy_provider": "2fbe28d6cea7ab67f5bc8a9cd56ee2f068d134027436be89d0c08d8d715cb404",
+        "translation_model_pool": "7c25f7cd799f837efc174d6e3c35bcf66cc1a4a3cad1a82538b274f13576c270",
+        "agy_provider": "7bcdab9bddd7a04c8c0662a50cbc3b084fa7a0a0e0c44940fa7e7d4b15a522cd",
         "codex_subtitle_provider": "9e405b01c87a83ee81335b46bcc6ed7348c8c160dc9362f9c4b7cb5abeeb5be6",
-        "codex_text_provider": "129baa32fb32ef88f7f64e30b1257f3eb0697c1e66916e4ed57b5dce6672b57d",
+        "codex_text_provider": "11cf850aaa6d41df6cb2c559af2823d8ff2f2b2cab6cd73fff46f8870fb7baf4",
         "subtitle_recovery_state": "a1a27bef4be471764144fb03c4698e1d88356ab4abcf08e0398d05de1115d201",
         "subtitle_failure_receipt": "f18542c3028495636bf0c1ff134c2d5ec213e94e9601b57a32cbbfda03e36ee1",
         "subtitle_audio_review": "1153d5d49cce7f07d753880bd0e4e628eecb479490426ee7ce875cc5b8148ddf",

@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.0.1 | 2026-10-30 | Codex | 旧保活页面契约隔离调度策略，并在页面层提供离线传输；账户许可/请求护栏另有真实浏览器专测。 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始创建：真实 Chromium 下保活正向校验、SPA未就绪、错误来源、锁忙及独立复用 |
 """
 
@@ -33,8 +34,16 @@ from video_processing.core.wechat_session_lock import (
 )
 
 
+@pytest.fixture(autouse=True)
+def legacy_page_contract(monkeypatch, tmp_path, isolated_default_output):
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "unused-scheduler-policy.json")
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setattr(settings, "wechat_operations_enabled", False)
+
+
 def _setup_browser_route(chromium, route_fn):
-    """为 chromium 创建上下文并挂载路由拦截，返回代理 launch 对象。"""
+    """为页面契约提供离线 HTML；上下文请求护栏在独立用例验证。"""
     class _MockPlaywright:
         def __init__(self, browser):
             self.chromium = MagicMock()
@@ -45,7 +54,9 @@ def _setup_browser_route(chromium, route_fn):
 
                 def _wrapped_new_context(*c_args, **c_kwargs):
                     ctx = orig_new_context(*c_args, **c_kwargs)
-                    ctx.route("**/*", route_fn)
+                    # factory 随后注册的账户 context 路由会 continue_ 到网络，
+                    # 因此离线页面传输放到 page 层；不修改生产 context 护栏。
+                    ctx.on("page", lambda page: page.route("**/*", route_fn))
                     return ctx
 
                 mock_b = MagicMock()

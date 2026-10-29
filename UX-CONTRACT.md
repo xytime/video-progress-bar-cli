@@ -47,6 +47,8 @@
 
 根路径 view/tab/search/size/page 及全部既有筛选由 URL 恢复；旧 tab 链接仍支持。导航不提交业务操作，离开商品页复用现有草稿确认；专题模态编辑保持原焦点隔离。根路径内部切换保留手动表单值。首页点击数字进入同口径的全时间列表，受理与公开分开。404/不可用候选禁用入口并保留说明；OFF 仍可进入管理页面。
 
+2026-10-30 回归修复：`console_navigation.js` 为当前分组维护 `is-active-group`，复用既有子导航折叠样式。首页主行与分集的手动执行统一调用既有 `ManualVideoExecution.execute`；冷却须人工确认，取消恢复按钮及焦点，失败恢复按钮，未知响应不自动重试。所有者为 `src/web/static/js/manual_video_execution.js` 和 `src/web/templates/index.html`，验证由 `tests/browser/test_manual_video_cooldown.py`、`tests/unit/test_dashboard_interactions.py` 及 `tests/browser/test_secondary_reply_settings_browser.py` 负责。Browser plugin unavailable，使用项目 OS 隔离 Playwright；不改变发布资格、会话锁或未知投稿保护。
+
 
 ## v0.3.1 已确认增补
 

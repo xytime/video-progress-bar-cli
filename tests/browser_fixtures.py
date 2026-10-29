@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-09-08 | Codex | 覆盖刷新选择、具名删除确认、状态一致性和过期响应隔离。 |
 | 1.1.0 | 2026-09-08 | Codex | 使用显式 Chromium 快照，清理异常路径，禁止缺失依赖伪装验收。 |
 | 1.2.0 | 2026-09-20 | Codex | 支持静态资源 (/static/*) 本地文件映射与 Content-Type 分发。 |
+| 1.2.1 | 2026-10-30 | Codex | 提供当前只读运行、微信与扫描状态回执，避免旧通用响应制造未知状态。 |
 """
 
 import json
@@ -87,6 +88,13 @@ def dashboard(chromium):
                                 "failed": 0, "breakdown": {}, "server_time": "测试时间"})
         elif parsed.path == "/api/channels":
             route.fulfill(json={"approved": [], "total_approved": 0})
+        elif parsed.path == "/api/console/header":
+            route.fulfill(json={"state": "RUNNING", "reason": "隔离测试",
+                                "channel_scan": {"running": False, "outcome": "idle"}})
+        elif parsed.path == "/api/wechat/status":
+            route.fulfill(json={"login_flow_active": False, "status_label": "隔离测试，未核实真实会话"})
+        elif parsed.path == "/api/high-likes/status":
+            route.fulfill(json={"running": False})
         elif parsed.path.startswith("/api/"):
             route.fulfill(json={"success": True, "platforms": {}})
         elif parsed.path.startswith("/static/"):

@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.8.1 | 2026-10-30 | Codex | 接续 AGY 已脱敏地域错误，保留既有地域冷却和不自动重试边界。 |
 | 1.8.0 | 2026-10-05 | Codex | 单独冷却账单与地区错误，拒绝短期限无效请求。 |
 | 1.7.0 | 2026-10-03 | Codex | 纳入经济型 Codex 字幕与词汇兜底 profile。 |
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
@@ -56,7 +57,8 @@ def classify_error(message: str | None) -> str:
     text = (message or "").lower()
     if any(token in text for token in ("402", "insufficient balance", "billing", "payment required")):
         return "billing"
-    if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition")):
+    if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition",
+                                      "location ineligible", "location_not_eligible")):
         return "region_restricted"
     if "deadline" in text or "budget" in text:
         return "budget_exhausted"

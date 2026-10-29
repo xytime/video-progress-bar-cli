@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.4 | 2026-10-30 | Codex | 复现地域失败被空成功掩盖及时间戳误分类，保护无效输出停止与脱敏边界。 |
 | 1.0.3 | 2026-10-20 | Codex | 验证宿主单一超时边界及空成功输出不可触发兜底，防止敏感输出外泄。 |
 | 1.0.2 | 2026-09-25 | Codex | 识别结构化参数的 API 400，确保只输出安全分类而不泄漏原始错误文本。 |
 | 1.0.1 | 2026-09-22 | Codex | 覆盖本地启动分类、模型列表预检及敏感输出不外泄。 |
@@ -81,6 +82,35 @@ def test_empty_success_envelope_remains_invalid_not_fallback(monkeypatch):
     with pytest.raises(AgyProviderError) as exc:
         run_agy_structured("translate", schema={"type": "object"}, model="test", command="agy", timeout_sec=1)
     assert not infrastructure_error(exc.value)
+
+
+def test_empty_success_preserves_explicit_location_failure_without_raw_output(monkeypatch):
+    import video_processing.utils.agy_provider as module
+    from video_processing.utils.english_world_provider import infrastructure_error
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=json.dumps({"status": "SUCCESS", "response": ""}),
+        stderr="agent executor error: FAILED_PRECONDITION (code 400): "
+               "User location is not supported for the API use. private subtitle"))
+    with pytest.raises(AgyProviderError) as exc:
+        run_agy_structured("translate", schema={"type": "object"}, model="test", command="agy", timeout_sec=1)
+    assert str(exc.value) == "agy returned no structured_output: location ineligible"
+    assert infrastructure_error(exc.value)
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("2026-10-29T15:42:31.135401Z network disconnected", "provider error"),
+    ("2026-10-29T15:42:31.135429Z network disconnected", "provider error"),
+    ("request_id=1403129429", "provider error"),
+    ("HTTP/1.1 401 Unauthorized private subtitle", "permission"),
+    ("status_code=429 private subtitle", "rate limit"),
+    ("403 Forbidden", "permission"),
+    ("open conversation: operation not permitted", "provider error"),
+    ("LOCATION_NOT_ELIGIBLE", "location ineligible"),
+])
+def test_status_classification_requires_context(message, expected):
+    from video_processing.utils.agy_provider import _safe_failure_category
+    assert _safe_failure_category(message) == expected
 
 
 def test_agy_provider_does_not_expose_external_error_text(monkeypatch):

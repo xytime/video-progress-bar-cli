@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-30 | Codex | 主行和分集手动执行恢复使用共享冷却确认，取消后恢复按钮，不自动重复提交。 |
   | 2026-10-25 | Codex | 主行与分集共用封面组件，未投稿任务跨列表补位原图，投稿与历史记录保持证据边界。 |
   | 2026-10-25 | Codex | 待筛选素材缺少生成封面时展示 YouTube 原图，保留投稿封面来源边界。 |
   | 2026-10-26 | Codex | 成片按共用准入显示可领取、资格阻塞和运行等待；频道分数线由后端提供。 |
@@ -2588,12 +2589,6 @@
       + (code ? ` [${code}]` : '');
   }
 
-  async function readProcessResponse(response) {
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result?.success) throw new Error(actionErrorMessage(result, response.status));
-    return result;
-  }
-
   async function processVideoNow(youtubeId) {
     navigator.vibrate(15);
     const btn = event?.target;
@@ -2603,13 +2598,17 @@
       btn.innerHTML = '<span class="inline-spinner"></span>';
     }
     try {
-      const r = await fetch(`/api/videos/${youtubeId}/process`, { method: 'POST' });
-      const res = await readProcessResponse(r);
+      const res = await window.ManualVideoExecution.execute(`/api/videos/${youtubeId}/process`);
+      if (res.cancelled) {
+        if (btn) { btn.disabled = false; btn.focus(); }
+        return;
+      }
       showToast('✅ ' + (res.message || '管线已手动启动'));
       loadVideos();
       fetchStats();
     } catch (e) {
       showToast('❌ 启动失败: ' + e.message, 'error');
+    } finally {
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
@@ -2916,13 +2915,17 @@
       btn.innerHTML = '<span class="inline-spinner"></span>';
     }
     try {
-      const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`, { method: 'POST' });
-      const res = await readProcessResponse(r);
+      const res = await window.ManualVideoExecution.execute(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`);
+      if (res.cancelled) {
+        if (btn) { btn.disabled = false; btn.focus(); }
+        return;
+      }
       showToast('✅ ' + (res.message || '分集任务已启动'));
       loadVideos();
       fetchStats();
     } catch (e) {
       showToast('❌ 启动失败: ' + e.message, 'error');
+    } finally {
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }

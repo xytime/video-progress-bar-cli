@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.2 | 2026-10-30 | Codex | 尾段越界须在任何画面读取或供应商请求前拒绝，不花费已知无效全片的批次预算。 |
+| 1.0.1 | 2026-10-30 | Codex | 实际图像与真实结构化缓存证明等价扫描零重复调用，字幕事实变化仍失效。 |
 | 1.0.0 | 2026-10-27 | Codex | 宿主三态、OCR/语义失败关闭、缓存与无重复烧录。 |
 """
 from copy import deepcopy
@@ -47,6 +49,53 @@ def test_simplified_traditional_bilingual_complete(evidence):
     evidence['runs'].append(dict(id=2, text='Bonds still matter.', chinese=False,
                                  confidence=.99, first=0, last=20))
     assert decide(evidence)['decision'] == 'PRESERVE'
+
+
+def test_equivalent_scan_reuses_semantic_cache_but_changed_ocr_invalidates(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    from config.settings import settings
+    from video_processing.utils import codex_text_provider as provider
+    from tests.unit.test_codex_text_provider import _executor
+
+    source = tmp_path / 'source.avi'
+    writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*'MJPG'), 10, (64, 64))
+    assert writer.isOpened()
+    try:
+        for _ in range(4):
+            writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+    finally:
+        writer.release()
+    segments = [dict(start=0., end=.4, text='Bonds still matter.')]
+    scanned = dict(fps=10., frame_count=4, width=64, height=64,
+                   runs=[dict(id=0, text='债券仍然重要', chinese=True, confidence=.99,
+                              box=[.1, .7, .9, .9], first=0, last=4)])
+    reviews = [dict(segment_id=0, decision='COMPLETE', run_ids=[0],
+                    visual_verified_run_ids=[0], reason='verified')]
+    calls = []
+    monkeypatch.setattr(provider, '_execute', _executor(payload=dict(reviews=reviews), calls=calls))
+    monkeypatch.setattr(settings, 'codex_text_model', 'gpt-5.6-luna')
+    directory = tmp_path / 'semantic'
+    directory.mkdir()
+    assert router.review(source, segments, scanned, directory, lambda _: None) == reviews
+    optimized = dict(deepcopy(scanned), frame_evidence=dict(contract='strict-identical-pixels'))
+    assert router.review(source, segments, optimized, directory, lambda _: None) == reviews
+    assert len(calls) == 1
+    optimized['runs'][0]['text'] = '价格正在上涨'
+    router.review(source, segments, optimized, directory, lambda _: None)
+    assert len(calls) == 2
+
+
+def test_late_timeline_overrun_is_rejected_before_any_batch(tmp_path, monkeypatch):
+    scanned = dict(fps=30., frame_count=1747, width=360, height=640, runs=[])
+    segments = [dict(start=float(i), end=float(i + 1), text='Speech.') for i in range(21)]
+    segments[-1] = dict(start=56.64, end=58.72, text="That's your expertise.")
+    calls = []
+    monkeypatch.setattr(router, 'run_codex_structured', lambda *a, **k: calls.append('model'))
+    monkeypatch.setattr(router.cv2, 'VideoCapture', lambda *a, **k: calls.append('decode'))
+    with pytest.raises(ValueError, match='SOURCE_TIMELINE_UNCERTAIN'):
+        router.review(tmp_path / 'unused.mp4', segments, scanned, tmp_path, lambda _: None)
+    assert calls == []
 
 
 @pytest.mark.parametrize('damage', ['partial', 'gap', 'low_confidence', 'unknown_run', 'duplicate',
