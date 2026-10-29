@@ -401,21 +401,37 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         with closing(sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=2)) as conn:
             conn.row_factory = sqlite3.Row
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "processed_videos" not in tables:
+                raise sqlite3.DatabaseError("MAINTENANCE_CORE_TABLE_MISSING: processed_videos")
             checks = {
-                "processed_videos": ("status", ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "PUBLISHING")),
-                "english_world_jobs": ("state", ("RESEARCHING",)),
-                "english_world_review_items": ("state", ("SUBMITTING",)),
-                "douyin_publications": ("state", ("SUBMITTING",)),
-                "kuaishou_publications": ("state", ("SUBMITTING",)),
-                "wallstreet_publications": ("state", ("SUBMITTING",)),
-                "wechat_review_notifications": ("delivery_state", ("PROCESSING",)),
-                "highlight_jobs": ("state", ("ANALYZING",)),
+                "processed_videos": {"status": ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "PUBLISHING")},
+                "english_world_jobs": {"state": ("RESEARCHING",), "production_state": ("PRODUCING",)},
+                "english_world_review_items": {"state": ("SUBMITTING",)},
+                "english_world_submission_attempts": {"state": ("SUBMITTING",)},
+                "english_world_douyin_publications": {"state": ("SUBMITTING",)},
+                "english_world_douyin_attempts": {"state": ("SUBMITTING",)},
+                "douyin_publications": {"state": ("SUBMITTING",)},
+                "kuaishou_publications": {"state": ("SUBMITTING",)},
+                "wallstreet_publications": {"state": ("SUBMITTING",)},
+                "wallstreet_version_publications": {"state": ("SUBMITTING",)},
+                "wallstreet_pairs": {"state": ("RENDERING",)},
+                "wechat_review_notifications": {"delivery_state": ("PROCESSING",)},
+                "highlight_jobs": {"state": ("ANALYZING",)},
+                "publishing_recovery_items": {"state": ("RUNNING",)},
+                "delivery_recoveries": {"state": ("RUNNING", "PAUSE_REQUESTED")},
             }
             rows = []
-            for table, (column, values) in checks.items():
+            for table, predicates in checks.items():
                 if table not in tables:
                     continue
-                count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} IN ({','.join('?' for _ in values)})", values).fetchone()[0]
+                clauses, arguments = [], []
+                for column, values in predicates.items():
+                    if (table == "english_world_jobs" and column == "production_state"
+                            and column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}):
+                        continue  # 旧 schema 尚无制作维度；其余必需列缺失仍由 SQL 拒绝。
+                    clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
+                    arguments.extend(values)
+                count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {' OR '.join(clauses)}", arguments).fetchone()[0]
                 if count:
                     rows.append({"table": table, "count": count})
             return rows
