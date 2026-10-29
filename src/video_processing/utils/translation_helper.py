@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 | ------- | ---------- | -------------------------- | ----------- |
+| 1.5.0 | 2026-10-29 | Codex | 原硬合同占位语不写入或复用 Google 行缓存，保持后续全片质量门。 |
 | 1.4.0   | 2026-10-05 | Codex | 逐段节流和有界退避，保留已完成缓存，供应商共用截止时间。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块 |
 | 1.3.0   | 2026-07-17 | Codex                      | 移除阿里云 MT 调用；仅保留 Google 终级翻译接口 |
@@ -29,6 +30,7 @@ import requests
 
 from config.settings import settings
 from .generated_content_validation import is_upstream_error_response
+from .subtitle_content_contract import is_translation_placeholder
 from .file_utils import write_json_atomically
 from .translation_model_pool import classify_error
 
@@ -160,7 +162,8 @@ def _google_translate_batch(
     invalid_markers = ("<html", "cloudflare", "captcha", "attention required")
     def valid_translation(value) -> str:
         text = value.strip() if isinstance(value, str) else ""
-        if any(marker in text.lower() for marker in invalid_markers) or is_upstream_error_response(text):
+        if (any(marker in text.lower() for marker in invalid_markers) or is_upstream_error_response(text)
+                or is_translation_placeholder(text)):
             return ""
         return text
 

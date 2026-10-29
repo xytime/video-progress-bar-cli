@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
+| 1.6.2 | 2026-10-29 | Codex | 每次渲染隔离 HTML/截图临时文件，验证完成后原子替换目标。 |
 | 1.6.1 | 2026-10-27 | Codex | 英语封面同时校验教学面板与标题、画布的相对边界，拒绝负坐标裁切。 |
 | 1.6.0 | 2026-10-20 | Codex | 普通封面采用已批准的 B 方案，实测词界排版并拒绝截字和安全区溢出。 |
 | 1.5.1 | 2026-09-23 | Codex | 英语封面截图前验证实际教学文本未溢出或被页脚覆盖。 |
@@ -15,6 +16,7 @@
 """
 
 import os
+import tempfile
 from pathlib import Path
 from jinja2 import Template
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
@@ -96,8 +98,15 @@ class HTMLRenderer:
         )
 
         # 3. 创建临时 HTML 文件
-        temp_html_path = Path(output_path).parent / f"temp_{Path(output_path).stem}.html"
-        temp_html_path.write_text(rendered_html, encoding="utf-8")
+        out_p = Path(output_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', prefix=f'.{out_p.stem}-',
+                                         dir=out_p.parent, encoding='utf-8', delete=False) as temporary:
+            temporary.write(rendered_html)
+            temp_html_path = Path(temporary.name)
+        with tempfile.NamedTemporaryFile(suffix='.jpg', prefix=f'.{out_p.stem}-',
+                                         dir=out_p.parent, delete=False) as temporary:
+            temp_image_path = Path(temporary.name)
 
         # 4. 调用 Playwright 无头浏览器截图
         try:
@@ -148,13 +157,13 @@ class HTMLRenderer:
                         raise ValueError("英语封面完整教学文本溢出，禁止裁切截图")
 
                 # 截图并保存为 JPEG
-                out_p = Path(output_path)
-                out_p.parent.mkdir(parents=True, exist_ok=True)
-                page.screenshot(path=str(out_p), type="jpeg", quality=95)
+                page.screenshot(path=str(temp_image_path), type="jpeg", quality=95)
+                temp_image_path.replace(out_p)
                 
                 browser.close()
                 return typography
         finally:
+            temp_image_path.unlink(missing_ok=True)
             # 5. 清理临时 HTML 文件
             if temp_html_path.exists():
                 try:

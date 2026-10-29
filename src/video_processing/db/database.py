@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| preparation-queue-v1 | 2026-10-29 | Codex | 独立预加工执行队列；owner CAS 与本地完成不授予投稿。 |
 | notification-guard-v2 | 2026-10-27 | Codex | 在字幕告警集成上接入文字通知持久防重复，不把UNKNOWN抑制当受理。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 接入字幕质量告警持久发件箱，候选与问题摘要独立幂等。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 接入字幕持久失败链与领取冷却，保留全局重试和投稿账本。 |
@@ -251,9 +252,10 @@ from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
 from .compliance_remix import ComplianceRemixDAL
+from .preparation_queue import PreparationQueueDAL
 
 
-class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(PreparationQueueDAL, NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -328,6 +330,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             self.initialize_subtitle_recovery()
             self.initialize_subtitle_quality_notifications()
             self.initialize_compliance_remix()
+            self.initialize_preparation_queue()
         self._initializing_schema = False
         from ..core.maintenance import running
         if not self._read_only and running():
@@ -409,6 +412,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                 "wallstreet_publications": ("state", ("SUBMITTING",)),
                 "wechat_review_notifications": ("delivery_state", ("PROCESSING",)),
                 "highlight_jobs": ("state", ("ANALYZING",)),
+                "preparation_execution_queue": ("state", ("RESERVED", "RUNNING")),
             }
             rows = []
             for table, (column, values) in checks.items():

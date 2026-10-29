@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 2.3.0 | 2026-10-29 | Codex | 同上下文批次暂存、有界成本探测及已知传输错误的稳定分类。 |
 | 2.2.0 | 2026-10-05 | Codex | DeepSeek 批次服从字幕全供应商共享期限。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：DeepSeek OpenAI-compatible 字幕批量翻译 provider |
 | 1.1.0   | 2026-07-06 | Codex  | 强化全局上下文硬约束提示，降低金融 close/金额单位误译 |
@@ -30,9 +31,11 @@ import logging
 import time
 import urllib.error
 import urllib.request
+import http.client
 from typing import Any, Dict, List, Optional
 
 from .translation_prompt_constraints import render_translation_constraints
+from .subtitle_translation_budget import transport_failure
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,7 @@ def translate_batch_deepseek(
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, json.JSONDecodeError) as e:
         logger.warning(f"[DeepSeek] API call failed: {e}")
         return None
 
@@ -98,6 +101,7 @@ def translate_batch_with_vocab_deepseek(
     settings_obj: Any = None,
     error_out: Optional[List[str]] = None,
     deadline: Optional[float] = None,
+    batch_cache: Any = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """一次调用返回中文翻译和与中文子串严格对齐的 vocabulary。"""
     if not texts:
@@ -111,11 +115,6 @@ def translate_batch_with_vocab_deepseek(
         except Exception:
             settings_obj = None
     api_key = getattr(settings_obj, "deepseek_api_key", "") if settings_obj else ""
-    if not api_key:
-        logger.info("[DeepSeek] API key not configured. Skipping vocab provider.")
-        record_error("credentials not configured")
-        return None
-
     base_url = (getattr(settings_obj, "deepseek_base_url", "") or "https://api.deepseek.com").rstrip("/")
     model = getattr(settings_obj, "deepseek_model", "") or "deepseek-v4-flash"
     total_timeout = max(30, int(getattr(settings_obj, "deepseek_subtitle_total_timeout_seconds", 300) or 300))
@@ -123,25 +122,42 @@ def translate_batch_with_vocab_deepseek(
     deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
     all_items: List[Dict[str, Any]] = []
     for batch_start in range(0, len(texts), _VOCAB_BATCH_SIZE):
+        batch = texts[batch_start: batch_start + _VOCAB_BATCH_SIZE]
+        payload = _build_vocab_payload(batch, context_text=context_text, model=model)
+        cached = batch_cache.load(batch_start, len(batch), payload) if batch_cache else None
+        if cached is not None:
+            all_items.extend(cached[0])
+            continue
+        if not api_key:
+            logger.info("[DeepSeek] API key not configured. Skipping vocab provider.")
+            record_error('authentication_401_not_configured')
+            return None
+        if batch_cache and not batch_cache.permit(batch_start):
+            record_error('provider_candidate_budget_exhausted')
+            return None
         remaining = deadline - time.monotonic()
+        if batch_cache:
+            remaining = min(remaining, batch_cache.request_deadline(deadline) - time.monotonic())
         if remaining <= 0:
             message = f"DeepSeek subtitle candidate budget exceeded ({total_timeout}s)"
             logger.warning("[DeepSeek] %s", message)
             record_error(message)
             return None
-        batch = texts[batch_start: batch_start + _VOCAB_BATCH_SIZE]
         req = urllib.request.Request(
             f"{base_url}/chat/completions",
-            data=json.dumps(_build_vocab_payload(batch, context_text=context_text, model=model), ensure_ascii=False).encode("utf-8"),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
+        started = time.monotonic()
         try:
-            with urllib.request.urlopen(req, timeout=min(90, max(1, int(remaining)))) as resp:
+            with urllib.request.urlopen(req, timeout=min(90.0, remaining)) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-            logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")
-            record_error(str(e))
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, json.JSONDecodeError) as e:
+            failure = transport_failure(e)
+            code = failure['code'] if failure else 'invalid_response_json'
+            logger.warning('[DeepSeek] Translation+vocab API call failed: %s', code)
+            record_error(code)
             return None
         content = _extract_message_content(data)
         items = _parse_translation_vocab_json(content, expected_count=len(batch)) if content else None
@@ -149,6 +165,8 @@ def translate_batch_with_vocab_deepseek(
             logger.warning("[DeepSeek] Could not parse aligned translation+vocab response.")
             record_error("DeepSeek invalid or empty aligned response")
             return None
+        if batch_cache:
+            batch_cache.store(batch_start, len(batch), payload, items, model, time.monotonic() - started)
         all_items.extend(items)
     return all_items
 

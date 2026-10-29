@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| 2.9.0 | 2026-10-29 | Codex | 同 provider/profile 的完整上下文候选批暂存和真实慢批预算探测。 |
 | 2.8.0 | 2026-10-05 | Codex | 共享截止时间，每次请求动态收紧时限并拒绝不足10秒的 Gemini 请求。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
 | 1.1.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现分批调用（50段/次）解决277段场景下输出截断导致计数不符的问题；放宽计数校验 |
@@ -43,6 +44,7 @@ from typing import Any, Dict, List, Optional
 
 from .translation_prompt_constraints import render_translation_constraints
 from .translation_model_pool import DynamicTranslationModelPool, classify_error
+from .subtitle_translation_budget import transport_failure
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,7 @@ def extract_vocab_batch(
     max_vocabulary_items: int = 3,
     min_vocabulary_items: int = 0,
     *, deadline: Optional[float] = None, error_out: Optional[List[str]] = None,
+    batch_cache: Any = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """批量从英文字幕段落中提取难词词汇，并可选地与中文翻译句子对齐。
 
@@ -112,17 +115,7 @@ def extract_vocab_batch(
         settings_obj = None
         api_key = ""
 
-    if not api_key:
-        logger.warning("[vocab_helper] GEMINI_API_KEY not configured. Skipping vocab extraction.")
-        return None
-
-    try:
-        from google import genai as _genai
-        from google.genai import types as _genai_types
-    except ImportError:
-        logger.error("[vocab_helper] google-genai SDK not installed. Cannot extract vocab.")
-        return None
-
+    _genai = _genai_types = None
     # [Claude_Sonnet_4.6_Thinking_planning] v1.1.0: 分批处理，每批 _BATCH_SIZE 段
     all_results: List[Dict[str, Any]] = []
     total = len(english_texts)
@@ -133,7 +126,38 @@ def extract_vocab_batch(
     local_deadline = time.monotonic() + total_timeout
     deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
     for batch_start in range(0, total, _BATCH_SIZE):
-        request_timeout_ms = _remaining_request_timeout_ms(deadline)
+        batch_end = min(batch_start + _BATCH_SIZE, total)
+        en_batch = english_texts[batch_start:batch_end]
+        zh_batch = chinese_translations[batch_start:batch_end] if chinese_translations else None
+        prompt = _build_prompt(
+            en_batch, zh_batch, context_text=context_text, max_vocabulary_items=max_vocabulary_items,
+            min_vocabulary_items=min_vocabulary_items,
+        )
+        cached = batch_cache.load(batch_start, len(en_batch), prompt) if batch_cache else None
+        if cached is not None:
+            all_results.extend(cached[0])
+            if model_out is not None and cached[1] not in model_out:
+                model_out.append(cached[1])
+            continue
+        # 读回已验证完整缓存不需要凭据或 SDK；只有实际请求才检查执行能力。
+        if not api_key:
+            if error_out is not None:
+                error_out.append('authentication_401_not_configured')
+            logger.warning("[vocab_helper] GEMINI_API_KEY not configured. Skipping vocab extraction.")
+            return None
+        if _genai is None:
+            try:
+                from google import genai as _genai
+                from google.genai import types as _genai_types
+            except ImportError:
+                logger.error("[vocab_helper] google-genai SDK not installed. Cannot extract vocab.")
+                return None
+        if batch_cache and not batch_cache.permit(batch_start):
+            if error_out is not None:
+                error_out.append('provider_candidate_budget_exhausted')
+            return None
+        request_deadline = batch_cache.request_deadline(deadline) if batch_cache else deadline
+        request_timeout_ms = _remaining_request_timeout_ms(request_deadline)
         if request_timeout_ms <= 0:
             if error_out is not None:
                 error_out.append("Gemini budget below minimum request deadline (10s)")
@@ -143,24 +167,18 @@ def extract_vocab_batch(
             api_key=api_key,
             http_options=_genai_types.HttpOptions(timeout=request_timeout_ms),
         )
-        batch_end = min(batch_start + _BATCH_SIZE, total)
-        en_batch = english_texts[batch_start:batch_end]
-        zh_batch = chinese_translations[batch_start:batch_end] if chinese_translations else None
 
         logger.info(f"[vocab_helper] Processing batch {batch_start//_BATCH_SIZE + 1} "
                     f"(segments {batch_start+1}-{batch_end}/{total})...")
 
-        prompt = _build_prompt(
-            en_batch, zh_batch, context_text=context_text, max_vocabulary_items=max_vocabulary_items,
-            min_vocabulary_items=min_vocabulary_items,
-        )
         state_path = (
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
             if getattr(settings_obj, "project_root", None) is not None else None
         )
+        started = time.monotonic()
         try:
             call_result = _call_with_retry(
-                client, prompt, _genai_types, state_path=state_path, deadline=deadline, error_out=error_out,
+                client, prompt, _genai_types, state_path=state_path, deadline=request_deadline, error_out=error_out,
             )
         finally:
             client.close()
@@ -178,7 +196,9 @@ def extract_vocab_batch(
             return None
         if model_out is not None and model_name not in model_out:
             model_out.append(model_name)
-
+        if batch_cache:
+            batch_cache.store(batch_start, len(en_batch), prompt, batch_result, model_name,
+                              time.monotonic() - started)
         all_results.extend(batch_result)
 
     logger.info(f"[vocab_helper] All batches completed. Total: {len(all_results)} segments.")
@@ -358,6 +378,9 @@ def _call_with_retry(
                     if deadline is not None:
                         remaining_seconds = deadline - time.monotonic()
                         if remaining_seconds <= 0:
+                            if error_out is not None:
+                                failure = transport_failure(e)
+                                error_out.append(failure['code'] if failure else str(e)[:500])
                             logger.warning("[vocab_helper] Gemini subtitle candidate budget exhausted after failure.")
                             return None
                         wait = min(wait, remaining_seconds)
@@ -375,7 +398,8 @@ def _call_with_retry(
     if response is None:
         if last_err:
             if error_out is not None:
-                error_out.append(str(last_err)[:500])
+                failure = transport_failure(last_err)
+                error_out.append(failure['code'] if failure else str(last_err)[:500])
             logger.error(f"[vocab_helper] All models failed. Last error: {last_err}")
         return None
 

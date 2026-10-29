@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-10-29 | Codex | 可选完整来源合同隔离候选批缓存，恢复计划身份和持久累计边界不变。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 隔离来源背景并记录真实修复，完整拒绝候选待全片比例守门，不写入干净缓存。 |
 | 1.5.0 | 2026-10-27 | Codex | 失败小批持久降级逐段恢复，真实请求与累计期限跨续跑有界，完成后重新守门。 |
 | 1.4.0 | 2026-10-27 | Codex | 每次最多5段并明确保留原文半句，只暴露真实拆分金额的最小单位上下文。 |
@@ -35,6 +36,15 @@ MAX_SUBTITLE_BATCH_ROWS = 5
 FRAGMENT_OWNERSHIP_RULE = (
     "原文半句也必须保留半句，不补全悬空从句；禁止为中文通顺把when等从句搬到邻段。"
 )
+
+
+def subtitle_cache_contract(*, singleton_repair: bool = False, binding: dict | None = None):
+    """新候选绑定完整源/ASR/合同；未传绑定时保持旧调用的缓存身份。"""
+    recipe = RECOVERY_RECIPE if singleton_repair else SUBTITLE_CACHE_CONTRACT
+    if binding is None:
+        return recipe
+    identity = json.dumps(binding, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    return recipe + ":" + hashlib.sha256(identity.encode()).hexdigest()
 
 
 class CodexSubtitleError(CodexTextError):
@@ -191,6 +201,7 @@ def build_codex_subtitle_candidate(
     allow_quality_candidate: bool = False,
     initial_candidate: SubtitleTranslationCandidate | None = None,
     repair_segment_numbers: list[int] | None = None,
+    cache_binding: dict | None = None,
 ) -> SubtitleTranslationCandidate:
     """每批最多5段；结构/质量拒绝可缩为单段，完整候选才返回。
 
@@ -321,7 +332,8 @@ def build_codex_subtitle_candidate(
                         prompt, schema=_schema(len(batch)), state_dir=state_dir, command=command,
                         model=model, effort=effort, timeout_sec=max(0.001, min(request_timeout, time_left)),
                         cache_prompt=base_prompt,
-                        cache_contract=(RECOVERY_RECIPE if singleton_repair else SUBTITLE_CACHE_CONTRACT),
+                        cache_contract=subtitle_cache_contract(singleton_repair=singleton_repair,
+                                                               binding=cache_binding),
                         repair_cached_output=repair_cached if allow_quality_candidate else _repair_prompt,
                         before_execute=before_execute if recovery else None,
                         validate=validate,

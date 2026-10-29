@@ -1,6 +1,8 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| journal-outcome-v1 | 2026-10-29 | Codex | 整片尝试只从数据库明确失败/复核取终态，观测读取故障不影响业务。 |
+| preparation-dispatch-v1 | 2026-10-29 | Codex | 默认关闭的允许名单预加工队列、阶段资源与本地完成隔离；投稿路径保持原守卫。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕具名回执驱动持久退避和待修复，成功快照验证后收敛恢复账。 |
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
@@ -265,6 +267,42 @@ from config.settings import settings
 from .core.maintenance import claimed as claim_unit, spawn_admitted, gate, guarded, entry, start_current, MaintenanceDenied
 from video_processing.core.douyin_management_state import MANAGEMENT_EXIT_STATES, MANAGEMENT_STATE_MESSAGES
 from video_processing.core.ffmpeg_slot import register_executable
+
+
+def _journal_video_execution(method):
+    """旧入口可选独立尝试；子预加工执行者沿用已绑定 journal，不推断交付。"""
+    from functools import wraps
+    @wraps(method)
+    def run(self, video, *args, **kwargs):
+        if not settings.enable_pipeline_stage_events or getattr(self, '_preparation_execution', None) is not None:
+            return method(self, video, *args, **kwargs)
+        import uuid
+        from .utils.stage_events import StageJournal, bind_journal, current_journal
+        key = f"{video['youtube_id']}:{int(video.get('slice_index') or 0)}"
+        active = current_journal()
+        if active is not None and active.role == 'attempt' and active.task_id == key:
+            return method(self, video, *args, **kwargs)
+        owner = uuid.uuid4().hex
+        task_hash = hashlib.sha256(key.encode()).hexdigest()[:24]
+        output = getattr(self, '_OUT_DIR', settings.default_output_dir)
+        journal = StageJournal(output / '.stage-events' / task_hash / (owner+'.jsonl'),
+                               task_id=key, attempt_id=owner)
+        outcome = 'unknown'
+        try:
+            with bind_journal(journal):
+                journal.transition('WAITING_ADMISSION')
+                result = method(self, video, *args, **kwargs)
+                return result
+        finally:
+            try:
+                latest = self.db.get_video_by_youtube_id(video['youtube_id'],
+                    slice_index=int(video.get('slice_index') or 0))
+                outcome = {'FAILED': 'failed', 'REVIEW': 'review'}.get(
+                    latest.get('status') if latest else None, 'unknown')
+            except Exception:
+                logger.warning('加工终态观测读取失败，保留未知且不改变业务结果', exc_info=True)
+            journal.close(outcome)
+    return run
 register_executable(settings.ffmpeg_path)
 
 logger = logging.getLogger(__name__)
@@ -557,6 +595,17 @@ class PipelineManager:
         preparation_only: bool = False,
     ) -> None:
         """向可选的外层运行态记录器报告当前视频阶段，失败不影响发布链路。"""
+        from .utils.stage_events import transition_stage
+        transition_stage(stage)
+        scope = getattr(self, '_preparation_execution', None)
+        if scope is not None and threading.get_ident() == scope.thread and not stage.startswith('CAPTION_'):
+            if stage not in {'WAITING_PIPELINE_LOCK'}:
+                kind = 'network' if stage in {'CENSORSHIP_PRECHECK', 'SOURCE_SUBTITLE_PRECHECK',
+                    'DOWNLOADING', 'COPYWRITING', 'COPY_REUSED', 'CONTENT_CENSORSHIP'} else 'heavy'
+                self.db.preparation_execution_event(self._preparation_video_id, scope.owner,
+                    stage='WAITING_RESOURCE', resource=kind, reason=stage)
+                scope.switch(kind, stage)
+                self.db.preparation_execution_event(self._preparation_video_id, scope.owner, stage=stage, resource=kind)
         if self._status_reporter is None:
             return
         try:
@@ -1255,6 +1304,7 @@ class PipelineManager:
             platform_url=platform_url,
             trigger_source=getattr(self, "_trigger_source", None),
         )
+        self._record_delivery_evidence(yid, slice_index, 'platform_accepted')
         cancel_douyin = settings.douyin_require_wechat_public_confirmation
         downstream_reason = (
             "视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。"
@@ -1385,6 +1435,7 @@ class PipelineManager:
                     platform_url=platform_url, reconciled=True,
                 )
                 self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
+                self._record_delivery_evidence(yid, slice_index, 'management_published_confirmed')
                 self.send_telegram_msg(
                     f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {html.escape(prefix)}"
                 )
@@ -2216,8 +2267,21 @@ class PipelineManager:
         # 先补齐业务环境，再附加维护凭据；否则原始 env 会绕过下层的 PATH 保底。
         if kwargs.get("env") is None:
             kwargs["env"] = _build_subprocess_env()
+        scope = getattr(self, '_preparation_execution', None)
+        if scope is not None and 'auto-caption' in cmd:
+            # 子 CLI 自己在 heavy/network 间交接，父进程不能留持 heavy 槽。
+            scope.release_lane()
         with child_continuation(cmd, kwargs) as child_kwargs:
-            return self._run_tracked_impl(cmd, yid, slice_index, **child_kwargs)
+            try:
+                return self._run_tracked_impl(cmd, yid, slice_index, **child_kwargs)
+            except subprocess.CalledProcessError as exc:
+                if scope is not None and exc.returncode == 76:
+                    from .core.preparation_resources import PreparationYielded
+                    raise PreparationYielded('validated checkpoint yielded') from exc
+                if scope is not None and exc.returncode == 77:
+                    from .core.preparation_resources import PreparationBusy
+                    raise PreparationBusy('child resource owner cannot be verified') from exc
+                raise
 
     def _run_tracked_impl(self, cmd: list, yid: str, slice_index: int = 0, *,
                      isolate_process_group: bool = False, **kwargs) -> subprocess.CompletedProcess:
@@ -2522,6 +2586,19 @@ class PipelineManager:
                         pass
         return vertical
 
+    def _record_delivery_evidence(self, yid: str, slice_index: int, outcome: str):
+        """只记录既有守卫已核实的事实；独立回查不伪装成加工尝试。"""
+        if not settings.enable_pipeline_stage_events:
+            return
+        from .utils.stage_events import StageJournal, current_journal
+        key = f'{yid}:{slice_index}'
+        journal = current_journal()
+        if journal is None or journal.task_id != key:
+            task_hash = hashlib.sha256(key.encode()).hexdigest()[:24]
+            journal = StageJournal(self._OUT_DIR / '.stage-events' / 'delivery' / (task_hash+'.jsonl'),
+                                   task_id=key, attempt_id='delivery', role='delivery')
+        journal.emit('delivery_evidence', outcome=outcome)
+
     def _mark_ready_and_enqueue_wallstreet(self, yid: str, slice_index: int):
         """正常版先就绪；二创只持久入队，不能在此等待策划或渲染。"""
         prefix = f"{yid}_s{slice_index}" if slice_index else yid
@@ -2531,6 +2608,14 @@ class PipelineManager:
         self.db.enroll_wallstreet_video(yid, slice_index=slice_index, accounts=accounts, mark_ready=True,
             inputs={"prefix": prefix, "output_dir": str(self._OUT_DIR),
                     "a_video": str(self._OUT_DIR / f"{prefix}_vertical.mp4")})
+        if settings.enable_pipeline_stage_events:
+            try:
+                ready = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+                if ready and ready.get('preparation_ready'):
+                    self._record_delivery_evidence(yid, slice_index, 'qualified_local_video')
+                    self._record_delivery_evidence(yid, slice_index, 'publication_package_ready')
+            except Exception:
+                logger.warning('发布包阶段证据读取失败，不改写既有就绪结果', exc_info=True)
 
     def _insight_review_text(self, prefix: str) -> str:
         """仅审查实际选用增强成片的脚本；发布执行者再次读取相同正文。"""
@@ -4342,12 +4427,26 @@ class PipelineManager:
         )
         return
 
+    @_journal_video_execution
     @guarded("video", lambda self, video, **kw: f"{video['youtube_id']}:{video.get('slice_index', 0)}", waiting=True)
     def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False, claim=False):
         """同视频互斥；就绪提交与重型加工使用不同资源锁。"""
         if video.get("source") == "COMPLIANCE_REMIX":
             logger.warning("合规二创任务必须通过独立审批执行，拒绝普通加工或发布入口。")
             return False
+        if getattr(self, '_preparation_execution', None) is None and not submission_only:
+            from .core.preparation_dispatch import canary_sources
+            if video.get('youtube_id') in canary_sources(settings) and not video.get('preparation_ready'):
+                prefix = video['youtube_id'] + (f"_s{int(video.get('slice_index') or 0)}" if video.get('slice_index') else '')
+                if self._wechat_submission_evidence_paths(prefix) or self._has_wechat_submission_terminal_state(
+                        video['youtube_id'], slice_index=int(video.get('slice_index') or 0)):
+                    return False
+                queued = self.db.enqueue_preparation(video['youtube_id'], int(video.get('slice_index') or 0),
+                                                     trigger_source=getattr(self, '_trigger_source', 'unknown'))
+                from .utils.stage_events import emit_event
+                emit_event('queue_wait', stage='WAITING_PREPARATION_DISPATCH',
+                           outcome='enqueued' if queued else 'already_queued_or_ineligible')
+                return False  # 已排队不是实际加工成功，旧循环不累计 processed。
         from .core.task_lease import TaskLease, TaskLeaseBusy
         from .utils.youtube_route import YoutubeRouteError
 
@@ -4357,7 +4456,15 @@ class PipelineManager:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
             raise ValueError("invalid video identity")
         try:
-            with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
+            from contextlib import nullcontext
+            scope = getattr(self, '_preparation_execution', None)
+            if scope is None:
+                self._report_runtime_stage(yid, 'WAITING_TASK_LOCK', slice_index=index)
+            task_lock = nullcontext() if scope is not None else TaskLease(
+                self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工")
+            with task_lock:
+                if scope is not None and (submission_only or not preparation_only):
+                    raise ValueError('preparation canary cannot enter publication')
                 if not self.db.keyword_processing_allowed(yid, index):
                     return False
                 start_current()
@@ -4371,9 +4478,13 @@ class PipelineManager:
                     logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)
                 if submission_only or (video.get("preparation_ready") and not preparation_only):
                     try:
+                        self._report_runtime_stage(yid, 'WAITING_PUBLICATION_SLOT', slice_index=index)
                         with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
                             self._submit_ready_video(video)
                     except TaskLeaseBusy:
+                        from .utils.stage_events import emit_event
+                        emit_event('publication_wait', stage='WAITING_PUBLICATION_SLOT',
+                                   outcome='busy_unknown_wait_duration')
                         evidence_root = self._OUT_DIR / "wechat_evidence" / prefix
                         if self._wechat_submission_evidence_paths(prefix) or list(evidence_root.glob("*/submission_receipt.json")):
                             logger.warning("[%s] 发布资源占用且已有投稿证据，保留状态，禁止回队重发。", prefix)
@@ -4399,6 +4510,8 @@ class PipelineManager:
                         self.db.update_process_pid(yid, None, slice_index=index)
                 return True
         except TaskLeaseBusy:
+            from .utils.stage_events import emit_event
+            emit_event('lock_wait', stage='WAITING_TASK_LOCK', outcome='busy_unknown_wait_duration')
             logger.info("[%s] 该视频已有执行者，保留原任务归属。", prefix)
             return False
 
@@ -4478,12 +4591,10 @@ class PipelineManager:
         trim_end   = video.get('trim_end')
         slice_index = video.get('slice_index', 0)
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
-        self._report_runtime_stage(
-            yid,
-            "WAITING_PIPELINE_LOCK",
-            slice_index=slice_index,
-            preparation_only=preparation_only,
-        )
+        scoped = getattr(self, '_preparation_execution', None) is not None
+        if not scoped:
+            self._report_runtime_stage(yid, 'WAITING_PIPELINE_LOCK', slice_index=slice_index,
+                                       preparation_only=preparation_only)
 
         # [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复: signal.signal() 只能在主线程调用。
         # 此方法通过 daemon 线程执行，signal 注册已移至 app.py startup_event()。
@@ -4495,10 +4606,15 @@ class PipelineManager:
         lock_path = self._OUT_DIR / "pipeline.lock"
         logger.info(f"[Lock] Waiting for pipeline lock to process {prefix}...")
         lock_file = None
+        lock_wait_started = time.monotonic()
         try:
             try:
-                lock_file = open(lock_path, "w")
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                if getattr(self, '_preparation_execution', None) is None:
+                    lock_file = open(lock_path, "w")
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    from .utils.stage_events import emit_event
+                    emit_event('lock_acquired', stage='PIPELINE_LOCK',
+                               duration_seconds=max(0.0,time.monotonic()-lock_wait_started))
                 logger.info(f"[Lock] Acquired pipeline lock. Processing {prefix}...")
                 self._report_runtime_stage(
                     yid,
@@ -5331,6 +5447,14 @@ class PipelineManager:
                 if preparation_only:
                     if not self._is_dedicated_cover(cover_file):
                         raise RuntimeError("预加工未生成可验证的专门封面，禁止标记为待发布就绪。")
+                    scope = getattr(self, '_preparation_execution', None)
+                    if scope is not None:
+                        if not self.db.mark_preparation_local_ready(yid, slice_index, scope.owner):
+                            raise RuntimeError('local preparation ownership or publication boundary changed')
+                        from .utils.stage_events import emit_event
+                        emit_event('delivery_evidence', stage='LOCAL_READY', outcome='qualified_local_video', owner_token=scope.owner)
+                        logger.info('[LocalPreparation] %s 本地成片完成；未授予发布包就绪。', prefix)
+                        return
                     self._mark_ready_and_enqueue_wallstreet(yid, slice_index)
                     (self._OUT_DIR / "ready_publications.wake").touch()
                     logger.info("[Preparation] %s 成片就绪，交给独立发布执行者。", prefix)

@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| legacy-contract-v1 | 2026-10-29 | Codex | 两个已审查前代完成合同经当前全片质量复核后原子升级，不接受任意旧哈希。 |
+| throughput-v1 | 2026-10-29 | Codex | 预算及批候选实现纳入翻译合同，ASR身份保持不变。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 容错政策与案例存储纳入合同，完成快照绑定最终质量告警。 |
 | 1.1.0 | 2026-10-27 | Codex | 翻译恢复计划、回执及离线音频诊断实现纳入完成快照合同。 |
 | 1.0.0 | 2026-10-23 | Codex | 独立保存 ASR 与已通过质量门的翻译，供下游失败后续跑。 |
@@ -30,12 +32,16 @@ TRANSLATION_MODULES = (
     'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
     'subtitle_recovery_state', 'subtitle_failure_receipt', 'subtitle_audio_review', 'subtitle_audio_review_worker',
     'subtitle_sparse_policy', 'subtitle_quality_recovery', 'subtitle_bad_cases',
+    'subtitle_translation_budget', 'subtitle_batch_cache', 'subtitle_provider_inventory',
+    'caption_legacy_contract',
 )
 TRANSLATION_SETTINGS = (
     'subtitle_translation_provider_order', 'enable_deepseek_vocab_fallback',
     'enable_translation_quality_fail_open', 'enable_translation_numeric_guard',
     'agy_subtitle_model', 'deepseek_model', 'codex_text_model', 'codex_text_effort',
     'codex_subtitle_batch_size',
+    'enable_subtitle_translation_throughput', 'subtitle_translation_quality_reserve_seconds',
+    'subtitle_translation_batch_seconds',
 )
 
 
@@ -98,12 +104,22 @@ class CaptionCheckpoints:
         try:
             payload = json.loads(path.read_text(encoding='utf-8'))
             result = payload['result']
-            if (payload['identity'] != self.identity or payload['contract'] != contract
+            if (payload['identity'] != self.identity
                     or payload['result_sha256'] != fingerprint(result)
                     or result.get('completed') is not True
                     or not isinstance(result.get('detected_lang'), (str, type(None)))
                     or not valid_segments(result['segments'], stage == 'translation', source)):
                 raise ValueError('identity, integrity or segment contract mismatch')
+            if payload['contract'] != contract:
+                if stage != 'translation' or source is None:
+                    raise ValueError('checkpoint contract mismatch')
+                from .caption_legacy_contract import upgrade_legacy_result
+                result = upgrade_legacy_result(payload, contract, source, self.source_digest)
+                if result is None:
+                    raise ValueError('unsupported legacy contract or quality revalidation failed')
+                self.save('translation', contract, result['segments'], result['detected_lang'], source,
+                          result.get('quality_audit'), quality_warning=result.get('quality_warning'))
+                LOG.info('[CaptionCheckpoint] 前代完成快照已全片复核并升级合同: %s', path)
             if stage == 'translation':
                 from .subtitle_failure_receipt import require_quality_warning_envelope
                 require_quality_warning_envelope(result)

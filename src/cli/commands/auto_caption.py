@@ -4,6 +4,8 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 1.10.0 | 2026-10-29 | Codex | 独立阶段证据与继承资源上下文；翻译可让出重计算槽。 |
+| 1.10.1 | 2026-10-29 | Codex | 字幕 CLI 只计子阶段，继承规范任务身份，避免重复计整片尝试。 |
 | 1.9.0 | 2026-10-27 | Codex | 具名字幕失败/成功回执，临时服务故障与待修复分别退出。 |
 | 1.9.0 | 2026-10-27 | Codex | 普通流水线可在翻译前分流原片中文字幕，独立制作默认不启用。 |
 | 1.8.0 | 2026-10-23 | Codex | 心跳保留已复用步骤，让字幕定位/渲染与转录分开展示。 |
@@ -23,6 +25,9 @@ import logging
 import json
 import time
 import threading
+import hashlib
+import uuid
+from config.settings import settings
 from video_processing.processors.caption_processor import AutoCaptionProcessor
 from video_processing.processors.vertical_processor import VerticalCaptionProcessor
 from video_processing.core.base import VideoProcessingError
@@ -30,16 +35,29 @@ from video_processing.utils.subtitle_failure_receipt import (
     SubtitleTranslationFailure, write_failure_receipt, write_success_receipt,
 )
 
-from video_processing.core.ffmpeg_slot import wait_state
+from video_processing.core.ffmpeg_slot import wait_state as _ffmpeg_wait_state
+from video_processing.core.preparation_resources import (setup_execution_context, resource_stage,
+                                                         PreparationYielded, PreparationBusy)
+from video_processing.core.preparation_resources import wait_state as _preparation_wait_state
+from video_processing.utils.preparation_artifacts import isolated_caption_artifacts
+from video_processing.utils.stage_events import StageJournal, bind_journal, canonical_task_id
 
 logger = logging.getLogger(__name__)
+
+
+def wait_state():
+    """同一执行线程的资源等待；心跳继续，等待不计入阶段无进展限时。"""
+    ffmpeg, preparation = _ffmpeg_wait_state(), _preparation_wait_state()
+    return dict(waiting=ffmpeg['waiting'] or preparation['waiting'],
+                seconds=ffmpeg['seconds'] + preparation['seconds'])
 
 
 class _CaptionProgressReporter:
     """以原子文件持续汇报当前字幕阶段，供父进程辨别存活与停滞。"""
 
-    def __init__(self, progress_file: Path):
+    def __init__(self, progress_file: Path, journal: StageJournal | None = None):
         self._progress_file = progress_file
+        self._journal = journal
         self._stage = "STARTING"
         self.reused_steps = set()
         self._stage_started_at = time.time()
@@ -50,6 +68,8 @@ class _CaptionProgressReporter:
         self._thread: threading.Thread | None = None
 
     def __call__(self, stage: str) -> None:
+        if self._journal is not None:
+            self._journal.transition(stage)
         with self._lock:
             if stage != self._stage:
                 self._stage_started_at = time.time()
@@ -60,6 +80,8 @@ class _CaptionProgressReporter:
         self._write_current()
 
     def start(self) -> None:
+        if self._journal is not None:
+            self._journal.transition(self._stage)
         self._write_current()
         self._thread = threading.Thread(target=self._heartbeat_loop, name="caption-progress", daemon=True)
         self._thread.start()
@@ -99,12 +121,27 @@ class _CaptionProgressReporter:
             logger.warning("Unable to write caption progress %s: %s", self._progress_file, exc)
 
 
-def _build_progress_reporter(progress_file: Path | None):
+def _build_progress_reporter(progress_file: Path | None, journal=None):
     """返回可选的原子阶段上报回调；上报失败不影响字幕成片。"""
     if progress_file is None:
         return None
 
-    return _CaptionProgressReporter(progress_file)
+    return _CaptionProgressReporter(progress_file, journal=journal)
+
+
+def _build_stage_journal(input_path: Path, output: Path | None, attempt_id: str, scope=None):
+    """字幕成片是整片流程的一阶段，独立 CLI 也不冒充完整准备/发布尝试。"""
+    if not settings.enable_pipeline_stage_events:
+        return None
+    task_id = canonical_task_id(input_path.stem, scope_key=scope.key if scope is not None else None)
+    journal_root = Path(output).parent if output is not None else input_path.parent
+    task_key = hashlib.sha256(task_id.encode()).hexdigest()[:24]
+    attempt_key = hashlib.sha256(str(attempt_id).encode()).hexdigest()[:24]
+    journal = StageJournal(journal_root / '.stage-events' / task_key / 'phases' / f'{attempt_key}.jsonl',
+                           task_id=task_id, attempt_id=attempt_id, role='phase')
+    if scope is not None:
+        journal.emit('phase_context', parent_attempt_id=scope.owner)
+    return journal
 
 @click.command()
 @click.argument('input_path', type=click.Path(exists=True, path_type=Path))
@@ -129,12 +166,23 @@ def _build_progress_reporter(progress_file: Path | None):
 @click.option('--subtitle-attempt-id', default=None, hidden=True)
 def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file, copy_reused=False, preserve_source_chinese=False, subtitle_receipt=None, subtitle_attempt_id=None):
     """Generate and burn bilingual subtitles for a video."""
-    progress_reporter = _build_progress_reporter(progress_file)
-    if progress_reporter is not None:
-        if copy_reused:
-            progress_reporter.reused_steps.add('copy')
-        progress_reporter.start()
+    attempt_id = subtitle_attempt_id or uuid.uuid4().hex
+    journal = None
+    journal_binding = None
+    execution_scope = None
+    outcome = 'failed'
+    resource_wait_baseline = wait_state()['seconds']
+    progress_reporter = None
     try:
+        execution_scope = setup_execution_context()
+        journal = _build_stage_journal(input_path, output, attempt_id, execution_scope)
+        journal_binding = bind_journal(journal)
+        journal_binding.__enter__()
+        progress_reporter = _build_progress_reporter(progress_file, journal=journal)
+        if progress_reporter is not None:
+            if copy_reused:
+                progress_reporter.reused_steps.add('copy')
+            progress_reporter.start()
         if vertical:
             processor = VerticalCaptionProcessor(
                 input_path=input_path,
@@ -150,7 +198,7 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 font_size=font_size,
                 bilingual=bilingual,
                 source_date=source_date,  # [Claude_Opus_4.8] 源视频发布日期毛玻璃戳
-                progress_reporter=progress_reporter,
+                progress_reporter=progress_reporter or (journal.transition if journal else None),
             )
             mode_str = "Vertical (9:16)"
         else:
@@ -162,7 +210,7 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 target_lang=target_lang,
                 device=device,
                 style=style,
-                progress_reporter=progress_reporter,
+                progress_reporter=progress_reporter or (journal.transition if journal else None),
             )
             mode_str = "Standard"
         
@@ -173,14 +221,26 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
         click.echo(f"Mode: {mode_str}")
         click.echo(f"Configuration: Model={model}, Src={src_lang}, Target={target_lang}, Device={device}, Style={style}")
         
-        output_file = processor.process()
+        with isolated_caption_artifacts(processor, execution_scope), resource_stage('heavy', 'CAPTION_PIPELINE'):
+            output_file = processor.process()
         if subtitle_receipt is not None:
             write_success_receipt(subtitle_receipt, subtitle_attempt_id, input_path,
                                   getattr(processor, '_subtitle_completion', None))
         
         click.echo(f"Success! Output saved to: {output_file}")
+        outcome = 'local_complete'
         
+    except PreparationYielded:
+        outcome = 'yielded'
+        raise click.exceptions.Exit(76)
+    except PreparationBusy:
+        outcome = 'waiting_resource_owner_unknown'
+        raise click.exceptions.Exit(77)
     except SubtitleTranslationFailure as e:
+        outcome = 'translation_stopped'
+        if journal:
+            journal.emit('failure', stage='TRANSLATING', category=e.failure['category'],
+                         code=e.failure['code'])
         logger.error('Subtitle translation stopped: %s', e)
         if subtitle_receipt is not None:
             write_failure_receipt(subtitle_receipt, subtitle_attempt_id, input_path, e)
@@ -198,3 +258,14 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
     finally:
         if progress_reporter is not None:
             progress_reporter.close()
+        if journal is not None:
+            journal.emit('metric', stage='RESOURCE_WAIT',
+                         duration_seconds=max(0.0, wait_state()['seconds'] -
+                                              resource_wait_baseline))
+            journal.close(outcome)
+        try:
+            if execution_scope is not None:
+                execution_scope.close()
+        finally:
+            if journal_binding is not None:
+                journal_binding.__exit__(None, None, None)

@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.4.0 | 2026-10-29 | Codex | 默认关闭的完整帧同像素复用、独立分块断点与扫描计时。 |
 | 2.3.1 | 2026-10-28 | Codex | 允许位于画面内的全宽对白字幕，仍按实际掩膜面积与纹理决定修补或避让。 |
 | 2.3.0 | 2026-10-23 | Codex | 单片已确认独立字幕区绑定原片、完整时间轴、版式和实现凭证。 |
 | 2.2.0 | 2026-10-23 | Codex | 对齐百分比与数字写法；用双向 ASR 轨迹区分字幕、孤帧 OCR 错误与画面文字。 |
@@ -16,23 +17,32 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from decimal import Decimal
 from difflib import SequenceMatcher
 import hashlib
 import json
 import logging
+import math
+import os
 from pathlib import Path
 import re
 import select
 import subprocess
 import tempfile
+import time
 
 import cv2
 import imageio_ffmpeg
 import numpy as np
 
+from config.settings import settings
+from ..core.preparation_resources import active_context, checkpoint_boundary, PreparationYielded
+from ..utils.caption_scan_runtime import (
+    CheckpointCadence, ExactFrameReuse, ObservationChunks, ScanMetrics, EXACT_CONTRACT,
+    validate_observation, validate_reuse_spans, checkpoint_elapsed,
+)
 from ..utils.render_source_binding import digest
 
 VERSION = "source-captions-ab-v2"
@@ -93,18 +103,42 @@ def _vision():
             worker.stdout.close()
 
 
-def _observe(worker, frame):
-    ok, png = cv2.imencode(".png", frame)
+def _observe(worker, frame, *, metrics=None, png_compression=None):
+    encoded_at = time.monotonic()
+    if png_compression is not None:
+        if type(png_compression) is not int or not 0 <= png_compression <= 9:
+            raise ValueError('原字幕定位帧编码配置无效')
+        ok, png = cv2.imencode('.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, png_compression])
+    else:
+        ok, png = cv2.imencode(".png", frame)
     if not ok:
         raise ValueError("原字幕定位帧编码失败")
-    worker.stdin.write(base64.b64encode(png) + b"\n")
-    worker.stdin.flush()
-    if not select.select([worker.stdout], [], [], 60)[0]:
-        raise ValueError("原字幕逐帧定位超时，停止出片")
-    result = json.loads(worker.stdout.readline())
-    if "rows" not in result:
+    pending, received = memoryview(base64.b64encode(png) + b'\n'), bytearray()
+    if metrics is not None:
+        metrics.values['encode_seconds'] += time.monotonic() - encoded_at
+    vision_at, deadline = time.monotonic(), time.monotonic() + 60
+    os.set_blocking(worker.stdin.fileno(), False)
+    os.set_blocking(worker.stdout.fileno(), False)
+    try:
+        while b'\n' not in received:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError("原字幕逐帧定位超时，停止出片")
+            readable, writable, _ = select.select([worker.stdout], [worker.stdin] if pending else [], [], remaining)
+            if writable:
+                pending = pending[os.write(worker.stdin.fileno(), pending):]
+            if readable:
+                chunk = os.read(worker.stdout.fileno(), 65536)
+                if not chunk or len(received) + len(chunk) > 4 * 1024 * 1024:
+                    raise ValueError('原字幕逐帧定位响应无效，停止出片')
+                received.extend(chunk)
+        result = json.loads(received)
+    finally:
+        if metrics is not None:
+            metrics.values['vision_seconds'] += time.monotonic() - vision_at
+    if not isinstance(result, dict) or 'error' in result or not isinstance(result.get('rows'), list):
         raise ValueError("本地 Vision 无法定位原字幕，停止出片")
-    if "faces" not in result:
+    if not isinstance(result.get('faces'), list):
         raise ValueError("人脸避让检测失败，停止出片")
     return result
 
@@ -239,26 +273,60 @@ def _outside_caption_track(row, current, evidence, index, fps):
 
 
 def _locate(source, segments, directory, fps, progress):
+    metrics = ScanMetrics('OCR_BURNED')
+    try:
+        return _select_locate(source, segments, directory, fps, progress, metrics)
+    except Exception:
+        metrics.finish(metrics.values.get('frames', 0), failed=True)
+        raise
+
+
+def _select_locate(source, segments, directory, fps, progress, metrics):
+    optimized = bool(getattr(settings, 'native_caption_scan_optimization_enabled', False))
+    if not optimized and active_context() is None:
+        return _locate_legacy(source, segments, directory, fps, progress, metrics=metrics)
+    # 老的完整识别缓存仍按原人脸/文字合同验证，绝不拿 native 的 runs 代替。
+    cache, identity = _scan_file(source, fps)
+    if cache.is_file():
+        valid_legacy = False
+        try:
+            data = json.loads(cache.read_text())
+            valid_legacy = (data['identity'] == identity and data['observations_sha256'] ==
+                            hashlib.sha256(json.dumps(data['observations'], sort_keys=True).encode()).hexdigest())
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        if valid_legacy:
+            return _locate_legacy(source, segments, directory, fps, progress, metrics=metrics)
+    return _locate_chunked(source, segments, directory, fps, progress, metrics=metrics, optimized=optimized)
+
+
+def _locate_legacy(source, segments, directory, fps, progress, *, metrics=None):
+    metrics = metrics or ScanMetrics('OCR_BURNED')
     cache, scan_identity = _scan_file(source, fps)
     if cache.is_file():
         data = json.loads(cache.read_text())
         if (data['identity'] == scan_identity and data['observations_sha256'] ==
                 hashlib.sha256(json.dumps(data['observations'], sort_keys=True).encode()).hexdigest()):
             observations = data['observations']
+            metrics.values['frames'] = len(observations)
             _write(directory / 'ocr.json', data)
             selected, center = _classify([x['rows'] for x in observations], segments, fps)
+            metrics.finish(len(observations), cache_hit=True)
             return selected, center, observations
     capture = cv2.VideoCapture(str(source))
     frames, observations = [], []
     try:
         with _vision() as worker:
             while True:
-                ok, frame = capture.read()
+                with metrics.measure('decode_seconds'):
+                    ok, frame = capture.read()
                 if not ok:
                     break
-                observation = _observe(worker, frame)
+                metrics.values['ocr_calls'] += 1
+                observation = _observe(worker, frame, metrics=metrics)
                 rows = observation["rows"]
                 observations.append(observation)
+                metrics.values['frames'] = len(observations)
                 # 所有识别结果保留审计；下半画面是此次原位字幕处理范围。
                 frames.append(rows)
                 if len(frames) % max(1, round(fps * 5)) == 0:
@@ -276,6 +344,119 @@ def _locate(source, segments, directory, fps, progress):
     _write(cache, data)
     _write(directory / 'ocr.json', data)
     selected, center = _classify(frames, segments, fps)
+    metrics.finish(len(frames))
+    return selected, center, observations
+
+
+def _locate_chunked(source, segments, directory, fps, progress, *, metrics=None, optimized=True):
+    """新扫描独立存储完整 observations；连续完整前缀才可恢复。"""
+    metrics = metrics or ScanMetrics('OCR_BURNED')
+    width, height, probed_fps, duration = _probe(source)
+    if abs(fps - probed_fps) > .001:
+        raise ValueError('原字幕时间轴不确定，停止出片')
+    timeline = dict(width=width, height=height, fps=fps, expected=round(duration * fps))
+    namespace = 'scan-v2-exact' if optimized else 'scan-v2-checkpoint'
+    contract = 'burned-scan-v2-exact' if optimized else 'burned-scan-v2-checkpoint'
+    identity = dict(version=contract, source_sha256=digest(source), pixel_reuse_enabled=optimized,
+                    vision_sha256=digest(VISION), reuse_contract=EXACT_CONTRACT, timeline=timeline)
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    store = ObservationChunks(source.parent / '.caption-repair' / namespace / key, identity, timeline)
+    observations = store.load(validate_observation)
+    spans = []
+    if observations:
+        try:
+            evidence = store.metadata['frame_evidence']
+            if (evidence['contract'] != EXACT_CONTRACT or evidence['decoded_frames'] != len(observations)
+                    or evidence['pixel_format'] != 'opencv-bgr'):
+                raise ValueError('OCR_REUSE_EVIDENCE_INVALID')
+            spans = validate_reuse_spans(evidence['reuse_spans'], len(observations))
+        except (TypeError, KeyError, ValueError):
+            # 无有效映射的块不能作为已核验帧；仅重写本优化命名空间。
+            observations, store.entries, store.index = [], [], 0
+    reuse = ExactFrameReuse(spans, len(observations))
+    prior_elapsed, scan_started = checkpoint_elapsed(store.metadata), time.monotonic()
+    resumed, index = len(observations), len(observations)
+    cadence = CheckpointCadence(index)
+    if index == timeline['expected']:
+        _write(directory / 'ocr.json', dict(identity=identity, observations=observations,
+            frame_evidence=reuse.evidence(index), observations_sha256=hashlib.sha256(
+                json.dumps(observations, sort_keys=True).encode()).hexdigest()))
+        selected, center = _classify([x['rows'] for x in observations], segments, fps)
+        metrics.finish(index, cache_hit=True, resumed_frames=resumed)
+        return selected, center, observations
+    capture = cv2.VideoCapture(str(source))
+    expected = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    if (not capture.isOpened() or abs(capture.get(cv2.CAP_PROP_FPS) - fps) > .001
+            or expected != timeline['expected']
+            or (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))) != (width, height)):
+        capture.release()
+        raise ValueError('原字幕完整时间轴不确定，停止出片')
+    last_progress = time.monotonic()
+    try:
+        for skipped in range(index):
+            with metrics.measure('decode_seconds'):
+                if not capture.grab():
+                    raise ValueError('原字幕断点源片提前结束')
+            if progress and time.monotonic() - last_progress >= 5:
+                progress('SOURCE_CAPTION_LOCATING')
+                last_progress = time.monotonic()
+        with ExitStack() as workers:
+            worker, worker_frames = workers.enter_context(_vision()), 0
+            while True:
+                with metrics.measure('decode_seconds'):
+                    ok, frame = capture.read()
+                if not ok:
+                    break
+                if index >= expected or frame.shape != (height, width, 3) or str(frame.dtype) != 'uint8':
+                    raise ValueError('原字幕完整帧不确定，停止出片')
+                with metrics.measure('compare_seconds'):
+                    observation = reuse.lookup(frame) if optimized else None
+                reused = observation is not None
+                if not reused:
+                    if worker_frames >= 300:
+                        workers.close()
+                        worker, worker_frames = workers.enter_context(_vision()), 0
+                    metrics.values['ocr_calls'] += 1
+                    observation = _observe(worker, frame, metrics=metrics,
+                        png_compression=getattr(settings, 'caption_scan_png_compression', 3) if optimized else None)
+                    worker_frames += 1
+                    with metrics.measure('normalize_seconds'):
+                        validate_observation(observation)
+                reuse.commit(frame, observation, index, reused=reused)
+                observations.append(observation)
+                index += 1
+                metrics.values['frames'] = index
+                metrics.values['reused_frames'] += int(reused)
+                if progress and time.monotonic() - last_progress >= 5:
+                    progress('SOURCE_CAPTION_LOCATING')
+                    last_progress = time.monotonic()
+                if cadence.due(index):
+                    with metrics.measure('checkpoint_seconds'):
+                        store.save(observations, metadata=dict(frame_evidence=reuse.evidence(index),
+                            scan_wall_seconds=prior_elapsed+time.monotonic()-scan_started))
+                    cadence.saved(index)
+                    checkpoint_boundary(contract)
+        if index != expected or digest(source) != identity['source_sha256']:
+            raise ValueError('原字幕扫描未覆盖完整时长或源片变化')
+    except PreparationYielded:
+        metrics.finish(index, resumed_frames=resumed, outcome='yielded')
+        raise
+    except Exception:
+        with metrics.measure('checkpoint_seconds'):
+            store.save(observations, metadata=dict(frame_evidence=reuse.evidence(index),
+                scan_wall_seconds=prior_elapsed+time.monotonic()-scan_started))
+        metrics.finish(index, resumed_frames=resumed, failed=True)
+        raise
+    finally:
+        capture.release()
+    with metrics.measure('checkpoint_seconds'):
+        store.save(observations, metadata=dict(frame_evidence=reuse.evidence(index),
+            scan_wall_seconds=prior_elapsed+time.monotonic()-scan_started))
+    _write(directory / 'ocr.json', dict(identity=identity, observations=observations,
+        frame_evidence=reuse.evidence(index), observations_sha256=hashlib.sha256(
+            json.dumps(observations, sort_keys=True).encode()).hexdigest()))
+    selected, center = _classify([x['rows'] for x in observations], segments, fps)
+    metrics.finish(index, resumed_frames=resumed)
     return selected, center, observations
 
 

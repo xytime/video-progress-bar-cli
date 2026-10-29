@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| preparation-dispatch-v1 | 2026-10-29 | Codex | 登记预加工派发角色；源锁、资源槽及等待票据继续阻止未排空迁移。 |
 | publishing-recovery-v1 | 2026-10-23 | Codex | 将发布恢复执行者纳入原生维护归属与排空检查。 |
 | 1.1.0 | 2026-10-18 | AGY | 增加加载时模块指纹 loaded_modules_hash、空白上下文浏览器能力预检与有界退避、以及通用受控 stop_worker |
 | keyword-stage-v1 | 2026-10-14 | Codex | 非秘密阶段配置绑定原生部署日志，维护、漂移及完成回读闭锁 |
@@ -31,7 +32,7 @@ import ctypes
 import sys
 
 PROTOCOL = 1
-ROLES = ("publishing-recovery-worker", "ui", "auto-pipeline", "queue-runner", "ready-supervisor", "keepalive-watchdog", "ready-worker", "wallstreet-worker")
+ROLES = ("publishing-recovery-worker", "ui", "auto-pipeline", "queue-runner", "ready-supervisor", "keepalive-watchdog", "ready-worker", "wallstreet-worker", "preparation-dispatch")
 SOURCE_GROUPS = {"cron", "launchd", "manual", "bot", "independent-workers"}
 
 
@@ -167,9 +168,9 @@ def inspection(control, *, evidence=None, process_pids=None, retiring_workers=No
                  "wechat_publish_priority.lock", "douyin_submission.lock", "kuaishou_submission.lock")]
         from .wechat_session_lock import canonical_wechat_session_lock_path
         paths += [canonical_wechat_session_lock_path(output / "wechat_state.json")]
-        task_directory = output / "task_locks"
-        if task_directory.exists():
-            paths += [path for path in task_directory.iterdir() if path.suffix == ".lock"]
+        for directory in (output / 'task_locks', output / 'source_locks', output / 'preparation_resources'):
+            if directory.exists():
+                paths += [path for path in directory.iterdir() if path.suffix in {'.lock', '.wait'}]
         for path in paths:
             row = read_lease_owner(path)
             if row and row.get("pid") not in active_pids:
@@ -259,6 +260,9 @@ def inspection(control, *, evidence=None, process_pids=None, retiring_workers=No
                 unknown.append({"code": "SEARCH_CLOSURE_UNCONFIRMED"})
             if candidate_db.keyword_control()['admission']:
                 unknown.append({"code": "ADMISSION_CLOSURE_UNCONFIRMED"})
+            # 运行开关仍开时不能签发冻结/迁移证明；不接受旧来源回执掩盖新入口。
+            if settings.enable_preparation_dispatch:
+                unknown.append({"code": "PREPARATION_ADMISSION_OPEN"})
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError, TopicError, sqlite3.Error):
         unknown.append({"code": "INSPECTION_UNKNOWN"})
     return dict(state, workers=owners, unknown=unknown, phase="UNKNOWN" if unknown else state["phase"],

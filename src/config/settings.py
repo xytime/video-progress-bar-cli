@@ -7,6 +7,7 @@
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| throughput-v1 | 2026-10-29 | Codex | 默认关闭的阶段证据、字幕等价优化与限量不投稿调度；不扩大供应商总预算。 |
 | dashboard-public-origin-v1 | 2026-10-25 | Codex | 为英语世界声明可选、严格校验的受保护 HTTPS 公网 Origin。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -416,6 +417,25 @@ class Settings(BaseSettings):
     google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     # 全供应商、节流和质量检查共享期限；低于外层 TRANSLATING 看门狗 720 秒。
     subtitle_translation_total_timeout_seconds: int = Field(default=600, ge=30, le=660)
+    # 分别启用，实测和隔离验收完成前全部保持关闭。
+    enable_pipeline_stage_events: bool = False
+    enable_subtitle_translation_throughput: bool = False
+    subtitle_translation_quality_reserve_seconds: int = Field(default=120, ge=30, le=300)
+    # 冷启动估值（不是测量结果）；成功批的真实耗时用于后续可完成性投影。
+    subtitle_translation_batch_seconds: dict[str, float] = Field(default_factory=lambda: {
+        "gemini": 30.0, "deepseek": 30.0, "google": 1.0, "codex": 120.0, "agy": 90.0,
+    })
+    native_caption_scan_optimization_enabled: bool = False
+    caption_scan_png_compression: int = Field(default=3, ge=0, le=9)
+    # 16GB 主机：一个重计算槽、一个网络槽；当前版本禁止放大。
+    enable_preparation_dispatch: bool = False
+    preparation_dispatch_allowlist: list[str] = Field(default_factory=list, max_length=3)
+    preparation_heavy_slots: int = Field(default=1, ge=1, le=1)
+    preparation_network_slots: int = Field(default=1, ge=1, le=1)
+    preparation_queue_poll_seconds: float = Field(default=5.0, ge=1, le=30)
+    preparation_quantum_seconds: int = Field(default=300, ge=300, le=300)
+    # 仅由已持真实 FD 的宿主注入，不能用字符串伪造锁归属。
+    preparation_execution_context: str = ""
     google_translate_interval_seconds: float = Field(default=0.4, ge=0.2, le=10)
     google_translate_max_retries: int = Field(default=2, ge=0, le=3)
 

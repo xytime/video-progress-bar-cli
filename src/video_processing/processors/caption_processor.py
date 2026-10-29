@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.42.0 | 2026-10-29 | Codex | 默认关闭的候选预算/上下文批暂存，传输分类及 ASR/翻译/烧录资源阶段交接。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
 | 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
 | 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
@@ -58,6 +59,7 @@
 import logging
 from copy import deepcopy
 from dataclasses import replace
+from contextlib import nullcontext
 import re
 from pathlib import Path
 from typing import Callable, Optional, List, Dict, Any, Union
@@ -69,6 +71,11 @@ import json  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P
 import time  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P2 fix)
 
 from ..core.base import VideoProcessorBase, VideoProcessingError
+from ..core.preparation_resources import active_context, resource_stage
+from ..utils.subtitle_translation_budget import CandidateBudget, TranslationAttemptLedger, transport_failure
+from ..utils.subtitle_batch_cache import CandidateBatchCache
+from ..utils.subtitle_provider_inventory import codex_inventory, google_inventory, cached_codex_candidate
+from ..utils.stage_events import emit_event
 from ..utils.translation_helper import translate_batch as _google_batch_fallback
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_context import build_translation_context
@@ -227,15 +234,19 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 segments, self.detected_lang = saved['segments'], saved['detected_lang']
                 self._report_progress('ASR_REUSED')
             else:
-                self._report_progress('AUDIO_EXTRACTING')
-                audio_path = self._extract_audio()
-                if audio_path is not None:
-                    self._report_progress('MODEL_LOADING')
-                    self._load_model()
-                    self._report_progress('TRANSCRIBING')
-                    segments = self._transcribe_audio(audio_path)
-                else:
-                    segments = []
+                with resource_stage('heavy', 'TRANSCRIBING'):
+                    self._report_progress('AUDIO_EXTRACTING')
+                    audio_path = self._extract_audio()
+                    if audio_path is not None:
+                        self._report_progress('MODEL_LOADING')
+                        self._load_model()
+                        self._report_progress('TRANSCRIBING')
+                        segments = self._transcribe_audio(audio_path)
+                        if active_context() is not None:
+                            # 后续只消费已落地的段落；释放 Whisper 引用再交出重计算槽。
+                            self.model = None
+                    else:
+                        segments = []
                 checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
             # 普通流水线先核验已有中文字幕；独立教学/配音制作不隐式启用。
@@ -244,7 +255,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 from ..utils.native_caption_source import preserve
                 if getattr(self, 'tts_provider', None):
                     raise ValueError('原字幕保留不能替代已指定的配音制作合同')
-                if route(self.input_path, self.output_path, segments, self._report_progress) == 'PRESERVE':
+                with resource_stage('heavy', 'NATIVE_CAPTION_REVIEW'):
+                    native_route = route(self.input_path, self.output_path, segments, self._report_progress)
+                if native_route == 'PRESERVE':
                     preserve(self.input_path, self.output_path)
                     self._report_progress('COMPLETE')
                     return self.output_path
@@ -272,8 +285,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     self._report_progress('TRANSLATION_REUSED')
                 else:
                     self._report_progress("TRANSLATING")
+                    self._translation_cache_binding = dict(input_sha256=checkpoints.source_digest,
+                        asr_sha256=fingerprint(source_segments), contract_sha256=fingerprint(contract),
+                        src_lang=self.src_lang, detected_lang=self.detected_lang, target_lang=self.target_lang)
                     try:
-                        segments = self._translate_segments(segments)
+                        with resource_stage('network', 'TRANSLATING'):
+                            segments = self._translate_segments(segments)
                     except SubtitleTranslationFailure as exc:
                         exc.binding = dict(input_sha256=checkpoints.source_digest,
                                            asr_sha256=fingerprint(source_segments),
@@ -327,7 +344,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 from ..utils.subtitle_failure_receipt import begin_subtitle_render
                 planned_output = self.output_path or self.input_path.parent / f"{self.input_path.stem}_captioned{self.input_path.suffix}"
                 begin_subtitle_render(planned_output, self.input_path, ass_path, completion)
-            final_output = self._burn_subtitles(ass_path)
+            with resource_stage('heavy', 'VIDEO_RENDERING'):
+                final_output = self._burn_subtitles(ass_path)
             if completion:
                 from ..utils.subtitle_failure_receipt import finish_subtitle_render
                 finish_subtitle_render(final_output, self.input_path, ass_path)
@@ -583,6 +601,67 @@ class AutoCaptionProcessor(VideoProcessorBase):
     # 所有 Gemini SDK 交互现由 vocab_helper.extract_vocab_batch 高内聚地封装。
 
     def _translate_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """开关开启时累计同语义计划预算；没有生产绑定的独立调用只用本次期限。"""
+        enabled = bool(getattr(settings, 'enable_subtitle_translation_throughput', False))
+        self._translation_throughput_events = []
+        self._translation_provider_deadline = None
+        self._active_batch_cache = None
+        self._translation_budget_ledger = None
+        if not enabled:
+            return self._translate_segments_inner(segments)
+        total = float(getattr(settings, 'subtitle_translation_total_timeout_seconds', 600))
+        binding = getattr(self, '_translation_cache_binding', None)
+        ledger = (TranslationAttemptLedger(settings.default_output_dir / 'subtitle_candidate_cache',
+                    binding, total) if binding else None)
+        try:
+            with ledger.lease() if ledger else nullcontext():
+                self._translation_budget_ledger = ledger
+                remaining = ledger.remaining() if ledger else total
+                reserve = float(getattr(settings, 'subtitle_translation_quality_reserve_seconds', 120))
+                self._translation_deadline = time.monotonic() + remaining
+                if remaining < reserve:
+                    if ledger:
+                        ledger.terminal = True
+                    raise SubtitleTranslationFailure([safe_failure('host', 'translation_budget_exhausted')])
+                try:
+                    return self._translate_segments_inner(segments)
+                except SubtitleTranslationFailure as exc:
+                    if ledger and exc.failure['category'] == 'budget':
+                        ledger.terminal = True
+                    raise
+                finally:
+                    self._translation_provider_deadline = None
+                    self._active_batch_cache = None
+                    self._translation_budget_ledger = None
+        except BlockingIOError:
+            raise SubtitleTranslationFailure([safe_failure('host', 'translation_plan_busy',
+                category='busy', retry_at=int(time.time()) + 60)]) from None
+
+    def _translation_budget_event(self, event):
+        """仅写分类、计时、数量及 profile 哈希；正文、完整错误不进入遥测。"""
+        self._translation_throughput_events.append(event)
+        emit_event('translation_budget', stage='TRANSLATING', **event)
+
+    def _build_translation_batch_cache(self, provider, texts, context, planner):
+        binding = getattr(self, '_translation_cache_binding', None)
+        if provider not in {'gemini', 'deepseek'} or not binding:
+            return None
+        from ..utils.vocab_helper import _MODELS_TO_TRY
+        from ..utils.vocab_helper import _build_prompt
+        from ..utils.deepseek_translation import _build_vocab_payload
+        profile = ({'models': _MODELS_TO_TRY, 'mode': 'translation_vocab', 'batch_rows': 25}
+                   if provider == 'gemini' else
+                   {'model': settings.deepseek_model, 'mode': 'translation_vocab', 'batch_rows': 25})
+        prompt_factory = (lambda offset, count: _build_prompt(texts[offset:offset + count], None,
+            context_text=context)) if provider == 'gemini' else (
+            lambda offset, count: _build_vocab_payload(texts[offset:offset + count],
+                context_text=context, model=settings.deepseek_model))
+        return CandidateBatchCache(settings.default_output_dir / 'subtitle_candidate_cache',
+            provider=provider, profile=profile, binding=binding, texts=texts, context=context,
+            batch_seconds=planner.costs[provider], deadline=self._translation_provider_deadline,
+            event=self._translation_budget_event, prompt_factory=prompt_factory)
+
+    def _translate_segments_inner(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """批量翻译字幕片段 — Gemini 主译 → DeepSeek 交叉候选 → Google 终级兜底。
 
         [Claude_Sonnet_4.6_Thinking_planning] v1.13.0:
@@ -595,9 +674,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
         if not segments:
             return segments
 
-        self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
+        throughput = bool(getattr(settings, 'enable_subtitle_translation_throughput', False))
+        if not throughput:
+            self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
+        planner = CandidateBudget(len(texts),
+            quality_reserve=getattr(settings, 'subtitle_translation_quality_reserve_seconds', 120),
+            batch_seconds=getattr(settings, 'subtitle_translation_batch_seconds', None)) if throughput else None
         self._selected_subtitle_candidate = None
         self._last_subtitle_candidate = None
         self._translation_quality_audit = []
@@ -632,6 +716,22 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
         # 环境配置是运营者批准的故障转移顺序；模型池只负责排除冷却/不兼容 provider。
         provider_order = [provider for provider in configured_providers if provider in eligible_providers]
+        caches, inventories = {}, {}
+        if planner:
+            for provider in provider_order:
+                cache = self._build_translation_batch_cache(provider, texts, translation_prompt_context, planner)
+                if cache is not None:
+                    caches[provider] = cache
+                    inventories[provider] = cache.inventory()
+                elif provider == 'google':
+                    inventories[provider] = google_inventory(self._translation_google_cache_dir(),
+                        texts, self.target_lang, planner.costs[provider])
+                elif provider == 'codex':
+                    inventories[provider] = codex_inventory(settings.default_output_dir / 'codex_text_cache',
+                        texts, translation_prompt_context, model=settings.codex_text_model,
+                        effort=settings.codex_text_effort, batch_size=settings.codex_subtitle_batch_size,
+                        seconds_per_batch=planner.costs[provider],
+                        binding=getattr(self, '_translation_cache_binding', None))
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             if time.monotonic() >= self._translation_deadline:
@@ -640,8 +740,42 @@ class AutoCaptionProcessor(VideoProcessorBase):
             final_provider = idx == len(provider_order) - 1
             self._last_provider_error = ""
             self._last_provider_failure = None
+            if planner:
+                admission = planner.admit(provider, self._remaining_translation_budget(), provider_order[idx + 1:],
+                    estimates={key: item['estimated_seconds'] for key, item in inventories.items()})
+                self._translation_budget_event(dict(action='admitted' if admission.allowed else 'not_admitted',
+                    provider=provider, estimated_ms=int(admission.estimated_seconds * 1000),
+                    allocation_ms=int(admission.seconds * 1000), fallback_reserve_ms=int(admission.fallback_reserve * 1000),
+                    cost_basis=inventories.get(provider, {}).get('cost_basis', 'cold_start_estimate'),
+                    cached_batches=inventories.get(provider, {}).get('cached_batches', 0),
+                    remaining_batches=inventories.get(provider, {}).get('remaining_batches', 0),
+                    probe=admission.probe))
+                if not admission.allowed:
+                    failures.append(safe_failure('host', 'candidate_not_admitted_budget'))
+                    continue
+                self._translation_provider_deadline = time.monotonic() + admission.seconds
+                self._active_batch_cache = caches.get(provider)
+                if self._active_batch_cache:
+                    self._active_batch_cache.deadline = self._translation_provider_deadline
+                if self._translation_budget_ledger:
+                    self._translation_budget_ledger.checkpoint(reserve=admission.seconds)
             attempt_started = time.monotonic()
-            candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
+            try:
+                with self._active_batch_cache.lease() if getattr(self, '_active_batch_cache', None) else nullcontext():
+                    candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
+            except Exception as exc:
+                failure = transport_failure(exc)
+                if failure is None:
+                    raise
+                self._last_provider_error = failure['code']
+                self._last_provider_failure = safe_failure(provider, **failure)
+                candidate = None
+            finally:
+                if planner:
+                    self._active_batch_cache = None
+                    self._translation_provider_deadline = None
+                    if self._translation_budget_ledger:
+                        self._translation_budget_ledger.checkpoint()
             duration_ms = int((time.monotonic() - attempt_started) * 1000)
             contract_error = candidate.contract_error_for(len(segments)) if candidate else "missing_translation_candidate"
             if contract_error:
@@ -652,8 +786,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     provider, error_class if error_class != 'unknown' else contract_error.split(':', 1)[0],
                     category={'rate_limit': 'quota', 'network': 'network', 'budget_exhausted': 'budget',
                               'auth_or_permission': 'authentication', 'region_restricted': 'authentication',
-                              'billing': 'authentication'}.get(error_class, 'unavailable')))
-                pool.record_failure(provider, error, category=error_class)
+                              'billing': 'authentication',
+                              **({'invalid_response': 'quality'} if throughput else {})}.get(error_class, 'unavailable')))
+                # 宿主累计/候选预算耗尽不是服务故障，不伪造供应商冷却。
+                if not (throughput and error_class == 'budget_exhausted'):
+                    pool.record_failure(provider, error, category=error_class)
                 self._record_translation_attempt(
                     provider, idx + 1, "FAILED", duration_ms, error_class=error_class, error_message=error,
                 )
@@ -677,6 +814,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 logger.warning("[Translate] %s 超出整片预算，未选用候选。", provider)
                 break
             logger.info("[Translate] %s returned complete candidate (%s segments); checking quality.", provider, len(texts))
+            if throughput and self._translation_budget_ledger:
+                # 120秒是最低预留；实际修复仍可使用整片余额，崩溃也不能退还该未核实窗口。
+                self._translation_budget_ledger.checkpoint(reserve=self._remaining_translation_budget())
             # 原生产时间轴不可缺；旧调用仅提供text时仍用原严格质量门，不能获得新增容错。
             if all('start' in segment and 'end' in segment for segment in segments):
                 candidate = prepare_subtitle_candidate(candidate, segments,
@@ -742,12 +882,16 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 continue
 
             if outcome.should_use_candidate:
+                if throughput and self._remaining_translation_budget() <= 0:
+                    raise SubtitleTranslationFailure(failures + [safe_failure('host', 'translation_budget_exhausted')])
                 self._apply_selected_translation_candidate(
                     segments,
                     outcome.candidate,
                     texts,
                     translation_prompt_context,
                 )
+                if throughput and self._remaining_translation_budget() <= 0:
+                    raise SubtitleTranslationFailure(failures + [safe_failure('host', 'translation_budget_exhausted')])
                 pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
                 self._record_selected_gemini_model_quality(outcome.candidate, quality_score, state_path)
                 self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, segments)
@@ -763,12 +907,19 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         outcome = arbiter.finish()
         if outcome.should_use_candidate:
+            if throughput and self._translation_budget_ledger:
+                # 后续供应商尝试会结算先前预扣；仲裁回选前重新覆盖词注等收尾请求。
+                self._translation_budget_ledger.checkpoint(reserve=self._remaining_translation_budget())
+            if throughput and self._remaining_translation_budget() <= 0:
+                raise SubtitleTranslationFailure(failures + [safe_failure('host', 'translation_budget_exhausted')])
             self._apply_selected_translation_candidate(
                 segments,
                 outcome.candidate,
                 texts,
                 translation_prompt_context,
             )
+            if throughput and self._remaining_translation_budget() <= 0:
+                raise SubtitleTranslationFailure(failures + [safe_failure('host', 'translation_budget_exhausted')])
             self._record_selected_gemini_model_quality(outcome.candidate, 90.0, state_path)
             self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, segments)
             self._write_translation_quality_report()
@@ -946,15 +1097,25 @@ class AutoCaptionProcessor(VideoProcessorBase):
         """全部既有供应商失败后才调用；任何批次失败都不修改字幕。"""
         from video_processing.utils.codex_subtitle_provider import build_codex_subtitle_candidate
         try:
+            binding = (getattr(self, '_translation_cache_binding', None)
+                       if getattr(settings, 'enable_subtitle_translation_throughput', False) else None)
+            if binding:
+                cached = cached_codex_candidate(settings.default_output_dir / 'codex_text_cache',
+                    texts, translation_context, model=settings.codex_text_model,
+                    effort=settings.codex_text_effort, batch_size=settings.codex_subtitle_batch_size,
+                    binding=binding)
+                if cached is not None:
+                    return cached
             return build_codex_subtitle_candidate(
                 texts, translation_context,
                 state_dir=settings.default_output_dir / "codex_text_cache",
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
+                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_candidate_budget()),
                 batch_size=settings.codex_subtitle_batch_size,
                 allow_quality_candidate=True,
+                cache_binding=binding,
             )
         except Exception as exc:
             self._last_provider_error = f"codex_text:{getattr(exc, 'code', type(exc).__name__)}"
@@ -976,7 +1137,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 request_timeout=settings.codex_text_request_timeout_seconds,
                 total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
                 batch_size=settings.codex_subtitle_batch_size, allow_quality_candidate=True,
-                initial_candidate=candidate, repair_segment_numbers=targets)
+                initial_candidate=candidate, repair_segment_numbers=targets,
+                cache_binding=(getattr(self, '_translation_cache_binding', None)
+                    if getattr(settings, 'enable_subtitle_translation_throughput', False) else None))
         except Exception as exc:
             logger.warning('[Translate] targeted repair unavailable: %s', getattr(exc, 'code', type(exc).__name__))
             return None
@@ -1026,7 +1189,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 schema=schema,
                 model=settings.agy_subtitle_model,
                 command=settings.agy_command,
-                timeout_sec=min(settings.agy_timeout_sec, self._remaining_translation_budget()),
+                timeout_sec=min(settings.agy_timeout_sec, self._remaining_candidate_budget()),
             )
         except AgyProviderError as exc:
             self._last_provider_error = str(exc)
@@ -1079,7 +1242,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 chinese_translations=None,
                 context_text=translation_context,
                 model_out=used_models,
-                deadline=self._translation_deadline, error_out=errors,
+                deadline=self._candidate_translation_deadline(), error_out=errors,
+                **({'batch_cache': self._active_batch_cache} if getattr(self, '_active_batch_cache', None) else {}),
             )
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed: {e}")
@@ -1119,7 +1283,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
             texts,
             context_text=translation_context,
             error_out=errors,
-            deadline=self._translation_deadline,
+            deadline=self._candidate_translation_deadline(),
+            **({'batch_cache': self._active_batch_cache} if getattr(self, '_active_batch_cache', None) else {}),
         )
         if results:
             logger.info("DeepSeek produced a subtitle translation+vocab candidate.")
@@ -1137,15 +1302,28 @@ class AutoCaptionProcessor(VideoProcessorBase):
         errors: List[str] = []
         gt_translated = _google_batch_fallback(
             texts, src_lang="auto", target_lang=self.target_lang,
-            deadline=self._translation_deadline,
-            cache_dir=(self.output_path or self.input_path).parent / "google_translation_cache", error_out=errors,
+            deadline=self._candidate_translation_deadline(),
+            cache_dir=self._translation_google_cache_dir(), error_out=errors,
         )
         if not gt_translated or any(not text or not text.strip() for text in gt_translated[:len(texts)]):
             self._last_provider_error = "; ".join(errors) or "Google returned empty translation"
         return SubtitleTranslationCandidate(provider="Google", translations=gt_translated)
 
+    def _translation_google_cache_dir(self):
+        binding = getattr(self, '_translation_cache_binding', None)
+        if getattr(settings, 'enable_subtitle_translation_throughput', False) and binding:
+            return settings.default_output_dir / 'subtitle_candidate_cache' / 'google' / fingerprint(binding)
+        return (self.output_path or self.input_path).parent / 'google_translation_cache'
+
     def _remaining_translation_budget(self) -> float:
         deadline = getattr(self, "_translation_deadline", None)
+        return max(0.0, deadline - time.monotonic()) if deadline is not None else 600.0
+
+    def _candidate_translation_deadline(self):
+        return getattr(self, '_translation_provider_deadline', None) or getattr(self, '_translation_deadline', None)
+
+    def _remaining_candidate_budget(self):
+        deadline = self._candidate_translation_deadline()
         return max(0.0, deadline - time.monotonic()) if deadline is not None else 600.0
 
     def _align_vocab_after_plain_translation(
