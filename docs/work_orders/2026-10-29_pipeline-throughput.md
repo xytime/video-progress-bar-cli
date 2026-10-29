@@ -72,6 +72,7 @@
 - **最终独立分支定向回归**：`video-pytest-lpa2c2w_`，330通过、6项未执行、4 warnings；收据退出0，源码manifest `2d7b3399aefc70c642628ec2034c13ede2cc61e877cc04443e7353b0c721b999`。6项均为主干缺失资格方法的既有测试；未通过删测试或改资格规则规避。
 - **最终联合生产源码副本回归**：`video-pytest-e3fjcfbf`，393通过、12 warnings；收据退出0，manifest `bd9ea4f5265e1a8927d2535441abd4f70093e3aea02016e5df0a926421f8ef72`。包含同一组定向测试、全部6项资格测试及维护入口/停止预加工测试。联合副本只用于隔离验证，没有把生产未提交改动纳入本次Git补丁，也未将候选写入生产。
 - **全量unit尚未通过**：独立分支 `video-pytest-f92kwn8_` 与联合副本 `video-pytest-bjdsbruv` 在600秒退出124，且出现其他失败；不能推断这些失败全部属于基线。后者清理pytest临时目录时报目录非空，原收据和剩余沙盒保留取证，不删除生产文件。最终定向回归在此后独立完成。
+- 超时后只读核实联合沙盒遗留的 `run_ready_publications.py` PID 31128，命令、cwd、输出及锁均属于该次测试，且无子孙；21:03:39上海时间仅对该PID发送TERM并退出，未触及生产。21:04:19回查两次测试均无可见残留。已证实触发链为既有TestClient startup启动独立session worker，而shutdown未回收；相关web/test/worker/runner摘要与本轮原生产源码manifest相同。此项仅证明该泄漏路径既有，不为其余全量失败归因；日志、收据及剩余目录保留。
 
 ### 真实翻译检查点副本验收
 
