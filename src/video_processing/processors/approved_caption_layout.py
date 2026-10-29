@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-29 | Codex | 经确认为 W-kr-Fm3AzU 保留完整原片和独立双语区，按原片摘要校验 25 段时间轴。 |
 | 1.0.0 | 2026-10-23 | Codex | 为 i1WsMclsgOs 保留完整原画面并使用画面外的双语区。 |
 """
 from dataclasses import asdict, dataclass
@@ -35,7 +36,19 @@ class ApprovedCaptionLayout:
         return asdict(self)
 
 
+RECOVERY_LAYOUT = ApprovedCaptionLayout(
+    profile='W-kr-Fm3AzU-framed-v1',
+    source_sha256='07b36706371156cdf5093e9dd7b22d13f41723b08a4bf58a5d30d53fecbcc064',
+    width=648, height=1152, x=216, subtitle_top=1302,
+)
+
+
 def approved_layout(source: Path, source_hash: str):
+    # 2026-10-29 确认的故障样片；授权只绑定这一份原片。
+    if source.stem == 'W-kr-Fm3AzU':
+        if source_hash != RECOVERY_LAYOUT.source_sha256:
+            raise ValueError('单片字幕版式的原片摘要不符，需要重新确认')
+        return RECOVERY_LAYOUT
     if source.stem != 'i1WsMclsgOs':
         return None
     layout = ApprovedCaptionLayout()
@@ -44,8 +57,14 @@ def approved_layout(source: Path, source_hash: str):
     return layout
 
 
-def validate_segments(segments, duration):
+def validate_segments(segments, duration, *, source_hash=None):
     from ..utils.caption_checkpoints import valid_segments
+    if source_hash == RECOVERY_LAYOUT.source_sha256:
+        if (abs(duration - 123.456667) > .05
+                or not valid_segments(segments, translated=True) or len(segments) != 25
+                or segments[0]['start'] != 0 or abs(segments[-1]['end'] - 123.36) > .05):
+            raise ValueError('已确认故障样片需要完整 25 段双语时间轴，拒绝缺失内容')
+        return
     if (not valid_segments(segments, translated=True) or len(segments) != 42
             or segments[0]['start'] != 0 or abs(segments[-1]['end'] - duration) > .05):
         raise ValueError('单片字幕版式需要完整 42 段双语时间轴，拒绝缺失内容')

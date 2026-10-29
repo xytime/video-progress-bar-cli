@@ -504,7 +504,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     approved = approved_layout(source, source_hash)
     if approved is not None:
         approved.geometry(w, h)
-        validate_segments(segments, duration)
+        validate_segments(segments, duration, source_hash=source_hash)
         identity = dict(source_sha256=source_hash, layout=approved.payload(),
                         layout_sha256=digest(Path(__file__).with_name('approved_caption_layout.py')),
                         segments_sha256=hashlib.sha256(json.dumps(segments, sort_keys=True,
@@ -517,7 +517,9 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
                          extra_subtitle_panel=True, clean_sha256=source_hash,
                          canvas=[1080, 1920], source_canvas=[w, h], fps=fps,
                          frames=round(duration*fps)))
-        LOG.info('[ApprovedCaptionLayout] %s：完整画面 675x1200，双语区 1350–1700', approved.profile)
+        LOG.info('[ApprovedCaptionLayout] %s：完整画面 %sx%s，双语区 %s–%s',
+                 approved.profile, approved.width, approved.height,
+                 approved.subtitle_top, approved.subtitle_bottom)
         return PreparedCaptions(source, None, source_hash, plan, mode='FRAMED')
     identity = {"version": VERSION, "source_sha256": source_hash, "vision_sha256": digest(VISION),
                 "implementation_sha256": digest(Path(__file__)), "fallback_sha256": digest(FALLBACK),
