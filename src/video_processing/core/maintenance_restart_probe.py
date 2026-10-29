@@ -110,8 +110,11 @@ def _arguments(pid, root, roles):
     require(all(arguments), "OWNER_ARGV_AMBIGUOUS")
     python = str(root / ".venv/bin/python")
     ui = bool(set(roles) & UI_ROLES)
-    accepted = {python, str((root / ".venv/bin/python").resolve(strict=True))} if ui else {python}
-    require(arguments[0] in accepted, "OWNER_INTERPRETER_UNKNOWN")
+    accepted = arguments[0] == python
+    if ui and not accepted:
+        interpreter = Path(arguments[0])
+        accepted = interpreter.is_absolute() and interpreter.resolve(strict=True) == Path(python).resolve(strict=True)
+    require(accepted, "OWNER_INTERPRETER_UNKNOWN")
     tail = arguments[1:]
     if tail[:1] == ["-u"]:
         tail = tail[1:]

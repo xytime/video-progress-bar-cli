@@ -127,6 +127,40 @@ def test_ui_resolved_pyenv_interpreter_and_unbuffered_flag_are_accepted(owners, 
     assert capture(owners)["processes"]["7001"]["arguments"][1] == "-u"
 
 
+@pytest.mark.parametrize("entry", ["venv", "intermediate", "resolved"])
+def test_ui_multilevel_interpreter_symlink_aliases_are_accepted(owners, tmp_path, entry):
+    actual = tmp_path / "pyenv/versions/3.12.4/bin/python3.12"
+    actual.parent.mkdir(parents=True)
+    actual.write_text("# isolated interpreter")
+    intermediate = actual.with_name("python")
+    intermediate.symlink_to(actual.name)
+    venv = owners.root / ".venv/bin/python"
+    venv.unlink()
+    venv.symlink_to(intermediate)
+    interpreter = {"venv": venv, "intermediate": intermediate, "resolved": actual}[entry]
+    arguments = [str(interpreter), "-u", str(owners.root / "src/web/app.py")]
+    owners.processes[7001]["arguments"] = arguments
+    assert capture(owners)["processes"]["7001"]["arguments"] == arguments
+
+
+def test_ui_interpreter_with_different_real_target_is_rejected(owners, tmp_path):
+    different = tmp_path / "different-python"
+    different.write_text("# distinct interpreter")
+    alias = tmp_path / "python-alias"
+    alias.symlink_to(different)
+    owners.processes[7001]["arguments"][0] = str(alias)
+    with pytest.raises(DeploymentDenied, match="OWNER_INTERPRETER_UNKNOWN"):
+        capture(owners)
+
+
+def test_independent_worker_still_requires_exact_venv_interpreter_path(owners, tmp_path):
+    alias = tmp_path / "same-python"
+    alias.symlink_to(owners.root / ".venv/bin/python")
+    owners.processes[7002]["arguments"][0] = str(alias)
+    with pytest.raises(DeploymentDenied, match="OWNER_INTERPRETER_UNKNOWN"):
+        capture(owners)
+
+
 @pytest.mark.parametrize("field,value", [("pid", True), ("protocol", 99), ("protocol", True),
                                          ("role", "other"), ("birth", ""), ("source_hash", "old")])
 def test_invalid_busy_row_is_never_retirement_evidence(owners, field, value):
