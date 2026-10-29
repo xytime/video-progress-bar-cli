@@ -190,3 +190,16 @@
 ## 成片待投资格（2026-10-26 用户授权）
 
 沿用 dashboard.css 主题、原生表格、行内状态与 console-notice。成片完成、当前可领取、资格阻塞、运行等待和提交结果待核实分别说明；现有发布记录入口拥有结果核实，不提供重投按钮。资格由 db/publication_eligibility.py 与执行器共同读取，页面不重建规则。分数线由 API 提供；TED50分仅改变TED/TEDx，点赞率、人工许可、历史隔离与提交防重保持。旧冷却文字不是当前状态。验证归 tests/unit/test_publication_eligibility.py 与 tests/browser/test_ready_eligibility_browser.py。
+
+## 健康度流程概览（2026-10-29）
+
+健康度只读 GET `/api/funnel/diagnosis` 与 `/api/funnel/tasks/{id}/evidence`；关键来源失败返回503，合法空集返回200。URL保存时间、频道、指标、类别、原因与展开任务，支持刷新和前后退；所有生效筛选可见，可清除。切换类别清除不兼容原因，旧响应不覆盖新范围。原生任务详情每次按精确ID重新读取，不依赖列表标签或搜索。
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Select / Navigation | native select / console_navigation.js | URL / DashboardWorkspace | 时间频道可见，历史恢复 | test_funnel_diagnosis_browser.py |
+| Dialog / Disclosure | native dialog / native button | 精确ID证据GET | Escape关闭、恢复入口焦点、aria-expanded与controls | 同上 |
+| Feedback | 页面status / 语义横幅 | 本次成功观测范围与as_of_bj | 失败不生成正常0，旧快照明确过期 | 同上 / test_funnel_diagnosis_api.py |
+| Scrollbar / Theme | dashboard.css / funnel_diagnosis.css | DESIGN.md | 自然滚动、三主题、减少动效 | test_funnel_diagnosis_browser.py |
+
+发布结果待核无重投操作；回执打开保留背景URL、筛选和焦点。恢复推进、本地完成、平台受理、独立公开确认分别呈现，不能用原生发表ID替代公开回读。父任务分布分类之和必须等于受影响父任务数，切片原因可重叠。数据库只读与SQLite总绑定上限由DAL测试核验，运行窗口未知不推断可执行。

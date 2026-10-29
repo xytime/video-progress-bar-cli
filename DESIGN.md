@@ -91,3 +91,9 @@ omitted:
 ## 成片待投资格（2026-10-26 用户授权）
 
 沿用 dashboard.css 主题、原生表格、行内状态与 console-notice。成片完成、当前可领取、资格阻塞、运行等待和提交结果待核实分别说明；现有发布记录入口拥有结果核实，不提供重投按钮。资格由 db/publication_eligibility.py 与执行器共同读取，页面不重建规则。分数线由 API 提供；TED50分仅改变TED/TEDx，点赞率、人工许可、历史隔离与提交防重保持。旧冷却文字不是当前状态。验证归 tests/unit/test_publication_eligibility.py 与 tests/browser/test_ready_eligibility_browser.py。
+
+## 健康度流程概览（2026-10-29 用户授权修复上线）
+
+`/?view=health` 是总览下的独立入口，沿用共享导航、header、系统字体和 dashboard.css 语义色。范围和观测时间先于诊断结论；入库、异常发生和锁观测时间明确分开，面向用户统一北京时间。原生 select 拥有时间与频道，原因卡用 button，任务证据行内展开，精确任务详情用原生 dialog。布局由 funnel_diagnosis.css 拥有，状态与请求由 funnel_diagnosis.js 拥有，纯展示由 funnel_diagnosis_view.js 拥有。
+
+父任务比例条互斥，切片明细保留独立原因；事实、推测和建议分栏。未对账提交只提供回执核对，平台身份绑定不等于公开确认；无锁不显示持锁制作。读取失败展示未知或带原范围/时间的旧快照。工作总览速览固定今日全频道并独立读取。窄屏保持自然滚动和44px控件，选中原因后让对应明细优先可达，三主题复用语义文字与背景配对。

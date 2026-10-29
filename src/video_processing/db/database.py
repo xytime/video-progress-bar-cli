@@ -251,9 +251,10 @@ from .english_product_recovery import EnglishProductRecoveryDAL
 from .english_console import EnglishConsoleDAL
 from .english_world_workbench import EnglishWorldWorkbenchDAL
 from .compliance_remix import ComplianceRemixDAL
+from .funnel_diagnosis import FunnelDiagnosisDAL
 
 
-class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL):
+class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, SubtitleRecoveryDAL, PublicationEligibilityDAL, ComplianceRemixDAL, EnglishWorldWorkbenchDAL, EnglishConsoleDAL, EnglishProductRecoveryDAL, PublishingRecoveryDAL, DeliveryRecoveryDAL, TopicCandidateDAL, WallstreetExperimentDAL, FunnelDiagnosisDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。

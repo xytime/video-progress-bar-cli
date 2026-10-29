@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| funnel-unavailable-v1 | 2026-10-29 | Codex | 健康度关键事实读取失败统一503，区分真实空集和任务不存在。 |
 | video-review-origin-v1 | 2026-10-25 | Codex | 修复受保护 HTTPS 控制台单条复核的 Origin 拒绝，并为 CP/P1/P2 批准留审计。 |
 | english-public-origin-v1 | 2026-10-25 | Codex | 仅允许配置的受保护 HTTPS Origin 访问英语世界路由；其它配置页边界不变。 |
 | english-workbench-v1 | 2026-10-25 | Codex | 注入英语世界桌面研究、制作、审核投稿与具名待审核续做执行器。 |
@@ -8,6 +9,7 @@
 | publishing-recovery-v1 | 2026-10-23 | Codex | 接入持久恢复批次，旧批量重试入口改为固定范围确认。 |
 | manual-login-v1 | 2026-10-22 | Codex | 人工单次扫码恢复保留账户互斥与限流即停，不恢复发布队列。 |
 
+| 3.58.0 | 2026-10-29 | Antigravity | 新增 GET /api/funnel/diagnosis 与 /api/funnel/tasks/{video_id}/evidence，/api/funnel 支持 channel 筛选。 |
 | 3.57.0 | 2026-10-18 | Antigravity | 修复看门狗空字典恒真判锁 Bug；新增重登失败指数退避与回退探测防饿死机制；整轮异常保护与调度心跳记录。 |
 | 3.56.0 | 2026-10-17 | Antigravity | 自动重登遵循 settings.wechat_headless；重登未确认时清理冷却 flag；看门狗联动跨进程会话锁并在繁忙/预热重登后 5 分钟快速复检。 |
 | evidence-v1 | 2026-10-17 | Codex | 复核 GET 展示经输入及规则指纹核对的原审计命中证据。 |
@@ -165,6 +167,11 @@ from video_processing.core.maintenance_child import child_continuation
 from video_processing.core.maintenance_runtime import registered, role_lease, inspection
 from video_processing.core.engagement_presentation import STAGES as ENGAGEMENT_STAGES, present_engagement
 from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
+from video_processing.funnel_diagnosis import (
+    get_funnel_diagnosis_payload,
+    get_funnel_task_evidence_payload,
+)
+from video_processing.funnel_diagnosis.service import DiagnosisUnavailable
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 app.include_router(listening_transcriber_router)
@@ -2612,16 +2619,50 @@ def get_console_attention():
 
 
 @app.get("/api/funnel")
-def get_global_funnel(window: str = "today_bj"):
-    """获取全站视频生产流转全局漏斗指标（支持 24h, today_bj, 7d, 30d, all）"""
+def get_global_funnel(window: str = "today_bj", channel: Optional[str] = None):
+    """获取全站或指定频道视频生产流转漏斗指标（支持 24h, today_bj, 7d, 30d, all）"""
     valid_windows = {"24h", "today_bj", "7d", "30d", "all"}
     win = window if window in valid_windows else "today_bj"
+    ch = channel.strip() if channel and isinstance(channel, str) else None
+    if ch and ch not in ("all", "*", ""):
+        metrics = db.get_channel_funnel_metrics(channel_id=ch, window=win)
+        ch_info = db.get_channel_by_id(ch)
+        channel_name = ch_info.get("channel_name", "") if ch_info else ""
+        return {
+            "success": True,
+            "channel_id": ch,
+            "channel_name": channel_name,
+            "window": win,
+            "metrics": metrics,
+        }
     metrics = db.get_global_funnel_metrics(window=win)
     return {
         "success": True,
         "window": win,
         "metrics": metrics,
     }
+
+
+@app.get("/api/funnel/diagnosis")
+def get_funnel_diagnosis(window: str = "today_bj", channel: Optional[str] = None):
+    """入库批次流程概览三层异常诊断（摘要、原因聚合、任务明细）。"""
+    try:
+        return get_funnel_diagnosis_payload(db, _OUT_DIR, window=window, channel=channel)
+    except DiagnosisUnavailable as exc:
+        raise HTTPException(status_code=503, detail=exc.detail) from exc
+
+
+@app.get("/api/funnel/tasks/{video_id}/evidence")
+def get_funnel_task_evidence(video_id: int):
+    """获取单任务事实、推测与建议三元组异常证据链。"""
+    try:
+        payload = get_funnel_task_evidence_payload(db, _OUT_DIR, video_id=video_id)
+    except DiagnosisUnavailable as exc:
+        raise HTTPException(status_code=503, detail=exc.detail) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"success": True, "data": payload}
+
 
 
 @app.get("/api/publication-funnel")

@@ -1,0 +1,98 @@
+/* 入库诊断专用布局；颜色由 dashboard.css 拥有。
+ * Modification History:
+ * | 1.1.0 | 2026-10-29 | Codex | 三主题语义配对、键盘焦点、窄屏及健康页紧凑布局。 |
+ */
+.funnel-diagnosis-mount {border-top:1px solid var(--border);background:var(--bg2);padding:14px 18px;position:relative;color:var(--text);}
+.funnel-diag-header,.funnel-diag-title-group,.funnel-diag-meta,.funnel-diag-filters {display:flex;align-items:center;flex-wrap:wrap;gap:10px;}
+.funnel-diag-header {justify-content:space-between;margin-bottom:10px;}
+.funnel-diag-title-group {font-size:.9375rem;}
+.funnel-diag-meta,.funnel-diag-scope-text {font-size:.75rem;color:var(--text2);line-height:1.6;}
+.funnel-diag-scope-text {margin:6px 0 10px;overflow-wrap:anywhere;}
+.funnel-diag-filters {margin:8px 0;}
+.funnel-diag-filters label {display:flex;align-items:center;gap:8px;font-size:.8125rem;min-width:0;}
+.funnel-diag-filters select {max-width:100%;min-height:44px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);font:inherit;padding:6px 8px;}
+.funnel-diag-scope-chip {font-size:.75rem;padding:2px 7px;border:1px solid var(--border);border-radius:4px;color:var(--text2);}
+.funnel-diag-banner {padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:.8125rem;line-height:1.6;margin:8px 0;overflow-wrap:anywhere;}
+.funnel-diag-banner-error {color:var(--red);border-color:var(--red);background:color-mix(in srgb,var(--red) 5%,var(--bg2));}
+.funnel-diag-banner-stale {color:var(--yellow);border-color:var(--yellow);background:color-mix(in srgb,var(--yellow) 5%,var(--bg2));}
+.funnel-diag-banner-history {color:var(--orange);border-color:var(--orange);background:color-mix(in srgb,var(--orange) 5%,var(--bg2));}
+.funnel-diag-banner-empty {color:var(--text2);background:var(--bg2);border-style:dashed;}
+.funnel-diag-narrative {border-left:3px solid var(--blue);padding:8px 12px;font-size:.875rem;line-height:1.6;color:var(--text);margin:10px 0;}
+.funnel-diag-proportion-bar {height:10px;border:1px solid var(--border);background:var(--glass-b);border-radius:6px;overflow:hidden;display:flex;margin:10px 0;}
+.funnel-diag-prop-seg {height:100%;flex-shrink:0;}
+.seg-fault {background:var(--red);}.seg-unverified {background:var(--orange);}.seg-policy {background:var(--yellow);}.seg-recovered {background:var(--green);}
+.funnel-diag-prop-labels {display:flex;gap:8px 18px;flex-wrap:wrap;color:var(--text2);font-size:.75rem;}
+.funnel-diag-pills {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;}
+.funnel-diag-pill {display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:135px;font-size:.8125rem;}
+.funnel-diag-pill.active,.funnel-diag-cause-card.selected {border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,var(--bg2));color:var(--text);}
+.funnel-diag-category-tabs {display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;}
+.funnel-diag-cat-tab {border-width:0 0 2px!important;border-color:transparent!important;border-radius:0!important;color:var(--text2);font-size:.8125rem;}
+.funnel-diag-cat-tab.active {border-color:var(--blue)!important;color:var(--blue);font-weight:600;}
+.funnel-diag-main-grid {display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:16px;margin-top:12px;}
+.funnel-diag-main-grid>section {min-width:0;}
+.funnel-diag-main-grid h3 {font-size:.9375rem;margin:0 0 8px;color:var(--text);}
+.funnel-diag-causes-list {display:flex;flex-direction:column;gap:8px;}
+.funnel-diag-cause-card {display:block;width:100%;text-align:left;font:inherit;}
+.funnel-diag-cause-header {display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;font-size:.8125rem;line-height:1.6;}
+.funnel-diag-cause-header>span,.funnel-diag-cause-body {font-size:.75rem;color:var(--text2);}
+.funnel-diag-cause-body {display:block;margin-top:6px;line-height:1.6;}
+.funnel-diag-task-item {border:1px solid var(--border);border-radius:6px;background:var(--bg2);margin-bottom:8px;overflow:hidden;}
+.funnel-diag-task-row {padding:10px 12px;}
+.funnel-diag-task-meta-line {display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+.funnel-diag-task-info {display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;font-size:.875rem;overflow-wrap:anywhere;}
+.funnel-diag-task-info>span {font-size:.75rem;color:var(--text2);}
+.funnel-diag-task-badges {display:flex;gap:8px;flex-wrap:wrap;font-size:.75rem;color:var(--text2);margin-top:8px;}
+.funnel-step-pills {display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.funnel-step-pill {display:inline-flex;font-size:.75rem;line-height:1.5;padding:2px 6px;border-radius:4px;border:1px solid var(--border);color:var(--text2);overflow-wrap:anywhere;}
+.step-done,.step-active {color:var(--green);border-color:var(--green);background:color-mix(in srgb,var(--green) 5%,var(--bg2));}
+.step-fail {color:var(--red);border-color:var(--red);background:color-mix(in srgb,var(--red) 5%,var(--bg2));}
+.step-warn {color:var(--orange);border-color:var(--orange);background:color-mix(in srgb,var(--orange) 5%,var(--bg2));}
+.funnel-diag-drawer {background:color-mix(in srgb,var(--glass-b) 45%,var(--bg2));border-top:1px solid var(--border);padding:12px;font-size:.8125rem;line-height:1.6;overflow-wrap:anywhere;}
+.funnel-diag-evidence-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:10px;}
+.evidence-block {min-width:0;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);}
+.evidence-block h4 {font-size:.8125rem;margin:0 0 6px;color:var(--text2);}
+.evidence-block ul {padding-left:18px;margin:0;color:var(--text);}
+.evidence-block li {margin-bottom:4px;}
+.funnel-diag-error-box {margin-top:10px;padding:8px;border:1px solid var(--red);background:var(--bg2);color:var(--red);overflow-wrap:anywhere;font-size:.75rem;}
+.funnel-diag-error-box code {display:block;white-space:pre-wrap;max-height:180px;overflow:auto;}
+.funnel-diag-guarded-actions {display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.funnel-diagnosis-mount button,#funnel-task-dialog button,.funnel-diag-action-btn {min-height:44px;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);font-family:inherit;cursor:pointer;}
+.funnel-diagnosis-mount button.active {border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,var(--bg2));color:var(--text);}
+.funnel-diagnosis-mount button:hover,#funnel-task-dialog button:hover {border-color:var(--blue);}
+.funnel-diagnosis-mount button:disabled {opacity:.65;cursor:wait;}
+.funnel-diagnosis-mount :focus-visible,#funnel-task-dialog :focus-visible {outline:2px solid var(--blue);outline-offset:3px;}
+.funnel-diag-btn-retry,.funnel-diag-btn-toggle,.funnel-diag-action-btn {font-size:.75rem;}
+.funnel-diag-action-primary {border-color:var(--blue)!important;color:var(--blue)!important;}
+#funnel-task-dialog {margin:auto;width:min(900px,calc(100% - 28px));max-height:88dvh;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--text);padding:18px;}
+#funnel-task-dialog h2 {margin:0 0 12px;font-size:1.1rem;}
+#funnel-task-dialog h3 {font-size:1rem;overflow-wrap:anywhere;}
+#funnel-detail-content {line-height:1.6;font-size:.875rem;overflow-wrap:anywhere;}
+#funnel-task-dialog::backdrop {background:color-mix(in srgb,var(--bg) 75%,transparent);}
+.funnel-diag-sr-status {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
+/* 仅健康页收紧旧漏斗摘要；共享操作 header 的控件和失败反馈仍保留。 */
+.health-flow-summary>summary {padding:8px 14px;min-height:44px;box-sizing:border-box;font-size:.8125rem;line-height:1.6;color:var(--text2);cursor:pointer;border-top:1px solid var(--border);}
+.health-flow-summary>summary:focus-visible {outline:2px solid var(--blue);outline-offset:-3px;}
+body[data-workspace-view="health"] #global-funnel-panel>.panel-header {padding:6px 14px!important;}
+body[data-workspace-view="health"] #global-funnel-panel>.panel-header .panel-title,body[data-workspace-view="health"] #global-funnel-tabs {display:none!important;}
+body[data-workspace-view="health"] .global-funnel-body {padding:10px 14px;gap:8px;}
+body[data-workspace-view="health"] .gf-stage-card {padding:8px;min-height:0;}
+body[data-workspace-view="health"] .gf-stage-num {font-size:1.25rem;line-height:1.2;}
+body[data-workspace-view="health"] .gf-stage-title {font-size:.8125rem;margin:4px 0;}
+body[data-workspace-view="health"] .gf-stage-sub {font-size:.6875rem;line-height:1.4;}
+body[data-workspace-view="health"] .cohort-help {margin:0 14px 8px;font-size:.75rem;}
+body[data-workspace-view="health"] .console-header {margin-bottom:12px;}
+@media(max-width:1023px) {.funnel-diag-main-grid {grid-template-columns:minmax(0,1fr);}}
+@media(max-width:760px) {
+  .funnel-diagnosis-mount {padding:12px;}
+  .funnel-diag-filters {align-items:stretch;}
+  .funnel-diag-filters label {flex:1 1 100%;justify-content:space-between;}
+  .funnel-diag-filters select {min-width:0;width:72%;}
+  .funnel-diag-pill {flex:1 1 calc(50% - 8px);min-width:0;}
+  .funnel-diag-main-grid.has-cause .funnel-diag-tasks-column {order:-1;}
+  .funnel-diag-task-info {flex-basis:100%;}
+  .funnel-diag-task-meta-line>button {margin-left:auto;}
+  body[data-workspace-view="health"] .global-funnel-body {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+  body[data-workspace-view="health"] .gf-stage-sub {display:none;}
+  body[data-workspace-view="health"] .gf-stage-card {border:1px solid var(--border);}
+}
+@media(prefers-reduced-motion:reduce) {.funnel-diagnosis-mount * {animation:none!important;transition:none!important;}}

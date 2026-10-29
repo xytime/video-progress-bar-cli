@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| funnel-diagnosis-v1 | 2026-10-29 | Antigravity | 新增批次流程概览异常诊断阶段阈值配置（加工/发布孤儿超时、字幕进度陈旧、错过可执行窗口停滞、监督心跳阈值）。 |
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -280,6 +281,13 @@ class Settings(BaseSettings):
     waitlist_ttl_days: int = Field(default=30, ge=1, le=365)
     # 待处理(queue)超期排队时效天数；用于识别并批量放弃/忽略超过此天数未处理的高分排队任务
     queue_stale_days: int = Field(default=7, ge=1, le=90)
+    # 批次流程概览异常诊断阈值（秒）：服务门面注入DiagnosisThresholds，汇总与详情共用。
+    # 无活跃锁时预提交加工孤儿、发布中断、字幕子阶段心跳陈旧、错过可执行窗口及监督器心跳阈值
+    pre_submission_orphan_seconds: int = Field(default=1200, ge=60, le=7200)
+    publishing_orphan_seconds: int = Field(default=1800, ge=60, le=7200)
+    caption_progress_stale_seconds: int = Field(default=900, ge=60, le=7200)
+    missed_window_stall_seconds: int = Field(default=1800, ge=300, le=14400)
+    ready_supervisor_heartbeat_stale_seconds: int = Field(default=30, ge=10, le=600)
 
     # [Claude_Opus_4.8 / Antigravity] 美股盘中及 OptionSense 物理交易时钟重负载保护：
     # 统一以 America/New_York (ET) 为唯一绝对基准，自适应夏令时 (EDT) 与冬令时 (EST) 切换。

@@ -1,14 +1,22 @@
-/* Modification History: 1.0.1 | 2026-10-21 | Codex | 选题中心增加独立预筛选入口并复用本机能力状态。 */
+/* Modification History:
+ * | 1.1.1 | 2026-10-29 | Codex | 健康页独立范围恢复与今日速览，隔离布局状态。 |
+ * | 1.1.0 | 2026-10-29 | Antigravity | 新增独立健康度视图(view=health)，总览页集成速览条，global-funnel-panel改为健康度看板独占。 |
+ * | 1.0.1 | 2026-10-21 | Codex | 选题中心增加独立预筛选入口并复用本机能力状态。 |
+ */
 /** 2026-10-12 Codex：v0.3 总览只读数据、分区与列表 URL 恢复。业务操作仍归旧模块。 */
 (() => {
   const $=id=>document.getElementById(id);
   const groups={waitlist:'topics',high_likes:'topics',hotwords:'topics',manual:'topics',queue:'production',active:'production',ready:'production',wechat_deferred:'production',error:'production',review:'publications',completed:'publications'};
-  const titles={overview:'工作总览',topics:'选题中心',production:'生产队列',publications:'发布记录',operations:'配置与运维'};
+  const titles={overview:'工作总览',health:'健康度：流程概览',topics:'选题中心',production:'生产队列',publications:'发布记录',operations:'配置与运维'};
   let view='overview', restoring=false, overviewGeneration=0, lastSuccess='', busy=false, capabilityGeneration=0;
   const label={waitlist:'待筛选',active:'制作中',ready:'成片待投',error:'异常记录',wechat_deferred:'待微信恢复',review:'本地受理／待核实'};
   const listURL=tab=>`/?view=${groups[tab]}&tab=${tab}&created_window=all`;
   const overview=document.createElement('section'); overview.id='workspace-overview'; overview.setAttribute('aria-label','工作总览');
   overview.innerHTML=`<div class="console-notice"><p id="console-search-state" role="status">正在核实关键词工作台状态…</p><a data-topic-entry href="/topic-candidates">YouTube 关键词采集 →</a></div>
+    <div class="console-notice" id="overview-health-strip" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <div><strong>⚡ 今日流程健康度：</strong><span id="overview-health-summary" role="status">正在读取批次状态…</span></div>
+      <a href="/?view=health" class="btn-tool-prefs" style="text-decoration:none;">进入全链路流程看板 →</a>
+    </div>
     <div class="console-metrics">${['waitlist','active','ready','error'].map(tab=>`<a class="console-metric" href="${listURL(tab)}"><span>${label[tab]}</span><strong id="overview-${tab}">—</strong><span>当前列表 · 全部入库时间</span></a>`).join('')}</div>
     <div class="console-overview-grid"><section class="console-panel"><h2>建议先查看</h2><p>按事项类型排序，非严重度评级 · 全部入库时间</p><div class="console-attention" id="attention-main">正在读取关注事项…</div><p>投递结果未核实前，请勿重复提交。</p>
     <div class="console-tasks"><h2>当前任务</h2><div id="overview-tasks" aria-live="polite">正在读取制作与待发布记录…</div></div><details class="console-observation"><summary>观察与历史</summary><p>根据现有错误记录分类；规则已阻止的事项可按需复核。</p><div id="attention-observation"></div><a href="${listURL('error')}">全部异常记录 →</a></details></section>
@@ -25,7 +33,8 @@
   const recoveryEntry=document.createElement('a');recoveryEntry.href='/wechat-cooldown-settings';recoveryEntry.className='btn-tool-prefs';recoveryEntry.textContent='发布恢复与批量重试';$('tab-error').after(recoveryEntry);
   function paint(tab=legacy.tab()) {
     $('workspace-title').textContent=titles[view];document.title=titles[view]+' · 视频运营工作台';
-    overview.hidden=view!=='overview';$('global-funnel-panel').hidden=view!=='overview';
+    document.body.dataset.workspaceView=view;
+    overview.hidden=view!=='overview';$('global-funnel-panel').hidden=view!=='health';
     table.hidden=!['topics','production','publications'].includes(view)||tab==='manual';
     channels.hidden=view!=='operations';manual.hidden=!(view==='topics'&&tab==='manual');
     tools.hidden=view!=='operations';$('backfill-panel').hidden=view!=='operations';
@@ -153,7 +162,8 @@
     } finally {busy=false;$('overview-retry').disabled=false;}
   }
   async function refresh() {
-    if(view==='overview')await Promise.all([loadOverview(),legacy.funnel(),capability()]);
+    if(view==='overview')await Promise.all([loadOverview(),window.FunnelDiagnosis?.loadOverview(),capability()]);
+    if(view==='health')await Promise.all([legacy.funnel()]);
     // 配置及列表只在进入时读取，避免轮询重画频道、表单与当前选择。
   }
   function navigate(url,{pop=false}={}) {
@@ -163,9 +173,10 @@
     const fallback={topics:'waitlist',production:'queue',publications:'review'}[view];
     const tab=groups[p.get('tab')]===view?p.get('tab'):fallback;
     if(tab){restoreRememberedFilters(p,tab);legacy.restore(p,tab);}
+    if(view==='health')window.FunnelDiagnosis?.restore(p);
     paint();restoring=false;
     if(tab)rememberFilters(tab);
-    if(view==='overview')refresh();
+    if(view==='overview'||view==='health')refresh();
     if(view==='operations'){window.fetchChannels?.();legacy.audit();}
   }
   window.DashboardWorkspace={navigate,selectTab,persist,refresh,restoring:()=>restoring,view:()=>view};

@@ -214,6 +214,11 @@ def test_v031_cohort_zero_and_low_score_completion(workspace):
         conn.execute('UPDATE processed_videos SET score=20')
     db.update_video_status('failed','SUBMITTED_BOUND')
     page.locator('#overview-retry').click()
+    # 方案A：总览只显示轻量健康度，旧四卡由独立health视图拥有。
+    expect(page.locator('#global-funnel-panel')).not_to_be_visible()
+    page.locator('#overview-health-strip a').click()
+    expect(page.locator('#workspace-title')).to_have_text('健康度：流程概览')
+    page.locator('#gf-chain-summary').click()
     expect(page.locator('#global-funnel-panel')).to_contain_text('无符合口径记录')
     expect(page.locator('#gf-qualified')).to_have_text('0')
     expect(page.locator('#global-funnel-panel')).not_to_contain_text('发布率')

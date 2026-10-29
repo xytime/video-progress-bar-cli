@@ -1,8 +1,15 @@
-/* Modification History: 1.0.1 | 2026-10-21 | Codex | 独立预筛选入口与选题分区定位。 */
+/* Modification History:
+ * | 1.1.1 | 2026-10-29 | Codex | 子页仅一个 aria-current，父组保留视觉活跃。 |
+ * | 1.1.0 | 2026-10-29 | Antigravity | 新增总览子分区「健康度：流程概览」(/?view=health)，支持独立成页导航与活跃态联动。 |
+ * | 1.0.1 | 2026-10-21 | Codex | 独立预筛选入口与选题分区定位。 |
+ */
 /** 共享工作台导航。2026-10-12 Codex：v0.3 五区导航、原生抽屉与草稿离开保护。 */
 (() => {
   const sections = [
-    ['overview', '总览', '/?view=overview', []],
+    ['overview', '总览', '/?view=overview', [
+      ['工作总览', '/?view=overview'],
+      ['健康度：流程概览', '/?view=health']
+    ]],
     ['topics', '选题中心', '/?view=topics&tab=waitlist', [
       ['素材待筛选', '/?view=topics&tab=waitlist'], ['近期高互动', '/?view=topics&tab=high_likes'],
       ['视频预筛选', '/video-prefilter'], ['频道白名单', '/?view=operations&tab=channels'], ['YouTube 关键词采集', '/topic-candidates'], ['热词线索', '/?view=topics&tab=hotwords'],
@@ -16,7 +23,7 @@
   const rail = document.createElement('aside'); rail.className = 'console-rail';
   const nav = document.createElement('nav'); nav.setAttribute('aria-label', '工作台导航');
   nav.innerHTML = '<a class="console-brand" href="/?view=overview">视频运营工作台</a>' + sections.map(([key,label,href,children]) =>
-    `<div class="console-nav-group"><a class="console-primary" data-section="${key}" href="${href}">${label}</a>` +
+    `<div class="console-nav-group" data-nav-group="${key}"><a class="console-primary" data-section="${key}" href="${href}">${label}</a>` +
     (children.length ? `<div class="console-subnav">${children.map(([name,url])=>`<a href="${url}">${name}</a>`).join('')}</div>` : '') + '</div>').join('');
   rail.append(nav); document.body.prepend(rail); document.body.classList.add('console-layout');
   const toggle = document.createElement('button'); toggle.type='button'; toggle.className='console-menu';
@@ -31,10 +38,12 @@
   const wide=matchMedia('(min-width: 1025px)'); wide.addEventListener('change',()=>{if(wide.matches&&drawer.open)drawer.close();});
   function select(view) {
     nav.querySelectorAll('a').forEach(a=>a.removeAttribute('aria-current'));
-    const active=nav.querySelector(`[data-section="${view}"]`); if(active)active.setAttribute('aria-current','page');
+    nav.querySelectorAll('[data-nav-group]').forEach(group=>group.classList.toggle('is-active-group',group.dataset.navGroup===view || (view==='health' && group.dataset.navGroup==='overview')));
+    const active=nav.querySelector(`[data-section="${view}"]`) || (view==='health' ? nav.querySelector('[data-section="overview"]') : null);
+    if(active && !['overview','health'].includes(view))active.setAttribute('aria-current','page');
     nav.querySelectorAll('.console-subnav a').forEach(a=>{
       const url=new URL(a.href);
-      if(root ? url.pathname==='/' && url.searchParams.get('tab')===new URL(location.href).searchParams.get('tab') && view==='topics' : url.pathname===location.pathname) a.setAttribute('aria-current','page');
+      if(root ? (url.pathname==='/' && ((view==='topics' && url.searchParams.get('tab')===new URL(location.href).searchParams.get('tab')) || (['overview','health'].includes(view) && (url.searchParams.get('view')||'overview')===view))) : url.pathname===location.pathname) a.setAttribute('aria-current','page');
     });
   }
   document.addEventListener('click',event=>{
@@ -47,5 +56,5 @@
     }
   });
   window.ConsoleNavigation={select};
-  select(root ? 'overview' : location.pathname==='/english-world'?'english':['/topic-candidates','/video-prefilter'].includes(location.pathname)?'topics':'operations');
+  select(root ? (new URL(location.href).searchParams.get('view')==='health'?'health':'overview') : location.pathname==='/english-world'?'english':['/topic-candidates','/video-prefilter'].includes(location.pathname)?'topics':'operations');
 })();
