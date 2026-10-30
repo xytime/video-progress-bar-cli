@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| output-retention-v1 | 2026-10-31 | Codex | 新增不初始化数据库的只读产物引用快照，多切片与跨平台未确认状态保守保护。 |
 | notification-guard-v2 | 2026-10-27 | Codex | 在字幕告警集成上接入文字通知持久防重复，不把UNKNOWN抑制当受理。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 接入字幕质量告警持久发件箱，候选与问题摘要独立幂等。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 接入字幕持久失败链与领取冷却，保留全局重试和投稿账本。 |
@@ -394,6 +395,324 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             finally:
                 if "context" in admission:
                     admission["context"].__exit__(None, None, None)
+
+    @staticmethod
+    def output_retention_snapshot(db_path) -> dict:
+        """只读取得清理依据；未知 schema/归属/状态不是“没有引用”。
+
+        不使用构造器或 immutable（需读取已提交 WAL）。这里只汇总账本事实，
+        不执行年龄判断、路径探测、隔离、删除或任何运行状态修复。
+        """
+        result = {"version": 1, "status": "OK", "unknown_reasons": [],
+                  "sources": {}, "path_references": [], "tables": {}}
+        required = {
+            "processed_videos": {"id", "youtube_id", "slice_index", "status", "updated_at"},
+            "publication_subjects": {"id", "kind", "video_id", "highlight_clip_id", "english_world_review_id"},
+            "wechat_publications": {"id", "subject_id", "state", "confirmed_at", "platform_post_id", "updated_at"},
+            "wechat_submission_attempts": {"attempt_id", "subject_id", "state", "platform_post_id", "created_at"},
+            "douyin_publications": {"id", "video_id", "state", "video_path", "published_at", "external_post_id", "updated_at"},
+            "kuaishou_publications": {"id", "video_id", "state", "video_path", "published_at", "external_post_id", "updated_at"},
+            "highlight_jobs": {"id", "source_video_id", "state", "updated_at"},
+            "highlight_clips": {"id", "job_id", "state", "updated_at"},
+            "highlight_clip_assets": {"clip_id", "source_video_path", "rendered_video_path"},
+            "dubbing_jobs": {"id", "source_video_id", "state", "requested_platforms", "updated_at"},
+            "dubbing_artifacts": {"id", "job_id", "path"},
+            "dubbing_publications": {"id", "job_id", "platform", "state", "external_post_id", "updated_at"},
+            "english_world_jobs": {"id", "state", "review_id", "production_state", "updated_at"},
+            "english_world_candidates": {"id", "job_id", "youtube_id"},
+            "english_world_review_items": {"id", "state", "source_youtube_id", "platform_state", "platform_post_id", "updated_at"},
+            "english_world_submission_attempts": {"attempt_id", "review_id", "state", "started_at"},
+            "english_world_douyin_publications": {"id", "review_id", "state", "platform_state", "evidence_dir", "published_at", "last_reconciled_at", "updated_at"},
+            "english_world_douyin_attempts": {"attempt_id", "review_id", "state", "started_at"},
+            "wallstreet_pairs": {"id", "video_id", "state", "created_at"},
+            "wallstreet_version_publications": {"id", "pair_id", "state", "public_at", "platform_post_id"},
+            "cover_versions": {"version_id", "youtube_id", "slice_index", "created_at"},
+            "cover_submission_bindings": {"version_id", "evidence_path", "created_at"},
+            "compliance_remix_proposals": {"proposal_id", "video_id", "source_id", "work_dir", "state", "created_at"},
+        }
+        identity_columns = {
+            "id", "attempt_id", "proposal_id", "ticket_id", "version_id", "archive_id", "video_id",
+            "source_video_id", "youtube_id", "source_youtube_id", "source_id", "slice_index", "parent_id",
+            "job_id", "clip_id", "highlight_clip_id", "review_id", "english_world_review_id", "subject_id",
+            "pair_id", "publication_id", "source_type", "source_ref", "kind", "platform", "variant",
+            "state", "status", "platform_state", "production_state", "process_pid", "preparation_ready",
+            "requested_platforms", "platform_post_id", "external_post_id", "last_error_message",
+        }
+        time_columns = {
+            "created_at", "updated_at", "published_at", "confirmed_at", "last_reconciled_at", "bound_at",
+            "publication_ready_at", "publication_last_attempt_at", "source_subtitle_checked_at",
+            "approved_at", "submission_started_at", "submission_finished_at", "started_at", "finished_at",
+            "submitted_at", "claimed_at", "production_started_at", "production_finished_at", "public_at",
+            "captured_at", "archived_at", "verified_at", "issued_at", "launch_started_at", "prelaunch_canceled_at",
+        }
+        def quote(name):
+            return '"' + name.replace('"', '""') + '"'
+
+        def unknown(reason):
+            result["status"] = "UNKNOWN"
+            if reason not in result["unknown_reasons"]:
+                result["unknown_reasons"].append(reason)
+
+        def timestamp(value):
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                if isinstance(value, (int, float)):
+                    parsed = datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+                else:
+                    parsed = datetime.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+                return parsed.astimezone(datetime.timezone.utc).isoformat()
+            except (ValueError, TypeError, OverflowError, OSError):
+                return None
+
+        def activity(row):
+            times = [timestamp(row.get(key)) for key in time_columns if key in row]
+            return max((value for value in times if value), default=None)
+
+        schemas = {}
+        rows = {}
+        try:
+            with closing(sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=2)) as conn:
+                conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN")
+                conn.row_factory = sqlite3.Row
+                names = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+                for table in sorted(names):
+                    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({quote(table)})")}
+                    schemas[table] = columns
+                    paths = {column for column in columns if column == "path" or column.endswith(("_path", "_dir"))}
+                    if table not in required and not paths:
+                        continue
+                    selected = sorted(columns & (identity_columns | time_columns | paths))
+                    if selected:
+                        rows[table] = []
+                        for record in conn.execute(f"SELECT {','.join(map(quote, selected))} FROM {quote(table)}"):
+                            row = dict(record)
+                            for column, value in row.items():
+                                if isinstance(value, bytes) or (isinstance(value, float) and not -1e308 <= value <= 1e308):
+                                    unknown(f"INVALID_VALUE:{table}:{column}")
+                                    row[column] = None
+                            rows[table].append(row)
+                for table, columns in required.items():
+                    missing = columns - schemas.get(table, set())
+                    if missing:
+                        unknown(f"SCHEMA:{table}:{','.join(sorted(missing))}")
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            unknown(f"DATABASE_UNAVAILABLE:{type(exc).__name__}")
+            return result
+
+        # 全表使用最小列白名单；不读取配置 JSON、cookie、通知地址或字幕正文。
+        def index(table, key="id"):
+            return {str(row[key]): row for row in rows.get(table, []) if row.get(key) is not None}
+
+        indexes = {table: index(table) for table in rows}
+        owners = {}
+        sources = result["sources"]
+
+        def source(youtube_id):
+            if not isinstance(youtube_id, str) or not youtube_id.strip() or youtube_id != youtube_id.strip():
+                return set()
+            sources.setdefault(youtube_id, {"youtube_id": youtube_id, "slices": [], "terminal": True,
+                                           "protection_reasons": [], "last_activity_at": None})
+            return {youtube_id}
+
+        for table, table_rows in rows.items():
+            for offset, row in enumerate(table_rows):
+                direct = set()
+                for key in ("youtube_id", "source_youtube_id"):
+                    if row.get(key):
+                        direct |= source(row[key])
+                owners[(table, offset)] = direct
+        # 外键传播只使用已知业务边；同名 job_id 不跨工作流串线。
+        links = {
+            "publication_subjects": (("video_id", "processed_videos", "id"), ("highlight_clip_id", "highlight_clips", "id"), ("english_world_review_id", "english_world_review_items", "id")),
+            "highlight_jobs": (("source_video_id", "processed_videos", "id"),),
+            "highlight_clips": (("job_id", "highlight_jobs", "id"),),
+            "highlight_clip_assets": (("clip_id", "highlight_clips", "id"),),
+            "dubbing_jobs": (("source_video_id", "processed_videos", "id"),),
+            "dubbing_artifacts": (("job_id", "dubbing_jobs", "id"),),
+            "dubbing_publications": (("job_id", "dubbing_jobs", "id"),),
+            "english_world_jobs": (("review_id", "english_world_review_items", "id"),),
+            "english_world_candidates": (("job_id", "english_world_jobs", "id"),),
+            "wallstreet_version_publications": (("pair_id", "wallstreet_pairs", "id"),),
+            "wallstreet_metric_snapshots": (("publication_id", "wallstreet_version_publications", "id"),),
+            "cover_submission_bindings": (("version_id", "cover_versions", "version_id"),),
+        }
+        for _ in range(5):
+            lookup = {(table, key, str(row[key])): owners[(table, offset)]
+                      for table, table_rows in rows.items() for offset, row in enumerate(table_rows)
+                      for key in ("id", "version_id") if row.get(key) is not None}
+            changed = False
+            for table, table_rows in rows.items():
+                edges = list(links.get(table, ()))
+                if "video_id" in schemas[table]:
+                    edges.append(("video_id", "processed_videos", "id"))
+                if "subject_id" in schemas[table]:
+                    edges.append(("subject_id", "publication_subjects", "id"))
+                if table.startswith("english_world_") and table != "english_world_jobs":
+                    edges.append(("review_id", "english_world_review_items", "id"))
+                for offset, row in enumerate(table_rows):
+                    before = set(owners[(table, offset)])
+                    for column, target, target_key in edges:
+                        owners[(table, offset)] |= lookup.get((target, target_key, str(row.get(column))), set())
+                    if table == "compliance_remix_proposals" and row.get("source_id"):
+                        owners[(table, offset)] |= source(row["source_id"])
+                    changed |= before != owners[(table, offset)]
+            if not changed:
+                break
+
+        terminal_slices = {"PUBLISHED", "COMPLETED", "IGNORED", "HISTORICAL_ARCHIVED"}
+        terminal_delivery = {"PUBLISHED", "CANCELED", "REJECTED"}
+        wechat = {str(row.get("subject_id")): row for row in rows.get("wechat_publications", [])}
+        ew_douyin = {str(row.get("review_id")): row for row in rows.get("english_world_douyin_publications", [])}
+
+        def confirmed(row, *, wechat_row=False):
+            state = PipelineDB._derive_platform_display_state(row.get("state"), row.get("last_error_message"))
+            if state != "PUBLISHED":
+                return state in {"CANCELED", "REJECTED"}
+            native_id = row.get("platform_post_id") or row.get("external_post_id")
+            return bool(native_id and timestamp(row.get("confirmed_at") if wechat_row else
+                                               row.get("published_at") or row.get("public_at") or row.get("last_reconciled_at")))
+
+        def row_terminal(table, row):
+            state = str(row.get("status") or row.get("state") or "").upper()
+            if table == "processed_videos":
+                return state in terminal_slices and not row.get("process_pid")
+            if table == "english_world_douyin_publications":
+                # 专用账本未保存原生 ID，其已发布终态由管理页回查与证据目录核实。
+                return state == "CANCELED" or bool(state == "PUBLISHED"
+                    and PipelineDB._derive_platform_display_state(state, row.get("last_error_message")) == "PUBLISHED"
+                    and row.get("platform_state") == "PUBLISHED" and row.get("evidence_dir")
+                    and timestamp(row.get("published_at")) and timestamp(row.get("last_reconciled_at")))
+            if table in {"wechat_publications", "douyin_publications", "kuaishou_publications",
+                         "dubbing_publications", "wallstreet_version_publications"}:
+                if table == "dubbing_publications":
+                    # 该维护表没有独立 published_at，原生作品 ID 与终态更新时间共同核实。
+                    row = dict(row, published_at=row.get("updated_at"))
+                return state in terminal_delivery and confirmed(row, wechat_row=table == "wechat_publications")
+            if table == "wechat_submission_attempts":
+                current = wechat.get(str(row.get("subject_id")), {})
+                return bool(state == "PLATFORM_ID_BOUND" and row.get("platform_post_id")
+                            and row.get("platform_post_id") == current.get("platform_post_id")
+                            and confirmed(current, wechat_row=True))
+            if table in {"english_world_submission_attempts", "english_world_douyin_attempts"}:
+                current = (wechat.get("english_world:" + str(row.get("review_id"))) if table == "english_world_submission_attempts"
+                           else ew_douyin.get(str(row.get("review_id")))) or {}
+                if table == "english_world_submission_attempts":
+                    subject = next((item for item in rows.get("publication_subjects", [])
+                                    if item.get("english_world_review_id") == row.get("review_id")), {})
+                    current = wechat.get(str(subject.get("id")), {})
+                done = (confirmed(current, wechat_row=True) if table == "english_world_submission_attempts"
+                        else row_terminal("english_world_douyin_publications", current))
+                return bool(done
+                            and (not row.get("platform_post_id") or row.get("platform_post_id") == current.get("platform_post_id")))
+            if table == "english_world_review_items":
+                return bool(str(row.get("platform_state") or "").upper() == "PUBLISHED"
+                            and row.get("platform_post_id") and timestamp(row.get("last_reconciled_at")))
+            if table == "english_world_jobs":
+                review = indexes.get("english_world_review_items", {}).get(str(row.get("review_id")), {})
+                return state == "CANCELED" or bool(review and row_terminal("english_world_review_items", review))
+            if table == "english_world_candidates":
+                job = indexes.get("english_world_jobs", {}).get(str(row.get("job_id")), {})
+                return bool(job and row_terminal("english_world_jobs", job))
+            if table == "dubbing_jobs":
+                if state == "CANCELED":
+                    return True
+                try:
+                    requested = json.loads(row.get("requested_platforms") or "null")
+                except (ValueError, TypeError):
+                    return False
+                deliveries = [item for item in rows.get("dubbing_publications", []) if item.get("job_id") == row.get("id")]
+                return bool(state == "PUBLISHED" and isinstance(requested, list) and requested
+                            and all(isinstance(platform, str) for platform in requested)
+                            and set(requested) <= {item.get("platform") for item in deliveries}
+                            and all(row_terminal("dubbing_publications", item) for item in deliveries))
+            if table in {"highlight_jobs", "highlight_clips"}:
+                if state == "CANCELED":
+                    return True
+                if table == "highlight_jobs":
+                    clips = [item for item in rows.get("highlight_clips", []) if item.get("job_id") == row.get("id")]
+                    return bool(state == "ASSETS_READY" and clips and all(row_terminal("highlight_clips", item) for item in clips))
+                subjects = [item for item in rows.get("publication_subjects", []) if item.get("highlight_clip_id") == row.get("id")]
+                return bool(state == "ASSETS_READY" and subjects and all(
+                    confirmed(wechat.get(str(item.get("id")), {}), wechat_row=True) for item in subjects))
+            if table == "wallstreet_pairs":
+                deliveries = [item for item in rows.get("wallstreet_version_publications", []) if item.get("pair_id") == row.get("id")]
+                return state == "CANCELED" or bool(state == "READY" and deliveries and all(
+                    row_terminal("wallstreet_version_publications", item) for item in deliveries))
+            if table == "compliance_remix_proposals":
+                return state in {"COMPLETED", "REVOKED"}
+            if table == "wechat_publications_historical_archive":
+                return None  # 已归档账本仅留下证据引用，当前平台任务另行判断。
+            if state:
+                # 新增的有状态维护表尚未建立终态规则，不能从源任务完成推断可删。
+                return False
+            return None
+
+        for table, table_rows in rows.items():
+            for offset, row in enumerate(table_rows):
+                own = owners[(table, offset)]
+                last_activity = activity(row)
+                invalid_time = any(row.get(key) not in (None, "") and timestamp(row[key]) is None
+                                   for key in time_columns if key in row)
+                terminal = row_terminal(table, row)
+                if table == "processed_videos" and not own:
+                    unknown("UNOWNED_PROCESSED_VIDEO")
+                if table == "processed_videos":
+                    for youtube_id in own:
+                        sources[youtube_id]["slices"].append(dict(row))
+                reasons = []
+                if terminal is False:
+                    reasons.append(f"NONTERMINAL:{table}:{row.get('status') or row.get('state') or 'UNKNOWN'}")
+                if invalid_time or (terminal is not None and not last_activity):
+                    reasons.append(f"UNKNOWN_TIME:{table}")
+                if table == "processed_videos" and row.get("status") == "PUBLISHED":
+                    subjects = {item.get("id") for item in rows.get("publication_subjects", [])
+                                if item.get("video_id") == row.get("id")}
+                    pubs = [item for item in rows.get("wechat_publications", [])
+                            if item.get("video_id") == row.get("id") or item.get("subject_id") in subjects]
+                    if not pubs or not all(confirmed(item, wechat_row=True) for item in pubs):
+                        reasons.append("MISSING_CONFIRMED_WECHAT_PUBLICATION")
+                for youtube_id in own:
+                    item = sources[youtube_id]
+                    if last_activity and (not item["last_activity_at"] or last_activity > item["last_activity_at"]):
+                        item["last_activity_at"] = last_activity
+                    for reason in reasons:
+                        if reason not in item["protection_reasons"]:
+                            item["protection_reasons"].append(reason)
+                    if reasons:
+                        item["terminal"] = False
+                for column, value in row.items():
+                    if value and (column == "path" or column.endswith(("_path", "_dir"))):
+                        invalid_path = not isinstance(value, str)
+                        if invalid_path:
+                            unknown(f"INVALID_PATH:{table}:{column}")
+                        result["path_references"].append({
+                            "path": str(value), "table": table, "column": column,
+                            "record_id": str(row.get("id") or row.get("attempt_id") or row.get("proposal_id") or row.get("version_id") or row.get("clip_id") or offset),
+                            "youtube_ids": sorted(own), "state": row.get("status") or row.get("state") or "UNKNOWN",
+                            "kind": "evidence" if "evidence" in column else "artifact",
+                            "protected": invalid_path or not own or terminal is False or bool(reasons),
+                            "reason": "INVALID_PATH" if invalid_path else (";".join(reasons) or ("UNKNOWN_OWNER" if not own else "TASK_REFERENCE")),
+                            "last_activity_at": last_activity,
+                        })
+        for item in sources.values():
+            if not item["slices"] and not any(row.get("source_youtube_id") == item["youtube_id"]
+                                               for row in rows.get("english_world_review_items", [])):
+                item["terminal"] = False
+                item["protection_reasons"].append("UNKNOWN_TASK_OWNERSHIP")
+            if not item["last_activity_at"]:
+                item["terminal"] = False
+                item["protection_reasons"].append("UNKNOWN_ACTIVITY_TIME")
+        for reference in result["path_references"]:
+            if any(not sources[key]["terminal"] for key in reference["youtube_ids"]):
+                reference["protected"] = True
+                reference["reason"] = "SOURCE_PROTECTED:" + reference["reason"]
+        result["tables"] = {table: [{key: value for key, value in row.items() if key != "last_error_message"}
+                                    for row in table_rows] for table, table_rows in rows.items()}
+        return result
 
     @staticmethod
     def maintenance_active_work(path) -> list[dict]:
