@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.1 | 2026-10-30 | Codex | 用真实单视频参数入口复现前导连字符 ID，仍拒绝 stdin 身份错配。 |
 | 1.3.0 | 2026-09-23 | Antigravity | [Code Review Fix] 懒抢占测试接入真实 SQLite 校验 PROCESSING；看门狗测试接入真实进程与 PID 过滤；增加取消信号/SystemExit 拦截、自杀防御与特定审核抢占单测 |
 | 1.2.0 | 2026-09-23 | Codex | 下载验真测试使用真实音视频；验证回退保留续传缓存。 |
 | 1.1.0 | 2026-09-23 | Antigravity | 补充产物验真 (<50KB) 回退、损坏文件清理、死循环防护与盘中开盘回滚单测 |
@@ -425,11 +426,12 @@ def test_market_guard_midway_leaves_unclaimed_video_pending(tmp_path, monkeypatc
 # ── Pillar 3: Web 进程生命周期与看门狗加固 ───────────────────────────────────────
 
 
-def test_trigger_video_async_popen_and_pid_tracking():
+@pytest.mark.parametrize('youtube_id', ['async_yid_test', '-D4TV5q5yOM'])
+def test_trigger_video_async_popen_and_pid_tracking(youtube_id, monkeypatch, isolated_running_maintenance):
     """_trigger_video_async 使用 Popen 启动独立进程组并记录/清理 PID。"""
     import web.app as web_app
 
-    video = {"youtube_id": "async_yid_test", "slice_index": 0}
+    video = {"youtube_id": youtube_id, "slice_index": 0}
     pid_updates = []
 
     mock_proc = MagicMock()
@@ -444,8 +446,20 @@ def test_trigger_video_async_popen_and_pid_tracking():
 
     mock_popen.assert_called_once()
     assert mock_popen.call_args.kwargs.get("start_new_session") is True
-    assert ("async_yid_test", 12345, 0) in pid_updates
-    assert ("async_yid_test", None, 0) in pid_updates
+    assert (youtube_id, 12345, 0) in pid_updates
+    assert (youtube_id, None, 0) in pid_updates
+
+    # 使用真实入口解析实际派发的 argv；错误正文必须到身份校验被拒绝，
+    # 不能像故障现场那样因 - 开头的有效 ID 在 argparse 阶段退出。
+    import io
+    import sys
+    from scripts import run_video_task
+    from video_processing.core.maintenance import MaintenanceDenied
+    monkeypatch.setattr(sys, 'argv', mock_popen.call_args.args[0][2:])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"youtube_id":"different-id","slice_index":0}'))
+    with pytest.raises(MaintenanceDenied) as rejected:
+        run_video_task.main()
+    assert rejected.value.code == 'INVALID_CONTINUATION'
 
 
 def test_recover_orphaned_pre_submission_tasks_guard(tmp_path, monkeypatch):

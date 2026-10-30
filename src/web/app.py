@@ -2842,7 +2842,7 @@ def _trigger_video_async(video: dict, *, trigger_source: str = "dashboard_manual
         import json
         video_json = json.dumps(dict(video))
         cmd = [python, "-u", str(prj_root / "scripts/run_video_task.py"),
-               "--trigger-source", trigger_source, "--object-key", f"{yid}:{slice_index}"]
+               "--trigger-source", trigger_source, f"--object-key={yid}:{slice_index}"]
         try:
             with open(log_path, "a") as f:
                 import subprocess as sp

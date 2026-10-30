@@ -101,7 +101,7 @@ def run_preparation_dispatch(db, config, *, output, project, popen=subprocess.Po
                 key = f"{row['youtube_id']}:{row['slice_index']}"
                 video = db.get_video_by_youtube_id(row['youtube_id'], slice_index=row['slice_index'])
                 command = [str(Path(project) / '.venv/bin/python'), str(Path(project) / 'scripts/run_video_task.py'),
-                           '--trigger-source', row['trigger_source'], '--object-key', key,
+                           '--trigger-source', row['trigger_source'], f'--object-key={key}',
                            '--preparation-owner', row['owner_token']]
                 options = cohort.options(key, row['owner_token'], dict(cwd=str(project), text=True,
                     stdin=subprocess.PIPE, start_new_session=True))
