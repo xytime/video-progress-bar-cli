@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 将 OCR 预算耗尽与对白字幕不完整分开诊断，保留质量门禁及原始错误。 |
 | 1.1.0 | 2026-10-29 | Codex | 提交证据优先、恢复凭据验证、未知运行观测保护及阶段化停滞。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 实现六大异常分类、尾部异常签名提取、字幕子阶段细分、锁探活保护与处理状态推导。 |
 """
@@ -50,6 +51,7 @@ _STAGE_MAP: dict[str, str] = {
 _ERR_SIGNATURES: tuple[tuple[str, str, str, str, str], ...] = (
     ("VISUAL_REVIEW_BUDGET_EXCEEDED", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_VISUAL_BUDGET", "原片内嵌字幕识别未完成：视觉核验预算耗尽", "原片字幕路由 (native_caption_router) 视觉核验超出预算 (VISUAL_REVIEW_BUDGET_EXCEEDED)"),
     ("OCR_INVALID_ROW", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_OCR_INVALID", "原片内嵌字幕识别未完成：OCR 行校验失败", "原片字幕路由 OCR 行结果无效 (OCR_INVALID_ROW)"),
+    ("OCR_BUDGET_EXCEEDED", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_OCR_BUDGET", "原片内嵌字幕识别未完成：OCR 预算耗尽", "原片字幕 OCR 未完成 (OCR_BUDGET_EXCEEDED)，对白字幕完整性尚无法判断；预算耗尽原因待查"),
     ("[NativeCaptionReview]", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_INCOMPLETE", "原片内嵌字幕对白不完整或无法确认", ""),
     ("原字幕位置或文字不确定", AnomalyCategory.EXECUTION_FAILURE.value, "BURNED_CAPTION_REPAIR_UNCERTAIN", "原片烧录字幕位置或文字不确定，停止出片", ""),
     ("burned_caption_repair", AnomalyCategory.EXECUTION_FAILURE.value, "BURNED_CAPTION_REPAIR_UNCERTAIN", "原片烧录字幕位置或文字不确定，停止出片", "烧录字幕定位不确定，安全门禁停止出片"),

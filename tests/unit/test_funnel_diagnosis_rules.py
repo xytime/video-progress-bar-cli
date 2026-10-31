@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 覆盖 OCR 预算分类、相邻原因不退化、原始证据及投稿保护优先级。 |
 | 1.1.0 | 2026-10-29 | Codex | 覆盖冲突提交、公开证据、恢复凭据、互斥分母、配置与运行未知边界。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 覆盖六大异常分类、恢复跳过、避让vs停滞、分集去重、防误导门禁及真实报错尾部提取。 |
 """
@@ -116,6 +117,43 @@ def test_scenario_3_recovery_skipped_and_supervisor_stopped():
     assert diag.is_stalled is True
     assert diag.unresolved is True
     assert "预览后任务已变化" in diag.reason_summary
+
+
+@pytest.mark.parametrize(("reason", "expected_code"), [
+    ("原字幕识别未完成：OCR_BUDGET_EXCEEDED", "NATIVE_CAPTION_OCR_BUDGET"),
+    ("第 25 段对白字幕不完整或无法确认", "NATIVE_CAPTION_INCOMPLETE"),
+    ("原字幕识别未完成：VISUAL_REVIEW_BUDGET_EXCEEDED", "NATIVE_CAPTION_VISUAL_BUDGET"),
+    ("原字幕识别未完成：OCR_INVALID_ROW", "NATIVE_CAPTION_OCR_INVALID"),
+])
+def test_native_caption_specific_failures_precede_generic_review(reason, expected_code):
+    task = TaskUnitFacts(video_id=6817, youtube_id="1tjJW33t2BE", status="FAILED",
+                         error_msg=f"NativeCaptionReviewRequired: [NativeCaptionReview] {reason}\nAborted!",
+                         failed_epoch=NOW_EPOCH - 60)
+    diag = diagnose_task_unit(task, _env())
+    assert diag.cause_code == expected_code
+    assert diag.stage == "字幕·原片识别与擦除 (SOURCE_CAPTION_LOCATING)"
+    assert diag.unresolved and not diag.is_recovered
+    assert reason in diag.sanitized_error_excerpt
+    assert task.status == "FAILED" and task.error_msg.endswith("Aborted!")
+    if expected_code == "NATIVE_CAPTION_OCR_BUDGET":
+        assert "对白字幕完整性尚无法判断" in diag.reason_summary
+        assert "原因待查" in diag.reason_summary
+        assert "对白不完整" not in diag.cause_title
+
+
+@pytest.mark.parametrize("protection", ["submission", "policy"])
+def test_ocr_budget_classification_never_overrides_submission_or_policy(protection):
+    task = TaskUnitFacts(video_id=6817, youtube_id="1tjJW33t2BE", status="FAILED",
+                         error_msg="[NativeCaptionReview] OCR_BUDGET_EXCEEDED")
+    if protection == "submission":
+        task = replace(task, wechat_publication={"state": "UNCERTAIN", "platform_post_id": "export/native"})
+        diag = diagnose_task_unit(task, _env())
+        assert diag.is_uncertain_delivery and diag.action_kind == "verify_receipt"
+    else:
+        task = replace(task, censor_tag="Social Unrest Review")
+        diag = diagnose_task_unit(task, _env())
+        assert diag.cause_code == "CONTENT_CENSOR_BLOCK"
+    assert diag.unresolved and not diag.is_recovered
 
 
 def test_scenario_4_market_avoidance_vs_missed_executable_window_stall():
