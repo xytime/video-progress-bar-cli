@@ -121,3 +121,44 @@ def test_claimed_calibration_cannot_repeat_after_cache_loss_or_binding_change(tm
     with SubtitleRecoveryState(tmp_path, **arguments) as state:
         with pytest.raises(CodexTextError, match='candidate_not_admitted_budget'):
             state.claim_calibration()
+
+
+def test_bound_vocab_only_rejection_is_sanitized_without_retranslation_and_keeps_audit(tmp_path, monkeypatch):
+    from video_processing.utils.codex_subtitle_provider import build_codex_subtitle_candidate
+    from video_processing.utils.subtitle_provider_inventory import cached_codex_candidate
+    calls = []
+    def execute(args, prompt, directory, timeout):
+        calls.append(prompt)
+        raw = dict(items=[dict(id=0, translation='油价为115美元。', vocab=[
+            dict(english='Oil', chinese='油价'), dict(english='Oil', chinese='原油')])])
+        Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(raw))
+        return subprocess.CompletedProcess(args, 0, json.dumps(dict(type='turn.completed', usage={})), '')
+    monkeypatch.setattr(text_provider, '_execute', execute)
+    binding = {'source': 'actual-source', 'asr': 'actual-asr'}
+    texts, context = ['Oil is $115.'], 'Oil is $115.'
+    candidate = build_codex_subtitle_candidate(texts, context, state_dir=tmp_path,
+        command='unused', allow_quality_candidate=True, cache_binding=binding)
+    assert len(calls) == 1 and candidate.translations == ['油价为115美元。']
+    assert candidate.vocabs == [{'Oil': '油价'}]
+    event = next(row for row in candidate.repair_history if row['strategy'] == 'host_vocab_sanitization')
+    assert event['original_payload_sha256'] != event['sanitized_payload_sha256']
+    assert not json.loads(next((tmp_path / 'subtitle-recovery').glob('*.json')).read_text())['split_batches']
+    cached = cached_codex_candidate(tmp_path, texts, context, model='gpt-5.6-luna',
+        effort='medium', batch_size=5, binding=binding)
+    assert cached.translations == candidate.translations and cached.vocabs == candidate.vocabs
+    assert event in cached.repair_history and len(calls) == 1
+
+
+def test_vocab_sanitization_never_hides_changed_amount(tmp_path, monkeypatch):
+    from video_processing.utils.codex_subtitle_provider import build_codex_subtitle_candidate
+    from video_processing.utils.codex_text_provider import CodexTextError
+    def execute(args, prompt, directory, timeout):
+        raw = dict(items=[dict(id=0, translation='油价为1150亿美元。',
+            vocab=[dict(english='Oil', chinese='原油')])])
+        Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(raw))
+        return subprocess.CompletedProcess(args, 0, json.dumps(dict(type='turn.completed', usage={})), '')
+    monkeypatch.setattr(text_provider, '_execute', execute)
+    with pytest.raises(CodexTextError, match='subtitle_quality'):
+        build_codex_subtitle_candidate(['Oil is $115.'], '', state_dir=tmp_path,
+            command='unused', allow_quality_candidate=True, cache_binding={'source': 'actual'}, max_attempts=1)
+    assert not list(tmp_path.glob('*.json'))  # 错误数字从未成为干净候选缓存。

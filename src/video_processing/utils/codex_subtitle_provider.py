@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.2 | 2026-10-31 | Codex | 绑定候选词注失配先做确定性清理再完整复核，避免无效拆批重译。 |
 | 1.6.1 | 2026-10-31 | Codex | 每次新请求执行前校准准入；缓存始终复核，续跑不重复收缩累计期限。 |
 | 1.6.0 | 2026-10-29 | Codex | 可选完整来源合同隔离候选批缓存，恢复计划身份和持久累计边界不变。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 隔离来源背景并记录真实修复，完整拒绝候选待全片比例守门，不写入干净缓存。 |
@@ -320,9 +321,28 @@ def build_codex_subtitle_candidate(
                                 else:
                                     recovery.record_batch_repair(offset, len(batch), observation)
                             if error.code.startswith("subtitle_vocab_alignment_"):
-                                repair_history.append(dict(strategy="host_vocab_sanitization", executed=True,
+                                sanitization = dict(strategy="host_vocab_sanitization", executed=True,
                                     segment_numbers=[d["segment_number"] for d in error.quality_details],
-                                    details=error.quality_details))
+                                    details=error.quality_details)
+                                if cache_binding:
+                                    # 沿用全片阶段的确定性词注清理：正文和段号完全不改，
+                                    # 清理后再次走严格批次事实/实体/数字门，才允许缓存。
+                                    sanitization['original_payload_sha256'] = hashlib.sha256(
+                                        json.dumps(raw, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                                    for row, vocab in zip(raw['items'], latest['vocabs']):
+                                        row['vocab'] = [dict(english=en, chinese=zh) for en, zh in vocab.items()]
+                                    accepted = _validate_batch(raw, batch, offset, context,
+                                        next_source_text=next_source)
+                                    sanitization['sanitized_payload_sha256'] = hashlib.sha256(
+                                        json.dumps(raw, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                                    repair_history.append(sanitization)
+                                    if recovery:
+                                        if len(batch) == 1:
+                                            recovery.record_repair(offset, sanitization)
+                                        else:
+                                            recovery.record_batch_repair(offset, len(batch), sanitization)
+                                    return accepted
+                                repair_history.append(sanitization)
                             if recovery and len(batch) == 1:
                                 recovery.remember_rejected_candidate(offset, latest)
                         raise

@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-31 | Codex | 完整缓存复用携带原始质量观察及确定性词注清理证据。 |
 | 1.1.0 | 2026-10-31 | Codex | 只读取有效批次的绑定耗时，同等或更大批次最大成本加 50% 余量。 |
 | 1.0.0 | 2026-10-29 | Codex | Google/Codex 已有缓存逐批验证后扣减成本，保留 Codex 旧累计终态。 |
 """
@@ -123,9 +124,16 @@ def codex_inventory(root, texts, context, *, model, effort, batch_size, seconds_
                     and state.get('calibration_claimed', False) is False)
     if include_candidate:
         from .subtitle_translation_provider import SubtitleTranslationCandidate
+        history = []
+        for offset in range(0, len(texts), effective):
+            count = min(effective, len(texts) - offset)
+            history.extend(state.get('batch_repair_history', {}).get(f'{offset}:{count}', []))
+            for index in range(offset, offset + count):
+                history.extend(state.get('units', {}).get(str(index), {}).get('repair_history', []))
         result['candidate'] = (SubtitleTranslationCandidate(provider='codex', model=model,
             translations=[text for part in parts for text in part['translations']],
-            vocabs=[vocab for part in parts for vocab in part['vocabs']], supports_vocab=True)
+            vocabs=[vocab for part in parts for vocab in part['vocabs']], supports_vocab=True,
+            repair_history=history)
             if texts and remaining == 0 else None)
     return result
 
