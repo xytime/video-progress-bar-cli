@@ -268,6 +268,55 @@ def test_semantic_review_uses_explicit_row_ids_and_rejects_wrong_reference(tmp_p
         with pytest.raises(ValueError): sampling.review_window(*args)
 
 
+def test_dense_slide_review_keeps_all_rows_and_images_within_existing_prompt_budget(tmp_path, monkeypatch):
+    # 真实失败样本中，21帧的重复 raw_box 与浮点精度占满90k；正文和行号不能丢弃。
+    from video_processing.utils.render_source_binding import digest
+    samples = []
+    for frame in range(21):
+        image = tmp_path / f'frame-{frame}.png'
+        image.write_bytes(f'actual frame {frame}'.encode())
+        rows = [dict(text=f'Customer Experience Systems {i}', confidence=.30000001192092896,
+                     box=[.11562500355113628,.016666666628787907,.8968750035511363,.09166666662878786],
+                     raw_box=[.11562500355113628,.016666666628787907,.8968750035511363,.09166666662878786])
+                for i in range(20)]
+        samples.append(dict(frame=frame, image_sha256=digest(image), rows=rows))
+    original = deepcopy(samples)
+    def provider(prompt, **kwargs):
+        assert len(prompt) < 90000
+        data = json.loads(prompt.split('\n', 1)[1])
+        assert len(kwargs['images']) == 21
+        for before, sent in zip(original, data['samples']):
+            assert [r['text'] for r in sent['rows']] == [r['text'] for r in before['rows']]
+            assert [r['row_id'] for r in sent['rows']] == list(range(20))
+            for row in sent['rows']:
+                assert 'raw_box' not in row
+                assert row['box'] == pytest.approx(before['rows'][0]['box'], abs=1e-6)
+        return SimpleNamespace(payload=kwargs['validate'](dict(decision='ABSENT', matches=[], reason='English only')),
+                               cached=False, duration_ms=1)
+    monkeypatch.setattr(sampling, 'run_codex_structured', provider)
+    result = sampling.review_window(dict(id=0,start=0,end=15), samples,
+        [dict(start=0,end=15,text='Customer experience.')], 30, tmp_path, supplemented=True)
+    assert result['decision'] == 'ABSENT'
+    assert samples == original
+
+
+def test_english_only_review_does_not_require_eligible_chinese_rows(tmp_path, monkeypatch):
+    from video_processing.utils.render_source_binding import digest
+    image = tmp_path / 'frame-15.png'
+    image.write_bytes(b'actual English subtitle frame')
+    samples = [dict(frame=15,image_sha256=digest(image),rows=[dict(text='English subtitles',confidence=1)])]
+    def provider(prompt, **kwargs):
+        assert '只有英文对白字幕也属于 ABSENT' in prompt
+        assert '确认画面确有中文字幕' in prompt
+        data = json.loads(prompt.split('\n',1)[1])
+        assert data['samples'][0]['rows'][0]['eligible'] is False
+        return SimpleNamespace(payload=kwargs['validate'](dict(decision='ABSENT',matches=[],reason='English only')),
+                               cached=False,duration_ms=1)
+    monkeypatch.setattr(sampling,'run_codex_structured',provider)
+    assert sampling.review_window(dict(id=0,start=0,end=15),samples,
+        [dict(start=0,end=15,text='English subtitles.')],30,tmp_path)['decision'] == 'ABSENT'
+
+
 class Capture:
     def __init__(self, _): self.frame = 0
     def set(self, _, frame): self.frame = frame; return True

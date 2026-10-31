@@ -5377,7 +5377,9 @@ class PipelineManager:
                 if not err.strip():
                     step = next((Path(str(arg)).name for arg in e.cmd if str(arg).endswith('.py')), '子进程')
                     err = f"{step} 退出码 {e.returncode}，未提供标准错误；保留产物，等待核验。"
-                logger.error(f"Process failed for {prefix}: {err[-500:]}")
+                else:
+                    err = f"子进程退出码 {e.returncode}；保留产物，等待核验。\n{err}"
+                logger.error("Process failed for %s (exit=%s): %s", prefix, e.returncode, err[-500:])
                 if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
                     logger.warning("[%s] 子进程异常发生在视频号提交后；保留账本状态，拒绝重试或写 FAILED。", prefix)
                     return
