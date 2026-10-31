@@ -65,6 +65,6 @@
 
 首轮31条基线在2026-10-31T23:12:59Z的一致备份回读仍为29条FAILED、2条UNCERTAIN；滚动24小时20条历史失败事件、48小时31条。没有删除事件或重置状态。代码修复、抽检通过和完整恢复不能混为“清零”。
 
-第一轮修复提交 `a9c8110` 已推送，原生部署 `204b5cd78d374c7fa36f917409a01205` 的9个步骤COMPLETE、verify.ok=true、维护闸门RUNNING/IDLE，5类驻留角色采用同一源摘要 `227a3efdb072b5103a00ef30fbb0b54f8e94a6f4513ccb906af6ec9a760d4e49`。第二轮修复尚待受控采用回读。
+第一轮修复提交 `a9c8110` 已推送，原生部署 `204b5cd78d374c7fa36f917409a01205` 的9个步骤COMPLETE、verify.ok=true、维护闸门RUNNING/IDLE，5类驻留角色采用同一源摘要 `227a3efdb072b5103a00ef30fbb0b54f8e94a6f4513ccb906af6ec9a760d4e49`。第二轮提交 `e68cbec` 已推送；原生部署 `0fadf58fe22549d19a91c1822f893591` 也已完成全部9步，verify.ok=true、闸门RUNNING/IDLE；5类驻留角色采用源摘要 `92d8c5bbc2cc54c6759a6d778c69308515297c62496e4fa9fdc3cd96fa7477a1`。证据：调查目录 `runtime-adopted-r2.json` 和外置 `deployment-r3/`。
 
 真实源片复测：19条首轮16条通过，#7113/#7008修复后第二轮均通过，累计18条完成抽检分流；#7031因ASR严重越界保留复核。两轮原始结果分别位于调查目录的 `sampling-validation-results.json`、`sampling-validation-r2-results.json`，独立副本包含源摘要/ASR摘要/实际画面/语义证据。全程未写队列或调用上传投稿。
