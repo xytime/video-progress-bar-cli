@@ -8,8 +8,32 @@ source: 2026-06-26 自我审查的循环项 + 历史事故教训
 
 # 每日运维工单
 
-> **怎么用**：在本机登录终端一次执行 `./scripts/install_daily_ops_schedule.sh`；之后每天早 **09:00** LaunchAgent 自动跑 `scripts/daily_ops_report.py`，把巡检报告推到 **Telegram**。
-> 你只需看那条消息，按本工单「每天须办」处理标红项即可。本文件是配套说明 + 异常处置手册 + 一次性 backlog。
+## 当前入口与人工审核（2026-11-01 更新）
+
+本机已核实使用 cron 的 `daily-ops-workorder`，每天北京时间 **09:00** 执行 `scripts/daily_ops_report.py`；同名 LaunchAgent 未加载。继续复用 cron，**不要重复安装 LaunchAgent**。默认生成本地报告；Telegram 仅在显式 `--send` 时发送，本轮未开启。
+
+日报先生成改进分析：全量未解决存量、上一自然日失败事件、七日趋势；周一追加周度复盘。新分析只读一致性数据库副本，不重试、重置或发布任务。方案、审核和验收保存在独立目录，具体修复逐项人工审核。
+
+```bash
+# 仅本地分析，不调用旧健康摘要的余额查询或消息接口
+.venv/bin/python scripts/daily_ops_report.py --improvement-only
+.venv/bin/python scripts/improvement_review.py show
+# 当日默认幂等；明确需要更新时使用 --refresh
+.venv/bin/python scripts/improvement_review.py report --refresh
+```
+
+`output/improvement/current.json` 指向最后一次完整批次：`runs/<generation>/report.md` 与 `record.json`；`last_attempt.json` 记录采集成功或失败。采集失败保留旧完整报告，旧时间不冒充当前。重复症状更新同一事项，未再出现也不会自动关闭。
+
+审核流程：
+
+1. 阅读报告中事项的 `plan`、版本及 `plan_sha`。默认是 `INVESTIGATION` 调查方案；实际修复应改为 `FIX`，填写完整范围、风险、回退、验收、保护条件和至少七天观察期。
+2. 用 `set-plan <事项ID> --file <方案JSON>` 更新方案。实质修改会递增版本、清除旧批准。
+3. 人工明确决定后，用 `review <事项ID> --plan-sha <当前指纹> --decision APPROVED|RETURNED|DEFERRED --reviewer <审核人> --evidence <已保存的批准记录文件>` 登记。保存证据的文件路径、字节数与 SHA-256；原文件需保留。模型建议或报告正文不构成批准。
+4. `advance <事项ID> --plan-sha <当前指纹> --state <下一阶段> --evidence <验收JSON>` 只登记阶段，不执行修复。JSON 必须有对应 `plan_sha`、`state` 和 `passed: true`。修复按 `IMPLEMENTING → LOCAL_VERIFIED → RUNTIME_ADOPTED → OBSERVING → CLOSED`；关闭还要求实际观察满指定天数、`sample_count` 为正整数。调查按 `INVESTIGATING → ANALYZED`，不能借调查批准实施修复。
+
+工具只验证记录格式与版本，验收内容仍须人工核查。实际执行分母和资源账本不足时，成功率与节省费用保持“不可计算”。批准修复不代表批准重跑历史任务或再次投稿。完整边界见 [已确认规格](specs/continuous-improvement-review-loop-2026-11-01.md)，首份分析见 [字幕异常专题](incident_reports/2026-11-01-caption-failure-analysis.md)。
+
+以下为历史巡检手册和 backlog，**不是本次运行结论或操作授权**。历史“约 24h 必失效”“自动续发”等说法不能替代当前结构化会话状态、任务批准和原生投稿回执；缺少近期验证时先核查，不直接判定登出或重发。
 
 ---
 
@@ -59,7 +83,7 @@ cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing
 
 | 任务 | 频率 | 作用 |
 |---|---|---|
-| `daily_ops_report.py` | 每日 09:00 | **本工单巡检 → Telegram** |
+| `daily_ops_report.py` | 每日 09:00 | 本地改进分析、周一复盘与健康摘要；外发需显式授权 |
 | `monitor_channels.py` | 每 30 分钟 | 发现新视频 |
 | `rescore_refresh.py` | 每 3 小时 :15 | 按到期时间轮转、批量刷新统计并重算，捞回涨上来的候选（黑名单安全）|
 | `run_publication_window.py` | 每 15 分钟 06:00-21:45 | 只在 Settings 有效窗口内运行完整流水线；重叠轮次跳过 |

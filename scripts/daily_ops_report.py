@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 2.0.0 | 2026-11-01 | Codex | 既有每日入口先生成本地改进报告，支持仅分析且不调用余额或消息接口。 |
 | 1.8.0 | 2026-09-21 | Codex | 按北京时间日界和投稿账本分别统计平台受理、公开确认，消除历史回填虚增。 |
 | 1.0.0   | 2026-06-26 | Claude_Opus_4.8 | 初版：每日发布/黑名单/会话/限流巡检工单 |
 | 1.1.0   | 2026-07-05 | Codex           | 接入翻译质量审计聚合摘要，纳入每日巡检 |
@@ -244,7 +245,22 @@ def push_telegram(text: str) -> bool:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--send", action="store_true", help="人工显式发送本次运维工单到 Telegram")
+    parser.add_argument("--improvement-only", action="store_true", help="仅生成本地只读改进分析，不查询余额或发送消息")
     args = parser.parse_args()
+    if args.improvement_only and args.send:
+        parser.error("--improvement-only 不允许 --send")
+    from video_processing.improvement.service import run_report
+    import json
+    try:
+        analysis = run_report(_DB, _OUT_DIR)
+        print("improvement:", json.dumps(analysis, ensure_ascii=False))
+    except Exception as exc:
+        print("improvement:", json.dumps({"state": "UNAVAILABLE", "error_type": type(exc).__name__,
+              "message": "保留最近完整报告，详情见 output/improvement/last_attempt.json"}, ensure_ascii=False))
+        if args.improvement_only:
+            return 1
+    if args.improvement_only:
+        return 0
     report = collect()
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plain = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "").replace("&gt;", ">")
@@ -257,4 +273,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,0 +1,15 @@
+{
+  "kind": "FIX",
+  "title": "准确区分原片字幕 OCR 未完成与对白字幕不完整",
+  "problem": "任务 #6817 的 NATIVE_CAPTION_INCOMPLETE 分类与原始 OCR_BUDGET_EXCEEDED 错误不一致，可能引导错误排障。",
+  "hypothesis": "现有通用 [NativeCaptionReview] 签名覆盖了未单列的 OCR_BUDGET_EXCEEDED；预算耗尽本身的根因仍未知。",
+  "confidence": "HIGH_FOR_CLASSIFICATION_ONLY",
+  "scope": ["src/video_processing/funnel_diagnosis/rules.py", "tests/unit/test_funnel_diagnosis_rules.py"],
+  "change": "在通用原片复核签名前识别 OCR_BUDGET_EXCEEDED，输出独立原因码与准确提示；保留原始错误并兼容旧分类。",
+  "risk": "历史状态重算会改变分类统计；不据此宣称加工问题已修复。",
+  "cost": "小范围诊断规则与隔离测试，不调用付费识别或重跑媒体。",
+  "rollback": "撤回独立 OCR 原因规则与相关提示，保留历史错误、事件及已生成报告。",
+  "acceptance": ["#6817 等价错误归入 OCR 未完成", "真正对白不完整仍保留原分类", "视觉预算和 OCR_INVALID_ROW 分类不退化", "隔离回归通过并记录实际运行采用", "观察至少七天，记录同类实际样本和错分情况；无样本不关闭"],
+  "protections": ["不改变任务状态或重写历史事件", "不删除或失效已有字幕与媒体检查点", "不放宽字幕质量与发布门禁", "不重试、重置、上传或发布"],
+  "observation_days": 7
+}
