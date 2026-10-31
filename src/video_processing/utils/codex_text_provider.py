@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.3 | 2026-10-31 | Codex | 通过原质量合同的缓存附来源及结果绑定的真实耗时，旧缓存继续兼容。 |
 | 1.4.2 | 2026-10-31 | Codex | 允许显式只查有效结构化缓存；未命中不执行、不消耗请求预算。 |
 | 1.4.1 | 2026-10-30 | Codex | HTTP 状态码必须有状态语境，避免时间戳或请求编号误触发认证及限流冷却。 |
 | 1.4.0 | 2026-10-28 | Codex | 接受流重连后有终态且通过结构/质量合同的输出，不把恢复提示当最终失败。 |
@@ -281,9 +282,14 @@ def _run_codex_structured(
             except Exception as exc:
                 exc.usage = usage
                 raise
+            duration_ms = int((time.monotonic() - started) * 1000)
             if validate:
-                _atomic_json(cached_path, {"payload": raw, "usage": usage})
-            return CodexTextResult(payload, model, usage, int((time.monotonic() - started) * 1000))
+                # 成本证据与实际合同身份、已验证原始结果绑定；旧缓存仍可使用但不作耗时证据。
+                measured = dict(identity=key, duration_ms=duration_ms,
+                    payload_sha256=hashlib.sha256(json.dumps(raw, ensure_ascii=False,
+                        sort_keys=True, allow_nan=False).encode()).hexdigest())
+                _atomic_json(cached_path, {"payload": raw, "usage": usage, "execution": measured})
+            return CodexTextResult(payload, model, usage, duration_ms)
 
 
 def read_codex_cache(prompt: str, **kwargs) -> CodexTextResult | None:

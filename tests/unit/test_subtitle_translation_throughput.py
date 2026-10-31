@@ -45,6 +45,8 @@ def test_budget_probes_only_api_provider_and_never_splits_fairly():
     assert not budget.admit('codex', 600).allowed
     assert budget.admit('google', 600).allowed is False
     assert not budget.admit('gemini', 125).allowed
+    assert budget.admit('codex', 600, codex_probe=True).probe
+    assert not budget.admit('codex', 239, codex_probe=True).allowed
 
 
 def test_cumulative_ledger_retains_spend_and_cannot_grow_limit(tmp_path, monkeypatch):
@@ -296,6 +298,7 @@ def test_insufficient_codex_budget_is_terminal_without_any_call_or_cooldown(tmp_
         calls.append(provider)
         pytest.fail('不应启动无法完成的长片 Codex 候选')
     processor = _processor_fixture(tmp_path, monkeypatch, ['codex'], build)
+    _claimed_codex_calibration(tmp_path, 197)
     with pytest.raises(SubtitleTranslationFailure) as first:
         processor._translate_segments([{'text': 'Hello world.'}] * 197)
     assert first.value.failure['category'] == 'budget'
@@ -335,6 +338,7 @@ def test_unadmitted_long_codex_fallback_does_not_mask_service_failure_or_close_b
         raise urllib.error.HTTPError('https://private', 429 if kind == 'quota' else 401,
                                      'private body', {}, None)
     processor = _processor_fixture(tmp_path, monkeypatch, ['google', 'codex'], build)
+    _claimed_codex_calibration(tmp_path, 197)
     with pytest.raises(SubtitleTranslationFailure) as result:
         processor._translate_segments([{'text': 'Hello world.'}] * 197)
     assert calls == ['google']
@@ -380,6 +384,7 @@ def test_agy_native_region_error_reaches_recovery_receipt_and_cooldown(tmp_path,
         return module.AutoCaptionProcessor._build_agy_candidate(processor, texts, context)
 
     processor = _processor_fixture(tmp_path, monkeypatch, ['agy', 'codex'], build)
+    _claimed_codex_calibration(tmp_path, 123)
     module.settings.agy_command = 'fixture-agy'
     module.settings.agy_subtitle_model = 'gemini-3.5-flash'
     module.settings.agy_timeout_sec = 90
@@ -434,6 +439,19 @@ def _codex_state_path(root, texts, context, model='gpt-5.6-luna', effort='medium
         [RECOVERY_RECIPE, 5, 2, 'parent-first-rejection-to-singletons']], ensure_ascii=False, sort_keys=True)
     key = hashlib.sha256(identity.encode()).hexdigest()
     return Path(root) / 'subtitle-recovery' / (key + '.json')
+
+
+def _claimed_codex_calibration(tmp_path, rows):
+    """此前冷校准未产出有效缓存，下一次不可再用探测绕过成本准入。"""
+    from video_processing.utils.translation_context import build_translation_context
+    from video_processing.utils.subtitle_recovery_state import RECOVERY_RECIPE
+    texts = ['Hello world.'] * rows
+    path = _codex_state_path(tmp_path / 'output' / 'codex_text_cache', texts,
+        build_translation_context(texts).to_prompt_context())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(identity=path.stem, recipe=RECOVERY_RECIPE,
+        requests_used=1, max_requests=100, elapsed_seconds=10, total_timeout=600,
+        split_batches={}, units={}, calibration_claimed=True)))
 
 
 def _write_codex_cache(root, texts, context, binding, *, offset=0, count=None, singleton=False):
@@ -557,7 +575,8 @@ def test_quality_repair_pre_reserves_entire_permitted_window_then_settles_actual
     processor = _processor_fixture(tmp_path, monkeypatch, ['deepseek'], build)
     def repair(texts, context, **kwargs):
         ledger = next((tmp_path / 'output').glob('subtitle_candidate_cache/subtitle-attempt-budget-v1/*/budget.json'))
-        observed.append((kwargs['total_timeout'], json.loads(ledger.read_text())))
+        observed.append((kwargs['attempt_timeout'], json.loads(ledger.read_text())))
+        assert kwargs['total_timeout'] == 600  # 累计上限与本次执行额度分别传递。
         now[0] += 20
         return None
     monkeypatch.setattr(codex, 'build_codex_subtitle_candidate', repair)

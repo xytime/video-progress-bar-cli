@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.5 | 2026-10-31 | Codex | 登记有界校准及续跑期限修复，前代合同与质量阈值保持不变。 |
 | 1.0.4 | 2026-10-30 | Codex | 接续地域分类的当前目标摘要，旧合同不变且仍完整离线复核。 |
 | 1.0.3 | 2026-10-30 | Codex | 精确审查 AGY 空成功地域错误与状态码分类修复，保留前代摘要及完整质量门。 |
 | 1.0.0 | 2026-10-29 | Codex | 两个精确已审查前代合同，完整质量复核后原子升级完成快照。 |
@@ -169,6 +170,39 @@ MANIFEST = {
                 "subtitle_translation_budget": "75b256bb55acfe9d9c479c2e1b1d5e3d8f54f76fadab2e0a7390ac486c640579",
                 "subtitle_batch_cache": "820299ff78e3e1424afdfdc0e1766a1f851ff87d37ee401e6fbd1a567f2e81a9",
                 "subtitle_provider_inventory": "1369cba1a30c7cec37027e8b39f21263e3afe0a4575904251a7717a3af58241f"
+            }
+        },
+        {
+            "methods": "72d80fd1c41687c16f5ffb8d65ce88884318fe59fc4211816dc80bd034529437",
+            "modules": {
+                "subtitle_translation_provider": "b664893df8f1db61fe1e0f7c7bcc19aa32f136dd25b049d6c5f7a97692b53184",
+                "subtitle_translation_quality": "db36ba5f3be0fe50e29911abc25e9b1ce0a850db5c8b3a4e138829a70e196a6f",
+                "subtitle_content_contract": "9dbc3f32ed77c66e804138c4f1633b286a41fa10f18fb1b6fbe48de6e790d650",
+                "translation_quality_guard": "2d8eb01f8ba24f30ee44dd631a67269b81817b73c0ab24c74fa7fd13bce737cf",
+                "translation_context": "1b14035b1890e3516ecf1289210783bc5da1fff5e30b89e8e74b4b85a78cf59c",
+                "translation_candidate_arbitration": "bee812fbee6692e5d4f438cc271179fc44f2e659db5c4bf3c009d65b899a4145",
+                "translation_quality_evaluator": "73364b1221e5f4036141e3d46c83454e3ce085cbd367c7cabb23fd7a9aacf7b6",
+                "translation_consistency_guard": "242803e50e8e9ea16e7109117f51cc1d7ce15b7f45f59985a978911d0fd47344",
+                "translation_fluency_guard": "6798c1f0c644e83334d441e48d32c2dd570577084e36f605cb07d3238c88ac1a",
+                "translation_entity_guard": "99080c6074620a8b2ae23e617aafcc368268522bb4f23cf9263ab121f1d4a6ff",
+                "translation_prompt_constraints": "90401ceafbf8a184520b9c5ee9008e0f753d5e5acdcf8c71a88ba0bbda765c97",
+                "vocab_helper": "84fe7d2c303f20f12fcd3a7563449644d4d64c89ef02d8a121ed07c023bdedfb",
+                "translation_helper": "bb965eaa8cdccd1e556cea3e6e2b07311902a3e542ea4ede5f5a2327e4be9507",
+                "deepseek_translation": "113ec14031b3ca7dfd4ac17afc177ffbed90bd5d216b0cc0e529e7b29cba1e54",
+                "translation_model_pool": "7c25f7cd799f837efc174d6e3c35bcf66cc1a4a3cad1a82538b274f13576c270",
+                "agy_provider": "7bcdab9bddd7a04c8c0662a50cbc3b084fa7a0a0e0c44940fa7e7d4b15a522cd",
+                "codex_subtitle_provider": "6cdb378853c93aef03097c3fda6b16e5e105ff0fe7b9b5743c1580b29d9c4f39",
+                "codex_text_provider": "e671230f081830ecf23e7804c001e86b87339bc61500be540e1c371cba5f2c54",
+                "subtitle_recovery_state": "21e302e7de42a4788dc160b65dc7342ac8b7f4099eebb3782bbbae15efa94c66",
+                "subtitle_failure_receipt": "f18542c3028495636bf0c1ff134c2d5ec213e94e9601b57a32cbbfda03e36ee1",
+                "subtitle_audio_review": "1153d5d49cce7f07d753880bd0e4e628eecb479490426ee7ce875cc5b8148ddf",
+                "subtitle_audio_review_worker": "c2c88f92e4cb5ecb1ed48438f9f6bcb4448ec2bfd0dbaf01444c78636dde64fb",
+                "subtitle_sparse_policy": "1151e1dc22600f8f73418df4df5337ca8ee79caf879801b4b1e5dadff652a184",
+                "subtitle_quality_recovery": "ba780fb04edcf7d1067a3cf7e6878e4de9506f546dffcda80c497b96a264883d",
+                "subtitle_bad_cases": "d8869449ec21a17a822990d46e2f6b429e5097833c9823e61d7917a1d8cc5fa4",
+                "subtitle_translation_budget": "ad8b4d8f4a7de8f50e1a140ecc07b3970f0fdae1d5b219785c5755636286193d",
+                "subtitle_batch_cache": "820299ff78e3e1424afdfdc0e1766a1f851ff87d37ee401e6fbd1a567f2e81a9",
+                "subtitle_provider_inventory": "a1ce3c8f24b894bec91c59cdd41909140a36bfbc82012f30ec5fe30c827fa887"
             }
         }
     ]

@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.42.2 | 2026-10-31 | Codex | 有界 Codex 成本校准；累计恢复上限与本次执行期限分离。 |
 | 1.42.1 | 2026-10-29 | Codex | 未准入候选单独归档，避免覆盖实际服务故障并误封恢复预算。 |
 | 1.42.0 | 2026-10-29 | Codex | 默认关闭的候选预算/上下文批暂存，传输分类及 ASR/翻译/烧录资源阶段交接。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
@@ -729,11 +730,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     inventories[provider] = google_inventory(self._translation_google_cache_dir(),
                         texts, self.target_lang, planner.costs[provider])
                 elif provider == 'codex':
-                    inventories[provider] = codex_inventory(settings.default_output_dir / 'codex_text_cache',
-                        texts, translation_prompt_context, model=settings.codex_text_model,
-                        effort=settings.codex_text_effort, batch_size=settings.codex_subtitle_batch_size,
-                        seconds_per_batch=planner.costs[provider],
-                        binding=getattr(self, '_translation_cache_binding', None))
+                    inventories[provider] = self._codex_cost_inventory(texts, translation_prompt_context)
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             if time.monotonic() >= self._translation_deadline:
@@ -744,7 +741,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
             self._last_provider_failure = None
             if planner:
                 admission = planner.admit(provider, self._remaining_translation_budget(), provider_order[idx + 1:],
-                    estimates={key: item['estimated_seconds'] for key, item in inventories.items()})
+                    estimates={key: item['estimated_seconds'] for key, item in inventories.items()},
+                    codex_probe=bool(getattr(self, '_translation_cache_binding', None)
+                        and inventories.get(provider, {}).get('calibration_available', False)))
                 self._translation_budget_event(dict(action='admitted' if admission.allowed else 'not_admitted',
                     provider=provider, estimated_ms=int(admission.estimated_seconds * 1000),
                     allocation_ms=int(admission.seconds * 1000), fallback_reserve_ms=int(admission.fallback_reserve * 1000),
@@ -1098,6 +1097,31 @@ class AutoCaptionProcessor(VideoProcessorBase):
         logger.warning("[Translate] Unknown provider ignored: %s", provider)
         return None
 
+    def _codex_cost_inventory(self, texts, context):
+        costs = CandidateBudget(len(texts),
+            batch_seconds=getattr(settings, 'subtitle_translation_batch_seconds', None)).costs
+        return codex_inventory(settings.default_output_dir / 'codex_text_cache', texts, context,
+            model=settings.codex_text_model, effort=settings.codex_text_effort,
+            batch_size=settings.codex_subtitle_batch_size, seconds_per_batch=costs['codex'],
+            binding=getattr(self, '_translation_cache_binding', None))
+
+    def _before_codex_request(self, texts, context):
+        """真实执行前重算全部缺批；一次冷校准后用已验缓存最大耗时留 50% 余量。"""
+        from ..utils.codex_text_provider import CodexTextError
+        inventory = self._codex_cost_inventory(texts, context)
+        remaining = self._remaining_candidate_budget()
+        costs = CandidateBudget(len(texts),
+            batch_seconds=getattr(settings, 'subtitle_translation_batch_seconds', None)).costs
+        probe = inventory['calibration_available'] and remaining >= costs['codex']
+        allowed = not inventory['budget_exhausted'] and (probe or inventory['estimated_seconds'] <= remaining)
+        self._translation_budget_event(dict(provider='codex', action='batch_admitted' if allowed else 'batch_not_admitted',
+            estimated_ms=int(inventory['estimated_seconds'] * 1000), allocation_ms=int(remaining * 1000),
+            remaining_batches=inventory['remaining_batches'], cached_batches=inventory['cached_batches'],
+            cost_basis=inventory['cost_basis'], probe=probe))
+        if not allowed:
+            raise CodexTextError('candidate_not_admitted_budget')
+        return inventory['observed_batches'] == 0
+
     def _build_codex_candidate(self, texts: List[str], translation_context: str) -> Optional[SubtitleTranslationCandidate]:
         """全部既有供应商失败后才调用；任何批次失败都不修改字幕。"""
         from video_processing.utils.codex_subtitle_provider import build_codex_subtitle_candidate
@@ -1117,7 +1141,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_candidate_budget()),
+                total_timeout=settings.codex_subtitle_total_timeout_seconds,
+                attempt_timeout=self._remaining_candidate_budget(),
+                before_request=(lambda: self._before_codex_request(texts, translation_context)) if binding else None,
                 batch_size=settings.codex_subtitle_batch_size,
                 allow_quality_candidate=True,
                 cache_binding=binding,
@@ -1140,7 +1166,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
+                total_timeout=settings.codex_subtitle_total_timeout_seconds,
+                attempt_timeout=self._remaining_translation_budget(),
                 batch_size=settings.codex_subtitle_batch_size, allow_quality_candidate=True,
                 initial_candidate=candidate, repair_segment_numbers=targets,
                 cache_binding=(getattr(self, '_translation_cache_binding', None)

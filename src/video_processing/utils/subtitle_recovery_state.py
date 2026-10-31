@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 冷校准跨崩溃持久限一次，不随新缓存绑定恢复机会。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 持久保留修复执行与质量观察、未接受候选，复用仍重验结构且预算不重置。 |
 | 1.0.0 | 2026-10-27 | Codex | 为逐段恢复持久化有界请求、累计期限、降级位置与安全失败，独立文件锁保护续跑。 |
 """
@@ -163,6 +164,13 @@ class SubtitleRecoveryState:
                 raise CodexTextError("request_budget_exhausted", failure.get("retry_at", 0))
             unit["attempts_used"] += 1
         self.data["requests_used"] += 1
+        self._write()
+
+    def claim_calibration(self) -> None:
+        """同一旧恢复计划最多一次冷校准，换缓存绑定或崩溃都不重获机会。"""
+        if self.data.get('calibration_claimed', False) is not False:
+            raise CodexTextError('candidate_not_admitted_budget')
+        self.data['calibration_claimed'] = True
         self._write()
 
     @staticmethod

@@ -1,11 +1,12 @@
 """字幕候选预算准入；依赖：processor/provider → 本模块 → 标准库。
 
-初始成本是保守估计而非实测；只允许 Gemini/DeepSeek 用一个有界批次校准。
+初始成本是保守估计而非实测；Codex 仅在有持久校准保护时显式准入探测。
 预算仅分配本次既有总期限，不创建恢复计划，也不修改供应商持久累计额度。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 仅显式具备持久保护的 Codex 计划可用原预算做一次冷校准。 |
 | 1.0.0 | 2026-10-29 | Codex | 按批成本准入、后备机会和全片质检预留。 |
 """
 from __future__ import annotations
@@ -51,7 +52,7 @@ class CandidateBudget:
         batches = math.ceil(self.rows / BATCH_ROWS.get(provider, max(1, self.rows)))
         return batches * self.costs.get(provider, 90.0)
 
-    def admit(self, provider, remaining, later=(), *, estimates=None):
+    def admit(self, provider, remaining, later=(), *, estimates=None, codex_probe=False):
         usable = max(0.0, remaining - self.quality_reserve)
         estimate = lambda item: (estimates or {}).get(item, self.estimate(item))
         # 保留下一条确有机会完成的后备；无需机械等分全部供应商。
@@ -59,7 +60,7 @@ class CandidateBudget:
                          if estimate(item) + min(estimate(provider), self.costs.get(provider, 90.0)) <= usable), 0.0)
         allocation = max(0.0, usable - fallback)
         required = estimate(provider)
-        probe = provider in {'gemini', 'deepseek'} and allocation >= self.costs[provider]
+        probe = (provider in {'gemini', 'deepseek'} or provider == 'codex' and codex_probe) and allocation >= self.costs[provider]
         allowed = required <= allocation or probe
         return Admission(allowed, allocation if allowed else 0.0, required, fallback,
                          probe=allowed and required > allocation)

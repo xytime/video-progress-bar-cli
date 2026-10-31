@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 只读取有效批次的绑定耗时，同等或更大批次最大成本加 50% 余量。 |
 | 1.0.0 | 2026-10-29 | Codex | Google/Codex 已有缓存逐批验证后扣减成本，保留 Codex 旧累计终态。 |
 """
 import hashlib
@@ -70,6 +71,7 @@ def codex_inventory(root, texts, context, *, model, effort, batch_size, seconds_
     except (OSError, ValueError, KeyError, TypeError):
         state, splits, exhausted = {}, {}, True
 
+    observed = []
     def cached(batch, offset, singleton=False):
         next_source = texts[offset + len(batch)] if offset + len(batch) < len(texts) else ''
         prompt = _batch_prompt(batch, offset, '' if singleton else context, next_source)
@@ -78,30 +80,47 @@ def codex_inventory(root, texts, context, *, model, effort, batch_size, seconds_
                  subtitle_cache_contract(singleton_repair=singleton, binding=binding)]
         signature = hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         try:
-            payload = json.loads((Path(root) / (signature + '.json')).read_text())['payload']
+            saved = json.loads((Path(root) / (signature + '.json')).read_text())
+            payload = saved['payload']
             Draft202012Validator(schema).validate(payload)
-            return _validate_batch(payload, batch, offset, context, next_source_text=next_source)
+            validated = _validate_batch(payload, batch, offset, context, next_source_text=next_source)
+            measured = saved.get('execution')
+            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False,
+                sort_keys=True, allow_nan=False).encode()).hexdigest()
+            if (isinstance(measured, dict) and measured.get('identity') == signature
+                    and measured.get('payload_sha256') == digest
+                    and type(measured.get('duration_ms')) in (int, float)
+                    and math.isfinite(measured['duration_ms']) and measured['duration_ms'] > 0):
+                observed.append((len(batch), measured['duration_ms'] / 1000))
+            return validated
         except (OSError, ValueError, KeyError, TypeError, ValidationError, CodexTextError):
             return None
-    remaining, accepted, parts = 0, 0, []
+    remaining, accepted, parts, missing_sizes = 0, 0, [], []
     for offset in range(0, len(texts), effective):
         batch = texts[offset:offset + effective]
         if f'{offset}:{len(batch)}' in splits and len(batch) > 1:
             children = [cached([source], index, True) for index, source in enumerate(batch, start=offset)]
             accepted += sum(child is not None for child in children)
             remaining += sum(child is None for child in children)
+            missing_sizes.extend(1 for child in children if child is None)
             parts.extend(child for child in children if child is not None)
         else:
             part = cached(batch, offset)
             if part is None:
                 remaining += 1
+                missing_sizes.append(len(batch))
             else:
                 accepted += 1
                 parts.append(part)
+    # 单行修复不能证明五行批次成本；只有同等或更大批次的实测可用于缺批估算。
+    estimate = sum(max(10.0, max(durations) * 1.5) if durations else seconds_per_batch
+        for size in missing_sizes for durations in [[seconds for count, seconds in observed if count >= size]])
     result = dict(cached_batches=accepted, remaining_batches=remaining,
-                estimated_seconds=(max(86400.0, remaining * seconds_per_batch)
-                                   if exhausted and remaining else remaining * seconds_per_batch),
-                cost_basis='cold_start_estimate', budget_exhausted=bool(exhausted and remaining))
+                estimated_seconds=max(86400.0, estimate) if exhausted and remaining else estimate,
+                cost_basis='validated_batch_max_x1.5' if observed else 'cold_start_estimate',
+                observed_batches=len(observed), budget_exhausted=bool(exhausted and remaining),
+                calibration_available=not exhausted and not observed
+                    and state.get('calibration_claimed', False) is False)
     if include_candidate:
         from .subtitle_translation_provider import SubtitleTranslationCandidate
         result['candidate'] = (SubtitleTranslationCandidate(provider='codex', model=model,

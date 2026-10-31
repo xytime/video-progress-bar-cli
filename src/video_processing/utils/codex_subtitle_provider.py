@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.1 | 2026-10-31 | Codex | 每次新请求执行前校准准入；缓存始终复核，续跑不重复收缩累计期限。 |
 | 1.6.0 | 2026-10-29 | Codex | 可选完整来源合同隔离候选批缓存，恢复计划身份和持久累计边界不变。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 隔离来源背景并记录真实修复，完整拒绝候选待全片比例守门，不写入干净缓存。 |
 | 1.5.0 | 2026-10-27 | Codex | 失败小批持久降级逐段恢复，真实请求与累计期限跨续跑有界，完成后重新守门。 |
@@ -202,6 +203,8 @@ def build_codex_subtitle_candidate(
     initial_candidate: SubtitleTranslationCandidate | None = None,
     repair_segment_numbers: list[int] | None = None,
     cache_binding: dict | None = None,
+    attempt_timeout: float | None = None,
+    before_request=None,
 ) -> SubtitleTranslationCandidate:
     """每批最多5段；结构/质量拒绝可缩为单段，完整候选才返回。
 
@@ -217,6 +220,9 @@ def build_codex_subtitle_candidate(
     effective = min(batch_size, MAX_SUBTITLE_BATCH_ROWS)
     batch_count = (len(texts) + effective - 1) // effective
     adaptive = adaptive_recovery and max_attempts == 2
+    if before_request is not None and not adaptive:
+        raise CodexSubtitleError('configuration')
+    attempt_deadline = started + (total_timeout if attempt_timeout is None else max(0.0, attempt_timeout))
     max_requests = batch_count * max_attempts + (2 * min(len(texts), 10) if adaptive else 0)
     logger.info("[CodexText] subtitle plan configured_batch_size=%d effective_batch_size=%d "
                 "batches=%d max_requests=%d total_timeout=%.1fs adaptive_recovery=%s",
@@ -229,7 +235,8 @@ def build_codex_subtitle_candidate(
     with manager as recovery:
         repair_history = list(initial_candidate.repair_history) if initial_candidate else []
         def remaining() -> float:
-            return recovery.remaining_seconds() if recovery else total_timeout - (time.monotonic() - started)
+            cumulative = recovery.remaining_seconds() if recovery else total_timeout - (time.monotonic() - started)
+            return min(cumulative, attempt_deadline - time.monotonic())
 
         def request(batch: list[str], offset: int, *, singleton_repair: bool = False) -> dict:
             next_source = texts[offset + len(batch)] if offset + len(batch) < len(texts) else ""
@@ -256,6 +263,10 @@ def build_codex_subtitle_candidate(
                 execution_entry = None
                 def before_execute() -> None:
                     nonlocal execution_entry
+                    if remaining() <= 0:
+                        raise CodexTextError('total_timeout')
+                    if before_request is not None and before_request():
+                        recovery.claim_calibration()
                     recovery.before_execute(offset if len(batch) == 1 else None)
                     admitted[0] = True
                     observed_numbers = set(repair_targets if initial_candidate is not None else ())
