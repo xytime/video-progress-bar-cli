@@ -431,6 +431,8 @@ class Settings(BaseSettings):
     # 2026-10-31 用户批准生产采用：只优化新扫描，保留旧断点、原语义及质量门。
     native_caption_scan_optimization_enabled: bool = True
     native_caption_semantic_paging_enabled: bool = True
+    # 2026-11-01 用户明确批准立即生产采用；抽检不通过仍回到完整验证。
+    native_caption_sampling_enabled: bool = True
     google_translate_interval_seconds: float = Field(default=0.4, ge=0.2, le=10)
     google_translate_max_retries: int = Field(default=2, ge=0, le=3)
 

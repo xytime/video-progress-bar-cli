@@ -79,6 +79,8 @@ def test_only_english_title_or_slide_requires_negative_semantic_evidence(evidenc
 
 @pytest.fixture
 def source(tmp_path, monkeypatch):
+    # 本组验证原完整路径；抽检启用和回滚由独立 sampling 用例覆盖。
+    monkeypatch.setattr(router.settings, 'native_caption_sampling_enabled', False)
     path = tmp_path / 'original_video/demo.mp4'
     path.parent.mkdir()
     path.write_bytes(b'source')
