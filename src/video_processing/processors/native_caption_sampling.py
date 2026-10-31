@@ -1,4 +1,4 @@
-"""少量首中尾 OCR 和带实拍帧的语义核验；不明确时交还原严格路由。
+"""少量首中尾 OCR 和带实拍帧的语义核验；不明确时定向补查并复核，不回退全片扫描。
 
 依赖：native_caption_router -> 本模块 -> caption_sampling_contract / Vision / Codex。
 不导入路由器，不操作数据库、投稿、历史逐帧检查点。
@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 获批首中尾负向分流及有界补查，取消默认全片回退。 |
 | 1.0.0 | 2026-10-31 | Codex | 独立抽检缓存、单次局部补查、正向保留及严格负向回退。 |
 """
 from contextlib import ExitStack
@@ -145,7 +146,7 @@ def review_window(window, samples, segments, fps, directory, *, supplemented=Fal
 
 
 def attempt(source, directory, segments, source_hash, normalize, progress=lambda _: None):
-    """返回可保留的抽检证据或 None；None 必须继续原完整扫描，不产生 GENERATE。"""
+    """返回有界抽检证据；缺帧或异常失败闭锁，不回退全片扫描。"""
     from .burned_caption_repair import _probe
     started = time.monotonic()
     width, height, fps, duration = _probe(source)
@@ -183,31 +184,34 @@ def attempt(source, directory, segments, source_hash, normalize, progress=lambda
                     if frame not in all_samples:
                         all_samples[frame] = reader.read(frame)
                 sampled = [all_samples[f] for f in frames]
-                # 没有正证据时，省去语义调用，但绝不据此判整片无中文。
-                if any(not any(HAN.search(r['text']) and r['confidence'] >= .5 for r in s['rows'])
-                       for s in sampled):
-                    rejected = True
-                    break
+                # 无中文也必须读完全部首中尾窗口；低置信中文仍视为疑点。
+                if not any(HAN.search(r['text']) for s in sampled for r in s['rows']):
+                    evidence['sample_reviews'].append(dict(window_id=window['id'], supplemented=False,
+                        decision='OCR_ABSENT', reviewed_frames=frames, matches=[], reason='sampled OCR only'))
+                    continue
                 reviewed = timed_review(window, sampled, segments, fps, directory)
                 initial.append(reviewed)
-                if reviewed['decision'] == 'UNCERTAIN':
+                if reviewed['decision'] in {'UNCERTAIN', 'PARTIAL', 'ABSENT'}:
                     extras = sample_frames(window, segments, fps, count, supplement=True)
                     for frame in extras:
                         if frame not in all_samples:
                             all_samples[frame] = reader.read(frame)
                     sampled = [all_samples[f] for f in sorted(set(frames + extras))]
                     reviewed = timed_review(window, sampled, segments, fps, directory, supplemented=True)
+                reviewed['reviewed_frames'] = [s['frame'] for s in sampled]
                 evidence['sample_reviews'].append(reviewed)
-                if reviewed['decision'] != 'MATCH':
+                if reviewed['decision'] not in {'MATCH', 'NOT_DIALOGUE'}:
                     rejected = True
                     break
             evidence['samples'] = [all_samples[f] for f in sorted(all_samples)]
-            accepted = not rejected and decide_sampled(evidence)['decision'] == 'PRESERVE'
-            outcome = 'PRESERVE' if accepted else 'FULL_FALLBACK'
+            if rejected:
+                evidence['error'] = '抽样对白不足或定向补查仍不明确'
+            outcome = decide_sampled(evidence)['decision']
+            accepted = outcome in {'PRESERVE', 'GENERATE'}
             write_json(directory / 'attempt.json', dict(evidence=evidence, initial_reviews=initial,
-                accepted=accepted, fallback_to_full=not accepted, ocr_calls=reader.ocr_calls,
+                accepted=accepted, fallback_to_full=False, ocr_calls=reader.ocr_calls,
                 cache_hits=reader.cache_hits, elapsed_seconds=time.monotonic() - started))
-            return evidence if accepted else None
+            return evidence
         finally:
             completed_reviews = initial + [r for r in evidence['sample_reviews'] if r['supplemented']]
             metrics = dict(outcome=outcome, ocr_calls=reader.ocr_calls, cache_hits=reader.cache_hits,

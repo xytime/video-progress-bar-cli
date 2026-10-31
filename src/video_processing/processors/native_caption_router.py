@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 获批首中尾负向分流及有界补查，取消默认全片回退。 |
 | 1.5.0 | 2026-10-31 | Codex | 完整视觉证据有界分页及图片缓存；不改变整片 OCR、质量或发布规则。 |
 | 1.6.0 | 2026-11-01 | Codex | 接入经授权的首中尾抽样保留；负向或不一致仍走原严格路径。 |
 | 1.3.0 | 2026-10-31 | Codex | 采用已测 BMP 全帧扫描、严格相等复用与独立断点；旧扫描和语义路由保持。 |
@@ -629,11 +630,12 @@ def route(source: Path, output: Path, segments: list[dict], progress=lambda _: N
             raise ValueError('ASR_EMPTY')
         progress('SOURCE_CAPTION_LOCATING')
         sampled = None
-        # 已有完整扫描优先复用；旧断点不迁移、不改写。抽样使用独立缓存空间。
-        complete_scan = (directory / 'scan.json').exists() or any(directory.glob('native-scan-*/scan.json'))
-        if settings.native_caption_sampling_enabled and not complete_scan:
+        # 已有最终决定优先复用；未完成的旧扫描保留，但不再触发全片语义核验。
+        if settings.native_caption_sampling_enabled:
             from .native_caption_sampling import attempt
             sampled = attempt(source, directory, segments, source_hash, normalize_row, progress)
+            if sampled is None:
+                raise ValueError('SAMPLE_EVIDENCE_MISSING')
         if sampled is not None:
             evidence.update(sampled)
         else:

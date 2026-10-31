@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 获批首中尾负向分流及有界补查，取消默认全片回退。 |
 | 1.1.0 | 2026-10-31 | Codex | 分页语义证据须全量覆盖，逐页矛盾不得降为无中文字幕。 |
 | 1.2.0 | 2026-11-01 | Codex | 新增独立抽样正向保留证据，不改历史逐帧合同或负向结论。 |
 | 1.0.0 | 2026-10-27 | Codex | 三态分流、逐对白覆盖检查及单片证据绑定。 |
@@ -53,8 +54,8 @@ def decide(evidence: dict) -> dict:
     if evidence.get('error'):
         return result('REVIEW', evidence['error'])
     if evidence.get('inspection_mode'):
-        from .caption_sampling_contract import MODE, decide_sampled
-        if evidence['inspection_mode'] != MODE:
+        from .caption_sampling_contract import MODE, LEGACY_MODE, decide_sampled
+        if evidence['inspection_mode'] not in {MODE, LEGACY_MODE}:
             return result('REVIEW', '未知原字幕检查方式')
         return decide_sampled(evidence)
     segments, runs = evidence['segments'], evidence['runs']

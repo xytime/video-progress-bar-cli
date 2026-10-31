@@ -114,7 +114,7 @@ def test_sampled_receipt_uses_existing_preserve_and_cannot_fall_back_to_stale_as
 
 
 @pytest.mark.parametrize('accepted', [True, False])
-def test_route_uses_sample_only_for_positive_and_calls_full_scan_otherwise(tmp_path, evidence, monkeypatch, accepted):
+def test_enabled_sampling_never_silently_falls_back_to_full_scan(tmp_path, evidence, monkeypatch, accepted):
     source, output = tmp_path / 'demo.mp4', tmp_path / 'demo_vertical.mp4'
     source.write_bytes(b'video')
     monkeypatch.setattr(router.settings, 'native_caption_sampling_enabled', True)
@@ -129,9 +129,9 @@ def test_route_uses_sample_only_for_positive_and_calls_full_scan_otherwise(tmp_p
         assert router.route(source, output, evidence['segments']) == 'PRESERVE'
         assert calls == []
     else:
-        with pytest.raises(router.NativeCaptionReviewRequired, match='FULL_PATH_SENTINEL'):
+        with pytest.raises(router.NativeCaptionReviewRequired, match='SAMPLE_EVIDENCE_MISSING'):
             router.route(source, output, evidence['segments'])
-        assert calls == ['full']
+        assert calls == []
 
 
 def test_rollback_does_not_reuse_sample_decision_for_new_routing(tmp_path, evidence, monkeypatch):
@@ -208,24 +208,27 @@ def test_attempt_supplements_only_uncertain_once(tmp_path, evidence, monkeypatch
             matches=[dict(frame=s['frame'], row_ids=[0]) for s in samples])
     monkeypatch.setattr(sampling, 'review_window', review)
     result = sampling.attempt(tmp_path / 'source', tmp_path, evidence['segments'], 's', router.normalize_row)
-    if response in {'MATCH', 'UNCERTAIN'}:
+    if response in {'MATCH', 'UNCERTAIN', 'PARTIAL', 'ABSENT'}:
         assert result and decide(result)['decision'] == 'PRESERVE'
-        assert len(Reader.calls) == (63 if response == 'UNCERTAIN' else 45)
-        assert len(calls) == (6 if response == 'UNCERTAIN' else 3)
+        assert len(Reader.calls) == (45 if response == 'MATCH' else 63)
+        assert len(calls) == (3 if response == 'MATCH' else 6)
     else:
-        assert result is None
-        assert calls == [(0, False)]
-        assert len(Reader.calls) == 15
+        assert result and decide(result)['decision'] == 'GENERATE'
+        assert calls == [(0, False), (1, False), (2, False)]
+        assert len(Reader.calls) == 45
 
 
-def test_no_chinese_goes_to_full_without_semantic_calls(tmp_path, evidence, monkeypatch):
+def test_no_chinese_checks_all_windows_and_generates_without_semantic_calls(tmp_path, evidence, monkeypatch):
     Reader.source_samples = {s['frame']: dict(s, rows=[]) for s in evidence['samples']}
     Reader.calls = []
     monkeypatch.setattr(sampling, 'SampleReader', Reader)
     monkeypatch.setattr(repair, '_probe', lambda _: (360, 640, 30., 120.))
     def forbidden(*args, **kwargs): raise AssertionError('no positive evidence')
     monkeypatch.setattr(sampling, 'review_window', forbidden)
-    assert sampling.attempt(tmp_path / 'source', tmp_path, evidence['segments'], 's', router.normalize_row) is None
+    result = sampling.attempt(tmp_path / 'source', tmp_path, evidence['segments'], 's', router.normalize_row)
+    assert decide(result)['decision'] == 'GENERATE'
+    assert len(Reader.calls) == 45
+    assert decide(result)['full_timeline_verified'] is False
 
 
 @pytest.mark.parametrize('row_id', [0, 1, 2, 3])
@@ -295,7 +298,7 @@ def test_approved_sampling_is_enabled_by_default():
 
 
 @pytest.mark.parametrize('scan_name', ['scan.json', 'native-scan-existing/scan.json'])
-def test_existing_scan_checkpoint_takes_priority_over_new_sampling(tmp_path, evidence, monkeypatch, scan_name):
+def test_existing_scan_is_preserved_but_does_not_force_full_semantic_review(tmp_path, evidence, monkeypatch, scan_name):
     source, output = tmp_path / 'demo.mp4', tmp_path / 'demo_vertical.mp4'
     source.write_bytes(b'video')
     directory = source.parent / '.native-caption-scan' / router.digest(source)
@@ -303,10 +306,63 @@ def test_existing_scan_checkpoint_takes_priority_over_new_sampling(tmp_path, evi
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_text('existing checkpoint')
     monkeypatch.setattr(router.settings, 'native_caption_sampling_enabled', True)
-    def forbidden(*args): raise AssertionError('old checkpoint must take priority')
+    def forbidden(*args): raise ValueError('BOUNDED_SAMPLE_SELECTED')
     monkeypatch.setattr(sampling, 'attempt', forbidden)
     def full(*args): raise ValueError('FULL_CHECKPOINT_SELECTED')
     monkeypatch.setattr(router, 'scan', full)
-    with pytest.raises(router.NativeCaptionReviewRequired, match='FULL_CHECKPOINT_SELECTED'):
+    with pytest.raises(router.NativeCaptionReviewRequired, match='BOUNDED_SAMPLE_SELECTED'):
         router.route(source, output, evidence['segments'])
     assert checkpoint.read_text() == 'existing checkpoint'
+
+
+@pytest.fixture
+def absent_evidence(evidence):
+    for sample in evidence['samples']:
+        sample['rows'] = []
+    for window, review in zip(evidence['sample_windows'], evidence['sample_reviews']):
+        review.update(decision='OCR_ABSENT', matches=[], reviewed_frames=sample_frames(window, evidence['segments'], 30, 3600))
+    return evidence
+
+
+def test_negative_receipt_roundtrip_and_route_never_calls_full_scan(tmp_path, absent_evidence, monkeypatch):
+    source, output = tmp_path/'source.mp4', tmp_path/'result.mp4'
+    source.write_bytes(b'video')
+    absent_evidence['source_sha256'] = router.digest(source)
+    monkeypatch.setattr(router.settings, 'native_caption_sampling_enabled', True)
+    monkeypatch.setattr(sampling, 'attempt', lambda *args: absent_evidence)
+    def forbidden(*args): raise AssertionError('full scan forbidden')
+    monkeypatch.setattr(router, 'scan', forbidden)
+    assert router.route(source, output, absent_evidence['segments']) == 'GENERATE'
+    assert validate_decision(output)['full_timeline_verified'] is False
+
+
+@pytest.mark.parametrize('damage', ['missing_frame', 'missing_window', 'low_confidence_han', 'missing_image', 'mixed', 'provider_error', 'legacy'])
+def test_negative_sample_cannot_hide_doubt(absent_evidence, damage):
+    e = absent_evidence
+    if damage == 'missing_frame': e['samples'].pop()
+    if damage == 'missing_window': e['sample_reviews'].pop()
+    if damage == 'low_confidence_han': e['samples'][0]['rows'] = [dict(text='中文', confidence=.1)]
+    if damage == 'missing_image': e['samples'][0]['image_sha256'] = ''
+    if damage == 'mixed': e['sample_reviews'][1]['decision'] = 'PARTIAL'
+    if damage == 'provider_error': e['error'] = 'authentication'
+    if damage == 'legacy': e['inspection_mode'] = 'sampled-positive-v1'
+    assert decide(e)['decision'] == 'REVIEW'
+
+
+def test_uncertainty_is_bounded_and_never_becomes_full_scan(tmp_path, evidence, monkeypatch):
+    Reader.source_samples = {s['frame']: s for s in evidence['samples']}
+    Reader.calls = []
+    monkeypatch.setattr(sampling, 'SampleReader', Reader)
+    monkeypatch.setattr(repair, '_probe', lambda _: (360, 640, 30., 120.))
+    def uncertain(window, samples, *args, supplemented=False):
+        return dict(window_id=window['id'], supplemented=supplemented, decision='UNCERTAIN', matches=[])
+    monkeypatch.setattr(sampling, 'review_window', uncertain)
+    result = sampling.attempt(tmp_path/'source', tmp_path, evidence['segments'], 's', router.normalize_row)
+    assert decide(result)['decision'] == 'REVIEW'
+    assert len(Reader.calls) == 21
+
+
+def test_legacy_positive_receipt_remains_valid(evidence):
+    evidence['inspection_mode'] = 'sampled-positive-v1'
+    assert decide(evidence)['decision'] == 'PRESERVE'
+    assert decide(evidence)['inspection_mode'] == 'sampled-positive-v1'

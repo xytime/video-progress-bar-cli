@@ -1,16 +1,18 @@
-"""首中尾抽检的独立宿主合同；只允许正向保留，不生成全片无中文结论。
+"""首中尾抽检的独立宿主合同；三态抽样分流，不生成全片无中文结论。
 
 依赖：source_caption_contract / native_caption_sampling -> 本模块 -> 标准库。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 获批首中尾负向分流及有界补查，取消默认全片回退。 |
 | 1.0.0 | 2026-10-31 | Codex | 用户批准抽样保留及未抽到局部缺失的风险，仍保留严格负向路径。 |
 """
 import math
 import re
 
-MODE = 'sampled-positive-v1'
+LEGACY_MODE = 'sampled-positive-v1'
+MODE = 'sampled-routing-v2'
 HAN = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff]')
 
 
@@ -64,7 +66,7 @@ def decide_sampled(evidence):
     """所有被抽到的对白帧都需实际图像/语义正证据；不伪造逐帧覆盖。"""
     def result(decision, reason, text=''):
         return dict(decision=decision, reason=reason, review_text=text,
-                    inspection_mode=MODE, full_timeline_verified=False)
+                    inspection_mode=evidence.get('inspection_mode', MODE), full_timeline_verified=False)
 
     try:
         segments, fps, count = evidence['segments'], evidence['fps'], evidence['frame_count']
@@ -76,6 +78,9 @@ def decide_sampled(evidence):
         if len(mapped) != len(samples) or [r['window_id'] for r in reviews] != list(range(len(planned))):
             raise ValueError('抽样帧或语义审查编号不一致')
         expected_all = set()
+        decisions = []
+        if evidence.get('error'):
+            raise ValueError('抽样执行未完成')
         for window, review in zip(planned, reviews):
             base = sample_frames(window, segments, fps, count)
             if type(review.get('supplemented')) is not bool:
@@ -83,8 +88,25 @@ def decide_sampled(evidence):
             extra = sample_frames(window, segments, fps, count, supplement=True) if review['supplemented'] else []
             expected = sorted(set(base + extra))
             expected_all.update(expected)
-            if len(base) < 3 or review['decision'] != 'MATCH':
-                raise ValueError('抽样对白不足或未一致确认中文字幕')
+            if len(base) < 3:
+                raise ValueError('抽样对白不足')
+            for frame in expected:
+                sample = mapped[frame]
+                if not re.fullmatch('[a-f0-9]{64}', sample['image_sha256']):
+                    raise ValueError('缺少抽检画面摘要')
+                for row in sample['rows']:
+                    if not isinstance(row['text'], str) or not math.isfinite(row['confidence']) or not 0 <= row['confidence'] <= 1:
+                        raise ValueError('OCR 行无效')
+            state = review['decision']
+            decisions.append(state)
+            if evidence.get('inspection_mode') == MODE and state in {'OCR_ABSENT', 'NOT_DIALOGUE'}:
+                if review.get('reviewed_frames') != expected:
+                    raise ValueError('负向证据未覆盖抽检帧')
+                if state == 'OCR_ABSENT' and any(HAN.search(r['text']) for f in expected for r in mapped[f]['rows']):
+                    raise ValueError('负向证据包含中文疑点')
+                continue
+            if state != 'MATCH':
+                raise ValueError('抽样对白未一致确认中文字幕')
             if [m['frame'] for m in review['matches']] != expected:
                 raise ValueError('抽样语义证据未覆盖实际抽检帧')
             texts = set()
@@ -99,6 +121,10 @@ def decide_sampled(evidence):
             raise ValueError('抽样证据存在缺帧或未核验的额外帧')
         text = '\n'.join(s['text'] for s in segments) + '\n' + '\n'.join(
             dict.fromkeys(r['text'] for s in samples for r in s['rows']))
+        if all(d in {'OCR_ABSENT', 'NOT_DIALOGUE'} for d in decisions):
+            return result('GENERATE', '首中尾抽样未见对白中文字幕；未验证全片逐帧完整性', text)
+        if any(d != 'MATCH' for d in decisions):
+            return result('REVIEW', '窗口间中文字幕证据不一致', text)
         return result('PRESERVE', '首中尾中文字幕抽样判断通过；未验证全片逐帧完整性', text)
     except (KeyError, TypeError, ValueError, IndexError, OverflowError) as exc:
         return result('REVIEW', str(exc) if isinstance(exc, ValueError) else '抽样证据结构无效')
