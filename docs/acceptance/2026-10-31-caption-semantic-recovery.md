@@ -1,7 +1,7 @@
 ---
 created_by: Codex
 created_at: 2026-10-31
-status: CANDIDATE_NOT_YET_ADOPTED
+status: SEMANTIC_HOTFIX_ADOPTED_FOLLOWUP_UNDER_VALIDATION
 ---
 
 # 完整字幕证据核验恢复
@@ -25,7 +25,7 @@ status: CANDIDATE_NOT_YET_ADOPTED
 
 证据根：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/caption-recovery-20261031-1845`。
 
-1. 初始针对性隔离回归：103 passed，4 warnings，`video-pytest-wp7c39sp`。随后启用候选默认值，执行完整浏览器与媒体回归；以最终原始回执为准。
+1. 语义修复完整浏览器与媒体回归：6502 passed，50 warnings，30 subtests passed；`video-pytest-pol9hh1n/receipt.json` 总退出码、pytest 与 OS 探针均为 0，副本清理完成。原生部署 `deployment-closed-v2/journal.json` 为 COMPLETE；2026-10-31 19:38:53 恢复 RUNNING，main 与 origin/main 为 `b4a4afa`。
 2. 今天失败任务 `cfHekZAC-o4`：源 SHA `a4b3eb94c39ce8c85d95b1c948b290ab7cd318287f3e79bd3f35e03c338683fb`，7,550 帧、62 段对白。复用此前真实核验的 14 个合格响应，在 OS 禁网和拒绝生产读写环境重新执行本候选的全部宿主判断；62 段结果完全相同，结论 GENERATE。耗时 0.1058 秒，新增 OCR/解码/模型执行均为 0，见 `replay-cfHekZAC-o4/candidate-receipt.json`。
 3. 这不是冷运行 OCR 提速倍数、人工语义金标、成片或公开发布证据。此前真实冷语义核验为 314.33 秒；不能将旧代码的翻译验收直接算作本次生产采用。
 4. 测试夹具修复来自已经通过的独立分支：隔离账户 429 账本、恢复页面热更新单例、固定合法并发输入、修正退役回查预期、回收本次沙盒的独立执行者。不得通过删业务断言或跳过用例宣称全量通过。
@@ -39,3 +39,14 @@ status: CANDIDATE_NOT_YET_ADOPTED
 回滚优先将独立分页开关恢复为 false，经过同一受控部署入口采用；保留全部 OCR、语义页、图片及累计预算，旧路由恢复原超限保护。源码回滚用前向提交，不 reset、不清理生产目录、不改写提交历史。原生部署失败保留 journal，按真实阶段 recover；不得绕过未知状态直接开闸。
 
 最终分别记录代码提交、测试、推送、运行采用、具名恢复、成片与平台证据。提交意图/已提交/审核中/UNCERTAIN/已发布均禁止自动重投。
+
+
+## 2026-10-31 19:56 后续隔离候选
+
+新确认 `p-nVeVG48FY` 的 ASR/完整 OCR/语义均完成，但 Gemini 无效响应、DeepSeek 网络失败共耗尽600秒，Codex未获得执行时间。独立候选给未完成供应商分配余量，保留末级300秒和质量120秒；最差前三家各60秒，实际快失败的余量交给后续。总600秒、原供应商顺序、模型、时间轴、完整质量门不变。`subtitle_provider_budget_allocation_enabled=false` 可回到原分配，所有缓存及累计请求账本保留。该候选尚未生产采用。
+
+另修正单片交接：普通加工入口在单片自然结束后通过原 PublishingRecoveryService 执行最多一条已批准恢复；与普通任务交替，合计仍受原批次上限约束。同批共享已尝试任务集合，恢复失败不在普通队列立即重复领取。原恢复服务仍核对最终资格、维护、内容、退避、互斥和投稿保护，不签发额外授权。
+
+针对性回归见 `video-pytest-awt9krnk`；后续完整测试、实际翻译、生产采用与成片证据均须分别报告，不能沿用第一阶段测试冒充第二阶段已通过。真实翻译使用具名62段 ASR、当前 gpt-5.6-luna/medium、原上下文与质量门，在拒绝生产读写的独立沙盒执行；不渲染、不投稿。
+
+真实反例：`translation-provider-window-20261031-1952/receipt.json` 仍未通过。Google 实际429后 Codex 已获得执行机会，但小批中少数词汇错位触发整批逐行重译，最终480秒候选窗口耗尽；未增加总超时。随后候选只对“词汇错位”保留其余已逐行通过原严格质量门的译文，来源/模型/上下文绑定与校验和持久化，恢复仍重新核验；错误行继续真实修复，完整重组后仍走原整片质量门。全片质量门指定的修复段禁止命中局部合格缓存。金额/实体等质量失败及结构失败保持原恢复路径。回滚代码会忽略新增局部缓存字段，保留全部账本及累计预算。

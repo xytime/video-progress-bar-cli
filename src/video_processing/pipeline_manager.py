@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| recovery-fairness-v1 | 2026-10-31 | Codex | 单片边界交替批准恢复与普通任务，沿用原准入并共享本批去重。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕具名回执驱动持久退避和待修复，成功快照验证后收敛恢复账。 |
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
@@ -1823,6 +1824,7 @@ class PipelineManager:
         total_processed = 0
         batch_limit = max(1, int(limit)) if limit is not None else None
         attempted_targets: set[tuple[str, int]] = set()
+        last_was_recovery = False
 
         while batch_limit is None or total_processed < batch_limit:
             # 本入口只负责重型加工；已就绪成片由独立执行者全天提交。
@@ -1830,6 +1832,16 @@ class PipelineManager:
             if market_guard_active:
                 logger.info("[MarketGuard] 暂停重型加工；成片由独立发布执行者全天处理。")
                 break
+
+            # 单片自然结束后让已批准的恢复批次领取一次；交替普通任务，避免双方饥饿。
+            # 原恢复服务重核提交身份、质量门、退避及真实锁，本层不改资格或重置状态。
+            if not last_was_recovery and self.db.pending_publishing_recovery_items():
+                from .publishing_recovery import PublishingRecoveryService
+                if PublishingRecoveryService(self.db, self._PRJ_ROOT).dispatch_once(self, attempted_targets=attempted_targets):
+                    total_processed += 1
+                    last_was_recovery = True
+                    continue
+            last_was_recovery = False
 
             # 检索候选任务，为切片与依赖校验保留充足候选池
             query_limit = max(batch_limit * 3 if batch_limit else 15, 10)

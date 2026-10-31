@@ -424,6 +424,10 @@ class Settings(BaseSettings):
     google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     # 全供应商、节流和质量检查共享期限；低于外层 TRANSLATING 看门狗 720 秒。
     subtitle_translation_total_timeout_seconds: int = Field(default=600, ge=30, le=660)
+    # 候选阶段为后续供应商和原有质量/定点修复预留时间，不延长整片期限。
+    subtitle_provider_budget_allocation_enabled: bool = True
+    subtitle_translation_quality_reserve_seconds: int = Field(default=120, ge=0, le=180)
+    subtitle_translation_fallback_reserve_seconds: int = Field(default=300, ge=30, le=480)
     # 2026-10-31 用户批准生产采用：只优化新扫描，保留旧断点、原语义及质量门。
     native_caption_scan_optimization_enabled: bool = True
     native_caption_semantic_paging_enabled: bool = True

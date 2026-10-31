@@ -240,7 +240,7 @@ class PublishingRecoveryService:
         self.guard.cancel_recovery_priority(key)
         return self.db.get_publishing_recovery_operation(key)
 
-    def dispatch_once(self, manager):
+    def dispatch_once(self, manager, *, attempted_targets=None):
         """独立恢复 worker 每次最多正式启动一项；等待时不启动浏览器。"""
         for row in self.db.pending_publishing_recovery_setups():
             self.resume_setup(row["id"], json.loads(row["request"]))
@@ -284,6 +284,9 @@ class PublishingRecoveryService:
             elif read_lease_owner(self.out / "pipeline.lock"):
                 self.db.update_publishing_recovery_item(item["id"], "WAITING", "等待实际加工锁释放")
                 continue
+            task_key = (video["youtube_id"], int(video.get("slice_index") or 0))
+            if attempted_targets is not None and task_key in attempted_targets:
+                continue
             operation = self.db.get_publishing_recovery_operation(item["operation_id"])
             if operation["request"].get("reset_backoff") and not item["started"]:
                 self.db.reset_proven_upload_backoff(video["id"])
@@ -294,6 +297,8 @@ class PublishingRecoveryService:
             activated = self.db.activate_publishing_recovery_item(item["id"])
             if not activated:
                 continue
+            if attempted_targets is not None:
+                attempted_targets.add(task_key)
             # 高分和低分统一走原流水线；最终内容、素材和投稿门禁仍由其逐项验证。
             try:
                 manager._process_single_video(activated, submission_only=ready, claim=not ready)

@@ -1,6 +1,7 @@
 """Codex 文字入口的分批字幕适配；只返回完整候选，不改写原文或时间轴。
 
 # Modification History
+| validated-rows-v1 | 2026-10-31 | Codex | 仅词汇对齐失败时复用独立通过原质量门的其他行，坏行仍真实修复并重验整片。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | sparse-quality-v1 | 2026-10-27 | Codex | 隔离来源背景并记录真实修复，完整拒绝候选待全片比例守门，不写入干净缓存。 |
@@ -233,6 +234,14 @@ def build_codex_subtitle_candidate(
                                          next_source_text=next_source, defer_quality=True)
             if recovery and len(batch) == 1:
                 repair_history.extend(recovery.repair_history(offset))
+                # 全片质量门指定的修复必须真实执行，不能被先前局部合格缓存掩盖。
+                if singleton_repair and initial_candidate is None and offset + 1 not in repair_targets:
+                    accepted = recovery.validated_candidate(offset)
+                    if accepted:
+                        checked = _validate_batch(_raw_rows(accepted, offset), batch, offset, context,
+                                                  next_source_text=next_source)
+                        logger.info("[CodexText] reused strictly validated row source_id=%d", offset)
+                        return checked
             if recovery and singleton_repair:
                 previous = recovery.previous_failure(offset)
                 if previous and (previous["code"] == "invalid_output" or previous["code"].startswith("subtitle_")):
@@ -298,6 +307,20 @@ def build_codex_subtitle_candidate(
                                 else:
                                     recovery.record_batch_repair(offset, len(batch), observation)
                             if error.code.startswith("subtitle_vocab_alignment_"):
+                                if recovery and len(batch) > 1:
+                                    bad_ids = {item["source_id"] for item in error.quality_details}
+                                    recovery.mark_split(offset, len(batch), error)
+                                    for local_index, row in enumerate(raw["items"]):
+                                        source_id = offset + local_index
+                                        if source_id in bad_ids:
+                                            continue
+                                        following = texts[source_id + 1] if source_id + 1 < len(texts) else ""
+                                        try:
+                                            accepted = _validate_batch({"items": [row]}, [batch[local_index]],
+                                                source_id, context, next_source_text=following)
+                                        except CodexSubtitleError:
+                                            continue
+                                        recovery.remember_validated_candidate(source_id, accepted)
                                 repair_history.append(dict(strategy="host_vocab_sanitization", executed=True,
                                     segment_numbers=[d["segment_number"] for d in error.quality_details],
                                     details=error.quality_details))

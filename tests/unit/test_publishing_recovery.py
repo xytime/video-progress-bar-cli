@@ -1,6 +1,7 @@
 """发布恢复的真实 SQLite、原生 flock、固定身份和幂等操作验证。
 
 # Modification History
+| 1.1.0 | 2026-10-31 | Codex | 验证真实 SQLite 恢复交接与本批失败不重复领取。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-23 | Codex | 账户恢复、批次、低分人工许可、软避让与提交防重。 |
@@ -240,3 +241,42 @@ def test_cancel_during_account_setup_does_not_leave_priority_reservation(recover
     assert operation['receipt']['priority_count']>0
     assert recovery.guard.snapshot()['schedule']['recovery_priority']==[]
     assert recovery.db.pending_publishing_recovery_items()==[]
+
+
+def test_pipeline_boundary_alternates_recovery_and_regular_work(recovery, monkeypatch):
+    """真实恢复账本交替出队；失败恢复不在同一普通批次再次领取。"""
+    from video_processing.pipeline_manager import PipelineManager
+    monkeypatch.setattr(type(settings), 'is_us_market_guard_window', lambda _: False)
+    monkeypatch.setattr(type(settings), 'is_public_publish_window', lambda _: True)
+    recovered = [add(recovery, f'recovery-{i}', score=99) for i in range(2)]
+    for i in range(2):
+        add(recovery, f'ordinary-{i}', state='PENDING', score=90-i)
+    preview = recovery.preview()
+    operation = recovery.execute(request(recovery, preview, [v['id'] for v in recovered]))
+    manager = PipelineManager(str(recovery.out/'pipeline.db'))
+    manager._PRJ_ROOT = recovery.root
+    manager._OUT_DIR = recovery.out
+    calls=[]
+    def process(video, **kwargs):
+        calls.append(video['youtube_id'])
+        recovery.db.update_video_status(video['youtube_id'], 'FAILED', error_msg='bounded technical failure')
+    manager._process_single_video = process
+    manager.process_high_score_videos(limit=4)
+    assert calls == ['recovery-0','ordinary-0','recovery-1','ordinary-1']
+    assert len(calls)==len(set(calls))
+    current=recovery.db.get_publishing_recovery_operation(operation['id'])
+    assert current['state']=='COMPLETED'
+    assert all(i['state']=='FAILED' for i in current['items'])
+
+
+def test_boundary_recovery_skips_same_batch_target(recovery, monkeypatch):
+    monkeypatch.setattr(type(settings), 'is_us_market_guard_window', lambda _: False)
+    monkeypatch.setattr(type(settings), 'is_public_publish_window', lambda _: True)
+    video=add(recovery,'already-attempted',score=95)
+    preview=recovery.preview()
+    operation=recovery.execute(request(recovery,preview,[video['id']]))
+    def forbidden(*args,**kwargs):
+        raise AssertionError('must not repeat the same video')
+    assert not recovery.dispatch_once(SimpleNamespace(_process_single_video=forbidden),
+                                      attempted_targets={('already-attempted',0)})
+    assert recovery.db.get_publishing_recovery_operation(operation['id'])['items'][0]['state']=='WAITING'

@@ -563,3 +563,58 @@ def test_two_network_executions_exhaust_singleton_without_audio_evidence(tmp_pat
     assert denied.value.quality_details == [] and len(calls) == 2
     ledger = json.loads(next((tmp_path / "subtitle-recovery").glob("*.json")).read_text())
     assert ledger["units"]["0"]["last_failure"]["code"] == "unavailable"
+
+
+def test_vocab_error_reuses_valid_rows_and_resumes_only_bad_row(tmp_path, monkeypatch):
+    """一行词汇错位不触发五行重译；中断后的真实账本/质量/预算全部继续。"""
+    class Interrupted(BaseException):
+        pass
+    def respond(data, number, prompt, timeout):
+        ids=[r['id'] for r in data]
+        if len(ids)==5:
+            return {'items':[{'id':i,'translation':'企业可以改变',
+                'vocab':[{'english':'missing','chinese':'不存在'}] if i==2 else []} for i in ids]}
+        if number==2:
+            raise Interrupted()
+        return {'items':[{'id':i,'translation':'企业可以改变','vocab':[]} for i in ids]}
+    calls=_real_executor(monkeypatch,respond)
+    args=dict(state_dir=tmp_path,command='codex',allow_quality_candidate=True)
+    texts=['A business can change.']*5
+    with pytest.raises(Interrupted):
+        provider.build_codex_subtitle_candidate(texts,'',**args)
+    path=next((tmp_path/'subtitle-recovery').glob('*.json'))
+    interrupted=json.loads(path.read_text())
+    assert {i for i,u in interrupted['units'].items() if u.get('validated_candidate')}=={'0','1','3','4'}
+    assert interrupted['requests_used']==2
+    result=provider.build_codex_subtitle_candidate(texts,'',**args)
+    assert calls==[list(range(5)),[2],[2]]
+    assert result.translations==['企业可以改变']*5
+    recovered=json.loads(path.read_text())
+    assert recovered['requests_used']==3 and recovered['elapsed_seconds']>=interrupted['elapsed_seconds']
+    assert recovered['total_timeout']<=interrupted['total_timeout']
+    assert provider.build_codex_subtitle_candidate(texts,'',**args).translations==result.translations
+    assert len(calls)==3
+    # 全片门指定的问题段仍必须实际修复，不能借用局部缓存逃过定点修复。
+    provider.build_codex_subtitle_candidate(texts,'',initial_candidate=result,repair_segment_numbers=[1],**args)
+    assert calls[-1]==[0] and len(calls)==4
+    # 缓存损坏必须安全停止，不能重置累计预算后悄悄重新执行。
+    state=json.loads(path.read_text());state['units']['1']['validated_candidate']['payload']['translations']=['损坏']
+    path.write_text(json.dumps(state))
+    with pytest.raises(CodexTextError,match='recovery_state_invalid'):
+        provider.build_codex_subtitle_candidate(texts,'',**args)
+    assert len(calls)==4
+
+
+def test_valid_rows_are_not_reused_for_changed_context_or_model(tmp_path, monkeypatch):
+    def respond(data, number, prompt, timeout):
+        ids=[r['id'] for r in data]
+        return {'items':[{'id':i,'translation':'企业可以改变','vocab':
+            [{'english':'wrong','chinese':'不存在'}] if len(ids)==5 and i==2 else []} for i in ids]}
+    calls=_real_executor(monkeypatch,respond)
+    args=dict(state_dir=tmp_path,command='codex',allow_quality_candidate=True)
+    texts=['A business can change.']*5
+    for context,model in [('', 'gpt-5.6-luna'),('new context','gpt-5.6-luna'),('','gpt-6-luna')]:
+        provider.build_codex_subtitle_candidate(texts,context,model=model,**args)
+    # 新上下文必须重验完整父批；定点修复原本隔离上下文，相同源行的请求缓存仍合法。
+    assert calls==[list(range(5)),[2],list(range(5)),list(range(5)),[2]]
+    assert len(list((tmp_path/'subtitle-recovery').glob('*.json')))==3

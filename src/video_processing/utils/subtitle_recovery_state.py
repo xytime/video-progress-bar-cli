@@ -3,6 +3,7 @@
 依赖：codex_subtitle_provider → 本模块 → codex_text_provider；不访问任务库或音频。
 
 # Modification History
+| validated-rows-v1 | 2026-10-31 | Codex | 词汇错位拆批时保存已独立严格验证的行，续跑复核校验和，不重置预算。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | sparse-quality-v1 | 2026-10-27 | Codex | 持久保留修复执行与质量观察、未接受候选，复用仍重验结构且预算不重置。 |
@@ -218,3 +219,23 @@ class SubtitleRecoveryState:
         if hashlib.sha256(encoded.encode()).hexdigest() != saved["sha256"]:
             raise CodexTextError("recovery_state_invalid")
         return deepcopy(saved["payload"])
+
+
+    def remember_validated_candidate(self, source_id: int, payload: dict) -> None:
+        """仅保存调用方已严格验证的完整单行；不能用于绕过指定质量修复。"""
+        unit = self.data["units"].setdefault(str(source_id), {"attempts_used": 0})
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        unit["validated_candidate"] = {"payload": deepcopy(payload), "sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+        self._write()
+
+    def validated_candidate(self, source_id: int) -> dict | None:
+        saved = self.data["units"].get(str(source_id), {}).get("validated_candidate")
+        if not saved:
+            return None
+        try:
+            encoded = json.dumps(saved["payload"], ensure_ascii=False, sort_keys=True, allow_nan=False)
+            if hashlib.sha256(encoded.encode()).hexdigest() != saved["sha256"]:
+                raise ValueError("checksum")
+            return deepcopy(saved["payload"])
+        except (KeyError, TypeError, ValueError):
+            raise CodexTextError("recovery_state_invalid") from None

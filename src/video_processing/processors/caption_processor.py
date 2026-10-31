@@ -641,7 +641,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
             self._last_provider_error = ""
             self._last_provider_failure = None
             attempt_started = time.monotonic()
-            candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
+            from ..utils.subtitle_provider_window import translation_provider_window
+            with translation_provider_window(self, provider_order, idx, settings) as available:
+                candidate = self._build_translation_candidate(provider, texts, translation_prompt_context) if available else None
+                if not available:
+                    self._last_provider_error = "translation_budget_exhausted:provider_window"
+                    self._last_provider_failure = safe_failure(provider, 'translation_budget_exhausted', category='budget')
             duration_ms = int((time.monotonic() - attempt_started) * 1000)
             contract_error = candidate.contract_error_for(len(segments)) if candidate else "missing_translation_candidate"
             if contract_error:
