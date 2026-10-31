@@ -23,7 +23,7 @@ from video_processing.processors.vertical_processor import VerticalCaptionProces
 @pytest.fixture(autouse=True)
 def prepared_caption_input(monkeypatch):
     # 本组只验证烧录后的 TTS 分支；定位/修补在专门的字幕测试中验证。
-    monkeypatch.setattr(VerticalCaptionProcessor, '_prepared_captions', SimpleNamespace(video=Path('test_video.mp4')), raising=False)
+    monkeypatch.setattr(VerticalCaptionProcessor, '_prepared_captions', SimpleNamespace(video=Path('test_video.mp4'), mode='DIRECT'), raising=False)
 
 
 class TestVerticalProcessorTTSAutoActivation:

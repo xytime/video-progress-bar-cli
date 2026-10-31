@@ -243,7 +243,7 @@ class TestCharacterizationBaseline:
         with mock.patch.object(pm, "_run_tracked", return_value=mock_process_result) as tracked_mock:
             settled = pm.reconcile_wechat_under_review()
 
-        assert tracked_mock.called, "回查子进程必须被以 --verify-only 执行"
+        tracked_mock.assert_not_called()  # 旧作品自动回查已永久停用，配置非零也不得重启。
         assert settled == 0, "未决结果不得标记为已解决 (settled=0)"
 
         # 验证数据库状态严格保持不变（无副作用）

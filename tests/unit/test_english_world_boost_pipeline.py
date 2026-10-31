@@ -663,14 +663,19 @@ def test_revision_cannot_spend_review_on_an_unchanged_failed_target():
 
 def test_review_cli_records_fresh_completion_and_local_failure(tmp_path, monkeypatch):
     import sys
+    from config.settings import settings
     from scripts import english_world_language as language
     from video_processing.study_cards import language_review_service as service
     from video_processing.study_cards.language_protocol import atomic_json, read_json, digest
     timeline = tmp_path / "timeline.json"
     atomic_json(timeline, {})
+    atomic_json(tmp_path / "display_plan.json", {})
+    atomic_json(tmp_path / "editorial_changes.json", [])
     atomic_json(tmp_path / "qa/source_evidence.json", {"source_sha256": "source", "caption_sha256": "caption",
                                                        "source_start": 0, "source_end": 20})
     report = {"state": "FAIL", "cache_hit": False, "attempts": 1}
+    # 本例只验证 CLI 的完成/错误收据，供应商切换另有真实路由边界测试。
+    monkeypatch.setattr(settings, "english_world_codex_fallback", False)
     atomic_json(tmp_path / "qa/language_qa.json", report)
     monkeypatch.setattr(sys, "argv", ["english_world_language.py", "review", "--timeline", str(timeline)])
     monkeypatch.setattr(language, "prepare", lambda *a: None)
