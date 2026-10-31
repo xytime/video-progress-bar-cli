@@ -3,12 +3,15 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 分页语义证据须全量覆盖，逐页矛盾不得降为无中文字幕。 |
 | 1.0.0 | 2026-10-27 | Codex | 三态分流、逐对白覆盖检查及单片证据绑定。 |
 """
 import hashlib
 import json
 import math
 from pathlib import Path
+
+from .caption_visual_pages import validate_paged_review
 
 VERSION = 'source-chinese-v1'
 
@@ -61,6 +64,13 @@ def decide(evidence: dict) -> dict:
     # 一个字幕 run 连续覆盖全部相同文字的帧，零星字、画面标题也保留给审查者。
     selected, absent = [], 0
     for index, (segment, review) in enumerate(zip(segments, reviews)):
+        if 'review_contract' in review or 'visual_page_proof' in review:
+            rows = [r for r in runs if r['chinese'] and r['last'] / fps > segment['start']
+                    and r['first'] / fps < segment['end']]
+            try:
+                validate_paged_review(review, rows)
+            except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+                return result('REVIEW', '分页视觉证据不完整或与整段结论矛盾')
         if review.get('decision') == 'ABSENT':
             if review.get('run_ids'):
                 return result('REVIEW', '无字幕结论含字幕引用')
