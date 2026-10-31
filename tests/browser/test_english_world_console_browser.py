@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 2.0.0 | 2026-10-25 | Codex | 验证 v10 筛选、历史折叠、任务抽屉、确认与 URL 恢复。 |
+| 2.0.1 | 2026-10-31 | Codex | 模拟真实状态分组并检查筛选后的任务身份，禁止旧列表瞬态满足断言。 |
 """
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -80,8 +81,16 @@ def ui(chromium, tmp_path):
             q = query.get('q', [''])[0].strip().casefold()
             status = query.get('status', [''])[0]
             trigger = query.get('trigger', [''])[0]
+            status_groups = {
+                'active': {'RESEARCH_QUEUED', 'RESEARCHING', 'PRODUCTION_REQUESTED', 'REQUESTED',
+                           'PRODUCING', 'SUBMISSION_APPROVED', 'SUBMITTING', 'UNDER_REVIEW', 'SUBMITTED_BOUND'},
+                'waiting': {'CANDIDATES_READY', 'CANDIDATE_SELECTED', 'READY_FOR_REVIEW',
+                            'LOGIN_REQUIRED', 'HELD', 'UNCERTAIN'},
+                'failed': {'FAILED', 'REJECTED'}, 'complete': {'PUBLISHED', 'CANCELED'},
+            }
             data = [r for r in data if (not q or q in (r['title']+' '+r['source']+' '+r['task_id']).casefold()) and
-                    (not status or r['status'] == status) and (not trigger or r['trigger'] == trigger)]
+                    (not status or r['status'] == status or r['status'] in status_groups.get(status, set())) and
+                    (not trigger or r['trigger'] == trigger)]
             old = [r for r in data if r['age_bucket'] == 'history']
             current = [r for r in data if r['age_bucket'] != 'history']
             page_num = int(query.get('page', ['1'])[0]); start=(page_num-1)*20
@@ -141,15 +150,19 @@ def test_desktop_filters_history_and_navigation(ui):
     page.wait_for_timeout(400)
     page.locator('#ew-trigger').select_option('manual')
     page.locator('#ew-status').select_option('failed')
-    expect(page.locator('#ew-rows tr')).to_have_count(12)
+    expect(page.locator('#ew-rows tr[data-task]')).to_have_count(1)
+    expect(page.locator('#ew-rows tr[data-task]')).to_have_attribute('data-task', 'job:fixture-03')
     expect(page.locator('#ew-chips')).to_contain_text('搜索：ocean')
     expect(page.locator('#ew-chips')).to_contain_text('状态：失败')
     expect(page.locator('#ew-chips')).to_contain_text('触发：人工')
     assert 'q=ocean' in page.url and 'trigger=manual' in page.url and 'status=failed' in page.url
     page.locator('#ew-trigger').select_option('scheduled')
+    expect(page.locator('#ew-rows tr[data-task]')).to_have_count(0)
     expect(page.locator('#ew-chips')).to_contain_text('触发：定时')
     page.locator('#ew-trigger').select_option('manual')
+    expect(page.locator('#ew-rows tr[data-task]')).to_have_attribute('data-task', 'job:fixture-03')
     page.locator('#ew-status').select_option('')
+    expect(page.locator('#ew-rows tr[data-task]')).to_have_count(12)
     expect(page.locator('#ew-history')).to_be_visible()
     page.locator('#ew-history').locator('summary').click()
     expect(page.locator('#ew-history-rows tr')).to_have_count(1)

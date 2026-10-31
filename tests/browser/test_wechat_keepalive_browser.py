@@ -12,6 +12,7 @@
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-09-28 | Antigravity | 初始创建：真实 Chromium 下保活正向校验、SPA未就绪、错误来源、锁忙及独立复用 |
+| 1.1.0 | 2026-10-31 | Codex | 旧保活页面合同显式使用隔离旧模式；页面路由与真实账户守卫共存。 |
 """
 
 import json
@@ -33,6 +34,15 @@ from video_processing.core.wechat_session_lock import (
 )
 
 
+@pytest.fixture(autouse=True)
+def legacy_keepalive_mode(monkeypatch, tmp_path):
+    """验证保活内部页面合同；默认调度关闭自动保活的保护另有回归。"""
+    from config.settings import settings
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setattr(settings, "wechat_operations_enabled", False)
+
+
 def _setup_browser_route(chromium, route_fn):
     """为 chromium 创建上下文并挂载路由拦截，返回代理 launch 对象。"""
     class _MockPlaywright:
@@ -45,7 +55,7 @@ def _setup_browser_route(chromium, route_fn):
 
                 def _wrapped_new_context(*c_args, **c_kwargs):
                     ctx = orig_new_context(*c_args, **c_kwargs)
-                    ctx.route("**/*", route_fn)
+                    ctx.on("page", lambda page: page.route("**/*", route_fn))
                     return ctx
 
                 mock_b = MagicMock()

@@ -1,4 +1,10 @@
-"""测试副本回收与宿主证据保留，不导入生产运行配置。"""
+"""测试副本回收与宿主证据保留，不导入生产运行配置。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 生命周期夹具隔离宿主进程枚举，保留回收失败闭锁断言。 |
+"""
 
 import importlib.util
 import json
@@ -13,6 +19,25 @@ spec = importlib.util.spec_from_file_location(
 )
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+
+
+@pytest.fixture(autouse=True)
+def no_detached_host_workers(monkeypatch):
+    # 这些夹具没有脚本执行者，且嵌套沙盒禁止 ps；真实子进程在专门边界测试中验证。
+    monkeypatch.setattr(runner, 'reap_snapshot_workers', lambda _repo: [])
+
+
+def test_worker_reap_failure_retains_snapshot_and_marks_failed(tmp_path, monkeypatch):
+    evidence = tmp_path / 'video-pytest-reap-failed'
+    (evidence / 'sandbox/repo').mkdir(parents=True)
+    def fail(_repo):
+        raise RuntimeError('本次测试副本执行者未退出')
+    monkeypatch.setattr(runner, 'reap_snapshot_workers', fail)
+    receipt = dict(exit_code=0)
+    assert runner.finish_run(evidence, receipt) is False
+    assert receipt['exit_code'] == 3
+    assert receipt['cleanup']['status'] == 'failed'
+    assert (evidence / 'sandbox/repo').is_dir()
 
 
 @pytest.mark.parametrize("outcome", [0, 1, "prepare-error", "interrupt", "timeout"])

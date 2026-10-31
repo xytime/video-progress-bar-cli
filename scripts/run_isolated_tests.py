@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-31 | Codex | pytest 退出后回收本次副本的独立 Python 执行者，保留清理收据，拒绝触碰其他根。 |
 | 1.0.0 | 2026-09-08 | Codex | 收集前隔离配置、源码、输出、网络和子进程；保留快照与真实退出收据 |
 | 1.1.0 | 2026-09-08 | Codex | 显式浏览器模式复制运行依赖，保留版本收据与原有默认隔离 |
 | 1.2.0 | 2026-09-08 | Codex | 显式媒体模式复制已校验离线模型，浏览器使用标准快照缓存布局 |
@@ -16,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,6 +46,42 @@ def create_evidence():
     return Path(tempfile.mkdtemp(prefix="video-pytest-", dir=root)).resolve()
 
 
+def reap_snapshot_workers(repo):
+    """独立 session 不属于 pytest 进程组；只回收本次物理副本内的 Python 脚本。"""
+    prefix = str(repo / '.venv/bin/python')
+    scripts = repo / 'scripts'
+    def owned():
+        output = subprocess.check_output(['/bin/ps', '-axo', 'pid=,command='], text=True)
+        found = {}
+        for line in output.splitlines():
+            try:
+                pid, command = line.strip().split(None, 1)
+                args = shlex.split(command)
+                if (len(args) >= 2 and args[0] == prefix
+                        and Path(args[1]).is_relative_to(scripts)
+                        and Path(args[1]).resolve() == Path(args[1]).absolute()
+                        and Path(args[1]).suffix == '.py'):
+                    found[int(pid)] = args[1]
+            except (ValueError, IndexError):
+                continue
+        return found
+    found = owned()
+    for pid, script in found.items():
+        # 发信号前再次核对 PID 对应的精确副本路径，不使用宽泛进程名匹配。
+        if owned().get(pid) == script:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    deadline = time.monotonic() + 5
+    while found.keys() & owned().keys() and time.monotonic() < deadline:
+        time.sleep(.1)
+    remaining = found.keys() & owned().keys()
+    if remaining:
+        raise RuntimeError('本次测试副本执行者未退出，保留沙盒供核验')
+    return [{'pid': pid, 'script': script, 'signal': 'SIGTERM'} for pid, script in found.items()]
+
+
 def finish_run(evidence, receipt, keep_sandbox=False):
     """保留宿主日志/收据与 JUnit，仅回收本次创建的副本。"""
     root = evidence / "sandbox"
@@ -51,12 +89,13 @@ def finish_run(evidence, receipt, keep_sandbox=False):
     try:
         if root.is_symlink():
             raise ValueError("拒绝清理链接形式的 sandbox")
+        cleanup['reaped_workers'] = reap_snapshot_workers(root / 'repo')
         junit = root / "pytest.xml"
         if junit.is_file() and not junit.is_symlink():
             shutil.copy2(junit, evidence / "pytest.xml")
         if root.exists() and not keep_sandbox:
             shutil.rmtree(root)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         cleanup.update(status="failed", error_type=type(exc).__name__, error=str(exc))
     receipt["cleanup"] = cleanup
     if cleanup["status"] == "failed" and receipt.get("exit_code") == 0:

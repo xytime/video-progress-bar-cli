@@ -49,6 +49,13 @@ def test_two_workers_must_not_both_take_last_hourly_quota(tmp_path, monkeypatch)
     # 固定时钟：上海 12:00，处于允许提交窗口内
     now = datetime(2026, 10, 12, 4, 0, 0, tzinfo=timezone.utc)
     from config.settings import settings
+    # 明确验证旧版共享小时额度的最后一个名额，不依赖先前页面用例的热更新值。
+    monkeypatch.setattr(settings, 'wechat_operations_enabled', False)
+    monkeypatch.setattr(settings, 'runtime_configuration_enabled', False)
+    monkeypatch.setattr(settings, 'wechat_reply_policy_path', tmp_path / 'legacy-policy.json')
+    monkeypatch.setattr(settings, 'wechat_reply_window_start_shanghai', '00:00')
+    monkeypatch.setattr(settings, 'wechat_reply_window_end_shanghai', '24:00')
+    monkeypatch.setattr(settings, 'wechat_reply_hourly_quota', 10)
     monkeypatch.setattr(settings, 'wechat_reply_min_interval_seconds', 0, raising=False)
     earlier = (now - timedelta(minutes=6)).strftime('%Y-%m-%d %H:%M:%S')
     with db.get_connection() as conn:
@@ -78,3 +85,4 @@ def test_two_workers_must_not_both_take_last_hourly_quota(tmp_path, monkeypatch)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(reserve, claims))
     assert sorted(bool(result[0]) for result in results) == [False, True], f'Both workers consumed last quota slot: {results}'
+    assert 'rolling 60m submission limit reached (10 >= 10' in next(result[1] for result in results if not result[0])

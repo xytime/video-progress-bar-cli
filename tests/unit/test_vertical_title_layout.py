@@ -79,7 +79,7 @@ def test_vertical_render_uses_single_thread_input_decode(_ffmpeg, mock_run, _val
     )
 
     from types import SimpleNamespace
-    processor._prepared_captions = SimpleNamespace(video=processor.input_path)
+    processor._prepared_captions = SimpleNamespace(video=processor.input_path, mode='DIRECT')
     processor._burn_subtitles(tmp_path / "source.ass")
 
     render_command = mock_run.call_args_list[-1].args[0]

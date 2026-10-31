@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                          |
 |---------|------------|-------------------------------------|----------------------------------------------------------------------|
+| isolation-v1 | 2026-10-31 | Codex | 标题迁移夹具提供真实格式的媒体元数据与绑定字幕成功凭据。 |
 | 1.3.0 | 2026-09-09 | Codex | 渲染替身生成真实 ASS；坏字幕须在封面/发布前被拒绝 |
 | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 新增切片进度标题测试（v2.9.0）: "AI写代码 3/9"                          |
 | 1.2.0   | 2026-08-24 | Codex                               | 双标题缺失触发未提交任务重写文案，并使平台标题重渲、封面展示标题重建。      |
@@ -244,13 +245,34 @@ class TestRenderTitleConsistency:
                 chinese = "正常译文" if valid_subtitles else "（承接上文）"
                 subs.append(pysubs2.SSAEvent(start=0, end=1000, text=r"{\fnGeorgia}English\N{\fnHiragino Sans GB}" + chinese))
                 subs.save(str(source.with_suffix(".ass")))
+                from video_processing.utils.caption_checkpoints import CaptionCheckpoints
+                from video_processing.utils.subtitle_failure_receipt import write_success_receipt, fingerprint
+                from video_processing.utils.render_source_binding import digest
+                store = CaptionCheckpoints(source, dict(model='fixture'))
+                segments = [dict(start=0, end=1, text='English', zh_text=chinese)]
+                contract = dict(asr_sha256=fingerprint(segments), target_lang='zh-CN')
+                store.save('asr', store.identity['asr'], segments, 'en')
+                store.save('translation', contract, segments, 'en', segments)
+                checkpoint = store.directory / 'translation.json'
+                write_success_receipt(Path(cmd[cmd.index('--subtitle-receipt') + 1]),
+                    cmd[cmd.index('--subtitle-attempt-id') + 1], source,
+                    dict(input_sha256=digest(source), asr_sha256=fingerprint(segments),
+                         contract_sha256=fingerprint(contract), checkpoint_path=str(checkpoint),
+                         checkpoint_sha256=digest(checkpoint)))
             return MagicMock(returncode=0, stdout="", stderr="")
 
         pm._run_tracked = mock_run_tracked
         with patch("video_processing.pipeline_manager.subprocess.run") as mock_sub:
-            mock_sub.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            # 时长/扫描预算也通过 ffprobe 读取；不能把空输出当有效媒体夹具。
+            def external(cmd, **kwargs):
+                if "-show_streams" in cmd:
+                    return MagicMock(returncode=0, stdout='{"streams":[{"width":360,"height":640,"avg_frame_rate":"30/1","r_frame_rate":"30/1","duration":"1"}]}', stderr="")
+                if "-show_entries" in cmd:
+                    return MagicMock(returncode=0, stdout="1.0", stderr="")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_sub.side_effect = external
             pm._process_single_video(
-                {"youtube_id": yid, "title": "Original title", "slice_index": 0, "disable_slicing": 1},
+                dict(db.get_video_by_youtube_id(yid), disable_slicing=1),
                 preparation_only=True,
             )
 

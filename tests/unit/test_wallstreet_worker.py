@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| isolation-v1 | 2026-10-31 | Codex | 锁定已绑定视频号作品不再自动回查或更改历史状态。 |
 | 1.1.2 | 2026-10-10 | Codex | 已提交无 ID 的抖音 A 强回读闭环，未提交队列禁止绑定。 |
 | 1.1.1 | 2026-10-10 | Codex | 登录退出可恢复且冷却；未知退出与已有回执不恢复。 |
 | 1.1.0 | 2026-10-10 | Codex | 普通 A 强回读、原生时间与错误身份拒绝的验收。 |
@@ -46,7 +47,7 @@ def test_preupload_login_exit_has_bounded_recovery(tmp_path,code,receipt,state):
             uploader_exit_code=2,evidence_path=str(tmp_path/'late'))
 
 
-def test_strong_a_readback_updates_ordinary_ledger_without_upload(tmp_path,monkeypatch):
+def test_wechat_a_reconciliation_preserves_bound_state_without_query(tmp_path,monkeypatch):
     spec=importlib.util.spec_from_file_location('wallstreet_a_bridge',Path('scripts/run_wallstreet_ab.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     db=PipelineDB(str(tmp_path/'db.sqlite'))
@@ -56,27 +57,16 @@ def test_strong_a_readback_updates_ordinary_ledger_without_upload(tmp_path,monke
     db.record_wechat_publication_confirmation('abcdefghijk',state='SUBMITTED_BOUND',
         platform_post_id='native-A',evidence_path='/tmp/receipt')
     db.update_video_status('abcdefghijk','SUBMITTED_BOUND')
+    before = db.get_wallstreet_publications()
     monkeypatch.setattr(type(settings),'default_output_dir',property(lambda _:tmp_path))
-    calls=[]
-    def read_only(args,evidence):
-        calls.append(args)
-        assert '--verify-only' in args and '--video' not in args
-        assert args[args.index('--platform-post-id')+1]=='native-A'
-        evidence.mkdir(parents=True)
-        (evidence/'management_readback.json').write_text(json.dumps({
-            'platform_post_id':'native-A','state':'PUBLISHED','matched_by':'EXACT_OBJECT_ID',
-            'platform_public_at':100,'public_time_evidence':'DOM_POSTED_INFO_AND_NATIVE_CREATE_TIME'}))
-        return 0
-    monkeypatch.setattr(module,'run_command',read_only)
+    def forbidden(*args):
+        pytest.fail('已停用的视频号历史回查不得启动浏览器')
+    monkeypatch.setattr(module,'run_command',forbidden)
     module.reconcile(db)
-    assert len(calls)==1
-    assert db.get_wechat_publication('abcdefghijk')['state']=='PUBLISHED'
-    assert db.get_video_by_youtube_id('abcdefghijk')['status']=='PUBLISHED'
-    assert all(p['attempt_count']==0 for p in db.get_wallstreet_publications())
-    a=next(p for p in db.get_wallstreet_publications() if p['variant']=='A')
-    assert a['public_at']==100 and a['public_time_basis']=='platform'
     module.reconcile(db)
-    assert len(calls)==1
+    assert db.get_wechat_publication('abcdefghijk')['state']=='SUBMITTED_BOUND'
+    assert db.get_video_by_youtube_id('abcdefghijk')['status']=='SUBMITTED_BOUND'
+    assert db.get_wallstreet_publications() == before
 
 
 def test_readback_identity_mismatch_cannot_confirm_or_rebind(tmp_path):

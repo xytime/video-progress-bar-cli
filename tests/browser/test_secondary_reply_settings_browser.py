@@ -14,16 +14,29 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from playwright.sync_api import expect
+from config.settings import settings
 from tests.browser_fixtures import chromium
 from web.secondary_reply_settings import create_secondary_reply_settings_router
 from video_processing.utils.secondary_reply_policy import current_policy_from_settings, load_policy
 
 
 @pytest.fixture
-def ui(chromium, tmp_path):
+def isolated_reply_policy():
+    original = current_policy_from_settings()
+    # 真实保存接口会热更新单例；页面测试结束必须恢复全部策略字段。
+    with pytest.MonkeyPatch.context() as restore:
+        for key in original.keys() - {'schema_version'}:
+            name = 'wechat_reply_' + key
+            restore.setattr(settings, name, getattr(settings, name))
+        yield original
+    assert current_policy_from_settings() == original
+
+
+@pytest.fixture
+def ui(chromium, tmp_path, isolated_reply_policy):
     active = tmp_path / 'secondary-policy.json'
     import json
-    active.write_text(json.dumps(current_policy_from_settings()), encoding='utf-8')
+    active.write_text(json.dumps(isolated_reply_policy), encoding='utf-8')
     now = int(datetime.now(timezone.utc).timestamp())
     records = [dict(task_id=i, status=['APPROVED','VERIFIED','PENDING_REVIEW','UNCERTAIN','FAILED','SKIPPED','MANUAL'][i % 7],
                     nickname=f'观众{i}', comment_content=f'原评{i}：' + '完整长评论内容' * 30,

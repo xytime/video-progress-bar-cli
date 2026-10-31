@@ -82,7 +82,8 @@ def scan_fixture(tmp_path, monkeypatch):
     writer.release()
     directory = tmp_path / 'scan'
     directory.mkdir()
-    monkeypatch.setattr(burned_caption_repair, '_probe', lambda _: (64, 64, 10., .8))
+    # 本组验证旧扫描断点；BMP 路径有独立的同等覆盖测试。
+    monkeypatch.setattr(router.settings, 'native_caption_scan_optimization_enabled', False)
     monkeypatch.setattr(router, 'vision_worker', lambda: nullcontext(None))
     return source, directory
 

@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-09-08 | Codex | 覆盖刷新选择、具名删除确认、状态一致性和过期响应隔离。 |
 | 1.1.0 | 2026-09-08 | Codex | 使用显式 Chromium 快照，清理异常路径，禁止缺失依赖伪装验收。 |
 | 1.2.0 | 2026-09-20 | Codex | 支持静态资源 (/static/*) 本地文件映射与 Content-Type 分发。 |
+| 1.3.0 | 2026-10-31 | Codex | 登录页面测试使用隔离账户的真实会话锁和准入，不绕过生产守卫。 |
 """
 
 import json
@@ -58,6 +59,18 @@ def chromium():
             yield browser
         finally:
             browser.close()
+
+
+@pytest.fixture
+def wechat_login_session(tmp_path, monkeypatch):
+    """内部登录 helper 与上下文工厂同样需要真实准入及账户互斥。"""
+    from config.settings import settings
+    from video_processing.core.wechat_session_lock import WeChatSessionLock
+    monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
+    monkeypatch.setattr(settings, "wechat_scheduler_priority_video", "")
+    with WeChatSessionLock(tmp_path / "wechat_state.json", purpose="登录", video="fixture-login") as session:
+        yield session
 
 
 @pytest.fixture

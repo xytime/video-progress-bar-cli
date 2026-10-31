@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1 | 2026-10-31 | Codex | 历史模式夹具与当前模式拒绝分开验证，保留原一次性工具写入保护。 |
 | 1.0 | 2026-10-13 | Codex | 授权目标及禁止自动入队的针对性验收 |
 """
 import importlib.util
@@ -30,11 +31,26 @@ def record(tmp_path):
     path = tmp_path / "pipeline.db"
     business = BusinessDB(str(path))
     with sqlite3.connect(path) as conn:
+        # 本文档工具仅适用于 10 月 13 日冻结的写入范围；10 月 23 日新加的
+        # 失败事件触发器不属于该历史模式。只在一次性测试库还原历史模式，
+        # 不放宽已审计工具的 authorizer；另测其对当前模式必须拒绝写入。
+        conn.execute("DROP TRIGGER publishing_failed_update")
+        conn.execute("DROP TRIGGER publishing_failed_insert")
         values = dict(dal.TARGET, title="需人工复核的原任务", channel_id="test", score=99)
         conn.execute(f"INSERT INTO processed_videos ({','.join(values)}) VALUES ({','.join('?' for _ in values)})", list(values.values()))
         conn.execute("INSERT INTO processed_videos(id,youtube_id,title,channel_id,status) VALUES (5788,'unrelated','title','test','PENDING')")
         conn.execute("INSERT INTO wechat_publications(video_id,subject_id,state) VALUES (5788,'unrelated','PUBLISHED')")
     return path, business, dal.PipelineDB.repair_snapshot(path)
+
+
+def test_historical_tool_refuses_current_schema_without_partial_writes(record):
+    path, business, before = record
+    business.initialize_publishing_recovery()
+    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
+        dal.PipelineDB.hold_authorized_orphan(path, before)
+    assert dal.PipelineDB.repair_snapshot(path) == before
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT count(*) FROM publishing_failure_events').fetchone() == (0,)
 
 
 def test_hold_preserves_task_ledgers_and_real_claims_refuse(record):

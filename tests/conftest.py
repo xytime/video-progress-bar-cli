@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-31 | Codex | 每例隔离账户退避账本，同时保留例内跨进程共用的原生路径与锁。 |
 | 1.2.0 | 2026-10-12 | Codex | 既有业务测试显式初始化独立维护状态，不改变生产缺失闭锁 |
 | 1.1.0 | 2026-09-08 | Codex | 业务配置导入前检查一次性源码根和实际沙盒拒绝，禁止裸 pytest 触碰正式库 |
 | 1.0.0 | 2026-07-28 | Codex | 默认关闭公开视频提交窗口守卫，避免发布类单测依赖当前时钟 |
@@ -43,6 +44,25 @@ def _require_test_sandbox():
 _require_test_sandbox()
 
 from config.settings import settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_account_request_ledger():
+    """例间不能继承 429；例内的子进程仍读写同一账户，风控逻辑不替换。"""
+    root = Path(__file__).resolve().parents[1]
+    paths = [root / 'output' / name for name in (
+        '.wechat_state.json.requests.json', '.wechat_state.json.requests.jsonl')]
+    saved = {path: path.read_bytes() if path.exists() else None for path in paths}
+    for path in paths:
+        path.unlink(missing_ok=True)
+    try:
+        yield
+    finally:
+        for path, data in saved.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(data)
 
 
 @pytest.fixture(autouse=True)

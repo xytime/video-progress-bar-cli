@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| isolation-v1 | 2026-10-31 | Codex | 已停止的视频号指标补采不得启动平台请求或伪造快照。 |
 | 1.1.0 | 2026-10-11 | Codex | 验证缺商品或停用后清空放行，并保留同次原生 ID 与禁止重传。 |
 """
 import importlib.util
@@ -241,3 +242,32 @@ def test_verify_and_douyin_commands_keep_existing_contract(setup,tmp_path):
         asset_sha256=module.sha256(Path(package['video'])),video_path=package['video'],evidence_path=str(tmp_path/'douyin'))
     args=module.command(douyin,package,tmp_path/'douyin',ticket=claim)
     assert '--douyin-launch-ticket' in args and '--publish' in args and '--product-task-decision' not in args
+
+
+def test_retired_wechat_metrics_never_query_or_change_publication(setup, tmp_path, monkeypatch):
+    import time as _time
+    module, db, _ = setup
+    pub, _ = ready(module, db, tmp_path, intent='NONE')
+    now = _time.time()
+    public_at = now - 24.5 * 3600.0
+    db.observe_wallstreet_publication(
+        pub['id'], state='PUBLISHED', platform_post_id='export/native-B-1',
+        evidence_path=str(tmp_path / 'pub.json'), public_at=public_at, time_basis='platform',
+    )
+    calls = []
+
+    def fake_verify(args, evidence):
+        calls.append(args)
+        pytest.fail('已停用的视频号指标采集不得请求平台')
+
+    monkeypatch.setattr(module, 'run_command', fake_verify)
+    before = db.get_wallstreet_publications()
+    assert module.collect_metrics(db) == 0
+    assert calls == []
+    # 永久停止自动回查，历史事实和待采指标不得伪造完成。
+    assert module.collect_metrics(db) == 0
+    assert calls == []
+    rep = module.report(db)
+    assert rep['metric_snapshots_total'] == 0
+    assert db.get_wallstreet_publications() == before
+    assert db.get_wallstreet_publications()[0]['attempt_count'] == 0

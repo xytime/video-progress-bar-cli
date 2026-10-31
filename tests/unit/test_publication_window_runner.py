@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| isolation-v1 | 2026-10-31 | Codex | 逐例隔离执行者心跳/锁；已退役回查改验零领取、零调用与零通知。 |
 | 1.9.1 | 2026-09-25 | Codex | 验证公开回读双凭据与 24 小时零确认提醒。 |
 | 1.8.5 | 2026-09-20 | Antigravity | 覆盖持久化日志降频过滤器与保留 N 日日志修剪功能。 |
 | 1.8.4 | 2026-09-18 | Antigravity | 覆盖英语世界专属发布窗口 is_english_world_publish_window 派发判定。 |
@@ -32,6 +33,33 @@ from unittest.mock import ANY, MagicMock
 import pytest
 
 import scripts.run_publication_window as runner
+
+
+@pytest.fixture(autouse=True)
+def isolated_runner_root(tmp_path, monkeypatch):
+    # Web 生命周期测试会创建真实执行者；巡航单测不能借用其他用例的锁和心跳。
+    (tmp_path / 'output').mkdir(exist_ok=True)
+    monkeypatch.setattr(runner, 'PROJECT_ROOT', tmp_path)
+
+
+def test_ready_worker_availability_requires_held_lock_and_fresh_matching_heartbeat(tmp_path):
+    import os
+    from video_processing.core.task_lease import TaskLease
+    output = tmp_path / 'output'
+    status = output / 'ready_publications_status.json'
+    def heartbeat(pid, at, stage='IDLE'):
+        status.write_text(json.dumps(dict(pid=pid, heartbeat_at=at, stage=stage)))
+    heartbeat(os.getpid(), 100)
+    assert runner._ready_worker_available(output, now=101) is False
+    with TaskLease(output / 'ready_publications.lock'):
+        assert runner._ready_worker_available(output, now=101) is True
+        assert runner._ready_worker_available(output, now=161) is False
+        heartbeat(os.getpid() + 1, 100)
+        assert runner._ready_worker_available(output, now=101) is False
+        heartbeat(os.getpid(), 100, 'ERROR')
+        assert runner._ready_worker_available(output, now=101) is False
+    heartbeat(os.getpid(), 100)
+    assert runner._ready_worker_available(output, now=101) is False
 
 
 @pytest.mark.parametrize("returncode, expected_level", [(0, None), (10, "INFO"), (1, "ERROR")])
@@ -242,88 +270,18 @@ def test_english_world_douyin_management_guard_stops_before_claim_or_browser(mon
     browser.assert_not_called()
 
 
-def test_runner_reconciles_one_bound_english_world_item_without_upload(monkeypatch, tmp_path):
-    recorded = {}
-
-    class FakeDB:
-        def claim_next_english_world_reconciliation(self, **_kwargs):
-            return {
-                "id": "c" * 32,
-                "platform_post_id": "export/native-id",
-                "platform_url": None,
-                "evidence_dir": str(tmp_path / "submission"),
-            }
-
-        def record_english_world_reconciliation(self, review_id, **kwargs):
-            recorded.update({"review_id": review_id, **kwargs})
-
-    def fake_run(command, **_kwargs):
-        recorded["command"] = command
-        evidence_dir = Path(command[command.index("--evidence-dir") + 1])
-        evidence_dir.mkdir(parents=True)
-        (evidence_dir / "management_under_review.png").write_bytes(b"png")
-        return type("Result", (), {"returncode": 6})()
-
-    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_interval_minutes", 30)
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_max_age_hours", 72)
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_failure_limit", 2)
-    monkeypatch.setattr(runner.settings, "wechat_headless", True)
-    monkeypatch.setattr(runner.settings, "wechat_review_timeout_seconds", 180)
-
-    runner.reconcile_one_english_world_submission()
-
-    assert recorded["review_id"] == "c" * 32
-    assert recorded["platform_state"] == "UNDER_REVIEW"
-    command_text = " ".join(str(part) for part in recorded["command"])
-    assert "--video" not in command_text
-    assert "--verify-only" in command_text
-    assert "export/native-id" in command_text
-
-
-def test_reconciliation_timeout_reaches_fuse_and_escapes_notification(monkeypatch, tmp_path):
-    failures = 0
-    notifications = []
-
-    class FakeDB:
-        def claim_next_english_world_reconciliation(self, **_kwargs):
-            return {
-                "id": "d" * 32,
-                "title": "A&B <成长>",
-                "platform_post_id": "export/native-id",
-                "platform_url": None,
-                "evidence_dir": str(tmp_path / "submission"),
-            }
-
-        def record_english_world_reconciliation(self, _review_id, **_kwargs):
-            nonlocal failures
-            failures += 1
-            return {"reconciliation_failures": failures}
-
-    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
-    monkeypatch.setattr(
-        runner.subprocess,
-        "run",
-        MagicMock(side_effect=subprocess.TimeoutExpired(["wechat_uploader"], 30)),
-    )
-    monkeypatch.setattr(runner, "send_text", lambda **kwargs: notifications.append(kwargs))
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_interval_minutes", 30)
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_max_age_hours", 72)
-    monkeypatch.setattr(runner.settings, "english_world_reconcile_failure_limit", 2)
-    monkeypatch.setattr(runner.settings, "wechat_headless", True)
-    monkeypatch.setattr(runner.settings, "wechat_review_timeout_seconds", 30)
-
-    runner.reconcile_one_english_world_submission()
-    runner.reconcile_one_english_world_submission()
-
-    assert failures == 2
-    assert len(notifications) == 1
-    assert notifications[0]["event_type"] == "english_world.reconciliation_recording_required"
-    assert "A&amp;B &lt;成长&gt;" in notifications[0]["text"]
-    assert "A&B <成长>" not in notifications[0]["text"]
+@pytest.mark.parametrize("review_id", [None, "c" * 32])
+def test_retired_wechat_reconciliation_never_claims_launches_or_notifies(monkeypatch, review_id):
+    # 用户永久停止旧作品轮询；显式旧 ID、重复调用也不能恢复回查或消耗失败预算。
+    database, browser, notify = MagicMock(), MagicMock(), MagicMock()
+    monkeypatch.setattr(runner, "PipelineDB", database)
+    monkeypatch.setattr(runner.subprocess, "run", browser)
+    monkeypatch.setattr(runner, "send_text", notify)
+    for _ in range(3):
+        assert runner.reconcile_one_english_world_submission(review_id=review_id) is False
+    database.assert_not_called()
+    browser.assert_not_called()
+    notify.assert_not_called()
 
 
 def test_published_readback_requires_same_native_id_and_explicit_state(tmp_path):
@@ -344,46 +302,6 @@ def test_published_readback_requires_same_native_id_and_explicit_state(tmp_path)
     assert runner._has_explicit_published_readback(tmp_path, "export/native") is True
     screenshot.unlink()
     assert runner._has_explicit_published_readback(tmp_path, "export/native") is False
-
-
-@pytest.mark.parametrize("readback_id, expected_state", [
-    ("export/native-id", "PUBLISHED"),
-    ("export/other-id", "UNCERTAIN"),
-])
-def test_reconciliation_exit_zero_still_requires_matching_readback(
-    monkeypatch, tmp_path, readback_id, expected_state,
-):
-    recorded = []
-
-    class FakeDB:
-        def claim_next_english_world_reconciliation(self, **_kwargs):
-            return {
-                "id": "e" * 32, "title": "目标作品", "platform_post_id": "export/native-id",
-                "evidence_dir": str(tmp_path / "submission"),
-            }
-
-        def record_english_world_reconciliation(self, _review_id, **kwargs):
-            recorded.append(kwargs)
-            return {"reconciliation_failures": 1}
-
-    def fake_run(command, **_kwargs):
-        evidence_dir = Path(command[command.index("--evidence-dir") + 1])
-        evidence_dir.mkdir(parents=True)
-        (evidence_dir / "management_published.png").write_bytes(b"png")
-        (evidence_dir / "management_readback.json").write_text(json.dumps({
-            "platform_post_id": readback_id,
-            "state": "PUBLISHED",
-            "reason": "DOM_STATUS_TEXT",
-        }), encoding="utf-8")
-        return type("Result", (), {"returncode": 0})()
-
-    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    monkeypatch.setattr(runner, "send_text", lambda **_kwargs: None)
-    monkeypatch.setattr(runner.settings, "wechat_headless", True)
-    assert runner.reconcile_one_english_world_submission() is True
-    assert recorded[0]["platform_state"] == expected_state
 
 
 def test_publication_gap_alert_requires_24_hours_and_uses_one_claim(monkeypatch):
