@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-31 | Codex | 采用已测 BMP 全帧扫描、严格相等复用与独立断点；旧扫描和语义路由保持。 |
 | 1.2.1 | 2026-10-28 | Codex | 低置信度疑似汉字也提供对应实拍帧，允许凭视觉证据排除 OCR 假阳性。 |
 | 1.2.0 | 2026-10-28 | Codex | 修复有效越界框、OCR 写读超时与内存累积；长片按源预算，核验接收完整负证据。 |
 | 1.1.0 | 2026-10-28 | Codex | 有界规范化 OCR 框并保存原始坐标，校验逐帧断点后续扫。 |
@@ -26,15 +27,21 @@ import time
 import cv2
 
 from config.settings import settings
+from ..utils.caption_vision_transport import file_worker, observe_file, CONTRACT as TRANSPORT_CONTRACT
 from ..utils.caption_checkpoints import valid_segments
 from ..utils.codex_text_provider import run_codex_structured
 from ..utils.file_utils import write_json_atomically as atomic_write_json
 from ..utils.render_source_binding import digest
+from ..utils.caption_scan_runtime import (
+    CheckpointCadence, ExactFrameReuse, ObservationChunks, ScanMetrics, EXACT_CONTRACT, validate_reuse_spans,
+    checkpoint_elapsed,
+)
 from ..utils.source_caption_contract import (
     VERSION, decide, decision_path, evidence_path, fingerprint, validate_decision,
 )
 
 VISION = Path(__file__).parents[1] / 'utils/native_caption_vision.js'
+FILE_VISION = VISION.with_name('native_caption_file_vision.js')
 HAN = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff]')
 MAX_SCAN_SECONDS = 1200
 SCAN_SECONDS_PER_FRAME = 1
@@ -78,31 +85,46 @@ def vision_worker():
             worker.stdout.close()
 
 
-def observe(worker, frame, timeout=45):
+def observe(worker, frame, timeout=45, *, metrics=None, png_compression=None):
+    if hasattr(worker, 'caption_frame_path'):
+        return observe_file(worker, frame, timeout=timeout, metrics=metrics)['rows']
     deadline = time.monotonic() + timeout
-    ok, png = cv2.imencode('.png', frame)
+    encoded_at = time.monotonic()
+    if png_compression is not None:
+        if type(png_compression) is not int or not 0 <= png_compression <= 9:
+            raise ValueError('OCR_FRAME_ENCODING')
+        ok, png = cv2.imencode('.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, png_compression])
+    else:
+        ok, png = cv2.imencode('.png', frame)
     if not ok:
         raise ValueError('OCR_FRAME_ENCODING')
     # 写入大图、读取半行也计入超时；不能只给 select 第一字节设限。
     pending, received = memoryview(base64.b64encode(png) + b'\n'), bytearray()
+    if metrics is not None:
+        metrics.values['encode_seconds'] += time.monotonic() - encoded_at
+    vision_at = time.monotonic()
     os.set_blocking(worker.stdin.fileno(), False)
     os.set_blocking(worker.stdout.fileno(), False)
-    while b'\n' not in received:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise ValueError('OCR_TIMEOUT')
-        readable, writable, _ = select.select([worker.stdout], [worker.stdin] if pending else [], [], remaining)
-        if writable:
-            pending = pending[os.write(worker.stdin.fileno(), pending):]
-        if readable:
-            chunk = os.read(worker.stdout.fileno(), 65536)
-            if not chunk:
-                raise ValueError('OCR_UNAVAILABLE')
-            received.extend(chunk)
-            if len(received) > 4 * 1024 * 1024:
-                raise ValueError('OCR_RESPONSE_INVALID')
-    data = json.loads(received)
-    if not isinstance(data.get('rows'), list):
+    try:
+        while b'\n' not in received:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError('OCR_TIMEOUT')
+            readable, writable, _ = select.select([worker.stdout], [worker.stdin] if pending else [], [], remaining)
+            if writable:
+                pending = pending[os.write(worker.stdin.fileno(), pending):]
+            if readable:
+                chunk = os.read(worker.stdout.fileno(), 65536)
+                if not chunk:
+                    raise ValueError('OCR_UNAVAILABLE')
+                received.extend(chunk)
+                if len(received) > 4 * 1024 * 1024:
+                    raise ValueError('OCR_RESPONSE_INVALID')
+        data = json.loads(received)
+    finally:
+        if metrics is not None:
+            metrics.values['vision_seconds'] += time.monotonic() - vision_at
+    if not isinstance(data, dict) or 'error' in data or not isinstance(data.get('rows'), list):
         raise ValueError('OCR_UNAVAILABLE')
     return data['rows']
 
@@ -147,22 +169,77 @@ def _load_partial(path, identity, timeline):
         return [], 0
 
 
-def _save_partial(path, identity, timeline, runs, index):
+def _save_partial(path, identity, timeline, runs, index, frame_evidence=None, scan_wall_seconds=None):
     state = dict(timeline=timeline, runs=runs, frame_count=index)
+    if frame_evidence is not None:
+        state['frame_evidence'] = frame_evidence
+    if scan_wall_seconds is not None:
+        state['scan_wall_seconds'] = scan_wall_seconds
     atomic_write_json(path, dict(identity=identity, state=state, sha256=fingerprint(state)))
 
 
 def scan(source, directory, progress):
+    """旧完整缓存/断点保持原合同；优化只写独立命名空间。"""
+    metrics = ScanMetrics('OCR_NATIVE')
+    try:
+        return _select_scan(source, directory, progress, metrics)
+    except Exception:
+        metrics.finish(metrics.values.get('frames', 0), failed=True)
+        raise
+
+
+def _select_scan(source, directory, progress, metrics):
+    optimized = bool(getattr(settings, 'native_caption_scan_optimization_enabled', False))
+    if optimized:
+        identity = dict(source_sha256=digest(source), scanner_sha256=digest(VISION), version=VERSION,
+                        scan_version=SCAN_VERSION)
+        # 不能为开提速开关废弃已完成的数小时扫描；旧断点仍由旧引擎校验并续扫。
+        for name, key in (('scan.json', 'scan'), ('partial-scan.json', 'state')):
+            valid_legacy = False
+            try:
+                data = json.loads((directory / name).read_text())
+                valid_legacy = (_scan_identity(data['identity']) == identity
+                                and data['sha256'] == fingerprint(data[key]))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            data = None  # 旧大缓存将在原引擎重验，不让选择器同时保留另一份解码对象。
+            if valid_legacy:
+                return _scan_frames(source, directory, progress, metrics=metrics)
+        previous = directory / 'native-scan-v3-exact'
+        previous_identity = dict(identity, scan_version='native-scan-v3-exact', reuse_contract=EXACT_CONTRACT)
+        for path in (previous/'scan.json', previous/'checkpoints'/'manifest.json'):
+            try:
+                envelope = json.loads(path.read_text())
+                state = envelope.get('scan', envelope.get('state'))
+                if envelope['identity'] == previous_identity and envelope['sha256'] == fingerprint(state):
+                    return _scan_frames(source, previous, progress, optimized=True, metrics=metrics, file_transport=False)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        directory = directory / 'native-scan-v4-file'
+        directory.mkdir(parents=True, exist_ok=True)
+    return _scan_frames(source, directory, progress, optimized=optimized, metrics=metrics)
+
+
+def _scan_frames(source, directory, progress, *, optimized=False, metrics=None, file_transport=True):
     """扫描实际解码的每一帧；连续相同文字压缩成 run，不用抽帧推断覆盖率。"""
+    metrics = metrics or ScanMetrics('OCR_NATIVE')
     from .burned_caption_repair import _probe
     probed_width, probed_height, probed_fps, duration = _probe(source)
     identity = dict(source_sha256=digest(source), scanner_sha256=digest(VISION), version=VERSION,
                     scan_version=SCAN_VERSION)
+    scan_version = 'native-scan-v4-file' if file_transport else 'native-scan-v3-exact'
+    if optimized:
+        identity.update(scan_version=scan_version, reuse_contract=EXACT_CONTRACT)
+        if file_transport:
+            identity.update(transport_contract=TRANSPORT_CONTRACT, file_scanner_sha256=digest(FILE_VISION))
     cache = directory / 'scan.json'
     if cache.is_file():
         try:
             data = json.loads(cache.read_text())
             if _scan_identity(data['identity']) == identity and data.get('sha256') == fingerprint(data['scan']):
+                if optimized:
+                    _reuse_evidence(data['scan']['frame_evidence'], data['scan']['frame_count'])
+                metrics.finish(data['scan']['frame_count'], cache_hit=True)
                 return data['scan']
         except (OSError, ValueError, KeyError, TypeError):
             pass  # 损坏缓存不能放行；重新逐帧扫描，而不是永久卡住后续人工重试。
@@ -178,89 +255,173 @@ def scan(source, directory, progress):
         raise ValueError('SOURCE_TIMELINE_UNCERTAIN')
     timeline = dict(fps=fps, expected=expected, width=width, height=height)
     partial = directory / 'partial-scan.json'
-    runs, index = _load_partial(partial, identity, timeline)
-    active = {(r['text'], tuple(round(v, 2) for v in r['box'])): r['id']
-              for r in runs if r['last'] == index}
-    deadline = time.monotonic() + max(MAX_SCAN_SECONDS, expected * SCAN_SECONDS_PER_FRAME)
+    spans, observations, chunk_store = [], [], None
+    if optimized:
+        chunk_store = ObservationChunks(directory / 'checkpoints', identity, timeline)
+        with metrics.measure('checkpoint_seconds'):
+            observations = chunk_store.load(_validate_native_frame)
+        index, runs, active = len(observations), [], {}
+        if index:
+            try:
+                spans = _reuse_evidence(chunk_store.metadata['frame_evidence'], index)
+            except (OSError, ValueError, KeyError, TypeError):
+                observations, index, chunk_store.entries, chunk_store.index = [], 0, [], 0
+        with metrics.measure('normalize_seconds'):
+            for frame_index, observation in enumerate(observations):
+                active = _accumulate_runs(runs, active, observation['rows'], frame_index)
+    else:
+        runs, index = _load_partial(partial, identity, timeline)
+        active = {(r['text'], tuple(round(v, 2) for v in r['box'])): r['id']
+                  for r in runs if r['last'] == index}
+    reuse = ExactFrameReuse(spans, index) if optimized else None
+    resumed_frames = index
+    cadence = CheckpointCadence(index)
+    bounded_checkpoints = optimized
+    try:
+        prior_elapsed = checkpoint_elapsed(chunk_store.metadata) if chunk_store is not None else 0.
+        if chunk_store is None and index:
+            # _load_partial 已校验相同 identity/timeline/checksum；旧字段缺省兼容。
+            prior_elapsed = checkpoint_elapsed(json.loads(partial.read_text())['state'])
+    except Exception:
+        capture.release()
+        raise
+    scan_started = time.monotonic()
+
+    def save_checkpoint():
+        elapsed = prior_elapsed + time.monotonic() - scan_started
+        if chunk_store is not None:
+            chunk_store.save(observations, metadata=dict(frame_evidence=reuse.evidence(index), scan_wall_seconds=elapsed))
+        else:
+            _save_partial(partial, identity, timeline, runs, index,
+                          scan_wall_seconds=elapsed if bounded_checkpoints or prior_elapsed else None)
+    deadline = scan_started + max(MAX_SCAN_SECONDS, expected * SCAN_SECONDS_PER_FRAME) - prior_elapsed
     last_progress = time.monotonic()
     try:
         # 顺序解码到已核验边界，不依赖压缩视频随机 seek 的帧定位精度。
         for skipped in range(index):
             if time.monotonic() > deadline:
                 raise ValueError('OCR_BUDGET_EXCEEDED')
-            if not capture.grab():
-                raise ValueError('SOURCE_INCOMPLETE_OR_CHANGED')
+            with metrics.measure('decode_seconds'):
+                if not capture.grab():
+                    raise ValueError('SOURCE_INCOMPLETE_OR_CHANGED')
             if skipped % max(1, round(fps * 5)) == 0:
                 progress('SOURCE_CAPTION_LOCATING')
+        worker_factory = (lambda: file_worker(FILE_VISION)) if optimized and file_transport else vision_worker
         with ExitStack() as workers:
-            worker, worker_frames = workers.enter_context(vision_worker()), 0
+            worker, worker_frames = workers.enter_context(worker_factory()), 0
             while True:
                 if time.monotonic() > deadline:
                     raise ValueError('OCR_BUDGET_EXCEEDED')
-                ok, frame = capture.read()
+                with metrics.measure('decode_seconds'):
+                    ok, frame = capture.read()
                 if not ok:
                     break
+                if frame.shape != (height, width, 3) or str(frame.dtype) != 'uint8':
+                    raise ValueError('SOURCE_UNREADABLE')
                 # 整帧验证成功才推进断点，避免失败帧污染已完成的 run。
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ValueError('OCR_BUDGET_EXCEEDED')
-                if worker_frames >= WORKER_FRAME_LIMIT:
-                    workers.close()
-                    worker, worker_frames = workers.enter_context(vision_worker()), 0
-                for attempt in range(2):
-                    try:
-                        rows = [normalize_row(row) for row in observe(worker, frame, timeout=min(45, remaining))]
-                        break
-                    except (OSError, ValueError) as exc:
-                        if attempt or (isinstance(exc, ValueError) and str(exc) not in
-                                       {'OCR_TIMEOUT', 'OCR_UNAVAILABLE'}):
-                            raise
+                with metrics.measure('compare_seconds'):
+                    rows = reuse.lookup(frame) if reuse else None
+                reused = rows is not None
+                if not reused:
+                    if worker_frames >= WORKER_FRAME_LIMIT:
                         workers.close()
-                        worker, worker_frames = workers.enter_context(vision_worker()), 0
-                        progress('SOURCE_CAPTION_LOCATING')
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise ValueError('OCR_BUDGET_EXCEEDED') from exc
-                worker_frames += 1
+                        worker, worker_frames = workers.enter_context(worker_factory()), 0
+                    for attempt in range(2):
+                        try:
+                            metrics.values['ocr_calls'] += 1
+                            options = dict(timeout=min(45, remaining), metrics=metrics)
+                            raw_rows = observe(worker, frame, **options)
+                            with metrics.measure('normalize_seconds'):
+                                rows = [normalize_row(row) for row in raw_rows]
+                            break
+                        except (OSError, ValueError) as exc:
+                            if attempt or (isinstance(exc, ValueError) and str(exc) not in
+                                           {'OCR_TIMEOUT', 'OCR_UNAVAILABLE'}):
+                                raise
+                            workers.close()
+                            worker, worker_frames = workers.enter_context(worker_factory()), 0
+                            progress('SOURCE_CAPTION_LOCATING')
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise ValueError('OCR_BUDGET_EXCEEDED') from exc
+                    worker_frames += 1
                 if time.monotonic() > deadline:
                     raise ValueError('OCR_BUDGET_EXCEEDED')
-                current = {}
-                for row in rows:
-                    text, box, confidence = row['text'], row['box'], row['confidence']
-                    if not text:
-                        continue
-                    key = (text, tuple(round(v, 2) for v in box))
-                    # OCR 框轻微移动会分成多个 run；保留每帧边界，宿主合并覆盖。
-                    if key in active:
-                        run = runs[active[key]]
-                        run['last'], run['confidence'] = index + 1, min(confidence, run['confidence'])
-                    else:
-                        run = dict(id=len(runs), text=text, box=box, confidence=confidence,
-                                   raw_box=row['raw_box'], chinese=bool(HAN.search(text)),
-                                   first=index, last=index + 1)
-                        runs.append(run)
-                    if row['raw_box'] != box:
-                        run.setdefault('boundary_adjustments', []).append(
-                            dict(frame=index, raw_box=row['raw_box']))
-                    current[key] = run['id']
-                active = current
+                active = _accumulate_runs(runs, active, rows, index)
+                if reuse:
+                    reuse.commit(frame, rows, index, reused=reused)
+                    observations.append(dict(rows=rows))
+                if reused:
+                    metrics.values['reused_frames'] += 1
                 index += 1
+                metrics.values['frames'] = index
                 # 按墙钟报告进度；高帧率、慢 OCR 不能等满五秒视频才更新心跳。
                 if time.monotonic() - last_progress >= 5:
                     progress('SOURCE_CAPTION_LOCATING')
                     last_progress = time.monotonic()
-                if index % max(1, round(fps * 30)) == 0:
-                    _save_partial(partial, identity, timeline, runs, index)
+                due = cadence.due(index) if bounded_checkpoints else index % max(1, round(fps * 30)) == 0
+                if due:
+                    with metrics.measure('checkpoint_seconds'):
+                        save_checkpoint()
+                    cadence.saved(index)
     except Exception:
-        _save_partial(partial, identity, timeline, runs, index)
+        with metrics.measure('checkpoint_seconds'):
+            save_checkpoint()
+        metrics.finish(index, resumed_frames=resumed_frames, failed=True)
         raise
     finally:
         capture.release()
     if index != expected or digest(source) != identity['source_sha256']:
         raise ValueError('SOURCE_INCOMPLETE_OR_CHANGED')
     result = dict(fps=fps, frame_count=index, width=width, height=height, runs=runs)
+    if reuse:
+        result['frame_evidence'] = reuse.evidence(index)
+        with metrics.measure('checkpoint_seconds'):
+            save_checkpoint()
     atomic_write_json(cache, dict(identity=identity, scan=result, sha256=fingerprint(result)))
+    metrics.finish(index, resumed_frames=resumed_frames)
     return result
+
+
+def _validate_native_frame(observation):
+    if not isinstance(observation, dict) or not isinstance(observation.get('rows'), list):
+        raise ValueError('OCR_INVALID_ROW')
+    for row in observation['rows']:
+        normalized = normalize_row(dict(text=row['text'], box=row['raw_box'], confidence=row['confidence']))
+        if normalized != row:
+            raise ValueError('OCR_INVALID_ROW')
+    return observation
+
+
+def _accumulate_runs(runs, active, rows, index):
+    current = {}
+    for row in rows:
+        text, box, confidence = row['text'], row['box'], row['confidence']
+        if not text:
+            continue
+        key = (text, tuple(round(v, 2) for v in box))
+        # OCR 框轻微移动会分成多个 run；保留每帧边界，宿主合并覆盖。
+        if key in active:
+            run = runs[active[key]]
+            run['last'], run['confidence'] = index + 1, min(confidence, run['confidence'])
+        else:
+            run = dict(id=len(runs), text=text, box=box, confidence=confidence,
+                       raw_box=row['raw_box'], chinese=bool(HAN.search(text)), first=index, last=index + 1)
+            runs.append(run)
+        if row['raw_box'] != box:
+            run.setdefault('boundary_adjustments', []).append(dict(frame=index, raw_box=row['raw_box']))
+        current[key] = run['id']
+    return current
+
+
+def _reuse_evidence(evidence, count):
+    if (evidence['contract'] != EXACT_CONTRACT or evidence['decoded_frames'] != count
+            or evidence['pixel_format'] != 'opencv-bgr'):
+        raise ValueError('OCR_REUSE_EVIDENCE_INVALID')
+    return validate_reuse_spans(evidence['reuse_spans'], count)
 
 
 SCHEMA = {
