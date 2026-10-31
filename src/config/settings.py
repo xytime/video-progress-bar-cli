@@ -426,6 +426,8 @@ class Settings(BaseSettings):
     subtitle_translation_total_timeout_seconds: int = Field(default=600, ge=30, le=660)
     # 2026-10-31 用户批准生产采用：只优化新扫描，保留旧断点、原语义及质量门。
     native_caption_scan_optimization_enabled: bool = True
+    # 首中尾仅正向抽检；未通过仍回到完整验证，验收完成前关闭。
+    native_caption_sampling_enabled: bool = False
     google_translate_interval_seconds: float = Field(default=0.4, ge=0.2, le=10)
     google_translate_max_retries: int = Field(default=2, ge=0, le=3)
 

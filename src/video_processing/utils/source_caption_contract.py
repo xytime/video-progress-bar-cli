@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 新增独立抽样正向保留证据，不改历史逐帧合同或负向结论。 |
 | 1.0.0 | 2026-10-27 | Codex | 三态分流、逐对白覆盖检查及单片证据绑定。 |
 """
 import hashlib
@@ -42,12 +43,17 @@ def validate_decision(output: Path) -> dict:
 
 
 def decide(evidence: dict) -> dict:
-    """每段对白必须被实际 OCR 字幕及语义审查共同覆盖；不接受模型总分。"""
+    """分别验证获批的抽样正向证据与原完整覆盖合同；不接受模型总分。"""
     def result(decision, reason, text=''):
         return dict(decision=decision, reason=reason, review_text=text)
 
     if evidence.get('error'):
         return result('REVIEW', evidence['error'])
+    if evidence.get('inspection_mode'):
+        from .caption_sampling_contract import MODE, decide_sampled
+        if evidence['inspection_mode'] != MODE:
+            return result('REVIEW', '未知原字幕检查方式')
+        return decide_sampled(evidence)
     segments, runs = evidence['segments'], evidence['runs']
     fps, count = evidence['fps'], evidence['frame_count']
     if not segments or not math.isfinite(fps) or fps <= 0 or count < 1:

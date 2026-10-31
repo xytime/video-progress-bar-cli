@@ -1,4 +1,4 @@
-"""普通流水线的中文字幕分流：本机整片 OCR -> 有界语义核验 -> 宿主决定。
+"""普通流水线的中文字幕分流：本机抽检/整片 OCR -> 有界语义核验 -> 宿主决定。
 
 依赖：caption_processor -> 本模块 -> source_caption_contract/native_caption_source/
 codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-31 | Codex | 接入经授权的首中尾抽样保留；负向或不一致仍走原严格路径。 |
 | 1.3.0 | 2026-10-31 | Codex | 采用已测 BMP 全帧扫描、严格相等复用与独立断点；旧扫描和语义路由保持。 |
 | 1.2.1 | 2026-10-28 | Codex | 低置信度疑似汉字也提供对应实拍帧，允许凭视觉证据排除 OCR 假阳性。 |
 | 1.2.0 | 2026-10-28 | Codex | 修复有效越界框、OCR 写读超时与内存累积；长片按源预算，核验接收完整负证据。 |
@@ -559,7 +560,8 @@ def route(source: Path, output: Path, segments: list[dict], progress=lambda _: N
             cached = None
         if (cached and cached['source_sha256'] == source_hash
                 and cached['asr_sha256'] == fingerprint(segments)):
-            if cached['decision'] != 'REVIEW':
+            if (cached['decision'] != 'REVIEW' and
+                    (not cached.get('inspection_mode') or settings.native_caption_sampling_enabled)):
                 return cached['decision']
     directory = source.parent / '.native-caption-scan' / source_hash
     directory.mkdir(parents=True, exist_ok=True)
@@ -568,11 +570,20 @@ def route(source: Path, output: Path, segments: list[dict], progress=lambda _: N
         if not segments:
             raise ValueError('ASR_EMPTY')
         progress('SOURCE_CAPTION_LOCATING')
-        scanned = scan(source, directory, progress)
-        evidence.update({key: scanned[key] for key in ('fps', 'frame_count', 'width', 'height', 'runs')})
-        evidence['reviews'] = review(source, segments, scanned, directory, progress)
+        sampled = None
+        # 已有完整扫描优先复用；旧断点不迁移、不改写。抽样使用独立缓存空间。
+        complete_scan = (directory / 'scan.json').exists() or any(directory.glob('native-scan-*/scan.json'))
+        if settings.native_caption_sampling_enabled and not complete_scan:
+            from .native_caption_sampling import attempt
+            sampled = attempt(source, directory, segments, source_hash, normalize_row, progress)
+        if sampled is not None:
+            evidence.update(sampled)
+        else:
+            scanned = scan(source, directory, progress)
+            evidence.update({key: scanned[key] for key in ('fps', 'frame_count', 'width', 'height', 'runs')})
+            evidence['reviews'] = review(source, segments, scanned, directory, progress)
         # 本版仅原样交付竖片；横片需独立的不裁字幕画幅方案，不能伪称原样竖版。
-        if scanned['width'] >= scanned['height'] and decide(evidence)['decision'] == 'PRESERVE':
+        if evidence['width'] >= evidence['height'] and decide(evidence)['decision'] == 'PRESERVE':
             evidence['error'] = '已有中文字幕，但源片为横屏，需要确认保留字幕的竖版布局'
         if digest(source) != source_hash:
             evidence['error'] = '识别过程中源文件变化'
