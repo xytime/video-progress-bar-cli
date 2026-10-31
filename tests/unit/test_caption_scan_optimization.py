@@ -233,13 +233,3 @@ def test_chunk_integrity_contiguous_prefix_and_orphan_rejection(tmp_path):
     value['observations'][0]['faces'] = [[0.,0.,1.,1.]]
     target.write_text(json.dumps(value))
     assert ObservationChunks(tmp_path/'chunks', identity, timeline).load(validate_observation) == []
-
-
-
-
-
-
-
-
-
-

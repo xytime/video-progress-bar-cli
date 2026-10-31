@@ -83,5 +83,3 @@ def test_context_sends_stop_and_reaps_only_its_dedicated_worker(tmp_path, monkey
     assert marker.read_text() == 'STOP'
     assert worker.pid == worker_pid and worker.returncode == 0
     assert time.monotonic() - started < 2
-
-
