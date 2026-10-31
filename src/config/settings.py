@@ -426,6 +426,8 @@ class Settings(BaseSettings):
         "gemini": 30.0, "deepseek": 30.0, "google": 1.0, "codex": 120.0, "agy": 90.0,
     })
     native_caption_scan_optimization_enabled: bool = False
+    # 全部疑似中文证据分页核验及图片缓存；金标与真实验收通过前关闭。
+    native_caption_semantic_paging_enabled: bool = False
     caption_scan_png_compression: int = Field(default=3, ge=0, le=9)
     # 16GB 主机：一个重计算槽、一个网络槽；当前版本禁止放大。
     enable_preparation_dispatch: bool = False

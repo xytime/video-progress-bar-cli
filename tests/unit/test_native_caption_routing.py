@@ -78,6 +78,7 @@ def test_equivalent_scan_reuses_semantic_cache_but_changed_ocr_invalidates(tmp_p
     directory = tmp_path / 'semantic'
     directory.mkdir()
     assert router.review(source, segments, scanned, directory, lambda _: None) == reviews
+    monkeypatch.setattr(settings, 'native_caption_semantic_paging_enabled', True)
     optimized = dict(deepcopy(scanned), frame_evidence=dict(contract='strict-identical-pixels'))
     assert router.review(source, segments, optimized, directory, lambda _: None) == reviews
     assert len(calls) == 1

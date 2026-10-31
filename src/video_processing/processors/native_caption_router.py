@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-31 | Codex | 默认关闭的完整语义分页及核验图片缓存，普通请求缓存身份保持不变。 |
 | 1.4.2 | 2026-10-30 | Codex | 语义请求前核验全片 ASR 时间边界，避免尾段越界时浪费前面批次；原阈值不变。 |
 | 1.4.1 | 2026-10-30 | Codex | 等价逐帧事实共用原语义提示词及缓存，不把扫描传输实现引入语义身份。 |
 | 1.4.0 | 2026-10-29 | Codex | 独立 v4 无损文件传输，保留旧识别器及缓存，不改变任何识别参数。 |
@@ -33,6 +34,8 @@ from config.settings import settings
 from ..core.preparation_resources import resource_stage, checkpoint_boundary, PreparationYielded, active_context
 from ..utils.caption_vision_transport import file_worker, observe_file, CONTRACT as TRANSPORT_CONTRACT
 from ..utils.caption_checkpoints import valid_segments
+from ..utils.caption_review_frames import ReviewFrames
+from ..utils.caption_semantic_pages import review_paged
 from ..utils.codex_text_provider import run_codex_structured
 from ..utils.file_utils import write_json_atomically as atomic_write_json
 from ..utils.render_source_binding import digest
@@ -449,8 +452,12 @@ def review(source, segments, scanned, directory, progress):
     metrics = ScanMetrics('SEMANTIC_REVIEW')
     metrics.values.update(batches=0, cached_batches=0)
     try:
-        with resource_stage('network', 'SEMANTIC_REVIEW'):
-            results = _review(source, segments, scanned, directory, progress, metrics)
+        _validate_review_timeline(segments, scanned)
+        with resource_stage('network', 'SEMANTIC_REVIEW'), ExitStack() as stack:
+            frames = None
+            if settings.native_caption_semantic_paging_enabled:
+                frames = stack.enter_context(ReviewFrames(source, directory, scanned['frame_count'], metrics))
+            results = _review(source, segments, scanned, directory, progress, metrics, frames)
     except Exception:
         metrics.finish(scanned['frame_count'], failed=True)
         raise
@@ -459,14 +466,31 @@ def review(source, segments, scanned, directory, progress):
     return results
 
 
-def _review(source, segments, scanned, directory, progress, metrics):
-    """正文与 OCR 只作为不可信素材；结构化审查每段，不允许使用工具执行指令。"""
+def _review_item(index, segment, scanned, rows):
+    review_rows = [{key: row[key] for key in
+                   ('id', 'text', 'box', 'confidence', 'first', 'last')} for row in rows]
+    item = dict(segment_id=index, speech=segment['text'], start=segment['start'], end=segment['end'], rows=review_rows)
+    first = max(0, math.floor(segment['start'] * scanned['fps']))
+    last = min(scanned['frame_count'], math.ceil(segment['end'] * scanned['fps']))
+    other = [r for r in scanned['runs'] if not r['chinese'] and r['last'] > first and r['first'] < last]
+    item['scan_coverage'] = dict(first=first, last=last, fps=scanned['fps'], scanned_frames=last-first,
+                                 failed_frames=0, whole_source_frame_count=scanned['frame_count'],
+                                 chinese_run_count=len(rows))
+    item['other_text_examples'] = list(dict.fromkeys(r['text'] for r in other))[:30]
+    return item
+
+
+def _validate_review_timeline(segments, scanned):
     # 全部时间边界先于任何供应商请求；不能扫到尾段才发现原 ASR 越界。
     for segment in segments:
         first = max(0, math.floor(segment['start'] * scanned['fps']))
         last = min(scanned['frame_count'], math.ceil(segment['end'] * scanned['fps']))
         if first >= last or segment['end'] > scanned['frame_count'] / scanned['fps'] + 1 / scanned['fps']:
             raise ValueError('SOURCE_TIMELINE_UNCERTAIN')
+
+
+def _review(source, segments, scanned, directory, progress, metrics, frames=None):
+    """正文与 OCR 只作为不可信素材；结构化审查每段，不允许使用工具执行指令。"""
     prepared = []
     for segment in segments:
         rows = [r for r in scanned['runs'] if r['last'] / scanned['fps'] > segment['start']
@@ -476,64 +500,75 @@ def _review(source, segments, scanned, directory, progress, metrics):
             # 低分也必须给实际对应帧；只给乱码不给图，会把可排除的误识别锁死为 UNCERTAIN。
             key = (row['text'], tuple(round(v, 1) for v in row['box']))
             groups.setdefault(key, []).append(row)
-        if len(groups) + 3 > 24:
+        if len(groups) + 3 > 24 and frames is None:
             raise ValueError('VISUAL_REVIEW_BUDGET_EXCEEDED')
         prepared.append((rows, groups))
     batches, start, image_count = [], 0, 0
     for index, (_, groups) in enumerate(prepared):
+        if len(groups) + 3 > 24:
+            if index > start:
+                batches.append((start, index))
+            batches.append((index, index + 1))
+            start, image_count = index + 1, 0
+            continue
         if index > start and (index - start >= BATCH_SIZE or image_count + len(groups) + 3 > 24):
             batches.append((start, index))
             start, image_count = index, 0
         image_count += len(groups) + 3
-    batches.append((start, len(segments)))
+    if start < len(segments):
+        batches.append((start, len(segments)))
     results = []
     for offset, stop in batches:
         progress('SOURCE_CAPTION_LOCATING')
+        if stop == offset + 1 and len(prepared[offset][1]) + 3 > 24:
+            rows, groups = prepared[offset]
+            item = _review_item(offset, segments[offset], scanned, rows)
+            results.append(review_paged(item, list(groups.values()), frames, directory, SCHEMA, metrics, progress))
+            continue
         batch, images = [], []
-        capture = cv2.VideoCapture(str(source))
+        capture = None if frames is not None else cv2.VideoCapture(str(source))
         try:
             for index, segment in enumerate(segments[offset:stop], offset):
                 start, end = segment['start'], segment['end']
                 rows, groups = prepared[index]
                 # 逐帧坐标修正审计留在本地证据；模型只需正文、位置、可信度和完整区间。
                 # 长 run 的 boundary_adjustments 可达数万项，不能挤占语义提示词预算。
-                review_rows = [{key: row[key] for key in
-                    ('id', 'text', 'box', 'confidence', 'first', 'last')} for row in rows]
-                item = dict(segment_id=index, speech=segment['text'], start=start, end=end, rows=review_rows)
+                item = _review_item(index, segment, scanned, rows)
                 first = max(0, math.floor(start * scanned['fps']))
                 last = min(scanned['frame_count'], math.ceil(end * scanned['fps']))
                 # 不能把“过滤后中文 rows 为空”当作缺少整段证据。整片成功逐帧扫描、
                 # 非中文 OCR 及三个位置的画面均传给审查者，文字仍是不可信素材。
-                other = [r for r in scanned['runs'] if not r['chinese'] and r['last'] > first and r['first'] < last]
-                item['scan_coverage'] = dict(first=first, last=last, fps=scanned['fps'],
-                                            scanned_frames=last-first, failed_frames=0,
-                                            whole_source_frame_count=scanned['frame_count'],
-                                            chinese_run_count=len(rows))
-                item['other_text_examples'] = list(dict.fromkeys(r['text'] for r in other))[:30]
                 batch.append(item)
                 item['context_images'] = []
                 for frame_number in sorted({first, (first+last-1)//2, last-1}):
-                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-                    ok, frame = capture.read()
-                    path = directory / f'segment-{index}-frame-{frame_number}.jpg'
-                    if not ok or not cv2.imwrite(str(path), frame):
-                        raise ValueError('REVIEW_FRAME_UNAVAILABLE')
+                    if frames is not None:
+                        path = frames.image(frame_number)
+                    else:
+                        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                        ok, frame = capture.read()
+                        path = directory / f'segment-{index}-frame-{frame_number}.jpg'
+                        if not ok or not cv2.imwrite(str(path), frame):
+                            raise ValueError('REVIEW_FRAME_UNAVAILABLE')
                     images.append(path)
                     item['context_images'].append(dict(frame=frame_number, image_index=len(images)-1))
                 item['visual_runs'] = []
                 for group in groups.values():
                     if len(images) >= 24:
                         raise ValueError('VISUAL_REVIEW_BUDGET_EXCEEDED')
-                    capture.set(cv2.CAP_PROP_POS_FRAMES, group[0]['first'])
-                    ok, frame = capture.read()
-                    path = directory / f'segment-{index}-run-{group[0]["id"]}.jpg'
-                    if not ok or not cv2.imwrite(str(path), frame):
-                        raise ValueError('REVIEW_FRAME_UNAVAILABLE')
+                    if frames is not None:
+                        path = frames.image(group[0]['first'])
+                    else:
+                        capture.set(cv2.CAP_PROP_POS_FRAMES, group[0]['first'])
+                        ok, frame = capture.read()
+                        path = directory / f'segment-{index}-run-{group[0]["id"]}.jpg'
+                        if not ok or not cv2.imwrite(str(path), frame):
+                            raise ValueError('REVIEW_FRAME_UNAVAILABLE')
                     images.append(path)
                     item['visual_runs'].append(dict(image_index=len(images) - 1,
                                                    run_ids=[r['id'] for r in group]))
         finally:
-            capture.release()
+            if capture is not None:
+                capture.release()
         # 优化的逐字节同帧映射仍保存在完整扫描证据中；相同的画面、对白、
         # OCR 和时间覆盖不应因传输实现变化而重新调用模型或改变语义判断。
         scan_description = 'scan_coverage 是宿主实际成功扫描每一帧的记录，不是抽样估算；'

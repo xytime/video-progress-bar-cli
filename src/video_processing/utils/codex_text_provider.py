@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.2 | 2026-10-31 | Codex | 允许显式只查有效结构化缓存；未命中不执行、不消耗请求预算。 |
 | 1.4.1 | 2026-10-30 | Codex | HTTP 状态码必须有状态语境，避免时间戳或请求编号误触发认证及限流冷却。 |
 | 1.4.0 | 2026-10-28 | Codex | 接受流重连后有终态且通过结构/质量合同的输出，不把恢复提示当最终失败。 |
 | 1.3.0 | 2026-10-27 | Codex | 真实执行前允许调用方持久领取预算，缓存、锁和冷却不消耗请求次数。 |
@@ -160,7 +161,8 @@ def _run_codex_structured(
     repair_cached_output: Callable[[str, CodexTextError], str] | None = None,
     before_execute: Callable[[], None] | None = None,
     _request_audit: dict | None = None,
-) -> CodexTextResult:
+    _cache_only: bool = False,
+) -> CodexTextResult | None:
     """一次有界请求；只缓存经调用方质量合同接受的结果，不自动升级模型。"""
     request_started = time.monotonic()
     if model not in ECONOMY_MODELS or effort not in {"low", "medium", "high"} or timeout_sec <= 0:
@@ -184,11 +186,15 @@ def _run_codex_structured(
                 cached = json.loads(cached_path.read_text(encoding="utf-8"))
                 Draft202012Validator(schema).validate(cached["payload"])
             except (ValueError, KeyError, ValidationError):
+                if _cache_only:
+                    return None
                 cached_path.unlink(missing_ok=True)
             else:
                 try:
                     payload = validate(cached["payload"])
                 except Exception as exc:
+                    if _cache_only:
+                        raise
                     cached_path.unlink(missing_ok=True)
                     if not isinstance(exc, CodexTextError) or repair_cached_output is None:
                         raise
@@ -202,6 +208,8 @@ def _run_codex_structured(
                         raise CodexTextError("timeout") from None
                 else:
                     return CodexTextResult(payload, model, {}, 0, True)
+        if _cache_only:
+            return None
         cooldown = state_dir / f"{model}.cooldown.json"
         if cooldown.exists():
             try:
@@ -276,6 +284,11 @@ def _run_codex_structured(
             if validate:
                 _atomic_json(cached_path, {"payload": raw, "usage": usage})
             return CodexTextResult(payload, model, usage, int((time.monotonic() - started) * 1000))
+
+
+def read_codex_cache(prompt: str, **kwargs) -> CodexTextResult | None:
+    """迁移传图布局前复用原合同缓存；完整校验，不产生供应商调用或请求回执。"""
+    return _run_codex_structured(prompt, _cache_only=True, **kwargs)
 
 
 def run_codex_structured(prompt: str, **kwargs) -> CodexTextResult:

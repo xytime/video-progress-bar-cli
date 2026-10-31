@@ -322,3 +322,32 @@ def test_budget_denial_and_existing_cooldown_do_not_execute_or_report_execution(
     with pytest.raises(provider.CodexTextError, match="cooldown"):
         _call(tmp_path, before_execute=deny)
     assert admissions == [1] and calls == []
+
+
+def test_cache_only_miss_never_executes_or_creates_request_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(provider, '_execute', lambda *_: pytest.fail('cache-only must not execute'))
+    result = provider.read_codex_cache('Existing evidence', schema=SCHEMA, state_dir=tmp_path,
+                                       command='codex', validate=lambda value: value)
+    assert result is None
+    assert not (tmp_path / 'requests.jsonl').exists()
+
+
+def test_cache_only_hit_still_requires_matching_images_and_validation(tmp_path, monkeypatch):
+    monkeypatch.setattr(provider, '_execute', _executor(payload={'title': '缓存证据'}))
+    image = tmp_path / 'frame.jpg'
+    image.write_bytes(b'first exact image')
+    kwargs = dict(schema=SCHEMA, state_dir=tmp_path, command='codex',
+                  images=(image,), validate=lambda value: value, cache_contract='visual-v1')
+    expected = provider.run_codex_structured('Existing evidence', **kwargs)
+    before = {p.name: p.read_bytes() for p in tmp_path.glob('*.json')}
+    monkeypatch.setattr(provider, '_execute', lambda *_: pytest.fail('cache-only must not execute'))
+    cached = provider.read_codex_cache('Existing evidence', **kwargs)
+    assert cached.cached and cached.payload == expected.payload
+    image.write_bytes(b'changed image')
+    assert provider.read_codex_cache('Existing evidence', **kwargs) is None
+    image.write_bytes(b'first exact image')
+    def reject(value):
+        raise ValueError('invalid quality')
+    with pytest.raises(ValueError, match='invalid quality'):
+        provider.read_codex_cache('Existing evidence', **dict(kwargs, validate=reject))
+    assert {p.name: p.read_bytes() for p in tmp_path.glob('*.json')} == before
