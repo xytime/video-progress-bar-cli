@@ -29,7 +29,7 @@ def test_transcription(speech_video, tmp_path):
                               "-c", "copy", "-f", "hash", "-hash", "sha256", "-"]).stdout.strip()
                     for path in (video, output)]
     assert audio_hashes[0].startswith("SHA256=") and audio_hashes[0] == audio_hashes[1]
-    assert stages == ["MODEL_LOADING", "AUDIO_EXTRACTING", "TRANSCRIBING", "ASS_GENERATING",
+    assert stages == ["AUDIO_EXTRACTING", "MODEL_LOADING", "TRANSCRIBING", "ASS_GENERATING",
                       "VIDEO_RENDERING", "COMPLETE"]
     midpoint = (subs[0].start + subs[0].end) / 2000
     before = capture_frame(video, midpoint, tmp_path / "before.png")

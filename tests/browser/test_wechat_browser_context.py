@@ -9,7 +9,7 @@
 import json
 from pathlib import Path
 
-from tests.browser_fixtures import chromium
+from tests.browser_fixtures import chromium, wechat_login_session
 from video_processing.core.wechat_browser_context import (
     WECHAT_USER_AGENT,
     WECHAT_VIEWPORT,
@@ -17,7 +17,7 @@ from video_processing.core.wechat_browser_context import (
 )
 
 
-def test_wechat_browser_contexts_configuration_parity_and_identity_isolation(chromium, tmp_path):
+def test_wechat_browser_contexts_configuration_parity_and_identity_isolation(chromium, tmp_path, wechat_login_session):
     """验证由 create_wechat_context 创建的两个独立浏览器上下文：
     1. 基础环境配置（Viewport、User-Agent、webdriver、window.chrome、plugins、languages 等）严格一致；
     2. 会话身份存储（Cookies、localStorage）完全独立隔离，互不串扰。

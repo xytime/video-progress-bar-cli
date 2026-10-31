@@ -4,17 +4,18 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.3.0 | 2026-10-03 | Codex | 真实浏览器回归独立复用页初始化二十五秒后才展示上传控件的会话保存。 |
+| 1.4.0 | 2026-10-31 | Codex | helper 测试持真实登录许可；已停用核对入口必须零浏览器访问。 |
 | 1.2.0 | 2026-10-03 | Codex | 覆盖官方登录路由延迟跳转，确认跳转前已记录扫码等待证据且复用验证仍必须通过。 |
 | 1.1.0 | 2026-10-03 | Codex | 回归扫码页保留创建地址且授权晚于十五秒时，仍须等待正向控件和独立复用成功才保存。 |
 | 1.0.0 | 2026-09-26 | Codex | 实际跨域 iframe 第 11 秒授权、完整导航及错误来源零点击。 |
 """
-from tests.browser_fixtures import chromium
+from tests.browser_fixtures import chromium, wechat_login_session
 from scripts.wechat_uploader import _try_wechat_quick_login
 import pytest
 
 
 @pytest.mark.parametrize("login_route", ["/platform/post/create", "/platform/login"])
-def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromium, tmp_path, login_route):
+def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromium, tmp_path, login_route, wechat_login_session):
     import json
     from unittest.mock import patch
     from scripts.wechat_uploader import _wait_and_save_login
@@ -38,7 +39,7 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
     original_new_context = chromium.new_context
     def routed_context(*args, **kwargs):
         ctx = original_new_context(*args, **kwargs)
-        ctx.route("**/*", route)
+        ctx.on("page", lambda page: page.route("**/*", route))
         return ctx
 
     context = routed_context()
@@ -61,7 +62,7 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
         context.close()
 
 
-def test_reuse_initializing_page_can_finish_after_ten_seconds(chromium, tmp_path):
+def test_reuse_initializing_page_can_finish_after_ten_seconds(chromium, tmp_path, wechat_login_session):
     import json
     from unittest.mock import patch
     from scripts.wechat_uploader import _wait_and_save_login
@@ -78,7 +79,7 @@ def test_reuse_initializing_page_can_finish_after_ten_seconds(chromium, tmp_path
 
     def reuse_context(*args, **kwargs):
         ctx = original_new_context(*args, **kwargs)
-        ctx.route("**/*", lambda r: r.fulfill(content_type="text/html", body=loading_html))
+        ctx.on("page", lambda page: page.route("**/*", lambda r: r.fulfill(content_type="text/html", body=loading_html)))
         return ctx
 
     state_file = tmp_path / "wechat_state.json"
@@ -155,7 +156,7 @@ def test_wait_and_save_login_browser_none_rejected(tmp_path):
         _wait_and_save_login(mock_page, mock_context, state_file)
 
 
-def test_wait_and_save_login_reuse_verification_failure_cleans_up(chromium, tmp_path):
+def test_wait_and_save_login_reuse_verification_failure_cleans_up(chromium, tmp_path, wechat_login_session):
     """独立全新上下文复用验证失败时，必须清理临时文件、拒绝提交会话，并记录 FAILED 状态（真实本地 route，不 mock 页面判据）。"""
     import json
     import pytest
@@ -192,7 +193,7 @@ def test_wait_and_save_login_reuse_verification_failure_cleans_up(chromium, tmp_
                 )
             else:
                 r.fulfill(status=404, body="Not Found")
-        ctx.route("**/*", reuse_route)
+        ctx.on("page", lambda page: page.route("**/*", reuse_route))
         return ctx
 
     with patch.object(chromium, "new_context", side_effect=reuse_new_context):
@@ -351,11 +352,17 @@ def test_try_wechat_quick_login_zero_clicks_on_untrusted_frame_origin(chromium, 
         page.close()
 
 
-def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
+def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path, monkeypatch):
     import json
     import pytest
     from unittest.mock import MagicMock, patch
     from scripts.wechat_uploader import run_uploader
+    from config.settings import settings
+
+    # 旧入口内部的 DOM 合同；默认关闭状态核对的门禁另测，不能绕过后声称生产允许。
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", False)
+    monkeypatch.setattr(settings, "wechat_operations_enabled", False)
 
     state_file = tmp_path / "wechat_state.json"
     state_file.write_text(json.dumps({"cookies": [], "origins": []}))
@@ -373,7 +380,7 @@ def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
                 orig_ctx = browser.new_context
                 def _new_ctx(*c_args, **c_kwargs):
                     ctx = orig_ctx(*c_args, **c_kwargs)
-                    ctx.route("**/*", handle_route)
+                    ctx.on("page", lambda page: page.route("**/*", handle_route))
                     return ctx
                 mock_b = MagicMock()
                 mock_b.new_context = _new_ctx
@@ -392,3 +399,22 @@ def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
                 platform_post_id="export/mock_12345",
                 login_only=True,
             )
+
+
+def test_retired_management_query_opens_no_browser(tmp_path, monkeypatch):
+    from config.settings import settings
+    from unittest.mock import patch
+    from scripts.wechat_uploader import run_uploader
+    from video_processing.core.wechat_session_lock import EXIT_WECHAT_SESSION_BUSY
+
+    monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
+    monkeypatch.setattr(settings, "wechat_scheduler_policy_path", tmp_path / "missing-policy.json")
+    monkeypatch.setattr(settings, "wechat_account_scheduler_enabled", True)
+    state = tmp_path / "wechat_state.json"
+    state.write_text('{"cookies": [], "origins": []}')
+    before = state.read_bytes()
+    with patch("scripts.wechat_uploader.sync_playwright") as runtime:
+        assert run_uploader(state_path=str(state), verify_only=True,
+                            platform_post_id="export/mock_12345", login_only=True) == EXIT_WECHAT_SESSION_BUSY
+    runtime.assert_not_called()
+    assert state.read_bytes() == before
