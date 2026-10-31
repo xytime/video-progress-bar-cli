@@ -48,7 +48,7 @@
 | 28.8 秒同源片段 | 复用 15 帧；1 次实际核验 | 32.45 秒，PARTIAL 后回到完整路径 | 不通过的帧不能被其他可读标题替代，也不降低置信度 |
 | 本次 43.57 分钟慢任务 | 463 段原 ASR；复制 74,617 帧时的检查点；读取其中 15 帧 | 1.09 秒，FULL_FALLBACK；0 新 OCR、0 语义请求，未重跑全片 | 负向抽检不声称全片无中文；不能用于首次 OCR 或成片吞吐对比 |
 | 14 分 37 秒双语长片 | 复制真实成片和 ASR；15 帧新 OCR、0 缓存命中、1 次实际语义核验 | 33.93 秒，ABSENT 后 FULL_FALLBACK；首段音乐/标题不足以证明对白字幕 | 前奏音乐会阻止该样本走正向捷径，不能宣称此片已提速成片 |
-| 14 分 13 秒访谈长片段 | 同一片从第 24 秒实际访谈开始无重编码切出，283 段 ASR 同步平移 | 等待生产 OCR 空闲后实测 | 单独保留切片来源、SHA 与失败的完整原片，不能挑成功片覆盖前次结果 |
+| 14 分 13 秒访谈长片段 | 同一片从第 24 秒实际访谈开始无重编码切出，283 段 ASR 同步平移；30 帧首次 OCR、0 缓存、2 次实际语义核验 | 54.28 秒，首窗口 MATCH，中段 PARTIAL 后 FULL_FALLBACK | 两帧实际对白行置信度 0.3 未达原 0.5 门槛，未降低阈值；长片正向交付仍未通过 |
 
 对应证据：`real-positive-av/receipt.json`、`real-positive-av/delivery-receipt.json`、`real-replay-v2/receipt.json`、`real-long-negative/receipt.json`、`real-long-bilingual-fixture/provenance.json`。所有抽检正向凭证均标注 `full_timeline_verified=false`。
 
@@ -59,6 +59,10 @@
 该真实长片随后在 OS 禁止联网、并明确禁止新 OCR worker 和供应商执行入口的条件下回放，0.134 秒返回相同的 FULL_FALLBACK，15 帧缓存命中、1 次语义缓存命中、0 解码、0 新 OCR、0 新供应商执行。见 `real-long-bilingual-fixture/warm-cache-receipt.json`；原冷运行 metrics/attempt 在 `before-warm-replay/` 保留。此项证明恢复复用有效，不是首次识别提速或成片吞吐验收。
 
 访谈长片验收使用 `run_long_when_idle.py` 非阻塞尝试取得既有 pipeline.lock，仅在空闲后最多占用 300 秒，防止验收和下一条生产 OCR 重叠；不改锁文件、不终止生产进程。16:20、16:44、17:14 三次尝试均因生产持锁让行，锁内容未变化，见 `long-acceptance-lock-receipts.jsonl`。没有把等待算作执行通过。
+
+17:49:35 在生产释放锁后取得该锁，54.67 秒后自行释放，退出 0，锁内容不变。该次长片冷启动实际 OCR 3.208 秒（Vision 3.109 秒、BMP 编码 0.092 秒），解码 1.566 秒、PNG 0.592 秒、语义核验 48.773 秒；主进程峰值 RSS 约 204 MiB、子进程峰值约 333 MiB，不相加冒充并发峰值。帧 12632/12662 的对白“它们本身就……”置信度 0.3，其他可读标题/词注不能替代，因而没有保留交付。证据 `real-long-dialogue-fixture/cold-receipt.json`、该源独立抽检 `attempt.json` 和 `long-slot-watch-20261031-1742.jsonl`。没有重跑全片来制造通过。
+
+另一个隔离分支于 17:58 补足一条真实翻译中断续跑：`codex/pipeline-throughput` 的 `f4d0cd0` 修复词注失配导致整批拆分重译，相关回归 963 项通过。cf 完整 62 段/13 批通过原全片质量门，无阻断项，仅记录失配词注清理告警；第二进程复用首批完成，其后 OS 断网复验 0.505 秒、0 新请求，保存并读回完整翻译检查点。累计预算 249.521/600 秒，含此前失败 28.531 秒，旧状态未重置。详见同级目录 `translation-recovery-cfHekZAC-o4-20261031-1753/acceptance-summary.json`。这不是本抽检候选的组合测试，也没有渲染成片；另一条 XC 首批失败仍保留在分母。当前仍缺组合版本验证、长片正向、人工金标、完整双任务交接和有效成片吞吐。
 
 ## 尚未达到的启用条件
 
