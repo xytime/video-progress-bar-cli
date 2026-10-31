@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 固化 v4 视觉，三词分页和每页 3 秒的局部翻页 |
 | 1.0.1 | 2026-10-17 | Codex | 长例句显示含完整生词的原文片段，省略明确可见，保留既有版式 |
+| 1.0.2 | 2026-10-31 | Codex | 词性使用释义右侧实际剩余宽度，保留完整标签和最低字号 |
 """
 from pathlib import Path
 import math
@@ -134,8 +135,9 @@ def render_cards(items, title):
             d.text((904-font('ipa', 28).getlength(stamp), y+106), stamp, font=font('ipa', 28), fill=MUTED)
             meaning_face, lines = fit(item['meaning_zh'], 'zh', 685, 42, 26)
             d.text((112, y+152), lines[0], font=meaning_face, fill=GOLD)
-            text_fit(d, (132+meaning_face.getlength(lines[0]), y+161), item['pos'],
-                     'ipa', 100, 26, 20, MUTED)
+            pos_x = 132 + meaning_face.getlength(lines[0])
+            text_fit(d, (pos_x, y+161), item['pos'],
+                     'ipa', 904-pos_x, 26, 20, MUTED)
             d.line((112, y+215, 112, y+239), fill=TEAL, width=3)
             face, lines, _ = fit_example(item['excerpt'], item['word'])
             top = y + (207 if face.size >= 28 else 203)

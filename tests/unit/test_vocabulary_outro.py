@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-10-13 | Codex | 验证真实字幕抽取和受控渲染串联，不调用上传器 |
 | 1.0.1 | 2026-10-15 | Codex | 流水线连接使用显式测试策略，保留生产独立类型开关 |
 | 1.0.2 | 2026-10-17 | Codex | 复现真实长例句，验证完整目标词、原文连续片段和短句兼容 |
+| 1.0.3 | 2026-10-31 | Codex | 真实长词性完整绘制及边界回归，超长内容仍明确失败 |
 """
 import json
 from pathlib import Path
@@ -68,6 +69,37 @@ def test_pagination_and_fixed_brand_cta(tmp_path):
 def test_text_never_silently_truncated():
     with pytest.raises(ValueError):
         layout.fit('unbreakable'*100, 'en', 700, 60, 30)
+
+
+@pytest.mark.parametrize('pos', ['adv. + v. phr.', 'n.'])
+def test_pos_uses_available_space_without_clipping_or_small_font(pos, monkeypatch):
+    item = dict(word='continuously changing', meaning_zh='持续不断地变化',
+                phonetic='/kənˈtɪnjuəsli ˈtʃeɪndʒɪŋ/', pos=pos, timestamp='00:44',
+                excerpt='The human body is continuously changing.')
+    original = dict(item)
+    drawn = []
+    actual_text = layout.ImageDraw.ImageDraw.text
+
+    def recording_text(draw, xy, text, *args, **kwargs):
+        if text in (item['meaning_zh'], pos):
+            drawn.append((xy, text, kwargs['font']))
+        return actual_text(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(layout.ImageDraw.ImageDraw, 'text', recording_text)
+    cards = layout.render_cards([item], '人体持续适应变化')
+    assert item == original and cards[0].size == (1080, 1920)
+    assert [row[1] for row in drawn] == [item['meaning_zh'], pos]
+    meaning, label = drawn
+    assert label[0][0] >= meaning[0][0] + meaning[2].getlength(meaning[1]) + 20
+    assert label[0][0] + label[2].getlength(pos) <= 904
+    assert label[2].size == 26
+
+
+def test_pos_still_fails_closed_when_full_label_cannot_fit():
+    item = dict(word='changing', meaning_zh='变化', phonetic='/test/',
+                pos='unbreakable' * 100, timestamp='00:44', excerpt='It is changing.')
+    with pytest.raises(ValueError, match='容量'):
+        layout.render_cards([item], '超长标签')
 
 
 LONG_EXAMPLE = (
