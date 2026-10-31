@@ -21,10 +21,24 @@ CONTRACT = 'vision-local-bmp-v1'
 
 
 @contextmanager
-def file_worker(script):
+def file_worker(script, *, pass_fds=()):
+    with _file_worker(['/usr/bin/osascript', '-l', 'JavaScript', str(script)], pass_fds) as worker:
+        yield worker
+
+
+@contextmanager
+def binary_file_worker(binary, *, pass_fds=()):
+    """仅显式隔离基准使用；生产 router 不选择原生实验后端。"""
+    with _file_worker([str(binary)], pass_fds) as worker:
+        yield worker
+
+
+@contextmanager
+def _file_worker(command, pass_fds):
     with tempfile.TemporaryDirectory(prefix='caption-vision-') as folder, tempfile.TemporaryFile() as errors:
-        worker = subprocess.Popen(['/usr/bin/osascript', '-l', 'JavaScript', str(script)],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors)
+        worker = subprocess.Popen(command,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+                                  pass_fds=pass_fds)
         worker.caption_frame_path = Path(folder) / 'frame.bmp'
         worker.caption_request_id = 0
         try:

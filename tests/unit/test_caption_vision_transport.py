@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import pytest
 
-from video_processing.utils.caption_vision_transport import observe_file, file_worker
+from video_processing.utils.caption_vision_transport import observe_file, file_worker, binary_file_worker
 
 
 @contextmanager
@@ -83,3 +83,33 @@ def test_context_sends_stop_and_reaps_only_its_dedicated_worker(tmp_path, monkey
     assert marker.read_text() == 'STOP'
     assert worker.pid == worker_pid and worker.returncode == 0
     assert time.monotonic() - started < 2
+
+
+def test_native_context_inherits_fence_and_preserves_same_pixel_protocol(tmp_path):
+    """真实子进程证明 fence 仍在；测试后端不调用 Vision。"""
+    import fcntl
+    fence = tmp_path/'pipeline.lock'
+    fence.write_text('unchanged')
+    executable = tmp_path/'native-test-worker'
+    with fence.open('rb') as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        executable.write_text(f'#!{sys.executable}\n'
+            'import sys,json,os\n'
+            f'os.fstat({lease.fileno()})\n'
+            'for line in sys.stdin:\n'
+            ' request=json.loads(line)\n'
+            ' if request.get("command")=="STOP": break\n'
+            ' print(json.dumps(dict(id=request["id"],rows=[])),flush=True)\n')
+        executable.chmod(0o700)
+        with binary_file_worker(executable, pass_fds=(lease.fileno(),)) as worker:
+            lease.close()
+            with fence.open('rb') as other:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            frame = np.random.default_rng(5).integers(0, 256, (48,64,3), dtype=np.uint8)
+            assert observe_file(worker, frame, timeout=5) == dict(id=1, rows=[])
+            assert np.array_equal(cv2.imread(str(worker.caption_frame_path)), frame)
+        assert worker.returncode == 0
+    with fence.open('rb') as other:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert fence.read_text() == 'unchanged'

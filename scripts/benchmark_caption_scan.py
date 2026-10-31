@@ -13,12 +13,16 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 from fractions import Fraction
+from functools import partial
 import hashlib
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 import resource
 import shutil
@@ -308,7 +312,7 @@ def sandbox_profile(root, *, readable_files=(), blocked_executables=()):
     return '\n'.join(rules)+'\n'
 
 
-def run_worker(script, runtime, root, config, timeout):
+def run_worker(script, runtime, root, config, timeout, *, pass_fds=()):
     profile = root/'ocr.sb'
     if not profile.exists():
         profile.write_text(sandbox_profile(root))
@@ -318,7 +322,8 @@ def run_worker(script, runtime, root, config, timeout):
     before, started, peak, samples = global_swap(), time.monotonic(), 0, 0
     with (directory/'worker.log').open('x') as log:
         process = subprocess.Popen(command, cwd=runtime, env=child_environment(runtime, root),
-                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                   pass_fds=pass_fds)
         try:
             while process.poll() is None:
                 peak, samples = max(peak, tree_rss(process.pid)), samples+1
@@ -343,6 +348,70 @@ def run_worker(script, runtime, root, config, timeout):
     return result
 
 
+@contextmanager
+def native_experiment_lease(args):
+    """原生实验必须占用既有全局 fence；只读打开、非阻塞，不改锁文件内容。
+
+    文件描述符传给基准 Python 和两种 OCR 后端；父进程退出也不能提前放行生产。
+    没有空闲就立即拒绝，不在维护窗口外排队或抢占正在运行的扫描。
+    """
+    if not args.native_worker or not args.run_ocr:
+        yield None
+        return
+    path = explicit_file(args.pipeline_lock)
+    if path.name != 'pipeline.lock':
+        raise ValueError('原生实验必须使用目标生产 output/pipeline.lock')
+    with path.open('rb') as lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError('OCR_BENCHMARK_BUSY: 生产流水线未空闲，未启动实验 OCR') from exc
+        yield lease.fileno()
+
+
+def configure_native_experiment(native, config, runtime):
+    """仅隔离子进程替换后端；二进制摘要进入扫描身份，拒绝跨后端检查点复用。"""
+    binary = explicit_file(config['native_binary'])
+    if binary != runtime/'native-caption-worker' or file_hash(binary) != config['native_binary_sha256']:
+        raise ValueError('原生实验二进制不在快照内或摘要变化')
+    descriptor = config['pipeline_lock_fd']
+    if type(descriptor) is not int or descriptor < 3:
+        raise ValueError('原生实验缺少继承的生产 fence')
+    stat = os.fstat(descriptor)  # 未继承、串 FD 或已经关闭时拒绝执行。
+    if config.get('pipeline_lock_identity') != [stat.st_dev, stat.st_ino]:
+        raise ValueError('原生实验继承的生产 fence 身份不符')
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    from video_processing.utils.caption_vision_transport import binary_file_worker, file_worker
+    native.file_worker = partial(file_worker, pass_fds=(descriptor,))
+    profile = dict(frames=0, seconds={}, revisions=[])
+    if config['mode'] == 'candidate':
+        native.FILE_VISION = binary
+        native.file_worker = partial(binary_file_worker, pass_fds=(descriptor,))
+        original_observe = native.observe_file
+
+        def observe(*args, **kwargs):
+            result = original_observe(*args, **kwargs)
+            measured = result.get('worker_metrics')
+            keys = {'read_seconds','setup_seconds','recognize_seconds','result_seconds'}
+            revision = result.get('vision_revision')
+            if (result.get('worker_contract') != 'vision-native-bmp-experiment-v1'
+                    or type(revision) is not int or revision < 1
+                    or not isinstance(measured, dict) or set(measured) != keys
+                    or any(type(v) not in (int,float) or not math.isfinite(v) or v < 0 for v in measured.values())):
+                raise ValueError('OCR_NATIVE_PROFILE_INVALID')
+            profile['frames'] += 1
+            for key, value in measured.items():
+                profile['seconds'][key] = profile['seconds'].get(key, 0) + value
+            if revision not in profile['revisions']:
+                profile['revisions'].append(revision)
+            if len(profile['revisions']) != 1:
+                raise ValueError('OCR_NATIVE_REVISION_CHANGED')
+            return result
+
+        native.observe_file = observe
+    return profile
+
+
 def worker(config_path):
     config_path = explicit_file(config_path)
     config = json.loads(config_path.read_text())
@@ -355,8 +424,9 @@ def worker(config_path):
     from config.settings import settings
     from video_processing.processors import native_caption_router as native
     from video_processing.utils.stage_events import StageJournal, bind_journal
-    settings.native_caption_scan_optimization_enabled = config['mode'] == 'candidate'
+    settings.native_caption_scan_optimization_enabled = bool(config.get('native_binary')) or config['mode'] == 'candidate'
     settings.caption_scan_png_compression = config['png_compression']
+    native_profile = configure_native_experiment(native, config, runtime) if config.get('native_binary') else None
     journal = StageJournal(directory/'metrics.jsonl', task_id=config['sample'], attempt_id=directory.name)
     started = time.monotonic()
     with bind_journal(journal):
@@ -366,7 +436,7 @@ def worker(config_path):
     events = [json.loads(line) for line in (directory/'metrics.jsonl').read_text().splitlines()]
     metrics = [event for event in events if event['kind'] == 'metric' and event['stage'] == 'OCR_NATIVE']
     write_new(directory/'scan-receipt.json', dict(scan_wall_seconds=time.monotonic()-started,
-        metrics=metrics, worker_count=1, semantic_review_performed=False,
+        metrics=metrics, worker_count=1, semantic_review_performed=False, native_profile=native_profile,
         self_maxrss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         child_maxrss=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
         maxrss_unit='bytes on macOS; child value is maximum process, not aggregate tree'))
@@ -429,6 +499,8 @@ def arguments(argv):
     parser.add_argument('--probe-only', action='store_true', help='仅单源一对A/B检查Vision/沙盒兼容；不构成三轮验收')
     parser.add_argument('--timeout', type=int, default=180, help='每轮 OCR 进程墙钟上限秒')
     parser.add_argument('--png-compression', type=int, choices=range(10), default=3)
+    parser.add_argument('--native-worker', help='显式已编译原生实验二进制；对照改为 BMP/JXA vs BMP/原生，不进入生产')
+    parser.add_argument('--pipeline-lock', help='原生 OCR 实验必需：目标生产现有 output/pipeline.lock；忙则退出')
     parser.add_argument('--worker-config', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker_config:
@@ -440,6 +512,10 @@ def arguments(argv):
         parser.error('full-source 不接受起始偏移、synthetic 或 probe-only')
     if args.probe_only and (len(args.source) != 1 or args.synthetic or not args.run_ocr):
         parser.error('probe-only 必须恰好一个显式source、run-ocr，不能混合synthetic')
+    if args.native_worker and args.run_ocr and not args.pipeline_lock:
+        parser.error('原生 OCR 实验必须显式指定生产 pipeline-lock；不允许并行争抢资源')
+    if args.pipeline_lock and not args.native_worker:
+        parser.error('pipeline-lock 只用于显式原生实验')
     return args
 
 
@@ -448,9 +524,17 @@ def main(argv=None):
     if args.worker_config:
         worker(args.worker_config)
         return 0
+    with native_experiment_lease(args) as lock_fd:
+        return benchmark_main(args, lock_fd)
+
+
+def benchmark_main(args, lock_fd=None):
     if sys.prefix == sys.base_prefix or sys.platform != 'darwin':
         raise ValueError('必须使用 macOS 项目 venv Python')
     sources = [explicit_file(value) for value in args.source]
+    binary = explicit_file(args.native_worker) if args.native_worker else None
+    if binary and not os.access(binary, os.X_OK):
+        raise ValueError('原生 worker 必须已经编译并可执行；基准不运行编译器')
     if len(sources) != len(set(sources)) or len({s.stem for s in sources}) != len(sources):
         raise ValueError('源片路径及文件名 stem 必须唯一')
     root = validate_output(args.output, sources)
@@ -469,6 +553,7 @@ def main(argv=None):
     rounds = 1 if args.probe_only else ROUNDS
     total = sum(sample['frames'] for sample in samples)*rounds*2
     plan = dict(samples=samples, rounds=rounds, probe_only=args.probe_only,
+                comparison='bmp-jxa-vs-native' if binary else 'png-jxa-vs-bmp-jxa',
                 order=['baseline,candidate','candidate,baseline','baseline,candidate'][:rounds],
                 planned_frame_visits=total, ocr_calls_no_retry_upper_bound=total, ocr_calls_upper_bound=total*2,
                 estimated_ocr_seconds_at_3_to_8_fps=[total/8,total/3],
@@ -478,6 +563,19 @@ def main(argv=None):
     if not args.run_ocr:
         return 0
     runtime, script = runtime_snapshot(root)
+    native_config = {}
+    if binary:
+        expected = file_hash(binary)
+        target = runtime/'native-caption-worker'
+        shutil.copyfile(binary, target)
+        target.chmod(0o500)
+        if file_hash(target) != expected or file_hash(binary) != expected:
+            raise ValueError('原生 worker 复制期间变化')
+        native_config = dict(native_binary=str(target), native_binary_sha256=expected,
+                             pipeline_lock_fd=lock_fd,
+                             pipeline_lock_identity=[os.fstat(lock_fd).st_dev, os.fstat(lock_fd).st_ino])
+        write_new(root/'native-artifact.json', dict(source=str(binary), sha256=expected,
+                  production_enable_allowed=False, comparison='bmp-jxa-vs-native'))
     runs = []
     for sample in samples:
         for index in range(rounds):
@@ -487,8 +585,9 @@ def main(argv=None):
                 directory.mkdir()
                 config = directory/'config.json'
                 write_new(config, dict(root=str(root), clip=sample['clip'], mode=mode,
-                                       sample=sample['sample'], png_compression=args.png_compression))
-                result = dict(run_worker(script, runtime, root, config, args.timeout), sample=sample['sample'],
+                                       sample=sample['sample'], png_compression=args.png_compression, **native_config))
+                result = dict(run_worker(script, runtime, root, config, args.timeout,
+                              pass_fds=(lock_fd,) if lock_fd is not None else ()), sample=sample['sample'],
                               mode=mode, round=index+1, directory=str(directory))
                 write_new(directory/'resource-receipt.json', result)
                 runs.append(result)
