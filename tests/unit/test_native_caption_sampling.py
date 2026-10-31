@@ -88,6 +88,20 @@ def test_short_source_merges_windows_and_silence_is_not_negative_evidence():
     assert all(not 7 <= f / 30 < 10 for f in frames)
 
 
+@pytest.mark.parametrize('fps,count,end', [(30.,4944,165.12),(24000/1001,3421,143.52)])
+def test_minor_asr_tail_overrun_samples_real_video_without_rewriting_asr(fps, count, end):
+    segments = [dict(start=0.,end=10.,text='Opening.'),
+                dict(start=130.,end=end,text='Closing.')]
+    before = deepcopy(segments)
+    planned = windows(segments, fps, count)
+    assert planned[-1]['end'] == pytest.approx(count / fps)
+    assert all(frame < count for w in planned for frame in sample_frames(w, segments, fps, count))
+    assert segments == before
+    segments[-1]['end'] = count / fps + 1.1
+    with pytest.raises(ValueError, match='SAMPLE_TIMELINE_INVALID'):
+        windows(segments,fps,count)
+
+
 @pytest.mark.parametrize('captions', ['债券价格上涨', '債券價格上漲', 'Bonds 债券价格上涨'])
 def test_simplified_traditional_and_bilingual(evidence, captions):
     for sample in evidence['samples']:
@@ -360,6 +374,26 @@ def test_uncertainty_is_bounded_and_never_becomes_full_scan(tmp_path, evidence, 
     result = sampling.attempt(tmp_path/'source', tmp_path, evidence['segments'], 's', router.normalize_row)
     assert decide(result)['decision'] == 'REVIEW'
     assert len(Reader.calls) == 21
+
+
+def test_visual_absence_after_supplement_completes_all_windows(tmp_path, evidence, monkeypatch):
+    # OCR 把英文标牌/图形错读为低置信汉字，实际视觉初查和补查均确认无中文字幕。
+    Reader.source_samples = {s['frame']: dict(s, rows=[dict(text='勿', confidence=.3)])
+                             for s in evidence['samples']}
+    Reader.calls = []
+    monkeypatch.setattr(sampling, 'SampleReader', Reader)
+    monkeypatch.setattr(repair, '_probe', lambda _: (360, 640, 30., 120.))
+    def absent(window, samples, *args, supplemented=False):
+        return dict(window_id=window['id'], supplemented=supplemented,
+                    decision='ABSENT', matches=[], reason='actual images contain English signs only')
+    monkeypatch.setattr(sampling, 'review_window', absent)
+    result = sampling.attempt(tmp_path/'source', tmp_path, evidence['segments'], 's', router.normalize_row)
+    assert len(Reader.calls) == 63
+    assert len(result['sample_reviews']) == 3
+    assert decide(result)['decision'] == 'GENERATE'
+    assert decide(result)['full_timeline_verified'] is False
+    result['sample_reviews'][0]['supplemented'] = False
+    assert decide(result)['decision'] == 'REVIEW'
 
 
 def test_legacy_positive_receipt_remains_valid(evidence):

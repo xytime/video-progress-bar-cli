@@ -192,6 +192,8 @@ def extract_fact_signal(text: str, *, lang: str = "auto") -> FactSignal:
         markers.append("ambiguous_fund_close")
         if event_type == "unknown":
             event_type = "ambiguous_fund_close"
+    if _currency_share_counts(normalized):
+        markers.append("source_currency_share_conflict")
 
     return FactSignal(
         event_type=event_type,
@@ -228,6 +230,7 @@ def evaluate_translation_pair(
 
     _append_event_direction_issues(issues, source_signal, translation_signal)
     if enable_numeric_checks:
+        _append_share_count_issues(issues, source_text, translated_text)
         _append_amount_issues(issues, source_signal, translation_signal)
         if require_amount_coverage:
             _append_missing_amount_issues(
@@ -465,6 +468,9 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
         if value is None:
             continue
         unit = _normalize_english_amount_unit(match.group(2))
+        if re.match(r"\s+shares\b", text[match.end():], re.IGNORECASE):
+            # ASR 可能给股数加上 $；明确的 shares 仍是计数，单价 $20 per share 仍校验。
+            continue
         if unit is None and re.match(rf"\s*{_chinese_amount_unit_pattern()}", text[match.end():]):
             # $115万等混合写法交给中文单位规范化，不能同时产生一个伪裸$115锚点。
             continue
@@ -483,6 +489,8 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
         re.IGNORECASE,
     )
     for match in bare_after_pattern.finditer(text):
+        if re.match(r"\s+shares\b", text[match.end(2):], re.IGNORECASE):
+            continue
         value = _parse_number(match.group(1))
         if value is None:
             continue
@@ -496,12 +504,37 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
         re.IGNORECASE,
     )
     for match in bare_before_pattern.finditer(text):
+        if re.match(r"\s+shares\b", text[match.end():], re.IGNORECASE):
+            continue
         value = _parse_number(match.group(1))
         if value is None:
             continue
         unit = _normalize_english_amount_unit(match.group(2))
         amounts.append(value * multipliers[unit])
     return amounts
+
+
+def _currency_share_counts(text: str) -> List[float]:
+    pattern = rf"(?:US)?\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*({_english_amount_unit_pattern()})?\s+shares\b"
+    return [float(m.group(1).replace(',', '')) * _english_amount_multipliers()[
+        _normalize_english_amount_unit(m.group(2))] for m in re.finditer(pattern, text, re.IGNORECASE)]
+
+
+def _append_share_count_issues(issues: List[QualityIssue], source: str, translated: str) -> None:
+    """只核对明确 $…shares 冲突，防止旧金额修复缓存把股数变成股票价值。"""
+    source_counts = _currency_share_counts(source)
+    if not source_counts:
+        return
+    pattern = rf"([0-9][0-9,]*(?:\.[0-9]+)?)\s*({_chinese_amount_unit_pattern()})?\s*股(?!票)"
+    translated_counts = [float(m.group(1).replace(',', '')) * _chinese_amount_multipliers().get(m.group(2), 1)
+                         for m in re.finditer(pattern, translated)]
+    for count in source_counts:
+        if not any(_same_numeric_amount(count, value) for value in translated_counts):
+            issues.append(QualityIssue(
+                severity='P0', code='NUMBER_SHARE_COUNT_MISMATCH',
+                message='源文明确 shares 股数未在译文保留，不能把股数强制修为股票价值。',
+                source_signal=f'{count:g} shares', translation_signal='share_count_not_in_segment',
+                suggested_fix='保留显式股数与单价，不为源文多余的美元符号添加价值事实。'))
 
 
 def _english_amount_unit_pattern() -> str:
@@ -534,7 +567,18 @@ def _extract_chinese_amounts_usd(text: str) -> List[float]:
         r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
         rf"({_chinese_amount_unit_pattern()}|美元|美金)\s*(?:美元|美金)?"
     )
-    multipliers = {
+    multipliers = _chinese_amount_multipliers()
+    for match in pattern.finditer(text):
+        if _has_non_amount_suffix(text[match.end(1):]):
+            continue
+        value = _parse_number(match.group(1))
+        if value is not None:
+            amounts.append(value * multipliers[match.group(2)])
+    return amounts
+
+
+def _chinese_amount_multipliers() -> dict[str, int]:
+    return {
         "万亿": 1_000_000_000_000,
         "千亿": 100_000_000_000,
         "百亿": 10_000_000_000,
@@ -550,13 +594,6 @@ def _extract_chinese_amounts_usd(text: str) -> List[float]:
         "美元": 1,
         "美金": 1,
     }
-    for match in pattern.finditer(text):
-        if _has_non_amount_suffix(text[match.end(1):]):
-            continue
-        value = _parse_number(match.group(1))
-        if value is not None:
-            amounts.append(value * multipliers[match.group(2)])
-    return amounts
 
 
 def _dedupe_amounts(amounts: Sequence[float]) -> List[float]:

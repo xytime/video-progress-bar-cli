@@ -101,7 +101,7 @@ def test_sparse_remaining_fact_error_is_complete_but_requires_whole_video_policy
     # 拒绝正文从未进干净缓存，只在带单独身份的待全片复核计划中存在。
     assert all(not any(row["id"] == 0 for row in raw["items"]) for raw in transport.cache.values())
     state = json.loads(next((tmp_path / "subtitle-recovery").glob("*.json")).read_text())
-    assert state["units"]["0"]["attempts_used"] == 2
+    assert state["units"]["0"]["attempts_used"] == 1
     assert state["units"]["0"]["accepted"] is False
     assert state["units"]["0"]["rejected_candidate"]
 
@@ -119,7 +119,7 @@ def test_restart_reuses_pending_without_resetting_or_executing_more_requests(tmp
     assert first.translations == second.translations
     assert len(transport.prompts) == count
     assert first_state["requests_used"] == second_state["requests_used"]
-    assert second_state["units"]["0"]["attempts_used"] == 2
+    assert second_state["units"]["0"]["attempts_used"] == 1
     assert build_sparse_quality_report(segments, second.translations,
                                        repair_history=second.repair_history)["status"] == "accepted_with_warnings"
 
@@ -166,7 +166,7 @@ def test_successful_targeted_repair_has_clean_cache_and_restart_reuses_it(tmp_pa
     def generate(data, number):
         if len(data) == 1 and data[0]["id"] == 0:
             zero_singletons[0] += 1
-        return _rows(data, wrong=zero_singletons[0] < 2)
+        return _rows(data, wrong=zero_singletons[0] < 1)
 
     transport = _StructuredTransport(generate)
     monkeypatch.setattr(provider, "run_codex_structured", transport)

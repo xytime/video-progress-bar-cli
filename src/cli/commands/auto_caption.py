@@ -81,20 +81,21 @@ class _CaptionProgressReporter:
                 stage_started_at = self._stage_started_at
                 waiting = wait_state()
                 stage_started_at += max(0, waiting["seconds"] - self._stage_wait_baseline)
-            self._progress_file.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self._progress_file.with_name(f".{self._progress_file.name}.tmp")
-            temporary.write_text(
-                json.dumps({
-                    "stage": stage,
-                    "reused_steps": reused_steps,
-                    "stage_started_at": stage_started_at,
-                    "updated_at": time.time(),
-                    "resource_waiting": waiting["waiting"],
-                    "resource_wait_seconds": max(0, waiting["seconds"] - self._process_wait_baseline),
-                }, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            temporary.replace(self._progress_file)
+                # 阶段回调与心跳共用临时文件，必须把快照和替换放在同一把锁内。
+                self._progress_file.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self._progress_file.with_name(f".{self._progress_file.name}.tmp")
+                temporary.write_text(
+                    json.dumps({
+                        "stage": stage,
+                        "reused_steps": reused_steps,
+                        "stage_started_at": stage_started_at,
+                        "updated_at": time.time(),
+                        "resource_waiting": waiting["waiting"],
+                        "resource_wait_seconds": max(0, waiting["seconds"] - self._process_wait_baseline),
+                    }, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                temporary.replace(self._progress_file)
         except OSError as exc:
             logger.warning("Unable to write caption progress %s: %s", self._progress_file, exc)
 

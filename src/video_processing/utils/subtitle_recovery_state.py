@@ -33,7 +33,7 @@ class SubtitleRecoveryState:
 
     def __init__(self, directory: Path, *, texts: list[str], context: str, model: str,
                  effort: str, batch_size: int, max_attempts: int, max_requests: int,
-                 total_timeout: float, request_timeout: float):
+                 total_timeout: float, request_timeout: float, window_timeout: float | None = None):
         recipe = [RECOVERY_RECIPE, batch_size, max_attempts, "parent-first-rejection-to-singletons"]
         identity = json.dumps([texts, context, model, effort, recipe], ensure_ascii=False, sort_keys=True)
         self.identity = hashlib.sha256(identity.encode()).hexdigest()
@@ -42,6 +42,8 @@ class SubtitleRecoveryState:
         self.max_requests = max_requests
         self.total_timeout = total_timeout
         self.request_timeout = request_timeout
+        self.window_timeout = window_timeout
+        self._window_deadline = float('inf')
         self.data: dict = {}
         self._lock = None
         self._tick = 0.0
@@ -75,6 +77,8 @@ class SubtitleRecoveryState:
                              "total_timeout": self.total_timeout, "elapsed_seconds": 0.0,
                              "split_batches": {}, "units": {}, "last_failure": None}
             self._tick = time.monotonic()
+            self._window_deadline = (self._tick + self.window_timeout
+                                     if self.window_timeout is not None else float('inf'))
             self._write()
             return self
         except BaseException:
@@ -105,7 +109,7 @@ class SubtitleRecoveryState:
         now = time.monotonic()
         self.data["elapsed_seconds"] += max(0.0, now - self._tick)
         self._tick = now
-        remaining = max(0.0, self.data["total_timeout"] - self.data["elapsed_seconds"])
+        remaining = max(0.0, self.remaining_seconds())
         self.data["active_window"] = None if closing else {
             "started_at": time.time(), "allowance_seconds": min(self.request_timeout, remaining),
         }
@@ -129,7 +133,14 @@ class SubtitleRecoveryState:
             self._lock = None
 
     def remaining_seconds(self) -> float:
+        return min(self.cumulative_remaining_seconds(), self._window_deadline - time.monotonic())
+
+    def cumulative_remaining_seconds(self) -> float:
+        """稳定累计额度不因本轮供应商窗口变化而缩小或重置。"""
         return self.data["total_timeout"] - self.data["elapsed_seconds"] - max(0.0, time.monotonic() - self._tick)
+
+    def exhausted_code(self) -> str:
+        return 'total_timeout' if self.cumulative_remaining_seconds() <= 0 else 'translation_budget_exhausted'
 
     def split(self, offset: int, count: int) -> bool:
         return f"{offset}:{count}" in self.data["split_batches"]
@@ -144,7 +155,7 @@ class SubtitleRecoveryState:
     def before_execute(self, source_id: int | None = None) -> None:
         """调用方在缓存/冷却检查后调用；持久预扣使崩溃也不能退还真实请求。"""
         if self.remaining_seconds() <= 0:
-            raise CodexTextError("total_timeout")
+            raise CodexTextError(self.exhausted_code())
         if self.data["requests_used"] >= self.data["max_requests"]:
             raise CodexTextError("request_budget_exhausted")
         if source_id is not None:

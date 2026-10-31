@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 from pathlib import Path
 from contextlib import nullcontext
 import time
@@ -82,6 +83,8 @@ def _repair_prompt(prompt: str, error: CodexTextError) -> str:
                    + json.dumps(error.quality_details, ensure_ascii=False))
     if error.code.startswith("subtitle_vocab_alignment"):
         prompt += "本次修正所有段的 vocab 必须返回空数组；逐段忠实翻译仍须通过原有事实质量合同。"
+    if any(detail.get('code') == 'NUMBER_SHARE_COUNT_MISMATCH' for detail in error.quality_details):
+        prompt += 'shares 是明确股数，保留股数及单价；禁止因源文多余美元符号把股数改译为股票价值。'
     return prompt
 
 
@@ -188,6 +191,7 @@ def build_codex_subtitle_candidate(
     texts: list[str], context: str, *, state_dir: Path, command: str,
     model: str = "gpt-5.6-luna", effort: str = "medium", request_timeout: float = 120,
     total_timeout: float = 600, batch_size: int = 50, max_attempts: int = 2,
+    window_timeout: float | None = None,
     adaptive_recovery: bool = True,
     allow_quality_candidate: bool = False,
     initial_candidate: SubtitleTranslationCandidate | None = None,
@@ -198,7 +202,10 @@ def build_codex_subtitle_candidate(
     batch_size 是请求段数上限。恢复计划持久共享真实调用和累计期限；
     max_attempts=1 不启用降级，adaptive_recovery=False 保留原整批修正行为。
     """
-    if not texts or batch_size <= 0 or max_attempts not in {1, 2} or total_timeout <= 0 or request_timeout <= 0:
+    if (not texts or batch_size <= 0 or max_attempts not in {1, 2}
+            or not math.isfinite(total_timeout) or total_timeout <= 0
+            or not math.isfinite(request_timeout) or request_timeout <= 0
+            or window_timeout is not None and (not math.isfinite(window_timeout) or window_timeout < 0)):
         raise CodexSubtitleError("configuration")
     if initial_candidate and initial_candidate.contract_error_for(len(texts)):
         raise CodexSubtitleError("subtitle_structure")
@@ -215,11 +222,14 @@ def build_codex_subtitle_candidate(
         state_dir, texts=texts, context=context, model=model, effort=effort, batch_size=effective,
         max_attempts=max_attempts, max_requests=max_requests, total_timeout=total_timeout,
         request_timeout=request_timeout,
+        window_timeout=window_timeout,
     ) if adaptive else nullcontext(None)
     with manager as recovery:
         repair_history = list(initial_candidate.repair_history) if initial_candidate else []
         def remaining() -> float:
-            return recovery.remaining_seconds() if recovery else total_timeout - (time.monotonic() - started)
+            if recovery:
+                return recovery.remaining_seconds()
+            return min(total_timeout, window_timeout if window_timeout is not None else total_timeout) - (time.monotonic() - started)
 
         def request(batch: list[str], offset: int, *, singleton_repair: bool = False) -> dict:
             next_source = texts[offset + len(batch)] if offset + len(batch) < len(texts) else ""
@@ -234,14 +244,29 @@ def build_codex_subtitle_candidate(
                                          next_source_text=next_source, defer_quality=True)
             if recovery and len(batch) == 1:
                 repair_history.extend(recovery.repair_history(offset))
+                if latest and initial_candidate is None and any(
+                    entry.get('executed') and entry.get('strategy') in {'isolated_source_repair', 'targeted_singleton'}
+                    and offset + 1 in entry.get('segment_numbers', []) for entry in repair_history):
+                    # 已真实修复的完整残余候选交全片比例门；续跑不能再为同一少量问题循环调用。
+                    return latest
                 # 全片质量门指定的修复必须真实执行，不能被先前局部合格缓存掩盖。
                 if singleton_repair and initial_candidate is None and offset + 1 not in repair_targets:
                     accepted = recovery.validated_candidate(offset)
                     if accepted:
-                        checked = _validate_batch(_raw_rows(accepted, offset), batch, offset, context,
-                                                  next_source_text=next_source)
-                        logger.info("[CodexText] reused strictly validated row source_id=%d", offset)
-                        return checked
+                        try:
+                            checked = _validate_batch(_raw_rows(accepted, offset), batch, offset, context,
+                                                      next_source_text=next_source)
+                        except CodexSubtitleError as error:
+                            # 新规则发现旧行缺陷时转入有界修复，不能直接信任“已校验”标签。
+                            recovery.record_failure(error, offset)
+                            observation = dict(strategy='quality_observation', executed=False,
+                                segment_numbers=[offset + 1], details=error.quality_details,
+                                translations=accepted['translations'])
+                            repair_history.append(observation)
+                            recovery.record_repair(offset, observation)
+                        else:
+                            logger.info("[CodexText] reused strictly validated row source_id=%d", offset)
+                            return checked
             if recovery and singleton_repair:
                 previous = recovery.previous_failure(offset)
                 if previous and (previous["code"] == "invalid_output" or previous["code"].startswith("subtitle_")):
@@ -307,23 +332,38 @@ def build_codex_subtitle_candidate(
                                 else:
                                     recovery.record_batch_repair(offset, len(batch), observation)
                             if error.code.startswith("subtitle_vocab_alignment_"):
-                                if recovery and len(batch) > 1:
-                                    bad_ids = {item["source_id"] for item in error.quality_details}
-                                    recovery.mark_split(offset, len(batch), error)
-                                    for local_index, row in enumerate(raw["items"]):
-                                        source_id = offset + local_index
-                                        if source_id in bad_ids:
-                                            continue
-                                        following = texts[source_id + 1] if source_id + 1 < len(texts) else ""
-                                        try:
-                                            accepted = _validate_batch({"items": [row]}, [batch[local_index]],
-                                                source_id, context, next_source_text=following)
-                                        except CodexSubtitleError:
-                                            continue
-                                        recovery.remember_validated_candidate(source_id, accepted)
-                                repair_history.append(dict(strategy="host_vocab_sanitization", executed=True,
+                                # 正文已通过事实门；只移除失配词注，无需为学习附注重译整批正文。
+                                entry = dict(strategy="host_vocab_sanitization", executed=True,
                                     segment_numbers=[d["segment_number"] for d in error.quality_details],
-                                    details=error.quality_details))
+                                    details=error.quality_details)
+                                repair_history.append(entry)
+                                for index, row in enumerate(raw['items']):
+                                    row['vocab'] = [{'english': en, 'chinese': zh}
+                                                    for en, zh in latest['vocabs'][index].items()]
+                                if recovery:
+                                    if len(batch) == 1:
+                                        recovery.record_repair(offset, entry)
+                                    else:
+                                        recovery.record_batch_repair(offset, len(batch), entry)
+                                return latest
+                            if recovery and len(batch) > 1:
+                                bad_ids = {item['source_id'] for item in error.quality_details}
+                                # 金额遗漏可能把事实挪到邻行，不能把其邻行冒充独立正确行。
+                                for detail in error.quality_details:
+                                    if detail['code'] == 'NUMBER_AMOUNT_MISSING':
+                                        bad_ids.update((detail['source_id'] - 1, detail['source_id'] + 1))
+                                recovery.mark_split(offset, len(batch), error)
+                                for local_index, row in enumerate(raw['items']):
+                                    source_id = offset + local_index
+                                    if source_id in bad_ids:
+                                        continue
+                                    following = texts[source_id + 1] if source_id + 1 < len(texts) else ''
+                                    try:
+                                        accepted = _validate_batch({'items': [row]}, [batch[local_index]],
+                                            source_id, context, next_source_text=following)
+                                    except CodexSubtitleError:
+                                        continue
+                                    recovery.remember_validated_candidate(source_id, accepted)
                             if recovery and len(batch) == 1:
                                 recovery.remember_rejected_candidate(offset, latest)
                         raise
@@ -350,6 +390,9 @@ def build_codex_subtitle_candidate(
                         validate=validate,
                     )
                 except CodexTextError as exc:
+                    if exc.code == 'timeout' and recovery and recovery.remaining_seconds() <= 0:
+                        logger.warning('[CodexText] request timeout exhausted subtitle budget: %s', recovery.exhausted_code())
+                        exc = CodexTextError(recovery.exhausted_code(), quality_details=exc.quality_details)
                     repairable = exc.code == "invalid_output" or isinstance(exc, CodexSubtitleError)
                     if exc.code == "subtitle_recovery_exhausted":
                         if latest and allow_quality_candidate:
@@ -358,7 +401,10 @@ def build_codex_subtitle_candidate(
                     error = _located_error(exc, offset, len(batch)) if repairable else exc
                     if recovery:
                         recovery.record_failure(error, offset if len(batch) == 1 and (admitted[0] or repairable) else None)
-                    if latest and allow_quality_candidate and len(batch) == 1 and (attempt + 1 == attempts or not repairable):
+                    repaired_now = execution_entry is not None and any(
+                        entry.get('executed') and entry.get('input_sha256') == execution_entry['input_sha256']
+                        for entry in repair_history)
+                    if latest and allow_quality_candidate and len(batch) == 1 and (repaired_now or attempt + 1 == attempts or not repairable):
                         # 仅完整单段可带证据返回；是否放行由全片比例/时长门决定。
                         if any(entry.get("executed") for entry in repair_history
                                if offset + 1 in entry.get("segment_numbers", [])):

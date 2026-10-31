@@ -29,6 +29,34 @@ from video_processing.utils.translation_quality_guard import (  # noqa: E402
 )
 
 
+def test_asr_currency_before_shares_does_not_force_share_count_into_dollars():
+    source = '$433.3 million shares at $20.47 a share, about $8.9 billion of taxpayer money.'
+    correct = '4.333亿股、每股20.47美元，约涉及89亿美元的纳税人资金。'
+    result = evaluate_translation_pair(source, correct, require_amount_coverage=True)
+    assert result.issues == []
+    assert result.source_signal.amounts_usd == [20.47, 8_900_000_000]
+    assert 'source_currency_share_conflict' in result.source_signal.markers
+    wrong = '价值4.333亿美元的股票，每股价格为20.47美元，约涉及89亿美元的纳税人资金。'
+    rejected = evaluate_translation_pair(source, wrong, require_amount_coverage=True)
+    assert [i.code for i in rejected.issues] == ['NUMBER_SHARE_COUNT_MISMATCH']
+    bad_price = evaluate_translation_pair(source, correct.replace('20.47美元', '20.47亿美元'),
+                                         require_amount_coverage=True)
+    assert any(i.code == 'NUMBER_MAGNITUDE_MISMATCH' for i in bad_price.issues)
+
+
+def test_money_spent_on_shares_is_still_a_dollar_amount():
+    result = evaluate_translation_pair('They bought $433.3 million worth of shares at $20.47 per share.',
+                                      '买入4.333亿股，每股20.47美元。', require_amount_coverage=True)
+    assert any(i.code == 'NUMBER_MAGNITUDE_MISMATCH' for i in result.issues)
+
+
+def test_share_count_near_money_cue_is_not_an_additional_currency_anchor():
+    result = evaluate_translation_pair('$433.3 million shares in the investment at $20.47 per share.',
+                                      '投资4.333亿股，每股20.47美元。', require_amount_coverage=True)
+    assert result.issues == []
+    assert result.source_signal.amounts_usd == [20.47]
+
+
 def test_fund_final_close_not_market_exit():
     source = (
         "MGX announced the final close of Fund I at $49 billion, "

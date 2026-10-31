@@ -957,7 +957,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
+                total_timeout=min(settings.codex_subtitle_total_timeout_seconds,
+                                  settings.subtitle_translation_total_timeout_seconds),
+                window_timeout=self._remaining_translation_budget(),
                 batch_size=settings.codex_subtitle_batch_size,
                 allow_quality_candidate=True,
             )
@@ -979,7 +981,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
+                total_timeout=min(settings.codex_subtitle_total_timeout_seconds,
+                                  settings.subtitle_translation_total_timeout_seconds),
+                window_timeout=self._remaining_translation_budget(),
                 batch_size=settings.codex_subtitle_batch_size, allow_quality_candidate=True,
                 initial_candidate=candidate, repair_segment_numbers=targets)
         except Exception as exc:

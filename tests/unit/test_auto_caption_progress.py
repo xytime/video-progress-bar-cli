@@ -8,8 +8,46 @@
 """
 
 import json
+import threading
+from pathlib import Path
 
 from cli.commands.auto_caption import _build_progress_reporter
+
+
+def test_heartbeat_cannot_race_stage_write_or_overwrite_newer_stage(tmp_path, monkeypatch):
+    progress_file = tmp_path / 'progress.json'
+    reporter = _build_progress_reporter(progress_file)
+    entered, release, stage_started = threading.Event(), threading.Event(), threading.Event()
+    original = Path.write_text
+    writers = []
+
+    def paused_write(path, *args, **kwargs):
+        writers.append(threading.current_thread().name)
+        if threading.current_thread().name == 'old-heartbeat':
+            entered.set()
+            assert release.wait(3)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'write_text', paused_write)
+    heartbeat = threading.Thread(target=reporter._write_current, name='old-heartbeat')
+    def advance():
+        stage_started.set()
+        reporter('TRANSLATING')
+    callback = threading.Thread(target=advance, name='new-stage')
+    heartbeat.start()
+    assert entered.wait(3)
+    callback.start()
+    assert stage_started.wait(3)
+    try:
+        assert reporter._lock.acquire(blocking=False) is False
+        assert writers == ['old-heartbeat']
+    finally:
+        release.set()
+        heartbeat.join(3)
+        callback.join(3)
+    assert not heartbeat.is_alive() and not callback.is_alive()
+    assert json.loads(progress_file.read_text())['stage'] == 'TRANSLATING'
+    assert not (tmp_path / '.progress.json.tmp').exists()
 
 
 def test_progress_reporter_writes_atomic_stage_payload(tmp_path):

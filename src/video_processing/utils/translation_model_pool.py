@@ -58,7 +58,7 @@ def classify_error(message: str | None) -> str:
         return "billing"
     if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition")):
         return "region_restricted"
-    if "deadline" in text or "budget" in text:
+    if "deadline" in text or "budget" in text or "total_timeout" in text:
         return "budget_exhausted"
     if any(token in text for token in ("429", "quota", "rate limit", "rate_limit", "resource_exhausted")):
         return "rate_limit"

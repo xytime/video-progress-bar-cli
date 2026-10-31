@@ -25,6 +25,13 @@ def _raw(ids):
         {"english": "business", "chinese": "企业"}]} for i in ids]}
 
 
+@pytest.mark.parametrize('window', [-1,float('nan'),float('inf')])
+def test_invalid_window_cannot_disable_shared_timeout(tmp_path, window):
+    with pytest.raises(provider.CodexSubtitleError, match='configuration'):
+        provider.build_codex_subtitle_candidate(['Business.'], '', state_dir=tmp_path,
+            command='forbidden', window_timeout=window)
+
+
 @pytest.mark.parametrize("ids", [[0, 0], [1, 0], [True, 1], [0], [0, 2]])
 def test_duplicate_missing_reordered_and_boolean_ids_rejected(ids):
     with pytest.raises(provider.CodexSubtitleError, match="subtitle_ids"):
@@ -565,21 +572,22 @@ def test_two_network_executions_exhaust_singleton_without_audio_evidence(tmp_pat
     assert ledger["units"]["0"]["last_failure"]["code"] == "unavailable"
 
 
-def test_vocab_error_reuses_valid_rows_and_resumes_only_bad_row(tmp_path, monkeypatch):
-    """一行词汇错位不触发五行重译；中断后的真实账本/质量/预算全部继续。"""
+def test_fact_error_reuses_valid_rows_and_resumes_only_bad_row(tmp_path, monkeypatch):
+    """单行金额问题不触发五行重译；中断后的真实账本/质量/预算全部继续。"""
     class Interrupted(BaseException):
         pass
     def respond(data, number, prompt, timeout):
         ids=[r['id'] for r in data]
         if len(ids)==5:
-            return {'items':[{'id':i,'translation':'企业可以改变',
-                'vocab':[{'english':'missing','chinese':'不存在'}] if i==2 else []} for i in ids]}
+            return {'items':[{'id':i,'translation':'价格为1150亿美元。' if i==2 else '企业可以改变',
+                'vocab':[]} for i in ids]}
         if number==2:
             raise Interrupted()
-        return {'items':[{'id':i,'translation':'企业可以改变','vocab':[]} for i in ids]}
+        return {'items':[{'id':i,'translation':'价格为115美元。' if i==2 else '企业可以改变','vocab':[]} for i in ids]}
     calls=_real_executor(monkeypatch,respond)
     args=dict(state_dir=tmp_path,command='codex',allow_quality_candidate=True)
     texts=['A business can change.']*5
+    texts[2]='The price is $115.'
     with pytest.raises(Interrupted):
         provider.build_codex_subtitle_candidate(texts,'',**args)
     path=next((tmp_path/'subtitle-recovery').glob('*.json'))
@@ -588,7 +596,7 @@ def test_vocab_error_reuses_valid_rows_and_resumes_only_bad_row(tmp_path, monkey
     assert interrupted['requests_used']==2
     result=provider.build_codex_subtitle_candidate(texts,'',**args)
     assert calls==[list(range(5)),[2],[2]]
-    assert result.translations==['企业可以改变']*5
+    assert result.translations==['企业可以改变']*2+['价格为115美元。']+['企业可以改变']*2
     recovered=json.loads(path.read_text())
     assert recovered['requests_used']==3 and recovered['elapsed_seconds']>=interrupted['elapsed_seconds']
     assert recovered['total_timeout']<=interrupted['total_timeout']
@@ -616,5 +624,43 @@ def test_valid_rows_are_not_reused_for_changed_context_or_model(tmp_path, monkey
     for context,model in [('', 'gpt-5.6-luna'),('new context','gpt-5.6-luna'),('','gpt-6-luna')]:
         provider.build_codex_subtitle_candidate(texts,context,model=model,**args)
     # 新上下文必须重验完整父批；定点修复原本隔离上下文，相同源行的请求缓存仍合法。
-    assert calls==[list(range(5)),[2],list(range(5)),list(range(5)),[2]]
+    assert calls==[list(range(5)),list(range(5)),list(range(5))]
     assert len(list((tmp_path/'subtitle-recovery').glob('*.json')))==3
+
+
+def test_vocab_only_error_is_sanitized_without_a_second_model_call(tmp_path, monkeypatch):
+    def respond(data, *args):
+        raw = _raw([row['id'] for row in data])
+        raw['items'][2]['vocab'] = [{'english': 'missing', 'chinese': '不存在'}]
+        return raw
+    calls = _real_executor(monkeypatch, respond)
+    args = dict(state_dir=tmp_path, command='codex', allow_quality_candidate=True)
+    texts = ['A business can change.'] * 5
+    result = provider.build_codex_subtitle_candidate(texts, '', **args)
+    assert calls == [list(range(5))]
+    assert result.translations == ['企业可以改变'] * 5
+    assert result.vocabs[2] == {} and result.vocabs[1] == {'business': '企业'}
+    assert any(e['strategy'] == 'host_vocab_sanitization' and e['executed']
+               and e['segment_numbers'] == [3] for e in result.repair_history)
+    replay = provider.build_codex_subtitle_candidate(texts, '', **args)
+    assert replay.translations == result.translations and len(calls) == 1
+    assert any(e['strategy'] == 'host_vocab_sanitization' for e in replay.repair_history)
+
+
+@pytest.mark.parametrize('cumulative,window,expected', [(10, 100, 'total_timeout'),
+                                                     (100, 10, 'translation_budget_exhausted')])
+def test_request_timeout_at_exhausted_budget_is_not_an_ordinary_network_retry(
+    tmp_path, monkeypatch, cumulative, window, expected,
+):
+    now = [0.]
+    monkeypatch.setattr(provider.time, 'monotonic', lambda: now[0])
+    def respond(data, number, prompt, timeout):
+        now[0] += timeout
+        raise CodexTextError('timeout')
+    calls = _real_executor(monkeypatch, respond)
+    with pytest.raises(CodexTextError, match=expected):
+        provider.build_codex_subtitle_candidate(['A business can change.'], '',
+            state_dir=tmp_path, command='codex', total_timeout=cumulative, window_timeout=window)
+    assert len(calls) == 1
+    ledger = json.loads(next((tmp_path/'subtitle-recovery').glob('*.json')).read_text())
+    assert ledger['last_failure']['code'] == expected

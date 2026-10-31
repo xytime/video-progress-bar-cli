@@ -49,6 +49,7 @@ def test_clean_report_binds_source_timing_and_final_text_without_mutation():
 @pytest.mark.parametrize("source,translation,code", [
     ("The price is $115.", "价格是1150亿美元。", "NUMBER_MAGNITUDE_MISMATCH"),
     ("The price is $115.", "价格继续上涨。", "NUMBER_AMOUNT_MISSING"),
+    ('$433.3 million shares at $20.47 a share.', '价值4.333亿美元的股票，每股20.47美元。', 'NUMBER_SHARE_COUNT_MISMATCH'),
     ("The fund announced its final close.", "该基金选择退出市场。", "FINANCE_EVENT_DIRECTION_REVERSAL"),
 ])
 def test_sparse_fact_issue_is_allowed_after_targeted_repair_and_keeps_p0(source, translation, code):

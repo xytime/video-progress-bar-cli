@@ -117,3 +117,41 @@ def test_network_attempt_exhaustion_never_becomes_quality_or_audio_evidence(tmp_
             ledger.before_execute(0)
         assert denied.value.quality_details == [] and denied.value.retry_at == 9999999999
         assert ledger.previous_failure(0)["code"] == "unavailable"
+
+
+def test_current_window_does_not_shrink_persisted_cumulative_balance(tmp_path, monkeypatch):
+    now = [0.]
+    monkeypatch.setattr(state.time, 'monotonic', lambda: now[0])
+    with _state(tmp_path, total_timeout=400) as ledger:
+        ledger.before_execute()
+        now[0] = 300.
+    with _state(tmp_path, total_timeout=400, window_timeout=250) as ledger:
+        assert ledger.data['total_timeout'] == 400
+        assert ledger.remaining_seconds() == 100
+        assert ledger.data['requests_used'] == 1
+    with _state(tmp_path, total_timeout=900, window_timeout=50) as ledger:
+        assert ledger.cumulative_remaining_seconds() == 100
+        assert ledger.remaining_seconds() == 50
+        assert ledger.data['active_window']['allowance_seconds'] == 50
+        now[0] += 51
+        with pytest.raises(CodexTextError, match='translation_budget_exhausted'):
+            ledger.before_execute()
+    with _state(tmp_path, total_timeout=900, window_timeout=250) as ledger:
+        assert ledger.data['total_timeout'] == 400
+        assert ledger.remaining_seconds() == 49
+        ledger.before_execute()
+        assert ledger.data['requests_used'] == 2
+
+
+def test_crash_charge_uses_smaller_current_request_window(tmp_path, monkeypatch):
+    now = [0.]
+    monkeypatch.setattr(state.time, 'monotonic', lambda: now[0])
+    with _state(tmp_path, window_timeout=10) as ledger:
+        ledger.before_execute()
+        saved = json.loads(ledger.path.read_text())
+    assert saved['active_window']['allowance_seconds'] == 10
+    saved['active_window']['started_at'] = 0
+    ledger.path.write_text(json.dumps(saved))
+    with _state(tmp_path, window_timeout=200) as ledger:
+        assert ledger.data['elapsed_seconds'] == 10
+        assert ledger.cumulative_remaining_seconds() == 590

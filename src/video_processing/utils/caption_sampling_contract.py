@@ -22,7 +22,10 @@ def windows(segments, fps, count):
         raise ValueError('SAMPLE_TIMELINE_INVALID')
     for segment in segments:
         start, end = segment['start'], segment['end']
-        if (not math.isfinite(start) or not math.isfinite(end) or not 0 <= start < end <= count / fps + 1 / fps
+        # Whisper 尾段可在实际片尾后不足一秒结束；只把抽样窗口裁到实际帧，保留原 ASR。
+        if (not math.isfinite(start) or not math.isfinite(end)
+                or not 0 <= start < min(end, count / fps)
+                or end > count / fps + max(1., 1 / fps)
                 or not isinstance(segment['text'], str) or not segment['text'].strip()):
             raise ValueError('SAMPLE_TIMELINE_INVALID')
     if any(a['start'] > b['start'] for a, b in zip(segments, segments[1:])):
@@ -99,11 +102,13 @@ def decide_sampled(evidence):
                         raise ValueError('OCR 行无效')
             state = review['decision']
             decisions.append(state)
-            if evidence.get('inspection_mode') == MODE and state in {'OCR_ABSENT', 'NOT_DIALOGUE'}:
+            if evidence.get('inspection_mode') == MODE and state in {'OCR_ABSENT', 'NOT_DIALOGUE', 'ABSENT'}:
                 if review.get('reviewed_frames') != expected:
                     raise ValueError('负向证据未覆盖抽检帧')
                 if state == 'OCR_ABSENT' and any(HAN.search(r['text']) for f in expected for r in mapped[f]['rows']):
                     raise ValueError('负向证据包含中文疑点')
+                if state == 'ABSENT' and (not review['supplemented'] or review.get('matches')):
+                    raise ValueError('视觉负向证据未完成补查或含矛盾的中文字幕引用')
                 continue
             if state != 'MATCH':
                 raise ValueError('抽样对白未一致确认中文字幕')
@@ -121,7 +126,7 @@ def decide_sampled(evidence):
             raise ValueError('抽样证据存在缺帧或未核验的额外帧')
         text = '\n'.join(s['text'] for s in segments) + '\n' + '\n'.join(
             dict.fromkeys(r['text'] for s in samples for r in s['rows']))
-        if all(d in {'OCR_ABSENT', 'NOT_DIALOGUE'} for d in decisions):
+        if all(d in {'OCR_ABSENT', 'NOT_DIALOGUE', 'ABSENT'} for d in decisions):
             return result('GENERATE', '首中尾抽样未见对白中文字幕；未验证全片逐帧完整性', text)
         if any(d != 'MATCH' for d in decisions):
             return result('REVIEW', '窗口间中文字幕证据不一致', text)

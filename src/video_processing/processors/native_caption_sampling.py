@@ -200,7 +200,7 @@ def attempt(source, directory, segments, source_hash, normalize, progress=lambda
                     reviewed = timed_review(window, sampled, segments, fps, directory, supplemented=True)
                 reviewed['reviewed_frames'] = [s['frame'] for s in sampled]
                 evidence['sample_reviews'].append(reviewed)
-                if reviewed['decision'] not in {'MATCH', 'NOT_DIALOGUE'}:
+                if reviewed['decision'] not in {'MATCH', 'NOT_DIALOGUE', 'ABSENT'}:
                     rejected = True
                     break
             evidence['samples'] = [all_samples[f] for f in sorted(all_samples)]

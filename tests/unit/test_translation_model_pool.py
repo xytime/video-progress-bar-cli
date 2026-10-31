@@ -10,6 +10,8 @@ def test_billing_region_and_budget_have_distinct_cooldowns(tmp_path):
     assert classify_error("HTTP Error 402: Payment Required") == "billing"
     assert classify_error("400 FAILED_PRECONDITION User location is not supported") == "region_restricted"
     assert classify_error("budget below minimum request deadline") == "budget_exhausted"
+    assert classify_error('codex_text:total_timeout') == 'budget_exhausted'
+    assert classify_error('codex_text:timeout') == 'network'
     pool = DynamicTranslationModelPool(tmp_path / "pool.json")
     pool.record_failure("deepseek", "HTTP Error 402")
     assert "deepseek" not in pool.order(["deepseek"])
