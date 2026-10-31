@@ -5,9 +5,11 @@
 | Version | Date       | Author                              | Description                          |
 | ------- | ---------- | ----------------------------------- | ------------------------------------ |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：覆盖高亮、折行、动态缩放、ASS 标签构造、GlossaryCard |
+| 1.1.1 | 2026-11-01 | Codex | 回归验证高亮短语真实折行后的双语高度，不丢失原文或短语。 |
 | 1.1.0   | 2026-06-28 | Claude_Opus_4.8                     | 新增 tag_aware_wrap_zh 测试 + 中英高亮不对称 Bug 回归测试（高亮短语不被 \\N 劈开） |
 """
 import textwrap
+import re
 
 import pytest
 from video_processing.utils.subtitle_stylist import (
@@ -37,6 +39,28 @@ def make_layout(en_size=50, zh_size=58, safe_width=1036, max_height=500, outline
         max_height=max_height,
         outline=outline,
     )
+
+
+def test_atomic_highlight_phrase_participates_in_height_fit():
+    layout = SubtitleLayout(en_size=53, zh_size=61, safe_width=750,
+                            max_height=350, outline=3.5, spacer_px=30)
+    result = SubtitleStylist(layout).render(
+        'So what do you think is likely in the next 250 years',
+        '那么你认为在未来250年里可能发生什么',
+        vocab_items={'likely': '可能', 'in the next 250 years': '在未来250年里'},
+        bilingual=True,
+    )
+    size, height = result.en_size, layout.outline * 2
+    for line in result.ass_text.split(r'\N'):
+        tags = re.findall(r'\\fs([0-9.]+)', line)
+        if tags:
+            size = float(tags[-1])
+        height += size * 1.25
+    assert height <= layout.max_height
+    assert '在未来250年里' in result.ass_text
+    assert 'in the next 250 years' in result.ass_text
+    plain = re.sub(r'\{[^}]*\}|\\N|\s', '', result.ass_text)
+    assert '那么你认为在未来250年里可能发生什么' in plain
 
 
 # ── strip_trailing_punctuation ───────────────────────────────────────────────

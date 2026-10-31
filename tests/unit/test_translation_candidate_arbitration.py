@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.1.0 | 2026-11-01 | Codex | 已清理词注可直接采用，但混合正文告警不能走捷径。 |
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：覆盖 warning-aware 候选仲裁状态机 |
 """
 
@@ -67,6 +68,26 @@ def test_arbiter_uses_clean_candidate_immediately():
     assert outcome.should_use_candidate
     assert outcome.candidate == "clean"
     assert event["selected"] is True
+
+
+def test_sanitized_vocab_does_not_start_another_full_translation():
+    arbiter = TranslationCandidateArbiter()
+    decision = _decision(warning_codes=['VOCAB_ALIGNMENT_SANITIZED'], warning_severity='P2')
+    event = _event(decision)
+    outcome = arbiter.consider(candidate='body passed; invalid annotation removed',
+                               decision=decision, event=event, final_provider=False)
+    assert outcome.should_use_candidate
+    assert event['selected'] is True
+    assert event['warning_issues'][0]['code'] == 'VOCAB_ALIGNMENT_SANITIZED'
+
+
+def test_sanitized_vocab_does_not_hide_a_body_warning():
+    arbiter = TranslationCandidateArbiter()
+    decision = _decision(warning_codes=['VOCAB_ALIGNMENT_SANITIZED', 'TERM_DRIFT'],
+                         warning_severity='P2')
+    outcome = arbiter.consider(candidate='body still has warning', decision=decision,
+                               event=_event(decision), final_provider=False)
+    assert outcome.action == 'keep_looking'
 
 
 def test_arbiter_keeps_warning_candidate_until_clean_candidate_arrives():

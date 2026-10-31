@@ -49,6 +49,10 @@ def approved_layout(source: Path, source_hash: str):
         if source_hash != RECOVERY_LAYOUT.source_sha256:
             raise ValueError('单片字幕版式的原片摘要不符，需要重新确认')
         return RECOVERY_LAYOUT
+    from .reviewed_caption_sources import reviewed_layout
+    reviewed = reviewed_layout(source, source_hash)
+    if reviewed:
+        return ApprovedCaptionLayout(**reviewed)
     if source.stem != 'i1WsMclsgOs':
         return None
     layout = ApprovedCaptionLayout()
@@ -59,6 +63,9 @@ def approved_layout(source: Path, source_hash: str):
 
 def validate_segments(segments, duration, *, source_hash=None):
     from ..utils.caption_checkpoints import valid_segments
+    from .reviewed_caption_sources import validate_reviewed_timeline
+    if validate_reviewed_timeline(segments, duration, source_hash):
+        return
     if source_hash == RECOVERY_LAYOUT.source_sha256:
         if (abs(duration - 123.456667) > .05
                 or not valid_segments(segments, translated=True) or len(segments) != 25

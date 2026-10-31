@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.1.0 | 2026-11-01 | Codex | 仅已清理的失配词注不再触发整片重复翻译，正文告警仍参与仲裁。 |
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：抽象 warning-aware 翻译候选仲裁状态机 |
 """
 
@@ -68,7 +69,8 @@ class TranslationCandidateArbiter:
                 return self._select_best_warning()
             return CandidateArbitrationOutcome("fail")
 
-        if not decision.warning_issues:
+        if all(issue.code == 'VOCAB_ALIGNMENT_SANITIZED' and issue.severity == 'P2'
+               for issue in decision.warning_issues):
             event["selected"] = True
             return CandidateArbitrationOutcome("use_candidate", candidate=candidate, event=event)
 

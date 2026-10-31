@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 越界旧缓存只重新识别一次；不合格新结果不写入也不翻译。 |
 | 1.0.0 | 2026-10-23 | Codex | 验证阶段恢复、独立失效、损坏快照和并发原子写入。 |
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,9 @@ from video_processing.utils.caption_checkpoints import CaptionCheckpoints, finge
 
 
 class SyntheticCaption(AutoCaptionProcessor):
+    def _source_duration(self):
+        return 10.
+
     def _validate_input(self):
         pass
 
@@ -121,6 +125,32 @@ def test_failed_translation_retries_translation_without_retranscribing(source):
     again = processor(source)
     again.process()
     assert again.calls == ['translation', 'layout', 'render']
+
+
+def test_out_of_source_asr_cache_is_replaced_once_before_downstream_reuse(source):
+    processor(source).process()
+    path = next(source.parent.glob('.caption-checkpoints/*/asr.json'))
+    payload = json.loads(path.read_text())
+    payload['result']['segments'][0]['end'] = 146.96
+    payload['result_sha256'] = fingerprint(payload['result'])
+    path.write_text(json.dumps(payload))
+    again = processor(source)
+    again.process()
+    assert again.calls == ['audio', 'model', 'asr', 'layout', 'render']
+    assert json.loads(path.read_text())['result']['segments'][0]['end'] == 2
+
+
+def test_invalid_new_asr_never_replaces_snapshot_or_reaches_translation(source):
+    p = processor(source)
+    def invalid_asr(path):
+        p.calls.append('asr')
+        return [dict(start=0., end=146.96, text='Wrong timeline')]
+    p._transcribe_audio = invalid_asr
+    with pytest.raises(ValueError, match='ASR_SOURCE_TIMELINE_INVALID'):
+        p.process()
+    assert p.calls == ['audio', 'model', 'asr']
+    assert not list(source.parent.glob('.caption-checkpoints/*/asr.json'))
+    assert not p.output_path.exists()
 
 
 @pytest.mark.parametrize('stage,damage', [('asr', 'truncated'), ('translation', 'digest'), ('translation', 'half')])

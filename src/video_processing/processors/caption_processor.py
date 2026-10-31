@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.42.0 | 2026-11-01 | Codex | 复用和写入前校验ASR原片时长；现有Gemini对问题段隔离修复，沿用共享期限。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
 | 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
 | 1.40.0 | 2026-10-23 | Codex | 持久化独立转录/翻译快照，下游失败重试复用已验证上游。 |
@@ -222,7 +223,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
         ))
         audio_path = None
         try:
+            from ..utils.asr_timeline import validate_asr_timeline
+            source_duration = self._source_duration()
             saved = checkpoints.load('asr', checkpoints.identity['asr'])
+            if saved is not None:
+                try:
+                    validate_asr_timeline(saved['segments'], source_duration)
+                except ValueError as exc:
+                    logger.warning('[CaptionCheckpoint] 拒绝越界ASR检查点，将重新识别: %s', exc)
+                    saved = None
             if saved is not None:
                 segments, self.detected_lang = saved['segments'], saved['detected_lang']
                 self._report_progress('ASR_REUSED')
@@ -236,6 +245,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     segments = self._transcribe_audio(audio_path)
                 else:
                     segments = []
+                validate_asr_timeline(segments, source_duration)
                 checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
             # 普通流水线先核验已有中文字幕；独立教学/配音制作不隐式启用。
@@ -970,10 +980,22 @@ class AutoCaptionProcessor(VideoProcessorBase):
             logger.warning("[Translate] Codex candidate failed: %s", self._last_provider_error)
             return None
 
+    def _source_duration(self) -> float:
+        from ..utils.video_metadata import get_video_duration_ffprobe
+        return get_video_duration_ffprobe(self.input_path)
+
     def _build_subtitle_targeted_repair(self, candidate, texts, context, targets):
         """只替换问题段，源文背景隔离；既有持久请求/时间预算继续累计。"""
         from ..utils.codex_subtitle_provider import build_codex_subtitle_candidate
-        if not hasattr(settings, 'codex_text_command') or self._remaining_translation_budget() <= 0:
+        from ..utils.subtitle_targeted_repair import repair_with_gemini
+        if self._remaining_translation_budget() <= 0:
+            return None
+        if candidate.provider.lower() == 'gemini':
+            repaired = repair_with_gemini(candidate, texts, context, targets,
+                                          deadline=self._translation_deadline)
+            if repaired is not None:
+                return repaired
+        if not hasattr(settings, 'codex_text_command'):
             return None
         try:
             return build_codex_subtitle_candidate(

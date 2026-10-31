@@ -45,6 +45,9 @@ def test_real_cli_preserves_typed_error_evidence_and_asr_checkpoint(
         monkeypatch.setattr(subtitle_audio_review, "review_failed_segments", unexpected)
     calls = []
     class SyntheticFailureCaption(AutoCaptionProcessor):
+        def _source_duration(self):
+            return 10.
+
         def _extract_audio(self):
             calls.append("audio")
             audio = self.input_path.with_suffix(".wav")

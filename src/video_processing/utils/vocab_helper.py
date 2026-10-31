@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| 2.10.0 | 2026-11-01 | Codex | 问题段修复可将全片背景降为消歧提示；原文逐段权威保持最高。 |
 | 2.8.0 | 2026-10-05 | Codex | 共享截止时间，每次请求动态收紧时限并拒绝不足10秒的 Gemini 请求。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
 | 1.1.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现分批调用（50段/次）解决277段场景下输出截断导致计数不符的问题；放宽计数校验 |
@@ -81,6 +82,7 @@ def extract_vocab_batch(
     max_vocabulary_items: int = 3,
     min_vocabulary_items: int = 0,
     *, deadline: Optional[float] = None, error_out: Optional[List[str]] = None,
+    context_is_authoritative: bool = True,
 ) -> Optional[List[Dict[str, Any]]]:
     """批量从英文字幕段落中提取难词词汇，并可选地与中文翻译句子对齐。
 
@@ -153,6 +155,7 @@ def extract_vocab_batch(
         prompt = _build_prompt(
             en_batch, zh_batch, context_text=context_text, max_vocabulary_items=max_vocabulary_items,
             min_vocabulary_items=min_vocabulary_items,
+            context_is_authoritative=context_is_authoritative,
         )
         state_path = (
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
@@ -193,6 +196,7 @@ def _build_prompt(
     context_text: str = "",
     max_vocabulary_items: int = 3,
     min_vocabulary_items: int = 0,
+    *, context_is_authoritative: bool = True,
 ) -> str:
     """[Claude_Sonnet_4.6_Thinking_planning] 构造双模式提示词。
 
@@ -207,7 +211,7 @@ def _build_prompt(
     # [Claude_Opus_4.8] BUG-4: 每个输入项带 0-based 整数 id，要求模型逐项回显 id。
     # 解析端按 id 重对齐到定长列表——即便模型漏返/合并某段，也只是该 id 槽位留空（位置正确），
     # 绝不发生「该段之后整体串位」的级联错位。
-    context_block = _render_context_block(context_text)
+    context_block = _render_context_block(context_text, context_is_authoritative=context_is_authoritative)
     target_instruction = (
         f"The text has enough learning value: return at least {min_vocabulary_items} distinct useful B1+ items "
         "when they exist; include contextual B1-B2 terms after C1/C2 terms. "
@@ -286,13 +290,13 @@ def _build_prompt(
     return prompt
 
 
-def _render_context_block(context_text: str) -> str:
+def _render_context_block(context_text: str, *, context_is_authoritative: bool = True) -> str:
     if not context_text or not context_text.strip():
         return ""
     normalized = context_text.strip()
     if len(normalized) > _MAX_CONTEXT_CHARS:
         normalized = normalized[:_MAX_CONTEXT_CHARS] + "\n[context truncated for rate-limit safety]"
-    return f"{render_translation_constraints(normalized)}\n\n"
+    return f"{render_translation_constraints(normalized, context_is_authoritative=context_is_authoritative)}\n\n"
 
 
 def _call_with_retry(

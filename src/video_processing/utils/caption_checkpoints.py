@@ -29,7 +29,7 @@ TRANSLATION_MODULES = (
     'translation_prompt_constraints', 'vocab_helper', 'translation_helper', 'deepseek_translation',
     'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
     'subtitle_recovery_state', 'subtitle_failure_receipt', 'subtitle_audio_review', 'subtitle_audio_review_worker',
-    'subtitle_sparse_policy', 'subtitle_quality_recovery', 'subtitle_bad_cases',
+    'subtitle_sparse_policy', 'subtitle_quality_recovery', 'subtitle_bad_cases', 'subtitle_targeted_repair',
 )
 TRANSLATION_SETTINGS = (
     'subtitle_translation_provider_order', 'enable_deepseek_vocab_fallback',

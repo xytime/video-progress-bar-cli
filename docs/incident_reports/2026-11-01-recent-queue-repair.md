@@ -29,10 +29,10 @@
 |#7026 `NSPhe3R_kQs`|`CHANNEL_POLICY_REJECT`|内容策略审核，不能作为程序故障自动绕过|
 |#7042 `F8Y7IigdTHA`|`NATIVE_CAPTION_VISUAL_BUDGET`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7031 `CatuGloDkTQ`|`NATIVE_CAPTION_VISUAL_BUDGET`|真实源片121.52秒、音频121.58秒，缓存ASR延伸至146.96秒且含乱码；不能作为轻微片尾误差放行，须重核ASR|
-|#7045 `-D4TV5q5yOM`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；需单片保留原画面并另设双语区的确认方案，尚未改变版式|
+|#7045 `-D4TV5q5yOM`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；按具名源摘要及完整ASR绑定，保留原画面并设独立双语区；全部段落的静态渲染、宽高和时间轴验证通过，完整成片待验证|
 |#7046 `f38UjmZEVv0`|`CHANNEL_POLICY_REJECT`|内容策略审核，不能作为程序故障自动绕过|
 |#7054 `6ZpaPFXIgE4`|`CONTENT_CENSOR_BLOCK`|内容策略审核，不能作为程序故障自动绕过|
-|#7030 `5e-k8bBMFvY`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；需单片保留原画面并另设双语区的确认方案，尚未改变版式|
+|#7030 `5e-k8bBMFvY`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；按具名源摘要及完整ASR绑定，保留原画面并设独立双语区；全部段落的静态渲染、宽高和时间轴验证通过，完整成片待验证|
 |#7007 `SqwiCJ8r8_Q`|`NATIVE_CAPTION_VISUAL_BUDGET`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7012 `YDeRVjCSCQU`|`NATIVE_CAPTION_VISUAL_BUDGET`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7065 `C0ysAy2LXjY`|`NATIVE_CAPTION_VISUAL_BUDGET`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
@@ -43,12 +43,12 @@
 |#7114 `THUSzemA-BM`|`CONTENT_CENSOR_BLOCK`|内容策略审核，不能作为程序故障自动绕过|
 |#7108 `cfHekZAC-o4`|`WECHAT_DELIVERY_UNVERIFIED`|已跨提交边界/结果待核实；保留UNCERTAIN，不重复上传，遵守现行不自动查询策略|
 |#7008 `jnJX5Q9QJgQ`|`NATIVE_CAPTION_VISUAL_BUDGET`|密集幻灯片的重复raw_box和浮点精度撑满语义输入；保留所有行/图像，仅精简运输数据，第二轮真实抽检已通过GENERATE，队列未解除|
-|#7010 `p-nVeVG48FY`|`SUBTITLE_REPAIR_TRANSLATION_BUDGET_EXHAUSTED`|183段ASR可复用；旧轮前置供应商耗尽时间且未进入Codex；拟按原额度各验证一次本地字幕，等待具名方案确认|
-|#7089 `z9VaYmwImt8`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；需单片保留原画面并另设双语区的确认方案，尚未改变版式|
+|#7010 `p-nVeVG48FY`|`SUBTITLE_REPAIR_TRANSLATION_BUDGET_EXHAUSTED`|183段完整翻译实测通过（480.4秒），原ASR未改；正文正确且仅失配词注已清理时立即接纳，避免继续调用其他供应商耗尽窗口；队列恢复另记|
+|#7089 `z9VaYmwImt8`|`BURNED_CAPTION_REPAIR_UNCERTAIN`|失败帧为中央英文标题/叠字，并非邻近语音对白；按具名源摘要及完整ASR绑定，保留原画面并设独立双语区；全部段落的静态渲染、宽高和时间轴验证通过，完整成片待验证|
 |#7013 `6kOHnXRiM58`|`WECHAT_DELIVERY_UNVERIFIED`|已跨提交边界/结果待核实；保留UNCERTAIN，不重复上传，遵守现行不自动查询策略|
 |#7135 `ZVGS33A0nK0`|`NATIVE_CAPTION_INCOMPLETE`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7068 `UHmZl3PiOj0`|`STAGE_EXECUTION_FAILED`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
-|#7121 `LxCqqKwqeCo`|`SUBTITLE_REPAIR_TOTAL_TIMEOUT`|股数误判、局部过度修复、预算分类已修；历史累计预算耗尽且缺32段，未解除|
+|#7121 `LxCqqKwqeCo`|`SUBTITLE_REPAIR_TOTAL_TIMEOUT`|真实定点修复第30/59/87段金额遗漏，127段完整翻译75.6秒通过质量门；保留原Codex耗尽账和全局单位告警，未扩额；队列恢复另记|
 |#7070 `r2xjrq_e62k`|`NATIVE_CAPTION_INCOMPLETE`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7071 `98MJXtcgEjc`|`STAGE_EXECUTION_FAILED`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
 |#7146 `RYYM-6C4Vs4`|`NATIVE_CAPTION_INCOMPLETE`|真实源片/ASR绑定的首中尾抽检已通过，分流为GENERATE；仅证明识别阶段，不代表完整成片或队列已恢复|
@@ -68,3 +68,7 @@
 第一轮修复提交 `a9c8110` 已推送，原生部署 `204b5cd78d374c7fa36f917409a01205` 的9个步骤COMPLETE、verify.ok=true、维护闸门RUNNING/IDLE，5类驻留角色采用同一源摘要 `227a3efdb072b5103a00ef30fbb0b54f8e94a6f4513ccb906af6ec9a760d4e49`。第二轮提交 `e68cbec` 已推送；原生部署 `0fadf58fe22549d19a91c1822f893591` 也已完成全部9步，verify.ok=true、闸门RUNNING/IDLE；5类驻留角色采用源摘要 `92d8c5bbc2cc54c6759a6d778c69308515297c62496e4fa9fdc3cd96fa7477a1`。证据：调查目录 `runtime-adopted-r2.json` 和外置 `deployment-r3/`。
 
 真实源片复测：19条首轮16条通过，#7113/#7008修复后第二轮均通过，累计18条完成抽检分流；#7031因ASR严重越界保留复核。两轮原始结果分别位于调查目录的 `sampling-validation-results.json`、`sampling-validation-r2-results.json`，独立副本包含源摘要/ASR摘要/实际画面/语义证据。全程未写队列或调用上传投稿。
+
+第三轮新增：拒绝超过源片尾1秒的ASR缓存及新结果；具名单片保持全画面、完整字幕及源摘要绑定；中文按高亮原子实际折行高度缩字号。Gemini仅修复问题段，沿用原供应商和共享期限，背景不得覆盖该段事实。所有非目标段正文和词注保持。独立补丁兼容不含扩展词汇字段的主干候选。
+
+第三轮实施前的综合隔离回归702项通过（`video-pytest-p2a9e7m9`）；最终兼容调整、Git提交、原生部署和队列恢复以追加回执为准。#7031重识别时间轴已不越界，但尾部文本在不同模型间不一致，仍保留人工/音频复核，不能以截断或删段代替修复。

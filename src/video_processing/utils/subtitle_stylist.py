@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                         |
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------- |
+| 1.5.1   | 2026-11-01 | Codex | 字号适配使用最终高亮短语的真实折行，防止估算通过后双语区溢出。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 vertical_processor.py 抽取字幕样式/ASS标签/字号/折行职责，实现单一职责原则 |
 | 1.0.1   | 2026-06-08 | Gemini_3.5_Flash_planning           | 修复 apply_word_highlights 中的 re.sub regex 转义错误，标注 # [Gemini_3.5_Flash_planning] |
 | 1.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 apply_chinese_highlights，在中文句子中寻找生词并绘制带颜色的下划线，标注 # [Gemini_3.5_Flash_planning] |
@@ -14,7 +15,6 @@
 """
 
 import re
-import textwrap
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -343,8 +343,6 @@ class SubtitleStylist:
         zh_text = strip_trailing_punctuation(zh_text)
 
         # 2. 英文词汇高亮（先于折行，避免英文标签被截断）
-        # [Claude_Sonnet_4.6_Thinking_planning] 中文高亮故意推迟到折行之后（步骤4），
-        # 确保 textwrap.fill 不会把 \N 插入 ASS 标签内部（如 {\u1\c&HC7D36F&}）
         word_colors: Dict[str, str] = {}
         if vocab_items:
             for idx, word in enumerate(vocab_items.keys()):
@@ -352,12 +350,14 @@ class SubtitleStylist:
                 word_colors[word] = VOCAB_HIGHLIGHT_COLOR
             en_text = apply_word_highlights(en_text, word_colors)
 
-        # 3. 动态字号缩放：迭代缩小直至估算高度适配
-        # 注意：此时 zh_text 还是纯文本（未加标签），_fit_font_size 的高度估算结果准确
+        # 中英均先高亮，字号估算与最终输出使用同一套不可拆短语折行。
+        if zh_text and vocab_items:
+            zh_text = apply_chinese_highlights(zh_text, vocab_items)
+
+        # 3. 动态字号缩放：迭代缩小直至实际折行高度适配
         en_size, zh_size = self._fit_font_size(en_text, zh_text, en_size, zh_size)
 
-        # 4. 以最终字号重新折行，折行后再施加中文高亮
-        # [Claude_Sonnet_4.6_Thinking_planning] 折行必须在高亮之前，防止 \N 截断标签
+        # 4. 以最终字号重新折行，保留已经标记的完整高亮短语
         wrap_w_en = max(20, int(layout.safe_width / (en_size * 0.54)))
         wrap_w_zh = max(10, int(layout.safe_width / zh_size))
 
@@ -366,8 +366,6 @@ class SubtitleStylist:
             # 再用 tag/词-aware 折行（tag_aware_wrap_zh）。这样 vocab 词组作为不可分
             # 原子参与折行，绝不被 \N 从中间劈开——与英文路径（高亮→tag_aware_wrap）对称。
             # 旧顺序「textwrap.fill→高亮」会把「头条叙事」劈成「头\N条叙事」致 substring 失配漏标。
-            if vocab_items:
-                zh_text = apply_chinese_highlights(zh_text, vocab_items)
             zh_text = tag_aware_wrap_zh(zh_text, wrap_w_zh)
         if en_text:
             en_text = tag_aware_wrap(en_text, wrap_w_en)
@@ -447,11 +445,10 @@ class SubtitleStylist:
             w_zh = max(10, int(layout.safe_width / zh_size))
 
             wrapped_en = tag_aware_wrap(en_text, w_en) if en_text else ''
-            raw_zh = re.sub(r'\{[^}]*\}', '', zh_text)
-            wrapped_zh_raw = textwrap.fill(raw_zh, width=w_zh) if raw_zh else ''
+            wrapped_zh = tag_aware_wrap_zh(zh_text, w_zh) if zh_text else ''
 
             en_lines = wrapped_en.count('\\N') + 1 if wrapped_en else 0
-            zh_lines = wrapped_zh_raw.count('\n') + 1 if wrapped_zh_raw else 0
+            zh_lines = wrapped_zh.count('\\N') + 1 if wrapped_zh else 0
 
             est_height = (
                 en_lines * en_size * layout.line_height_factor
