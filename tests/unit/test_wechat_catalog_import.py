@@ -1,4 +1,10 @@
-"""全量清单导入的边界、CAS、原子性和保留策略验收。"""
+"""全量清单导入的边界、CAS、原子性和保留策略验收。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-31 | Codex | 并发 CAS 使用两个预先合法的新增商品清单，避免改名冲突依赖抢锁顺序。 |
+"""
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -104,12 +110,22 @@ def test_disk_failure_and_untrusted_origin(import_setup,monkeypatch):
 
 def test_concurrent_import_only_one_wins(import_setup):
     client,active,path,doc=import_setup
-    a=request_body(client,doc);second=deepcopy(doc);second['pages'][1]['items'][1]['title']='另一批商品'
+    policy_before=active.read_bytes()
+    a=request_body(client,doc);second=deepcopy(doc)
+    added=next(item for page in second['pages'] for item in page['items'] if item['product_id']=='8880001')
+    added['title']='另一批新增商品'
     b=request_body(client,second)
+    # 两个请求在同一初始版本都必须合法；修改已有商品名会先被 422 拒绝，测不到 CAS。
+    for body in (a,b):
+        preview=client.post('/api/product-settings/catalog/preview',json=body)
+        assert preview.status_code==200,preview.text
     with ThreadPoolExecutor(max_workers=2) as pool:
-        statuses=list(pool.map(lambda body:client.post('/api/product-settings/catalog/import',json=body).status_code,[a,b]))
-    assert sorted(statuses)==[200,409]
-    decode_catalog(path.read_bytes())
+        responses=list(pool.map(lambda body:client.post('/api/product-settings/catalog/import',json=body),[a,b]))
+    assert sorted(response.status_code for response in responses)==[200,409]
+    winner=next(body for body,response in zip((a,b),responses) if response.status_code==200)
+    saved,_=decode_catalog(path.read_bytes())
+    assert saved==json.loads(winner['content'])
+    assert active.read_bytes()==policy_before
 
 
 def test_missing_saved_product_is_retained(import_setup):
