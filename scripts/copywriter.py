@@ -9,6 +9,7 @@
 | 2.0.3 | 2026-09-11 | Codex | 收紧评论区互动帖为标题独立展示、正文四段结构，禁止机器人套话。 |
 | 2.0.2 | 2026-09-09 | Codex | 候选仲裁前执行中文正文硬合同，阻断英文 fallback 并继续供应商回退 |
 | 2.0.1 | 2026-09-07 | Codex | 同次文案请求生成评论区选择题，独立保存且失败不阻断主文案。 |
+| 2.4.0 | 2026-11-01 | Grok Bot | AGY 全文案模式按 COPYWRITER_TITLE_PROVIDER_ORDER 依次尝试 agy→codex→grok→gemini；CLI 兜底执行者可插拔，共用宿主校验与审计。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
 | 1.1.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning     | 移除 os.getenv/load_dotenv，通过 settings 注入   |
 | 1.2.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning     | 结构化输出：短标题/文案/分类三文件；加原创/分类 LLM 推断 |
@@ -59,6 +60,7 @@ import random
 import argparse
 import logging
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -95,6 +97,7 @@ from video_processing.utils.title_contract import TitleContractError, validate_t
 from video_processing.title_provider import TitleProviderError, generate_agy_title_bundle
 from video_processing.utils.agy_copy_service import CopyProviderDeferred, generate_cached_agy_copy
 from video_processing.utils.codex_text_provider import CodexTextError, run_codex_structured
+from video_processing.utils.grok_provider import GrokProviderError, run_grok_structured
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -1050,6 +1053,7 @@ def _generate_existing_wechat_content(
     description: str,
     model_name: str = "gemini-2.5-flash",
     audit_path: Optional[Path] = None,
+    content_provider: Optional[str] = None,
 ) -> dict:
     """生成微信视频号所需内容，并按配置仲裁标题供应商。
 
@@ -1066,7 +1070,7 @@ def _generate_existing_wechat_content(
         content_hints : list — 2-5 个语义 token（英文）
         content_label : str  — 运营标签
     """
-    if settings.copywriter_content_provider == "agy":
+    if (content_provider or settings.copywriter_content_provider) == "agy":
         return _generate_agy_content(title, description, audit_path)
     api_key = settings.gemini_api_key
     base_provider = model_name
@@ -1152,7 +1156,8 @@ def _generate_existing_wechat_content(
                 )
                 raise
 
-    candidates = _title_provider_candidates(
+    # 作为 CLI 链之后的 API 末位时只用 Gemini 自身标题，不再重复调用已失败的 AGY。
+    candidates = [(base_provider, lambda: dict(base_content))] if content_provider else _title_provider_candidates(
         base_content,
         title,
         description,
@@ -1181,11 +1186,27 @@ def _copy_audit_events(path: Optional[Path]) -> list[dict]:
         return []
 
 
-def _generate_codex_content(title: str, description: str, audit_path: Optional[Path], failure: Exception) -> dict:
-    """最后一层文字兜底；两次结构/质量机会共享一次请求预算。"""
+def _run_grok_copy(prompt: str, *, schema: dict, timeout_sec: float, validate: Callable[[dict], dict]):
+    """grok 执行者：返回与 CodexTextResult 同形的结果，供共用的 CLI 兜底循环使用。"""
+    started = time.monotonic()
+    raw = run_grok_structured(prompt, schema=schema, command=settings.grok_command,
+                              model=settings.grok_subtitle_model, timeout_sec=timeout_sec,
+                              environment=settings.agy_app_environment())
+    return SimpleNamespace(payload=validate(raw), model=settings.grok_subtitle_model or "grok-cli-default",
+                           usage=None, cached=False, duration_ms=int((time.monotonic() - started) * 1000))
+
+
+def _generate_codex_content(title: str, description: str, audit_path: Optional[Path], failure: Exception,
+                            executor: str = "codex") -> dict:
+    """CLI 文字兜底（codex 或 grok）；两次结构/质量机会共享一次请求预算。"""
     if not title.strip():
-        raise ValueError("Codex full copy requires a source title")
-    provider = f"codex:{settings.codex_text_model}"
+        raise ValueError(f"{executor} full copy requires a source title")
+    if executor == "grok":
+        provider = f"grok:{settings.grok_subtitle_model or 'default'}"
+        budget = settings.copywriter_grok_timeout_seconds
+    else:
+        provider = f"codex:{settings.codex_text_model}"
+        budget = settings.codex_text_request_timeout_seconds
     previous = _copy_audit_events(audit_path)
     if not previous:
         previous = [{"provider": settings.copywriter_content_provider, "status": "unavailable",
@@ -1195,7 +1216,7 @@ def _generate_codex_content(title: str, description: str, audit_path: Optional[P
         "不使用工具、文件、命令或网络。只返回指定 JSON Schema，不能补充未证实事实。\n"
         + _build_wechat_prompt(title, description)
     )
-    deadline = time.monotonic() + settings.codex_text_request_timeout_seconds
+    deadline = time.monotonic() + budget
     base_prompt = prompt
 
     def validate(raw: dict) -> dict:
@@ -1210,21 +1231,25 @@ def _generate_codex_content(title: str, description: str, audit_path: Optional[P
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise CodexTextError("total_timeout")
-            result = run_codex_structured(
-                prompt, schema=WeChatContentSchema.model_json_schema(),
-                state_dir=settings.default_output_dir / "codex_text_cache",
-                command=settings.codex_text_command, model=settings.codex_text_model,
-                effort=settings.codex_text_effort, timeout_sec=remaining, validate=validate,
-                cache_prompt=base_prompt,
-            )
+            if executor == "grok":
+                result = _run_grok_copy(prompt, schema=WeChatContentSchema.model_json_schema(),
+                                        timeout_sec=remaining, validate=validate)
+            else:
+                result = run_codex_structured(
+                    prompt, schema=WeChatContentSchema.model_json_schema(),
+                    state_dir=settings.default_output_dir / "codex_text_cache",
+                    command=settings.codex_text_command, model=settings.codex_text_model,
+                    effort=settings.codex_text_effort, timeout_sec=remaining, validate=validate,
+                    cache_prompt=base_prompt,
+                )
             events = _copy_audit_events(audit_path)
             for event in events:
                 event.update(model=result.model, usage=result.usage, cached=result.cached,
                              duration_ms=result.duration_ms, attempt=attempt + 1)
             _write_copy_candidate_report(audit_path, title, previous + events)
             return result.payload
-        except (CodexTextError, ValueError) as exc:
-            code = getattr(exc, "code", "copy_quality")
+        except (CodexTextError, GrokProviderError, ValueError) as exc:
+            code = "unavailable" if isinstance(exc, GrokProviderError) else getattr(exc, "code", "copy_quality")
             current = [event for event in _copy_audit_events(audit_path)
                        if event.get("provider") == provider]
             previous.extend(current or [{"provider": provider, "status": "rejected",
@@ -1245,15 +1270,37 @@ def _generate_codex_content(title: str, description: str, audit_path: Optional[P
 
 def generate_wechat_content(title: str, description: str, model_name: str = "gemini-2.5-flash",
                             audit_path: Optional[Path] = None) -> dict:
-    """保留现有完整链；仅候选耗尽且开关开启时调用 Luna。"""
-    try:
-        return _generate_existing_wechat_content(title, description, model_name, audit_path)
-    except (CopyProviderDeferred, TitleContractError, GeneratedContentValidationError, ValueError, TitleProviderError) as exc:
-        if not settings.enable_codex_text_fallback:
-            raise
-        logger.warning("[CodexText] prior copy chain unavailable (%s); trying %s",
-                       type(exc).__name__, settings.codex_text_model)
-        return _generate_codex_content(title, description, audit_path, exc)
+    """AGY 全文案模式按标题供应商顺序（CLI 优先、API 最后）逐个尝试；Gemini 模式保持原链。
+
+    codex 仍需 ENABLE_CODEX_TEXT_FALLBACK；开启但未写入顺序时追加到末尾。
+    全部失败时优先抛出延后（退出码 75 重新排队），否则抛出最后一个错误。
+    """
+    if settings.copywriter_content_provider == "agy":
+        providers = list(settings.copywriter_title_provider_order_list)
+    else:
+        providers = ["gemini"]
+    if not settings.enable_codex_text_fallback:
+        providers = [provider for provider in providers if provider != "codex"]
+    elif "codex" not in providers:
+        providers.append("codex")
+    failures: list[Exception] = []
+    for provider in providers:
+        try:
+            if provider == "agy":
+                return _generate_existing_wechat_content(title, description, model_name, audit_path)
+            if provider == "gemini":
+                return _generate_existing_wechat_content(title, description, model_name, audit_path, "gemini")
+            logger.warning("[CopyChain] prior copy provider unavailable (%s); trying %s",
+                           type(failures[-1]).__name__ if failures else "none", provider)
+            return _generate_codex_content(title, description, audit_path,
+                                           failures[0] if failures else RuntimeError("none"), provider)
+        except (CopyProviderDeferred, TitleContractError, GeneratedContentValidationError, ValueError,
+                TitleProviderError) as exc:
+            failures.append(exc)
+    if not failures:
+        raise ValueError("no copy provider configured")
+    deferred = [exc for exc in failures if isinstance(exc, CopyProviderDeferred)]
+    raise deferred[-1] if deferred else failures[-1]
 
 
 # ── 兼容旧接口 ───────────────────────────────────────────────────────────────

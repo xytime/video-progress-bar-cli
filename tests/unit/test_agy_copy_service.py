@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-22 | Codex | 覆盖零 API 依赖、校验后缓存、限流、锁竞争与投稿保护。 |
+| 1.0.1 | 2026-11-01 | Grok Bot | 固定供应商顺序为仅 agy，隔离新的 CLI 文案链。 |
 """
 
 import fcntl
@@ -105,6 +106,7 @@ def test_app_environment_excludes_business_credentials(monkeypatch):
 def test_full_copy_works_without_api_or_fallback(tmp_path, monkeypatch):
     import scripts.copywriter as copywriter
     monkeypatch.setattr(settings, "copywriter_content_provider", "agy")
+    monkeypatch.setattr(settings, "copywriter_title_provider_order", "agy")
     monkeypatch.setattr(settings, "gemini_api_key", None)
     monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
     calls = []
@@ -126,6 +128,7 @@ def test_full_copy_works_without_api_or_fallback(tmp_path, monkeypatch):
 def test_full_copy_rejects_incomplete_or_english_response(tmp_path, monkeypatch, raw):
     import scripts.copywriter as copywriter
     monkeypatch.setattr(settings, "copywriter_content_provider", "agy")
+    monkeypatch.setattr(settings, "copywriter_title_provider_order", "agy")
     monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
     monkeypatch.setattr(service, "run_agy_structured", lambda *a, **k: raw)
     with pytest.raises(ValueError):
@@ -138,6 +141,7 @@ def test_cli_deferred_protocol_has_no_publishable_checkpoint(tmp_path, monkeypat
     import sys
     import scripts.copywriter as copywriter
     monkeypatch.setattr(settings, "copywriter_content_provider", "agy")
+    monkeypatch.setattr(settings, "copywriter_title_provider_order", "agy")
     monkeypatch.setattr(type(settings), "default_output_dir", property(lambda _: tmp_path))
     def unavailable(*a, **k):
         raise service.AgyProviderError("agy exit 1: rate limit")

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-03 | Codex | 现有成功短路、冷却回退、严格质量和失败延后。 |
+| 1.1.0 | 2026-11-01 | Grok Bot | 全文案供应商顺序 agy→codex→grok→gemini、grok 执行者与延后保留。 |
 """
 
 import json
@@ -26,6 +27,7 @@ DESCRIPTION = "Printing in gel enables complex structures and new manufacturing 
 
 
 def _settings(tmp_path, enabled=True, **kwargs):
+    kwargs.setdefault("copywriter_title_provider_order", "agy,codex")
     return Settings(_env_file=None, default_output_dir=tmp_path,
                     enable_codex_text_fallback=enabled, copywriter_content_provider="agy", **kwargs)
 
@@ -123,3 +125,60 @@ def test_codex_cannot_use_legacy_quality_fail_open(tmp_path, monkeypatch):
         provider="codex", final_provider=True, quality_context=None,
     )
     assert decision.blocking_issues and not decision.accepted
+
+
+def _chain_settings(tmp_path, enabled=True):
+    return _settings(tmp_path, enabled, copywriter_title_provider_order="agy,codex,grok,gemini",
+                     grok_command="grok-test")
+
+
+def test_chain_order_cli_first_grok_recovers_before_gemini(tmp_path, monkeypatch):
+    monkeypatch.setattr(copywriter, "settings", _chain_settings(tmp_path))
+    calls = []
+    def existing(*args):
+        calls.append(args[4] if len(args) > 4 else "agy")
+        if len(args) > 4:
+            pytest.fail("gemini API must stay behind grok")
+        _deferred()
+    monkeypatch.setattr(copywriter, "_generate_existing_wechat_content", existing)
+    def codex(*args, **kwargs):
+        calls.append("codex")
+        raise CodexTextError("quota", 9999999999)
+    monkeypatch.setattr(copywriter, "run_codex_structured", codex)
+    def grok(prompt, **kwargs):
+        calls.append("grok")
+        assert kwargs["command"] == "grok-test" and kwargs["timeout_sec"] <= 90
+        assert "PATH" in kwargs["environment"]
+        return dict(RAW)
+    monkeypatch.setattr(copywriter, "run_grok_structured", grok)
+    audit = tmp_path / "quality.json"
+    content = copywriter.generate_wechat_content(SOURCE, DESCRIPTION, audit_path=audit)
+    assert calls == ["agy", "codex", "grok"]
+    assert content["short_title"] == RAW["short_title"]
+    events = json.loads(audit.read_text())["events"]
+    assert events[-1]["provider"] == "grok:default" and events[-1]["selected"]
+
+
+def test_chain_all_cli_fail_then_gemini_last_and_deferral_preserved(tmp_path, monkeypatch):
+    monkeypatch.setattr(copywriter, "settings", _chain_settings(tmp_path, enabled=False))
+    calls = []
+    def existing(*args):
+        calls.append(args[4] if len(args) > 4 else "agy")
+        if len(args) > 4:
+            raise ValueError("gemini key missing")
+        _deferred()
+    monkeypatch.setattr(copywriter, "_generate_existing_wechat_content", existing)
+    monkeypatch.setattr(copywriter, "run_codex_structured",
+                        lambda *a, **k: pytest.fail("codex disabled must be skipped"))
+    def grok(prompt, **kwargs):
+        calls.append("grok")
+        raise copywriter.GrokProviderError("grok timed out after 90s")
+    monkeypatch.setattr(copywriter, "run_grok_structured", grok)
+    with pytest.raises(copywriter.CopyProviderDeferred):
+        copywriter.generate_wechat_content(SOURCE, DESCRIPTION, audit_path=tmp_path / "quality.json")
+    assert calls == ["agy", "grok", "gemini"]
+
+
+def test_title_order_accepts_cli_providers():
+    configured = Settings(_env_file=None, copywriter_title_provider_order="AGY, codex,grok,bogus,gemini,grok")
+    assert configured.copywriter_title_provider_order_list == ["agy", "codex", "grok", "gemini"]
