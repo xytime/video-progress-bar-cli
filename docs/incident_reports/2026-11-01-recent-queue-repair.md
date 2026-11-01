@@ -403,3 +403,14 @@ DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送�
 具名标题登记提交971221f4b29a8cd06184c30f5d22ef9ca905e8cb已推送并实际采用：部署70a7f7e8026e4afc9df421c8b7224814（deployment-r39）13:31:51完成9步、verify.ok=true，5类运行角色核对源码摘要4391786b943d7f47237fa948afebfffb84468b2ea35eea997f908a0bf0392cfa，RUNNING278、unknown为空。运行候选及独立提交各71项隔离通过、6项既有告警（video-pytest-2feyneqx / f4977212597f2bde05cb0755d8e987decd2c13efa18e6b01d7b120dc40cb8fec；video-pytest-e81qw4ls / 94002c754e11dad63f8c68f4fb3d19decf1b34de5c5ae0850d5e85986fa0dfb1），边界探针/pytest均0，r28-validation.json记录。
 
 首轮正式全片验证ASR_REUSED、TRANSLATION_REUSED后在SOURCE_CAPTION_LOCATING严格拒绝：记录错误使用容器总时长164.861678秒，prepare_source实际读取零起点30fps视频流164.8秒，差0.061678秒超过原0.05容差。之前只读绑定验证也使用容器值，未覆盖该差异；不能算全片验证通过，保留reviewed-title-validation-r28/7146/result.json及原检查点。只纠正该登记为真实视频流164.8秒，原65段ASR/起止时间与译文字段不变，不扩大容差或改变时长。重验将直接调用同一_probe取得真实视频流并validate_reviewed_timeline，通过后再原生采用及完整烧录。#7031本轮尚未执行，不沿用未发生的成功。
+
+
+## 13:40 BJ：7146完整65段排版通过；原授权队列正常推进
+
+视频流时长更正提交bed58bb2eccb2f91007b745a49ff9dd22a06733a已推送，原生部署781880378fba439799a38526807f4f57（deployment-r40）13:36:36完成9步、verify.ok=true；5类角色核对实际摘要02e0517edfc29ce0464284f23bfbe3520eeaf6da6d7db4ba8aa40f33185d6732，维护RUNNING280、unknown为空。两份源码各71项隔离通过、6项既有告警（video-pytest-x0girkea / 6182895cc9991554ad43779f2679c0405a2a5ea2ae29a5553945e5253bf51a45；video-pytest-mpu1pdg5 / a388c90c54bd9a93ad6aa134604f6e044b202e6b64b9e9d09c54c2d6de8eb966），真实视频流校验7146-real-stream-validation-r29.json通过。
+
+随后全片ASS检查准确拒绝第16段：原完整英文和oppressive高亮短语的真实字体宽945.6640625，超过940安全宽，不能声称成片完成。首轮失败保留reviewed-title-validation-r29/7146/result.json及7146-layout-overflow-r29.json。本次只让已绑定源支持既有font_size字段，并将7146字号上限由76降至74；未知源不豁免、其他具名源保持默认值、原940宽/350高边界保持。新增真实长句回归旧源1失败13通过（video-pytest-cvhwrbhp / e46a069a18c4c54c0687e32d5c0ec66434185cc4a257b5fbbdcdb274c3f0155d）。复核同时确认该段原译漏掉my mom的妈妈，仅把中文主语纠正为我妈妈，ASR原文与所有起止时间不变；具名本会话修复、模型unknown、供应商请求0，另存前后文本。
+
+上线前在独立媒体副本调用正常_generate_ass_file完整处理65段，绑定原片SHA与真实视频流时长，最大实际宽928.2359375/940、高342/350，已全部通过；原画面675x1200保留，未裁切或擦字。证据7146-full-ass-layout-proof-r30.json、外置title-layout-proof-r30/ASS和plan。首轮完整源OCR缓存4944/4944帧核验摘要一致、含中文OCR帧0，片头标题持续0–3.8秒，证据7146-source-ocr-review-r29.json。正式全片渲染、解码和画面验收另记，不提前算成功。
+
+原授权后台在13:33将7042推进PUBLISHING，13:35:59自然结束为UNCERTAIN；原因明确“已执行发表操作；按当前策略不自动查询结果”，原生ID仍缺，submission_protected保护保持。没有将PUBLISHING或UNCERTAIN计为公开交付，未手工重投/查询；新事实纳入后续一致备份，不能沿用先前5条全在等待封面的过时计数。
