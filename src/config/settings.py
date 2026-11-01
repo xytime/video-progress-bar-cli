@@ -8,6 +8,7 @@
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| auth-age-relogin-v1 | 2026-11-02 | Grok Bot | 新增按授权时长的自动快捷重登阈值、连续失败上限与临期提醒阈值。 |
 | bot-proxy-v1 | 2026-11-01 | Codex | 允许 Bot 单独读取真实 macOS 系统代理并沿用 TCP 连通检查，其他调用保持原选择。 |
 | dashboard-public-origin-v1 | 2026-10-25 | Codex | 为英语世界声明可选、严格校验的受保护 HTTPS 公网 Origin。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
@@ -343,6 +344,12 @@ class Settings(BaseSettings):
     # 临期时自动启动 --login-only --relogin 并把二维码推送到 Telegram。
     # 旧 state 在扫码成功前不覆盖；该开关不能绕过微信扫码，只把人工动作前移。
     wechat_auto_relogin_enabled: bool = False
+    # 自动快捷重登按“授权时长”触发（不依赖闲置保活/业务验证刷新）：授权满该小时数即预热重登；
+    # 失败按既有 30/60/120 分钟退避，连续失败达到上限后停止自动尝试，只告警等人工。
+    wechat_auto_relogin_after_hours: float = Field(default=20.0, ge=1.0, le=23.0)
+    wechat_auto_relogin_max_failures: int = Field(default=3, ge=1, le=10)
+    # 授权满该小时数仍未续期（自动重登未开启或未成功）时，按授权代际去重推送一次 Telegram 临期提醒。
+    wechat_session_expiry_alert_hours: float = Field(default=21.0, ge=1.0, le=23.5)
     # 仅在网页已触发“微信快捷登录”后，短时间监听本机 WeChat 的登录/授权窗口。
     # 默认关闭：需要先通过 --desktop-auth-preflight 确认 macOS 辅助功能权限。
     enable_wechat_desktop_quick_login: bool = False

@@ -46,15 +46,32 @@ def test_recovery_one_session_survives_restart_and_all_other_purposes(account, m
     assert len(guard.snapshot()['schedule']['sessions']) == 1
 
 
-def test_automatic_login_has_no_child_or_marker_mutation(account, monkeypatch):
+def test_automatic_login_requires_switch_and_single_use_permit(account, monkeypatch, tmp_path):
+    """2026-11-02 起账户调度下也允许按授权时长自动快捷重登，但必须显式开关并走单次登录许可。"""
+    from unittest.mock import MagicMock, patch
     import web.app as app
+    fake_app = tmp_path / 'project' / 'src' / 'web' / 'app.py'
+    fake_app.parent.mkdir(parents=True)
+    (tmp_path / 'project' / 'output').mkdir()
+    monkeypatch.setattr(app, '__file__', str(fake_app))
+    monkeypatch.setattr(app, '_is_wechat_login_running', lambda: False)
     monkeypatch.setattr(app.settings, 'wechat_keepalive_enabled', True)
-    monkeypatch.setattr(app.settings, 'wechat_auto_relogin_enabled', True)
-    marker = account.parent / 'wechat_login_at.txt'
+    monkeypatch.setattr(app.settings, 'wechat_auto_relogin_enabled', False)
+    marker = tmp_path / 'project' / 'output' / 'wechat_login_at.txt'
     marker.write_text('old')
     assert app._wechat_session_needs_auto_relogin() is False
-    result = app._start_wechat_login_flow(reason='automatic pre-expiry relogin')
-    assert result['deferred'] and not result['success']
+    with patch('subprocess.run') as run:
+        result = app._start_wechat_login_flow(reason='automatic pre-expiry relogin')
+    assert result['deferred'] and not result['success'] and not run.called
+    monkeypatch.setattr(app.settings, 'wechat_auto_relogin_enabled', True)
+    with patch('subprocess.run', return_value=MagicMock(returncode=11)) as run:
+        result = app._start_wechat_login_flow(reason='automatic pre-expiry relogin')
+        if app._wechat_login_thread:
+            app._wechat_login_thread.join(timeout=5)
+        assert result['success'] and not result.get('deferred')
+        assert '--manual-login-token' in run.call_args[0][0]
+        again = app._start_wechat_login_flow(reason='automatic pre-expiry relogin')
+    assert again['deferred'] and run.call_count == 1
     assert marker.read_text() == 'old'
 
 

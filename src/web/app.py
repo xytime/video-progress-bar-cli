@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| auth-age-relogin-v1 | 2026-11-02 | Grok Bot | 看门狗按授权时长每分钟判定自动快捷重登（与闲置保活解耦，账户调度开启时也生效，走单次登录许可），LOGIN_REQUIRED/临期/自动重登失败去重 Telegram 告警。 |
 | funnel-unavailable-v1 | 2026-10-29 | Codex | 健康度关键事实读取失败统一503，区分真实空集和任务不存在。 |
 | video-review-origin-v1 | 2026-10-25 | Codex | 修复受保护 HTTPS 控制台单条复核的 Origin 拒绝，并为 CP/P1/P2 批准留审计。 |
 | english-public-origin-v1 | 2026-10-25 | Codex | 仅允许配置的受保护 HTTPS Origin 访问英语世界路由；其它配置页边界不变。 |
@@ -365,6 +366,9 @@ def maintenance_status(request: Request):
     return inspection(gate())
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
+# 登录子进程未真正尝试登录的退出码：会话锁占用、账户冷却、单次许可失效、账户准入等待。
+_WECHAT_LOGIN_NOT_ATTEMPTED_CODES = frozenset({11, 15, 16, 17})
+_WECHAT_AUTH_ALERT_MEMO: dict[str, float] = {}
 
 _VIDEO_TABS = {"waitlist", "queue", "ready", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
 _VIDEO_SORTS = {"updated_at_desc","default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
@@ -609,9 +613,10 @@ def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
 @guarded("wechat-login")
 def _start_wechat_login_flow(*, headless: bool | None = None, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
-    # 固定时钟重登与账户统一调度互斥；在删标记/建线程之前退出。
-    if settings.wechat_account_scheduler_enabled and reason != "manual":
-        return {"success": False, "deferred": True, "message": "账户统一调度已停用自动保活及预热重登"}
+    # 自动重登只在显式开关开启时允许；与人工入口一样走单次登录许可（账户互斥、限流即停仍有效）。
+    automatic = reason != "manual"
+    if automatic and not settings.wechat_auto_relogin_enabled:
+        return {"success": False, "deferred": True, "message": "自动重登未启用（WECHAT_AUTO_RELOGIN_ENABLED=false）"}
     from video_processing.core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
     if headless is None:
         headless = bool(settings.wechat_headless)
@@ -638,7 +643,9 @@ def _start_wechat_login_flow(*, headless: bool | None = None, preserve_marker: b
     manual_login_token = ""
     try:
         guard = WeChatRequestGuard(state)
-        if reason == "manual":
+        if reason == "manual" or settings.wechat_account_scheduler_enabled or settings.wechat_operations_enabled:
+            # 账户调度下凭证失效会挡住普通准入；自动重登同样申请十五分钟单次登录许可，
+            # 重复触发在许可有效期内被拒绝，不会反复打开后台。
             manual_login_token = guard.issue_manual_login()
         else:
             guard.check()
@@ -694,8 +701,8 @@ def _start_wechat_login_flow(*, headless: bool | None = None, preserve_marker: b
                         auto_flag.unlink(missing_ok=True)
                     except Exception:
                         pass
-                # 若非会话锁占用 (returncode != 11) 且子进程未写入本次失败尝试，补记失败退避以防死循环饿死保活
-                if result.returncode != 11 and state.exists():
+                # 若非会话锁占用/账户冷却/许可失效/准入等待 (11/15/16/17) 且子进程未写入本次失败尝试，补记失败退避以防死循环饿死保活
+                if result.returncode not in _WECHAT_LOGIN_NOT_ATTEMPTED_CODES and state.exists():
                     post_att_at = float(post_auth.get("last_auth_attempt_at") or 0.0)
                     post_att_status = post_auth.get("last_auth_attempt_status")
                     if post_att_status != "FAILED" or post_att_at < (start_ts - 2.0):
@@ -713,6 +720,17 @@ def _start_wechat_login_flow(*, headless: bool | None = None, preserve_marker: b
                 logging.getLogger(__name__).warning(
                     f"WeChat login subprocess finished (code={result.returncode}) but fresh authorization was not confirmed (pre={pre_auth_at}, post={post_auth_at}, start={start_ts})."
                 )
+                if automatic and result.returncode not in _WECHAT_LOGIN_NOT_ATTEMPTED_CODES:
+                    from video_processing.core.wechat_auto_relogin import relogin_failure_alert
+                    _send_wechat_auth_alert(*relogin_failure_alert(
+                        read_wechat_auth_state(state) if state.exists() else {},
+                        started_at=start_ts, returncode=result.returncode,
+                        max_failures=settings.wechat_auto_relogin_max_failures))
+            elif automatic:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[Keepalive] Automatic WeChat relogin succeeded (%s): authorized_at %.0f -> %.0f",
+                    reason, pre_auth_at, post_auth_at)
         except Exception as exc:
             if preserve_marker:
                 try:
@@ -763,6 +781,81 @@ def _wechat_session_needs_auto_relogin() -> bool:
     except (OSError, ValueError):
         # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
         return state_file.is_file()
+
+
+def _send_wechat_auth_alert(event_type: str, dedupe_key: str, text: str) -> str:
+    """经项目 Telegram 投递账本发送视频号授权告警；同一去重键 7 天内只受理一次，进程内再做本地节流。"""
+    import logging
+    log = logging.getLogger(__name__)
+    memo_key = event_type + "\0" + dedupe_key
+    now = time.time()
+    if _WECHAT_AUTH_ALERT_MEMO.get(memo_key, 0) > now:
+        return "MEMO_SUPPRESSED"
+    try:
+        from video_processing.telegram_delivery import send_text
+        result = send_text(event_type=event_type, priority="P1", text=text,
+                           cooldown_seconds=7 * 86400, dedupe_key=dedupe_key, timeout_seconds=10)
+        state = result.state
+    except Exception as exc:  # 告警失败不能影响看门狗；不记录可能含 token 的异常文本。
+        state = "ERROR:" + type(exc).__name__
+    # 已受理/已去重不再尝试；其他结果 30 分钟后才允许再试，避免每分钟打扰或刷接口。
+    _WECHAT_AUTH_ALERT_MEMO[memo_key] = float("inf") if state in {"ACCEPTED", "SUPPRESSED"} else now + 1800
+    log.warning("[Keepalive] WeChat auth alert %s (%s): %s", event_type, dedupe_key, state)
+    return state
+
+
+def _wechat_auth_lifecycle_tick(state_file, log) -> bool:
+    """每分钟本地判定（不开浏览器）：去重告警 + 按授权时长自动快捷重登。
+
+    返回 True 表示本轮已启动或正在等待自动重登，调用方跳过本轮闲置保活。
+    """
+    from video_processing.core.wechat_auth_state import read_wechat_auth_state, record_wechat_keepalive_defer
+    from video_processing.core.wechat_auto_relogin import pending_alerts, relogin_plan
+    now = time.time()
+    auth = read_wechat_auth_state(state_file)
+    for event_type, dedupe_key, text in pending_alerts(
+            auth, now, alert_hours=settings.wechat_session_expiry_alert_hours,
+            auto_enabled=settings.wechat_auto_relogin_enabled,
+            max_failures=settings.wechat_auto_relogin_max_failures):
+        _send_wechat_auth_alert(event_type, dedupe_key, text)
+    if not settings.wechat_auto_relogin_enabled:
+        return False
+    plan = relogin_plan(auth, now, after_hours=settings.wechat_auto_relogin_after_hours,
+                        max_failures=settings.wechat_auto_relogin_max_failures)
+    if not plan["due"]:
+        return False
+    prj_root = Path(__file__).parent.parent.parent
+    auto_flag = prj_root / "output" / _WECHAT_AUTO_RELOGIN_FLAG
+    try:
+        flag_fresh = auto_flag.exists() and now - auto_flag.stat().st_mtime < 15 * 60
+    except OSError:
+        flag_fresh = False
+    if _is_wechat_login_running() or flag_fresh:
+        record_wechat_keepalive_defer(state_file, defer_reason="RELOGIN_IN_PROGRESS", timestamp=now)
+        return True
+    import threading as _threading
+    from video_processing.core.wechat_session_lock import inspect_wechat_session_lock
+    upload_running = any("wechat-uploader" in t.name or "upload" in t.name.lower()
+                         for t in _threading.enumerate())
+    if upload_running or inspect_wechat_session_lock(state_file).locked:
+        record_wechat_keepalive_defer(state_file, defer_reason="LOCK_BUSY", timestamp=now)
+        log.info("[Keepalive] Auto relogin due (%s) but WeChat browser is busy; rechecking next tick.", plan["reason"])
+        return True
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    admission = WeChatRequestGuard(state_file).evaluate("登录", account_only=True)
+    if not admission["allowed"]:
+        log.info("[Keepalive] Auto relogin due (%s) but account admission waits: %s", plan["reason"],
+                 "；".join(b["reason"] for b in admission.get("blockers", [])))
+        return False
+    reason = "automatic expired-session relogin" if plan["expired"] else "automatic pre-expiry relogin"
+    started = _start_wechat_login_flow(headless=bool(settings.wechat_headless), preserve_marker=True, reason=reason)
+    if started.get("deferred"):
+        log.info("[Keepalive] Auto relogin due (%s) but deferred: %s", plan["reason"], started.get("message"))
+        return False
+    record_wechat_keepalive_defer(state_file, defer_reason="RELOGIN_IN_PROGRESS", timestamp=time.time())
+    log.warning("[Keepalive] Automatic pre-expiry relogin triggered (reason=%s, age=%.1fh): %s",
+                plan["reason"], plan["age_hours"] or 0.0, started)
+    return True
 
 @guarded("title-translation", lambda youtube_id, *a: str(youtube_id) + ":0")
 def _translate_title_task(youtube_id: str, english_title: str):
@@ -1171,6 +1264,13 @@ def _wechat_keepalive_loop(stop=None):
                     pass
                 log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
                 continue
+
+            # 授权时长驱动的自动重登/告警与闲置保活解耦：业务会话持续刷新验证时间也不会让授权悄悄过期。
+            try:
+                if _wechat_auth_lifecycle_tick(state_file, log):
+                    continue
+            except Exception as lifecycle_exc:
+                log.exception("[Keepalive] Auth lifecycle tick failed: %s", lifecycle_exc)
 
             now = time.time()
             auth = read_wechat_auth_state(state_file)
