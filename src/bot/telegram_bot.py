@@ -50,12 +50,14 @@
 | 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
 | 1.29.0  | 2026-10-08 | Antigravity                         | 落实 RFC-2026-DEEP-CREATION-001：新增 /masterpiece 远程指令，支持重大新闻高品质二创母带一键调度。 |
 | 1.30.0  | 2026-10-17 | Antigravity                         | M3.5: 新增 handle_secondary_reply_callback (^rep:)，在纯短事务内消费视频号二级回复一次性审批回调。 |
+| 1.33.0 | 2026-11-01 | Codex | 所有启动入口在初始化前持有同一个真实内核锁，重复进程不再竞争轮询。 |
 | 1.32.0 | 2026-11-01 | Codex | Bot 请求与独立轮询池接入既有动态代理检测，保持权限、池大小和超时。 |
 | 1.31.0  | 2026-10-25 | Antigravity                         | 新增 /compliance-video-remix 指令与两阶段人工审核确认发布回调 |
 """
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 import html
 import json
 import logging
@@ -88,6 +90,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from config.settings import settings
+from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
 from bot.auth import SecurityConfigError, is_admin, parse_admin_ids
 from bot.api_client import PipelineAPIClient
 from bot import formatter as fmt
@@ -2068,7 +2071,7 @@ def _build_application(token: str) -> Application:
     return builder.build()
 
 
-def main() -> None:
+def _run_bot() -> None:
     global _api, _admin_ids
 
     token, _admin_ids = _load_config()
@@ -2128,6 +2131,18 @@ def main() -> None:
 
     logger.info("✅ Bot 已就绪，开始轮询...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+def main() -> None:
+    """任何管理入口均在配置加载和网络初始化前取得同一个实例锁。"""
+    with ExitStack() as lifecycle:
+        try:
+            lifecycle.enter_context(TaskLease(
+                settings.default_output_dir / "telegram_bot.lock", stage="Telegram 轮询"))
+        except TaskLeaseBusy:
+            logger.warning("Bot 实例已在运行，跳过重复启动。")
+            return
+        _run_bot()
 
 
 if __name__ == "__main__":

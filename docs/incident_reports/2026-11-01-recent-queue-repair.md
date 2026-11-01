@@ -210,4 +210,19 @@
 
 真实SDK离线构造证据 `bot-candidate-real-routing-readback.json` 显示两池均使用当前代理；未初始化Bot、未认证、未发送消息。旧实现真实SDK复现2失败1通过，证据 `video-pytest-fnp65k1r`。最终完整候选93项及20子测试通过、9项既有弃用告警，边界探针及pytest均0；证据 `video-pytest-9k4p8m7s`，源清单 `8b35e793c0f202c212702191dc7f420ebcf98c4dc8663f68f8d9ae5e4e127c89`。独立提交导出、原生部署和启动稳定性另记，尚不据离线构造宣告运行恢复。
 
-10:16一致备份固定24小时20条：8条FAILED、2条AI_COVER_PENDING、8条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统10条、策略2条、提交待核实8条。固定48小时31条：17条FAILED、2条AI_COVER_PENDING、10条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统16条、策略5条、提交待核实10条。#7071本次完整翻译已耗尽原持久预算，仍未解决；#7146由原生恢复批次领取，#7135进入原生投稿。保留待核实与预算保护，没有清零。
+10:16一致备份固定24小时20条：8条FAILED、2条AI_COVER_PENDING、8条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统10条、策略2条、提交待核实8条。固定48小时31条：17条FAILED、2条AI_COVER_PENDING、10条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统16条、策略5条、提交待核实10条。#7071本轮供应商翻译窗口耗尽，原累计预算尚有约301秒，完整翻译当时仍未完成；#7146由原生恢复批次领取，#7135进入原生投稿。保留待核实与预算保护，没有清零。
+
+
+## 10:37 BJ：Bot 网络恢复回读、重复轮询与两条字幕续跑
+
+提交 `0d543bbe859ba32dd0132edf95584c7b0b6c4ca4` 已推送；原生部署 `16c3e9ecd6ea493897fc880c0a5724ca`（外置 `deployment-r22/`）9步COMPLETE、verify.ok=true，维护恢复RUNNING，5类角色核对同一实际源码摘要 `28b93db2c7683f2615699b33f668dcf959ee5129a2ba65158d82e7b4da6fef76`。独立提交导出93项及20子测试隔离通过、9项既有弃用告警；证据 `video-pytest-o5jkn4em`，源清单 `9e4639188161d50d17bf1d0104149156648f9734df46474ad641a29631d42e23`。运行证据 `runtime-adopted-r15.json`。
+
+新原生Bot PID30913已正常初始化，启动后未再出现NetworkError或ConnectError，但getUpdates出现另一个实例竞争的Conflict。核对发现4天前遗留的PID6814，父进程1、精确脚本与工作目录均为本项目、日志为旧output/bot.log，且不是launchd当前实例。逐项核对身份、无子进程及无活动准入后只向该旧进程发送SIGTERM；8秒观察未退出的失败记录保留。旧SDK随后10:30:02优雅退出，无SIGKILL；同一受控PID持续运行，10:30:03至10:32:19观察窗口无新错误。证据 `bot-orphan-graceful-retirement.json`、`bot-post-retirement-health.json`。不能把启动后曾有的Conflict说成全程为零。
+
+防止复发的修复在所有Bot入口共用main中取得同一个真实内核锁，并持有至完整生命周期结束；重复启动在Bot配置及网络初始化前返回，业务层异常继续传播，异常及正常退出均释放锁。真实跨进程争锁、递归重复启动和两类异常释放已验证。候选完整运行源97项及20子测试隔离通过、9项既有弃用告警，边界探针及pytest均0；证据 `video-pytest-swnp7h50`，源清单 `902ad603de49bce4efb1a74b6327e9dcc13879ffebb8664d89bba7d92bcf68d1`。本修复独立提交导出与实际采用另记。
+
+#7071的错误是本轮供应商窗口耗尽，原累计账本仍剩约301秒；已纠正前文错误描述，未重置账本。在原账本与147段完整ASR下，正式完整字幕制作于10:30:32通过，548.827007秒、整片解码退出0、同源及成功回执均有效。成片SHA256 `ae1cae5bcc2b84a146c226f9184d4e3bae67ed2610c0075770face072a1de5f4`，唯一告警为删除失配词注、正文保留；3秒、270秒和540秒画面已实看。原生DAL只凭同源绑定成功回执解除修复链，随后官方重试入口恢复原任务，10:33为PROCESSING，不能据此声称已发表。证据 `production-caption-validation/7071/`、`7071-native-restoration.json`。
+
+#7137也是本轮窗口耗尽，既有累计账本28次请求、约308.16/600秒，尚有约291.84秒；115/189段缓存通过原合同严格核验，未新增请求。保持原账本与完整ASR，等待真实加工锁空闲后续跑。#7146原片为娱乐选题，违反既有受众内容规则；仅使用现有发布前人工复核标记闭锁，状态、评分、来源及字幕失败记录不变，字幕技术问题仍未解决。证据 `7137-cache-only-validation.json`、`7146-policy-review-hold.json`。
+
+10:36一致备份：初始24小时20条中，7条FAILED、10条UNCERTAIN、1条AI_COVER_PENDING、1条TRANSCRIBING、1条PROCESSING；系统类未解6条、策略3条、投递待核实10条。初始48小时31条中系统类12条、策略6条、投递待核实12条。#7146的分类转移不是技术修复，既有UNCERTAIN禁止重投保持。证据 `live-audits/20261101T023617Z/audit.json`；尚未清零。
