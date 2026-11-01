@@ -36,6 +36,7 @@
 | 1.10.6 | 2026-06-08 | Gemini_3.5_Flash_planning | 提示词升级：强制让 vocab 中的中文词汇与翻译句子中的子串完全对齐，以便于前端画下划线，标注 # [Gemini_3.5_Flash_planning] |
 | 1.11.0 | 2026-06-08 | Claude_Sonnet_4.6_planning | 将 _translate_segments_aliyun 迁移至 translation_helper 模块，实现高内聘低耦合的统一翻译接口 |
 | 1.12.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 移除 _translate_segments_gemini，委托至 vocab_helper.extract_vocab_batch；将阿里云翻译结果传入以实现中文字幕下划线 100% 精确对齐 |
+| 1.45.0 | 2026-11-01 | Grok Bot | 新增 grok CLI 字幕供应商，复用 agy 的结构化批次、校验与整片期限。 |
 | 1.13.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 翻转翻译优先级：Gemini 主译（习语/语境准确 + vocab 天然对齐）→ Aliyun 降级 → Google 终级 Fallback |
 | 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
 | 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
@@ -99,6 +100,7 @@ from ..utils.deepseek_translation import (
     translate_batch_with_vocab_deepseek,
 )
 from ..utils.agy_provider import AgyProviderError, run_agy_structured
+from ..utils.grok_provider import GrokProviderError, run_grok_structured
 from ..utils.translation_prompt_constraints import render_translation_constraints
 from ..db.database import PipelineDB
 from config.settings import settings
@@ -959,8 +961,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         translation_context: str,
     ) -> Optional[SubtitleTranslationCandidate]:
         """按 provider 名称构建字幕翻译候选。"""
-        if provider == "agy":
-            return self._build_agy_candidate(texts, translation_context)
+        if provider in ("agy", "grok"):
+            return self._build_agy_candidate(texts, translation_context, provider=provider)
         if provider == "gemini":
             return self._build_gemini_candidate(texts, translation_context)
         if provider == "deepseek":
@@ -1031,26 +1033,33 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self,
         texts: List[str],
         translation_context: str,
+        provider: str = "agy",
     ) -> Optional[SubtitleTranslationCandidate]:
-        """agy 首选：仅接受结构化翻译与可验证 vocabulary，失败交给 DeepSeek。"""
+        """agy/grok CLI：仅接受结构化翻译与可验证 vocabulary，失败交给下一供应商。"""
         translations, vocabs = [], []
-        batch_size = settings.agy_subtitle_batch_size
-        logger.info("[agy] subtitle plan effective_batch_size=%d batches=%d timeout=%.1fs",
-                    batch_size, (len(texts) + batch_size - 1) // batch_size, settings.agy_timeout_sec)
+        batch_size = settings.grok_subtitle_batch_size if provider == "grok" else settings.agy_subtitle_batch_size
+        timeout = settings.grok_timeout_sec if provider == "grok" else settings.agy_timeout_sec
+        logger.info("[%s] subtitle plan effective_batch_size=%d batches=%d timeout=%.1fs", provider,
+                    batch_size, (len(texts) + batch_size - 1) // batch_size, timeout)
         for offset in range(0, len(texts), batch_size):
             if self._remaining_translation_budget() <= 0:
-                self._last_provider_error = "translation_budget_exhausted:agy"
+                self._last_provider_error = f"translation_budget_exhausted:{provider}"
                 return None
-            batch = self._build_agy_batch(texts[offset:offset + batch_size], translation_context)
+            batch = self._build_agy_batch(texts[offset:offset + batch_size], translation_context, provider=provider)
             if batch is None:
                 # 整片候选失败立即交给下一供应商，不再调用本轮剩余 AGY 批次。
                 return None
             translations.extend(batch.translations)
             vocabs.extend(batch.vocabs)
-        return SubtitleTranslationCandidate(provider="agy", translations=translations, vocabs=vocabs,
-                                            supports_vocab=True, model=settings.agy_subtitle_model)
+        return SubtitleTranslationCandidate(provider=provider, translations=translations, vocabs=vocabs,
+                                            supports_vocab=True, model=self._cli_subtitle_model(provider))
 
-    def _build_agy_batch(self, texts: List[str], translation_context: str) -> Optional[SubtitleTranslationCandidate]:
+    @staticmethod
+    def _cli_subtitle_model(provider: str) -> str:
+        return (settings.grok_subtitle_model or "grok-cli-default") if provider == "grok" else settings.agy_subtitle_model
+
+    def _build_agy_batch(self, texts: List[str], translation_context: str,
+                         provider: str = "agy") -> Optional[SubtitleTranslationCandidate]:
         """单批严格校验数量、原顺序和内容；沿用整片期限和 vocab schema。"""
         items = [{"id": index, "english": text} for index, text in enumerate(texts)]
         schema = {
@@ -1090,16 +1099,24 @@ class AutoCaptionProcessor(VideoProcessorBase):
             f"Input JSON: {json.dumps(items, ensure_ascii=False)}"
         )
         try:
-            result = run_agy_structured(
-                prompt,
-                schema=schema,
-                model=settings.agy_subtitle_model,
-                command=settings.agy_command,
-                timeout_sec=min(settings.agy_timeout_sec, self._remaining_translation_budget()),
-            )
-        except AgyProviderError as exc:
+            if provider == "grok":
+                # cron 等消毒父进程无代理变量；与 agy App 环境同契约注入系统代理。
+                result = run_grok_structured(
+                    prompt, schema=schema, command=settings.grok_command, model=settings.grok_subtitle_model,
+                    timeout_sec=min(settings.grok_timeout_sec, self._remaining_translation_budget()),
+                    environment=settings.agy_app_environment(),
+                )
+            else:
+                result = run_agy_structured(
+                    prompt,
+                    schema=schema,
+                    model=settings.agy_subtitle_model,
+                    command=settings.agy_command,
+                    timeout_sec=min(settings.agy_timeout_sec, self._remaining_translation_budget()),
+                )
+        except (AgyProviderError, GrokProviderError) as exc:
             self._last_provider_error = str(exc)
-            logger.warning("[agy] subtitle translation failed: %s", exc)
+            logger.warning("[%s] subtitle translation failed: %s", provider, exc)
             return None
 
         rows = result.get("items")
@@ -1107,7 +1124,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         if (not isinstance(rows, list) or len(rows) != len(items)
                 or any(not isinstance(row, dict) or type(row.get("id")) is not int
                        or row["id"] != index for index, row in enumerate(rows))):
-            self._last_provider_error = "agy returned invalid or misaligned subtitle ids"
+            self._last_provider_error = f"{provider} returned invalid or misaligned subtitle ids"
             return None
         for row in rows:
             if not isinstance(row, dict):
@@ -1127,18 +1144,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
                         vocab[source_text] = chinese_text
             aligned[index] = {"translation": translation, "vocab": vocab}
         if any(item is None for item in aligned):
-            self._last_provider_error = "agy returned incomplete or misaligned subtitle ids"
+            self._last_provider_error = f"{provider} returned incomplete or misaligned subtitle ids"
             return None
         candidate = SubtitleTranslationCandidate(
-            provider="agy",
+            provider=provider,
             translations=[str(item["translation"]) for item in aligned if item is not None],
             vocabs=[dict(item["vocab"]) for item in aligned if item is not None],
             supports_vocab=True,
-            model=settings.agy_subtitle_model,
+            model=self._cli_subtitle_model(provider),
         )
         error = candidate.contract_error_for(len(items))
         if error:
-            self._last_provider_error = "agy " + error
+            self._last_provider_error = f"{provider} " + error
             return None
         return candidate
 

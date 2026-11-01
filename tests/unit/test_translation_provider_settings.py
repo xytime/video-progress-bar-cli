@@ -6,7 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.5.0   | 2026-08-21 | Codex  | 覆盖 yt-dlp 下载总超时配置 |
 | 1.6.0   | 2026-08-25 | Codex  | 覆盖受限 WeChat 桌面快捷授权默认关闭及环境模板说明。 |
-| 1.7.0   | 2026-11-01 | Grok Bot | 默认顺序改为 CLI 优先（agy,codex）再 API。 |
+| 1.7.0   | 2026-11-01 | Grok Bot | 默认顺序改为 CLI 优先（agy,codex,grok）再 API。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
 | 1.4.0   | 2026-08-20 | Codex  | 显式隔离宿主环境变量，确保 RSS 默认行为测试不受部署密钥污染。 |
@@ -28,9 +28,9 @@ from config.settings import Settings  # noqa: E402
 def test_default_subtitle_translation_provider_order():
     settings = Settings(_env_file=None)
 
-    assert settings.subtitle_translation_provider_order_list == ["agy", "deepseek", "gemini", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["agy", "grok", "deepseek", "gemini", "google"]
     enabled = Settings(_env_file=None, enable_codex_text_fallback=True)
-    assert enabled.subtitle_translation_provider_order_list == ["agy", "codex", "deepseek", "gemini", "google"]
+    assert enabled.subtitle_translation_provider_order_list == ["agy", "codex", "grok", "deepseek", "gemini", "google"]
 
 
 def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
@@ -45,7 +45,7 @@ def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
 def test_empty_subtitle_translation_provider_order_falls_back_to_default():
     settings = Settings(_env_file=None, subtitle_translation_provider_order="unknown,,")
 
-    assert settings.subtitle_translation_provider_order_list == ["agy", "deepseek", "gemini", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["agy", "grok", "deepseek", "gemini", "google"]
 
 
 def test_dubbing_refinement_provider_order_defaults_to_deepseek_during_agy_shadow():

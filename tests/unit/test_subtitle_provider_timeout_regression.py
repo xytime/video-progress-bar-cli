@@ -29,7 +29,7 @@ def test_codex_configuration_clamps_and_warns(value, expected, caplog):
 
 def test_approved_effective_order_and_defaults():
     config = Settings(_env_file=None, enable_codex_text_fallback=True)
-    assert config.subtitle_translation_provider_order_list == ['agy','codex','deepseek','gemini','google']
+    assert config.subtitle_translation_provider_order_list == ['agy','codex','grok','deepseek','gemini','google']
     assert config.codex_subtitle_batch_size == 40
     assert config.agy_timeout_sec == 150
     assert config.agy_subtitle_batch_size == 80

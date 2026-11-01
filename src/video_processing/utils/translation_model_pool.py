@@ -16,6 +16,7 @@
 | 1.4.0   | 2026-07-13 | Codex  | 锁内 read-merge-write，避免外层旧快照覆盖具体模型冷却状态 |
 | 1.5.0   | 2026-07-17 | Codex  | 移除阿里云 MT profile，避免配置残留重新进入字幕质量链路 |
 | 1.6.0   | 2026-08-24 | Codex  | 增加 agy 首选翻译 profile，保留 DeepSeek 次选与 Google 终级兜底 |
+| 1.7.0   | 2026-11-01 | Grok Bot | 增加 grok CLI 翻译 profile |
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ PROFILES = {
     "deepseek": ModelProfile("deepseek", frozenset({"translate", "vocab"}), 90),
     "google": ModelProfile("google", frozenset({"translate"}), 20),
     "codex": ModelProfile("codex", frozenset({"translate", "vocab"}), 10),
+    "grok": ModelProfile("grok", frozenset({"translate", "vocab"}), 105),
     # Gemini 供应商内部也必须按模型而不是整体冷却，否则一个模型撞配额会拖垮全部免费池。
     "gemini-2.5-flash": ModelProfile("gemini-2.5-flash", frozenset({"translate", "vocab"}), 100),
     "gemini-3.5-flash": ModelProfile("gemini-3.5-flash", frozenset({"translate", "vocab"}), 90),
@@ -56,9 +58,9 @@ def classify_error(message: str | None) -> str:
     text = (message or "").lower()
     if "agy_auth_required" in text:
         return "auth_or_permission"
-    if "agy" in text and any(token in text for token in ("timed out", "timeout")):
+    if ("agy" in text or "grok" in text) and any(token in text for token in ("timed out", "timeout")):
         return "timeout"
-    if "agy command not found" in text:
+    if "agy command not found" in text or "grok command not found" in text:
         return "command_not_found"
     if any(token in text for token in ("402", "insufficient balance", "billing", "payment required")):
         return "billing"

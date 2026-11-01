@@ -125,7 +125,7 @@
 | 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
 | 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
 | 7.1.0 | 2026-10-08 | Antigravity | 新增豆包语音 2.0 (Doubao Voice) 配置与沉稳克制转场过渡音效配置 |
-| 7.2.0 | 2026-11-01 | Grok Bot | 字幕翻译 CLI 优先：codex 成为可排序供应商（不再重复追加）；默认 agy,codex,deepseek,gemini,google |
+| 7.2.0 | 2026-11-01 | Grok Bot | 字幕翻译 CLI 优先：codex 成为可排序供应商（不再重复追加），新增 grok CLI 配置；默认 agy,codex,grok,deepseek,gemini,google |
 """
 import json
 import logging
@@ -420,8 +420,8 @@ class Settings(BaseSettings):
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
 
-    # 字幕翻译生产链：CLI 优先（AGY → Codex），API 兜底（DeepSeek → Gemini → Google）。
-    subtitle_translation_provider_order: str = "agy,codex,deepseek,gemini,google"
+    # 字幕翻译生产链：CLI 优先（AGY → Codex → Grok），API 兜底（DeepSeek → Gemini → Google）。
+    subtitle_translation_provider_order: str = "agy,codex,grok,deepseek,gemini,google"
     # Google 仅作终级兜底；请求保持系统 CA 验证，超时后返回空候选并交给现有质量门处理。
     google_translate_request_timeout_seconds: int = Field(default=90, ge=5, le=300)
     google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
@@ -453,6 +453,11 @@ class Settings(BaseSettings):
     agy_timeout_sec: int = Field(default=150, ge=120, le=180)
     agy_subtitle_batch_size: int = Field(default=80, ge=60, le=100)
     agy_subtitle_model: str = AGY_DEFAULT_MODEL
+    # grok CLI 字幕供应商：与 agy 同批次/超时边界；model 为空时用 CLI 默认模型。
+    grok_command: str = str(Path.home() / ".grok" / "bin" / "grok")
+    grok_subtitle_model: str = ""
+    grok_timeout_sec: int = Field(default=150, ge=60, le=180)
+    grok_subtitle_batch_size: int = Field(default=80, ge=20, le=100)
     agy_dubbing_model: str = "claude-sonnet-4-6"
     # AGY 影子评估只读取已有双语 ASS 并输出不含字幕正文的比较报告。
     enable_agy_subtitle_shadow_review: bool = False
@@ -1029,13 +1034,13 @@ class Settings(BaseSettings):
         codex 仍需 ENABLE_CODEX_TEXT_FALLBACK 显式开启；开启后按配置位置排序，
         未写入顺序时才追加到末尾兜底（兼容旧配置），不会重复出现。
         """
-        allowed = {"agy", "codex", "deepseek", "gemini", "google"}
+        allowed = {"agy", "codex", "grok", "deepseek", "gemini", "google"}
         providers = []
         for item in (self.subtitle_translation_provider_order or "").split(","):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        providers = providers or ["agy", "codex", "deepseek", "gemini", "google"]
+        providers = providers or ["agy", "codex", "grok", "deepseek", "gemini", "google"]
         if not self.enable_codex_text_fallback:
             return [provider for provider in providers if provider != "codex"]
         if "codex" not in providers:
