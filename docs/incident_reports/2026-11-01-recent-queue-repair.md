@@ -200,3 +200,14 @@
 继续核对本地投稿证据发现#7008、#7010均有同成片的submit_intent、submit_click_returned=true、manual_confirmation_required=true及禁止自动结果查询记录，但`operation_receipts.submission_feedback`只识别vertical/interactive文件名，漏认原生发布入口产出的`<prefix>_vocab.mp4`，错误降为RESULT_UNKNOWN。修复仅认可同任务/同切片的确切词汇片尾路径，仍要求全部原有标志、尝试路径边界与输入一致性；未知成片、其他任务/切片及坏证据继续拒绝。显示为“已执行发表，等待人工确认”，保留UNCERTAIN、不查询平台、不改写投稿账本、不重传。原始脱敏证据 `local-uncertain-submission-receipts-audit.json`。
 
 旧版本新增回归3项失败、26项通过，证据 `video-pytest-urm8qds7`（两项直接复现词汇片尾误判，通知分支一项进入错误兜底）。修复后最终候选97项隔离通过，边界探针及pytest均0，8项既有FastAPI弃用告警；证据 `video-pytest-hm2qw463`，源清单 `f6ad6e7e7b3b160a86a5a2a9903148a8c1fe15b72e277ab16dec100ac649416e`。独立提交导出及本轮运行采用另记。
+
+
+## 10:18 BJ：回执修复实际采用与 Bot 网络启动异常
+
+提交 `385a5401f7a4141fc9fee66cfeb0b39f9efe978d` 已推送。原生部署 `c83d0469aca54ca592c942274b6209ee`（外置 `deployment-r21/`）9步COMPLETE、verify.ok=true，维护恢复RUNNING；5类驻留角色核对同一源码摘要 `56121cd677bd84ec7c8fb066535d893b7f745ad0e06173c0f45247030b87268b`，证据 `runtime-adopted-r14.json`。完整候选及独立提交导出各97项隔离通过，后者 `video-pytest-upq0hd6e` / `a4f59dfee22713b8caa6b119be05ba2245e4310d08c192cc8ba1d5135be6460e`，均8项既有FastAPI告警。两次部署基线因Bot定时进程身份变化拒绝的记录保留，未改写计划；最终正常排空后采用。
+
+真实Bot启动日志表明初始化get_me期间ConnectError导致重复退出。无认证的Telegram根地址探测：直连连接被重置，当前macOS系统代理127.0.0.1:17890可达。进一步核对Bot正常模块加载后普通getproxies返回空值，macOS系统配置读取仍返回可达代理。修复让Bot通过settings既有TCP校验明确读取系统配置，并把同一代理接入主请求和getUpdates两个独立客户端，保持池大小、超时、并发和权限不变；其他get_active_proxies调用默认行为不变，无新环境变量。不读取或输出实际认证值。
+
+真实SDK离线构造证据 `bot-candidate-real-routing-readback.json` 显示两池均使用当前代理；未初始化Bot、未认证、未发送消息。旧实现真实SDK复现2失败1通过，证据 `video-pytest-fnp65k1r`。最终完整候选93项及20子测试通过、9项既有弃用告警，边界探针及pytest均0；证据 `video-pytest-9k4p8m7s`，源清单 `8b35e793c0f202c212702191dc7f420ebcf98c4dc8663f68f8d9ae5e4e127c89`。独立提交导出、原生部署和启动稳定性另记，尚不据离线构造宣告运行恢复。
+
+10:16一致备份固定24小时20条：8条FAILED、2条AI_COVER_PENDING、8条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统10条、策略2条、提交待核实8条。固定48小时31条：17条FAILED、2条AI_COVER_PENDING、10条UNCERTAIN、1条PUBLISHING、1条TRANSCRIBING；系统16条、策略5条、提交待核实10条。#7071本次完整翻译已耗尽原持久预算，仍未解决；#7146由原生恢复批次领取，#7135进入原生投稿。保留待核实与预算保护，没有清零。

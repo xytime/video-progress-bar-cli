@@ -50,6 +50,7 @@
 | 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
 | 1.29.0  | 2026-10-08 | Antigravity                         | 落实 RFC-2026-DEEP-CREATION-001：新增 /masterpiece 远程指令，支持重大新闻高品质二创母带一键调度。 |
 | 1.30.0  | 2026-10-17 | Antigravity                         | M3.5: 新增 handle_secondary_reply_callback (^rep:)，在纯短事务内消费视频号二级回复一次性审批回调。 |
+| 1.32.0 | 2026-11-01 | Codex | Bot 请求与独立轮询池接入既有动态代理检测，保持权限、池大小和超时。 |
 | 1.31.0  | 2026-10-25 | Antigravity                         | 新增 /compliance-video-remix 指令与两阶段人工审核确认发布回调 |
 """
 from __future__ import annotations
@@ -86,6 +87,7 @@ _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
+from config.settings import settings
 from bot.auth import SecurityConfigError, is_admin, parse_admin_ids
 from bot.api_client import PipelineAPIClient
 from bot import formatter as fmt
@@ -2044,6 +2046,28 @@ async def handle_agent_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 # ── 入口 ─────────────────────────────────────────────────────────────────
 
+def _build_application(token: str) -> Application:
+    """主请求与长轮询均使用已经通过本机连通性检查的代理。"""
+    builder = (
+        Application.builder()
+        .token(token)
+        .concurrent_updates(True)
+        .post_init(_configure_bot_menu)
+        .connection_pool_size(256)
+        .pool_timeout(20)
+        .get_updates_connection_pool_size(16)
+        .get_updates_pool_timeout(20)
+        .read_timeout(30)
+        .write_timeout(60)
+        .connect_timeout(15)
+    )
+    proxies = settings.get_active_proxies(system_only=True)
+    proxy = proxies.get("HTTPS_PROXY") or proxies.get("HTTP_PROXY")
+    if proxy:
+        builder.proxy(proxy).get_updates_proxy(proxy)
+    return builder.build()
+
+
 def main() -> None:
     global _api, _admin_ids
 
@@ -2060,20 +2084,7 @@ def main() -> None:
     # 但默认连接池仅 1 条 → getUpdates/sendMessage 抢不到连接 → PoolTimeout 抛进 updater 轮询循环 →
     # Application 停止（日志「Application is stopping」+ 频繁重启 487 次，表现为「/命令无反应」）。
     # 显式放大主连接池(256)与 getUpdates 专用池(16)，并放宽各自 pool_timeout。
-    app = (
-        Application.builder()
-        .token(token)
-        .concurrent_updates(True)
-        .post_init(_configure_bot_menu)
-        .connection_pool_size(256)
-        .pool_timeout(20)
-        .get_updates_connection_pool_size(16)
-        .get_updates_pool_timeout(20)
-        .read_timeout(30)
-        .write_timeout(60)
-        .connect_timeout(15)
-        .build()
-    )
+    app = _build_application(token)
 
     # 注册命令（直接由程序接管，不消耗 API 限额）
     app.add_handler(CommandHandler("start", cmd_help))

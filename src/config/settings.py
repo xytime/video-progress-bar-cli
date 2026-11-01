@@ -8,6 +8,7 @@
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| bot-proxy-v1 | 2026-11-01 | Codex | 允许 Bot 单独读取真实 macOS 系统代理并沿用 TCP 连通检查，其他调用保持原选择。 |
 | dashboard-public-origin-v1 | 2026-10-25 | Codex | 为英语世界声明可选、严格校验的受保护 HTTPS 公网 Origin。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -1254,10 +1255,11 @@ class Settings(BaseSettings):
                 return ["--cookies", str(p)]
         return ["--cookies-from-browser", "chrome"]
 
-    def get_active_proxies(self) -> dict:
+    def get_active_proxies(self, *, system_only: bool = False) -> dict:
         """[Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 动态检测系统代理并验证连通性。
 
         从 macOS/系统全局代理设置中读取配置（通过 urllib.request.getproxies()），
+        system_only=True 时直接读取 macOS 系统配置，避免旧进程环境屏蔽系统代理。
         随后对代理服务器进行 TCP 连通性测试（超时 0.5 秒）。
 
         - 若代理可达：返回含代理 env var 的字典，可直接注入 subprocess 环境。
@@ -1267,7 +1269,9 @@ class Settings(BaseSettings):
                   同时注入 pipeline_manager 进程，确保 Gemini API 调用正常。
         """
         try:
-            system_proxies = urllib.request.getproxies()  # 读取 macOS 系统全局代理
+            detector = (getattr(urllib.request, "getproxies_macosx_sysconf", None)
+                        if system_only else urllib.request.getproxies)
+            system_proxies = detector() if detector else {}
         except Exception:
             return {}
 
