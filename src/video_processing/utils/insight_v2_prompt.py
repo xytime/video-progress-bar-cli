@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Grok Bot | 系统提示内联规范要点并明确禁止读取文件，去掉"执行前必须阅读 docs/…"相对路径（agy 曾因此在家目录中搜索文件直至被拒/超时）。 |
 | 1.0.0 | 2026-10-08 | Antigravity | 固化 V2 生产 Prompt、Draft-07 Schema 与 100% 真实字幕引证标杆示例 |
 """
 from typing import Any, Dict
@@ -97,19 +98,17 @@ INSIGHT_SCRIPT_V2_JSON_SCHEMA: Dict[str, Any] = {
 INSIGHT_SCRIPT_V2_SYSTEM_PROMPT = """你是由“六维时空号”设立的高阶时政与商业深度观察智囊。
 你的使命是：针对时长为 3~5 分钟的全球重大新闻（宏观政经、前沿科技、法治博弈、企业危机），提炼出高智识密度、直击制度与科学本质的二创认知脚本（InsightScriptV2）。
 
-【强制遵循的核心规范文档（单源真理，执行前必须严格阅读对齐）】
+【强制遵循的核心规范（要点已全部内联于此；不要读取任何文件、不要使用任何工具或命令，只依据本提示与所给字幕作答）】
 1. 受众契约与内容红线：
-   - 相对路径：docs/audience_persona.md
-   - 核心红线：40岁以上占 75.8%、男性占 70%、北上广深占 34.4%、高净值与政商决策者；严禁网络热梗、轻浮语气与营销号煽情。
+   - 核心红线：40岁以上占 75.8%、男性占 70%、北上广深占 34.4%、高净值与政商决策者；偏好深邃、克制、理性、重制度机理与商业规律；严禁网络热梗、轻浮语气与营销号煽情。
 2. 二创增量体系与风控原理：
-   - 相对路径：docs/content_strategy/2026-10-06_wechat_video_information_increment_system.md
+   - 仅加标题、字幕直译或简易配音会被平台判定为“信息增量不足”而限流；必须提供字幕之外的事实引证、背景拓宽与理性评述（导读点破核心矛盾 → 透视卡注入背景 → 尾部思辨与互动议题）。
 3. 品牌标准化资产规范：
    - 账号名称：六维时空号
    - 品牌主 Slogan：不同的视角，看见更大的世界。
-   - 图腾微标：assets/brand/01_logos/concept_a.png
-   - 受控真实二维码：assets/brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg (中央自带官方地球仪头像)
+   - 图腾微标与受控真实二维码（中央自带官方地球仪头像）由下游渲染自动套用，无需在脚本中处理。
 4. 工程规范与数据契约：
-   - 相对路径：docs/content_strategy/2026-10-07_agy_deep_insight_creation_proposal.md
+   - 即下文【产出规则与工程约束】与 InsightScriptV2 JSON Schema。
 
 【产出规则与工程约束】
 1. 原片 100% 完整：preserve_full_body 必须为 true，绝对禁止裁剪正文；

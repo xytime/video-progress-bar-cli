@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-08 | Antigravity | 覆盖 V2 Pydantic 模型、JSON Schema、边界时序校验、适配器及 DAL 状态更新 |
+| 1.1.0 | 2026-11-02 | Grok Bot | 系统提示不得要求读取文件或给出文件路径，且保留受众/增量/品牌要点。 |
 """
 import copy
 import jsonschema
@@ -138,3 +139,12 @@ class TestDatabaseEnrichmentStatus:
 
         # 未知视频返回 NONE
         assert db.get_enrichment_status("NonExistentVideo", slice_index=0) == "NONE"
+
+
+def test_system_prompt_inlines_rules_and_forbids_file_access():
+    from video_processing.utils.insight_v2_prompt import INSIGHT_SCRIPT_V2_SYSTEM_PROMPT as prompt
+    assert "不要读取任何文件" in prompt
+    for path_hint in ("docs/", "assets/", "相对路径", "执行前必须严格阅读"):
+        assert path_hint not in prompt
+    for kept in ("75.8%", "严禁网络热梗", "信息增量不足", "六维时空号", "不同的视角，看见更大的世界。", "preserve_full_body"):
+        assert kept in prompt
