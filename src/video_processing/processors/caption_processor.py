@@ -4,6 +4,9 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.43.0 | 2026-11-01 | Codex | 生词导出在单次调用内复用离线词典并批量预热，保留首现语境及已有音标词性。 |
+| 1.36.1 | 2026-10-11 | Antigravity | 修复切片视频生词路径关联数据库失败缺陷，清洗生词标点与字幕样式标签 |
+| 1.36.0 | 2026-10-11 | Antigravity | 新增 export_vocabulary_json 方法，导出结构化 vocabulary.json 资产并自动同步数据库 |
 | 1.42.0 | 2026-11-01 | Codex | 复用和写入前校验ASR原片时长；现有Gemini对问题段隔离修复，沿用共享期限。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 全片稀疏质量政策、有效定点修复和不可变案例/告警快照交接。 |
 | 1.41.0 | 2026-10-27 | Codex | 保留字幕故障分类与段号，持续质量失败离线诊断并交给持久恢复账。 |
@@ -56,12 +59,13 @@
 | 1.34.0 | 2026-08-31 | Codex | 移除导入期全局 TLS 绕过；Google 终级翻译的受限超时改由 translation_helper 管理。 |
 | 1.35.0 | 2026-09-08 | Codex | 委托纯函数补齐明确关闭翻译时的原文字幕，翻译失败不静默回退。 |
 """
+from datetime import datetime, timezone
 import logging
 from copy import deepcopy
 from dataclasses import replace
 import re
 from pathlib import Path
-from typing import Callable, Optional, List, Dict, Any, Union
+from typing import Callable, Optional, List, Dict, Any, Tuple, Union
 
 import whisper
 import pysubs2
@@ -199,6 +203,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._translation_audit_run_id: Optional[int] = None
         self._progress_reporter = progress_reporter
         self._translation_deadline: Optional[float] = None
+        self.vocabulary_json_path: Optional[Path] = None
 
     def _report_progress(self, stage: str) -> None:
         """上报阶段心跳；观测失败绝不影响字幕加工。"""
@@ -319,6 +324,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     checkpoint_path=str(checkpoint_path.resolve()), checkpoint_sha256=digest(checkpoint_path))
                 if quality_warning:
                     self._subtitle_completion['quality_warning'] = quality_warning
+            # 4b. 导出结构化生词资产 vocabulary.json（复用翻译时同样保留）
+            try:
+                self.export_vocabulary_json(segments)
+            except Exception as exc:
+                logger.warning(f"[AutoCaption] Vocabulary export warning: {exc}")
             
             # 5. 生成 ASS 字幕 (双语样式)
             self._report_progress("ASS_GENERATING")
@@ -1330,6 +1340,211 @@ class AutoCaptionProcessor(VideoProcessorBase):
             logger.info(f"[TranslationGuard] quality report → {report_path}")
         except Exception as e:
             logger.warning(f"[TranslationGuard] failed to write quality report: {e}")
+
+    @staticmethod
+    def _enrich_single_vocab(
+        word: str,
+        phonetic: str,
+        pos: str,
+        level: Any,
+        context: str = "",
+        *,
+        leveler: Any = None,
+    ) -> Tuple[str, str, Any]:
+        """尝试通过离线词典/词汇分级器丰富音标与词性，若未安装词表则平滑降级。"""
+        # 1. 尝试 VocabularyLeveler 离线查找
+        if not phonetic or not pos:
+            try:
+                if leveler is None:
+                    from ..vocabulary.leveler import VocabularyLeveler
+                    leveler = VocabularyLeveler(ecdict_mode="lazy")
+                res = leveler.analyze_word(word, context=context)
+                if not phonetic and res.phonetic:
+                    phonetic = res.phonetic
+                if not pos and res.pos:
+                    pos = res.pos
+                if level is None and res.recommended_level:
+                    level = res.recommended_level
+            except Exception:
+                pass
+
+        # 2. 词性启发式推断（如果仍未推得词性）
+        if not pos:
+            w_lower = word.lower()
+            if " " in w_lower or "-" in w_lower:
+                pos = "phr."
+            elif w_lower.endswith(("tion", "ment", "ness", "ity", "ship", "ism", "ence", "ance")):
+                pos = "n."
+            elif w_lower.endswith(("able", "ible", "ful", "ive", "ous", "al", "ic")):
+                pos = "adj."
+            elif w_lower.endswith("ly"):
+                pos = "adv."
+            elif w_lower.endswith(("ize", "ise", "ate", "ify")):
+                pos = "v."
+
+        # 3. 音标规范化
+        if phonetic:
+            try:
+                from ..study_cards.learning_dictionary import normalize_phonetic
+                norm_p, _ = normalize_phonetic(phonetic)
+                if norm_p:
+                    phonetic = norm_p
+            except Exception:
+                pass
+
+        return phonetic, pos, level
+
+    def export_vocabulary_json(
+        self,
+        segments: List[Dict[str, Any]],
+        output_path: Optional[Union[Path, str]] = None,
+    ) -> Optional[Path]:
+        """将提取出的生词导出为结构化 vocabulary.json 文件。
+
+        导出的字段包含:
+        - video_id: 视频标识符
+        - generated_at: ISO 生成时间
+        - total_items: 词汇总数
+        - items: 词汇列表，每项包含:
+            - word: 英文单词/词组
+            - phonetic: 音标 (IPA)
+            - pos: 词性 (n., v., adj. 等)
+            - meaning_zh: 中文释义
+            - context_sentence: 英文原句
+            - context_translation: 中文对应译文
+            - start: 开始时间 (秒)
+            - end: 结束时间 (秒)
+            - timestamp: 格式化时间戳 (mm:ss)
+            - level: 难度等级 (可选)
+        """
+        video_id = self.input_path.stem
+        if video_id.endswith("_vertical"):
+            video_id = video_id[:-9]
+
+        if output_path is not None:
+            target_path = Path(output_path)
+        else:
+            base_dir = (self.output_path or self.input_path).parent
+            target_path = base_dir / f"{video_id}_vocabulary.json"
+
+        # 整理生词条目 (按首次出现顺序去重)
+        items: List[Dict[str, Any]] = []
+        seen_words: set = set()
+
+        for seg in segments:
+            vocab_dict = seg.get("vocab", {})
+            if not isinstance(vocab_dict, dict) or not vocab_dict:
+                continue
+
+            phonetics_dict = seg.get("vocab_phonetics", {})
+            if not isinstance(phonetics_dict, dict):
+                phonetics_dict = {}
+            pos_dict = seg.get("vocab_pos", {})
+            if not isinstance(pos_dict, dict):
+                pos_dict = {}
+            levels_dict = seg.get("vocab_levels", {})
+            if not isinstance(levels_dict, dict):
+                levels_dict = {}
+
+            en_raw = seg.get("text", "")
+            zh_raw = seg.get("zh_text", "")
+            en_sentence = re.sub(r"\{[^}]*\}", "", str(en_raw)).strip().replace("\n", " ")
+            zh_sentence = re.sub(r"\{[^}]*\}", "", str(zh_raw)).strip().replace("\n", " ")
+            start_s = round(float(seg.get("start", 0.0)), 2)
+            end_s = round(float(seg.get("end", 0.0)), 2)
+            mins = int(start_s // 60)
+            secs = int(start_s % 60)
+            timestamp_str = f"{mins:02d}:{secs:02d}"
+
+            for raw_word, meaning_zh in vocab_dict.items():
+                word_clean = str(raw_word).strip().strip(" \t\n\r\"'.,;:!?")
+                meaning_clean = str(meaning_zh).strip().strip(" \t\n\r\"'.,;:!?；，。")
+                if not word_clean:
+                    continue
+
+                word_key = word_clean.lower()
+                if word_key in seen_words:
+                    continue
+                seen_words.add(word_key)
+
+                phonetic = str(phonetics_dict.get(raw_word) or "").strip()
+                pos = str(pos_dict.get(raw_word) or "").strip()
+                level = levels_dict.get(raw_word)
+
+                items.append({
+                    "word": word_clean,
+                    "phonetic": phonetic,
+                    "pos": pos,
+                    "meaning_zh": meaning_clean,
+                    "context_sentence": en_sentence,
+                    "context_translation": zh_sentence,
+                    "start": start_s,
+                    "end": end_s,
+                    "timestamp": timestamp_str,
+                    "level": level,
+                })
+
+        # 一次导出只扫描一次离线词表；词性仍按各词首次出现的原句判断。
+        leveler = None
+        pending = [item["word"] for item in items if not item["phonetic"] or not item["pos"]]
+        if pending:
+            try:
+                from ..vocabulary.leveler import VocabularyLeveler
+                leveler = VocabularyLeveler(ecdict_mode="lazy")
+                leveler.prepare_words(pending)
+            except Exception as exc:
+                logger.debug(f"[AutoCaption] Vocabulary batch preparation unavailable: {exc}")
+        for item in items:
+            item["phonetic"], item["pos"], item["level"] = self._enrich_single_vocab(
+                item["word"], item["phonetic"], item["pos"], item["level"],
+                context=item["context_sentence"], leveler=leveler,
+            )
+
+        payload = {
+            "video_id": video_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total_items": len(items),
+            "items": items,
+        }
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = target_path.with_suffix(".tmp.json")
+        try:
+            temp_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_file.replace(target_path)
+            self.vocabulary_json_path = target_path
+            logger.info(f"[AutoCaption] Exported {len(items)} vocabulary items to: {target_path}")
+
+            # 兼容性镜像：若同目录下不存在通用名 vocabulary.json，或在独立专用目录，写入镜像
+            generic_alias = target_path.parent / "vocabulary.json"
+            if generic_alias != target_path:
+                try:
+                    generic_alias.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
+            # 若数据库存在相应视频，自动同步 vocabulary_json_path (支持切片视频 base_yid + slice_index)
+            try:
+                from ..db.database import PipelineDB
+                db = PipelineDB()
+                slice_match = re.search(r"^(.*?)(?:[_\-#](?:s|part)?(\d+))$", video_id)
+                if slice_match:
+                    base_yid = slice_match.group(1)
+                    slice_idx = int(slice_match.group(2))
+                    updated = db.update_vocabulary_json_path(base_yid, str(target_path), slice_index=slice_idx)
+                    if not updated and base_yid != video_id:
+                        db.update_vocabulary_json_path(video_id, str(target_path), slice_index=0)
+                else:
+                    db.update_vocabulary_json_path(video_id, str(target_path), slice_index=0)
+            except Exception as db_exc:
+                logger.debug(f"[AutoCaption] Could not update db vocabulary_json_path: {db_exc}")
+
+            return target_path
+        except Exception as exc:
+            logger.error(f"[AutoCaption] Failed to write vocabulary JSON to {target_path}: {exc}")
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            return None
 
     def _load_model(self):
         """加载 Whisper 模型"""
