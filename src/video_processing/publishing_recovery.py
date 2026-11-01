@@ -1,6 +1,7 @@
 """后台发布恢复服务；固定范围、审计恢复和正式流水线续跑。
 
 # Modification History
+| maintenance-finish-v1 | 2026-11-01 | Codex | 单项恢复准入覆盖激活至最终状态回写，维护排空不遗留运行中账本。 |
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -18,7 +19,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from config.settings import settings
-from .core.maintenance import running
+from .core.maintenance import running, guarded
 from .core.task_lease import read_lease_owner
 from .core.wechat_request_guard import WeChatRequestGuard, WeChatRequestDeferred
 from .core.wechat_session_lock import inspect_wechat_session_lock
@@ -294,21 +295,28 @@ class PublishingRecoveryService:
             if wait:
                 self.db.update_publishing_recovery_item(item["id"], "WAITING", "等待任务提交前退避；文案服务退避保持原规则", next_at=wait)
                 continue
-            activated = self.db.activate_publishing_recovery_item(item["id"])
-            if not activated:
-                continue
-            if attempted_targets is not None:
-                attempted_targets.add(task_key)
-            # 高分和低分统一走原流水线；最终内容、素材和投稿门禁仍由其逐项验证。
-            try:
-                manager._process_single_video(activated, submission_only=ready, claim=not ready)
-            except Exception as exc:
-                self.db.update_publishing_recovery_item(item["id"], "ATTENTION", f"执行中断，需核实任务归属：{type(exc).__name__}")
+            if self._dispatch_item(manager, item, video, ready=ready, attempted_targets=attempted_targets):
                 return True
-            current = self.db.get_video_by_youtube_id(video["youtube_id"], int(video.get("slice_index") or 0))
-            self._finish_item(item, current)
-            return True
         return False
+
+    @guarded("publishing-recovery-item", lambda self, manager, item, video, **kw:
+             f"{video['youtube_id']}:{int(video.get('slice_index') or 0)}")
+    def _dispatch_item(self, manager, item, video, *, ready, attempted_targets=None):
+        """同视频已接纳项覆盖激活、流水线及收尾；新项仍须重新准入。"""
+        activated = self.db.activate_publishing_recovery_item(item["id"])
+        if not activated:
+            return False
+        if attempted_targets is not None:
+            attempted_targets.add((video["youtube_id"], int(video.get("slice_index") or 0)))
+        # 高分和低分统一走原流水线；最终内容、素材和投稿门禁仍由其逐项验证。
+        try:
+            manager._process_single_video(activated, submission_only=ready, claim=not ready)
+        except Exception as exc:
+            self.db.update_publishing_recovery_item(item["id"], "ATTENTION", f"执行中断，需核实任务归属：{type(exc).__name__}")
+            return True
+        current = self.db.get_video_by_youtube_id(video["youtube_id"], int(video.get("slice_index") or 0))
+        self._finish_item(item, current)
+        return True
 
     def _finish_item(self, item, video, *, after_restart=False):
         if not video:

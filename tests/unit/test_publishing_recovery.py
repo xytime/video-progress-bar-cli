@@ -1,6 +1,7 @@
 """发布恢复的真实 SQLite、原生 flock、固定身份和幂等操作验证。
 
 # Modification History
+| maintenance-finish-v1 | 2026-11-01 | Codex | 真实维护切换验证单项最终回写与下一项闭锁，覆盖等待、失败及提交保护。 |
 | 1.2.0 | 2026-11-01 | Codex | 验证热度刷新不撤销恢复身份，实质变更及启动事务仍闭锁。 |
 | 1.1.0 | 2026-10-31 | Codex | 验证真实 SQLite 恢复交接与本批失败不重复领取。 |
 | Version | Date | Author | Description |
@@ -47,6 +48,64 @@ def request(service, preview=None, ids=(), **options):
     return dict(operation_id=str(uuid.uuid4()), expected_version=preview['account_version'] if preview else service.status()['version'],
                 preview_id=preview['preview_id'] if preview else None,selected_ids=list(ids),reset_quota=False,
                 reset_cooldown=False,priority=False,reset_backoff=False,skip_avoidance=False,**{}) | options
+
+
+@pytest.mark.parametrize('state,crash,expected', [
+    ('AI_COVER_PENDING', False, 'FAILED'),
+    ('FAILED', False, 'FAILED'),
+    ('UNCERTAIN', False, 'SUBMITTED_UNVERIFIED'),
+    ('PENDING', False, 'WAITING'),
+    ('AI_COVER_PENDING', True, 'ATTENTION'),
+])
+def test_maintenance_during_item_finishes_ledger_without_admitting_next(
+        recovery, monkeypatch, state, crash, expected):
+    from video_processing.core.maintenance import gate, guarded, current, start_current
+    monkeypatch.setattr(type(settings), 'is_us_market_guard_window', lambda _: False)
+    monkeypatch.setattr(type(settings), 'is_public_publish_window', lambda _: True)
+    first = add(recovery, 'maintenance-first', score=80)
+    second = add(recovery, 'maintenance-second', score=80)
+    preview = recovery.preview()
+    operation = recovery.execute(request(recovery, preview, [first['id'], second['id']]))
+    calls = []
+
+    @guarded('video', lambda row, **kw: f"{row['youtube_id']}:{row.get('slice_index', 0)}", waiting=True)
+    def process(row, **kw):
+        start_current()
+        calls.append(row['id'])
+        assert current().key == f"{first['youtube_id']}:0"
+        gate().enter('测试：已接纳视频执行中进入维护')
+        recovery.db.update_video_status(row['youtube_id'], state, error_msg='实际执行结果')
+        if crash:
+            raise RuntimeError('实际加工异常')
+
+    attempted = set()
+    assert recovery.dispatch_once(SimpleNamespace(_process_single_video=process), attempted_targets=attempted)
+    result = recovery.db.get_publishing_recovery_operation(operation['id'])
+    by_video = {row['video_id']: row for row in result['items']}
+    assert by_video[first['id']]['state'] == expected
+    assert by_video[second['id']]['state'] == 'WAITING'
+    assert by_video[second['id']]['started'] is None
+    assert recovery.db.get_video_by_youtube_id(second['youtube_id']) == second
+    assert attempted == {(first['youtube_id'], 0)}
+    assert calls == [first['id']]
+    status = gate().status()
+    assert status['state'] == 'MAINTENANCE' and not status['active'] and not status['unknown']
+    assert not recovery.dispatch_once(SimpleNamespace(_process_single_video=process))
+    assert calls == [first['id']]
+
+
+def test_maintenance_between_eligibility_and_activation_leaves_item_untouched(recovery):
+    from video_processing.core.maintenance import gate, MaintenanceDenied
+    video = add(recovery, 'maintenance-race', score=80)
+    preview = recovery.preview()
+    operation = recovery.execute(request(recovery, preview, [video['id']]))
+    item = operation['items'][0]
+    gate().enter('测试：资格核对后维护关闭新准入')
+    with pytest.raises(MaintenanceDenied):
+        recovery._dispatch_item(SimpleNamespace(), item, video, ready=False)
+    assert recovery.db.get_publishing_recovery_operation(operation['id'])['items'] == operation['items']
+    assert recovery.db.get_video_by_youtube_id(video['youtube_id']) == video
+    assert not recovery.db.publishing_recovery_video(video['id'])['flags']['active_lease']
 
 
 @pytest.mark.parametrize('phase', ['preview', 'waiting', 'activation'])

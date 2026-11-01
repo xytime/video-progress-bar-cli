@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.11.1 | 2026-10-21 | Codex | 公开归档兼容同原生 ID 的已发表组件凭据，逐项核验公开、处理与预约状态。 |
 | 1.10.0 | 2026-10-09 | Codex | 复用已有每分钟巡航恢复二创队列。 |
 | 1.9.2 | 2026-10-06 | Codex | 英语世界回查区分平台拒绝与 UI 未确认，停止受限作品后续尝试。 |
@@ -527,98 +528,8 @@ def _has_explicit_published_readback(evidence_dir: Path, platform_post_id: str) 
 
 @guarded("english-wechat-readback")
 def reconcile_one_english_world_submission(*, review_id: str | None = None) -> bool:
-    """按同次提交绑定的原生 ID 回查一条英语世界作品；不上传、不按标题匹配。"""
-    pipeline_lock = PROJECT_ROOT / "output" / "pipeline.lock"
-    pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
-    with pipeline_lock.open("a+") as lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            logging.info("[EnglishWorld] pipeline.lock 正忙，本轮跳过只读作品回查。")
-            return False
-        try:
-            db = PipelineDB()
-            item = (
-                db.claim_named_english_world_reconciliation(review_id)
-                if review_id else db.claim_next_english_world_reconciliation(
-                    min_interval_minutes=settings.english_world_reconcile_interval_minutes,
-                    max_age_hours=settings.english_world_reconcile_max_age_hours,
-                    failure_limit=settings.english_world_reconcile_failure_limit,
-                )
-            )
-            if not item:
-                return False
-            review_id = str(item["id"])
-            platform_post_id = str(item["platform_post_id"])
-            evidence_root = Path(str(item.get("evidence_dir") or PROJECT_ROOT / "output"))
-            evidence_dir = evidence_root / "reconciliation" / str(time.time_ns())
-            command = [
-                str(PROJECT_ROOT / ".venv/bin/python"),
-                str(PROJECT_ROOT / "scripts/wechat_uploader.py"),
-                "--state", str(PROJECT_ROOT / "output/wechat_state.json"),
-                "--evidence-dir", str(evidence_dir),
-                "--fail-fast-login",
-                "--verify-only",
-                "--platform-post-id", platform_post_id,
-            ]
-            if item.get("title"):
-                command.extend(["--expected-title", str(item["title"])])
-            if not settings.wechat_headless:
-                command.append("--no-headless")
-            try:
-                result = run_admitted(
-                    command,
-                    cwd=PROJECT_ROOT,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=max(30, int(settings.wechat_review_timeout_seconds or 180)),
-                )
-            except subprocess.TimeoutExpired:
-                _record_english_world_reconciliation_result(
-                    db,
-                    item,
-                    review_id=review_id,
-                    platform_state="UNCERTAIN",
-                    evidence_dir=evidence_dir,
-                    message="视频号原生 ID 只读回查超时；保留已受理状态并等待下一次节流回查。",
-                )
-                return True
-
-            outcomes = {
-                0: ("PUBLISHED", "management_published.png", "作品管理页按原生 ID 明确显示已发布。"),
-                6: ("UNDER_REVIEW", "management_under_review.png", "作品管理页按原生 ID 明确显示仍在审核/处理中。"),
-                8: ("REJECTED", "management_rejected.png", "作品管理页按原生 ID 明确显示审核未通过；禁止自动重传。"),
-                9: ("NOT_FOUND", "management_not_found.png", "作品管理页按原生 ID 未找到记录；保留提交事实且禁止自动重传。"),
-            }
-            platform_state, evidence_name, message = outcomes.get(
-                result.returncode,
-                ("UNCERTAIN", "management_uncertain.png", "视频号原生 ID 只读回查暂不可判定；保留已受理状态。"),
-            )
-            evidence_path = evidence_dir / evidence_name
-            if not evidence_path.is_file():
-                platform_state = "UNCERTAIN"
-                message = "视频号原生 ID 回查缺少对应页面证据；不改变已受理事实。"
-            elif platform_state == "PUBLISHED" and not _has_explicit_published_readback(
-                evidence_dir, platform_post_id,
-            ):
-                platform_state = "UNCERTAIN"
-                message = "视频号回查缺少同原生 ID 的明确公开状态凭据；保留已受理事实。"
-            _record_english_world_reconciliation_result(
-                db,
-                item,
-                review_id=review_id,
-                platform_state=platform_state,
-                evidence_dir=evidence_dir,
-                message=message,
-            )
-            logging.info(
-                "[EnglishWorld] 原生 ID 回查完成 review=%s platform_state=%s",
-                review_id[:8], platform_state,
-            )
-            return True
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    """发送后由用户手工确认；兼容旧调用，不领取或查询投稿结果。"""
+    return False
 
 
 def _latest_english_world_failure_stage() -> str:
