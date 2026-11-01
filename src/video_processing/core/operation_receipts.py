@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1 | 2026-11-01 | Codex | 识别原生词汇片尾成片的发表回执，保留人工确认与禁止重传边界。 |
 | 1.0 | 2026-10-25 | Codex | 精确任务授权回读和本地投稿动作分类，不查询平台或改变投稿状态。 |
 """
 from __future__ import annotations
@@ -49,7 +50,8 @@ def submission_feedback(output: Path, youtube_id: str, slice_index: int = 0,
         attempt = json.loads((evidence_dir / 'submission_attempt.json').read_text())
         progress = json.loads((evidence_dir / 'submission_progress.json').read_text())
         video = Path(attempt['video']).resolve()
-        allowed = {output / f'{prefix}_vertical.mp4', output / f'{prefix}_vertical_interactive.mp4'}
+        allowed = {output / f'{prefix}_vertical.mp4', output / f'{prefix}_vertical_interactive.mp4',
+                   output / f'{prefix}_vocab.mp4'}
         if (video not in {p.resolve() for p in allowed} or progress.get('video') != attempt['video']
                 or progress.get('submit_intent') is not True
                 or attempt.get('submit_click_returned') is not True

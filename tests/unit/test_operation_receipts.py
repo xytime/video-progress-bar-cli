@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1 | 2026-11-01 | Codex | 核对词汇片尾投稿、切片隔离与人工确认回执，保留未知投稿账本。 |
 | 1.0 | 2026-10-25 | Codex | 覆盖只读回执、坏缓存、旧尝试、切片与投稿证据绑定。 |
 """
 import json
@@ -50,10 +51,10 @@ def test_fresh_auth_cache_force_recheck_and_unknown_is_not_login_required(tmp_pa
     assert not notices
 
 
-def make_attempt(tmp_path, index=0, number='100'):
+def make_attempt(tmp_path, index=0, number='100', suffix='vertical_interactive'):
     prefix = 'subject' + (f'_s{index}' if index else '')
     evidence = tmp_path / 'wechat_evidence' / prefix / number; evidence.mkdir(parents=True)
-    video = str(tmp_path / f'{prefix}_vertical_interactive.mp4')
+    video = str(tmp_path / f'{prefix}_{suffix}.mp4')
     attempt = dict(video=video, submit_click_returned=True, draft_requested=False,
         platform_result='UNVERIFIED', manual_confirmation_required=True, automatic_result_queries=False,
         recorded_at=1234)
@@ -63,8 +64,9 @@ def make_attempt(tmp_path, index=0, number='100'):
 
 
 @pytest.mark.parametrize('index', [0, 1])
-def test_submission_manual_wait_requires_latest_attempt_and_exact_slice(tmp_path, index):
-    evidence, _ = make_attempt(tmp_path, index)
+@pytest.mark.parametrize('suffix', ['vertical', 'vertical_interactive', 'vocab'])
+def test_submission_manual_wait_requires_latest_attempt_and_exact_slice(tmp_path, index, suffix):
+    evidence, _ = make_attempt(tmp_path, index, suffix=suffix)
     assert submission_feedback(tmp_path, 'subject', index)['kind'] == 'MANUAL_CONFIRMATION_REQUIRED'
     assert submission_feedback(tmp_path, 'subject', 1-index)['kind'] == 'RESULT_UNKNOWN'
     (evidence.parent / '200').mkdir()
@@ -97,14 +99,15 @@ def test_submission_does_not_follow_evidence_file_outside_attempt(tmp_path):
     assert submission_feedback(tmp_path, 'subject')['kind'] == 'RESULT_UNKNOWN'
 
 
-def test_manual_confirmation_retains_real_evidence_and_uncertain_ledger(tmp_path):
+@pytest.mark.parametrize('suffix', ['vertical_interactive', 'vocab'])
+def test_manual_confirmation_retains_real_evidence_and_uncertain_ledger(tmp_path, suffix):
     from video_processing.pipeline_manager import PipelineManager
-    evidence, _ = make_attempt(tmp_path)
+    evidence, _ = make_attempt(tmp_path, suffix=suffix)
     manager = PipelineManager.__new__(PipelineManager)
     manager.db = PipelineDB(str(tmp_path / 'pipeline.db'))
     manager.db.add_video('subject', 'Test', 'channel', score=100)
     manager._OUT_DIR = tmp_path; manager._PRJ_ROOT = tmp_path
-    messages = []; manager.send_telegram_msg = messages.append
+    messages = []; manager.send_telegram_msg = lambda message, **kwargs: messages.append(message)
     receipt = evidence / 'submission_attempt.json'
     manager._mark_wechat_submission_under_review('subject', 'subject',
         evidence_path=receipt, reason='等待人工确认投稿结果')
@@ -113,3 +116,14 @@ def test_manual_confirmation_retains_real_evidence_and_uncertain_ledger(tmp_path
     assert publication['evidence_path'] == str(receipt)
     assert messages and '等待人工确认投稿结果' in messages[0]
     assert '后台核验按钮' not in messages[0]
+
+
+@pytest.mark.parametrize('index', [0, 1])
+@pytest.mark.parametrize('filename', ['other_vocab.mp4', 'subject_s2_vocab.mp4', 'subject_other.mp4'])
+def test_vocab_submission_rejects_other_task_slice_or_arbitrary_asset(tmp_path, index, filename):
+    evidence, attempt = make_attempt(tmp_path, index, suffix='vocab')
+    video = str(tmp_path / filename)
+    attempt['video'] = video
+    (evidence / 'submission_attempt.json').write_text(json.dumps(attempt))
+    (evidence / 'submission_progress.json').write_text(json.dumps(dict(video=video, submit_intent=True)))
+    assert submission_feedback(tmp_path, 'subject', index)['kind'] == 'RESULT_UNKNOWN'

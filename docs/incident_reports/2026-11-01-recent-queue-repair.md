@@ -187,3 +187,16 @@
 修复仅让单次导出共享词典并调用既有prepare_words批量预热，随后仍按各词首现原句选择词性；已有音标、词性、释义、等级、时间戳及缺词启发式兜底保持。翻译供应商、质量规则、预算和字幕时间轴不变；源码AST对照证明运行版本仅两个导出方法变化，翻译合同所绑定方法完全相同，证据外置 `r13-source-boundary.json`。主干尚缺少已经在线使用的Antigravity生词导出实现；为使补丁可独立使用，本次选择性纳入该实现的必要方法、调用、属性和导入，保留原作者记录。工作区其他供应商元数据扩展和重复导入不进入提交，不改写无关修改。
 
 候选完整运行源55项隔离回归通过，边界探针和pytest均为0，无告警，证据 `video-pytest-2kt2i3xg`，源清单 `4dc37c04d1b8725672c78a0d4d960957a96daf322453b1d60778531754074dda`。覆盖真实CSV读取、原逐词输出对照、已有元数据、词表缺失、真实SQLite及切片路径、词典本体、字幕完成快照、翻译守门、准入延续与进度竞争。早期夹具为空词表、音标格式期待和共享测试库重复ID的问题均修正；失败证据保留，不计入通过。独立提交导出和运行采用另记。
+
+
+## 10:09 BJ：词典扫描修复实际采用与词汇片尾投稿回执
+
+提交 `f23ab73632185de3f5dfa9cd6fb937da7202fde1` 已推送；原生部署 `9584d806b9b14b2da3165c06c9f70713`（外置 `deployment-r18/`）全部9步COMPLETE、verify.ok=true。5类驻留角色实际采用源码摘要 `04887e0378bda788cff6e3813b23aa17cf4913e1f34d326b373223f00105cf87`，证据 `runtime-adopted-r13.json`。最终完整候选55项通过，证据 `video-pytest-2kt2i3xg`、清单 `4dc37c04d1b8725672c78a0d4d960957a96daf322453b1d60778531754074dda`；独立提交源48项通过，证据 `video-pytest-da2jxeb8`、清单 `d32e12ac7819c8cc68fc37e81f6f0f4c39899728e17578d654ad5ef433e3e666`。边界探针及pytest均0。
+
+使用#7068的12个实际生词与完整公开离线词典，在隔离进程比较缺少音标/词性的相同输入：原逐词构建12次、17.2478秒；批量构建1次、1.8763秒，所有音标、词性、级别输出一致。证据 `r13-full-dictionary-benchmark.json` / `video-pytest-x_sotbd6`。这只证明该导出工作负载，不代表全片加速倍数。#7070在维护247关闭期间继续正常完成字幕、互动及片尾，真实恢复项29结束为封面等待并释放准入；随后原生部署排空完成。一次adopt前空闲检查拒绝的原始回执保留，显式恢复重新核验通过，没有终止在途任务。#7071由恢复批次正常领取并进入翻译。
+
+10:06一致备份，最初24小时20条：8条FAILED、4条AI_COVER_PENDING、7条UNCERTAIN、1条TRANSCRIBING；系统类11条未解、策略2条、投递待核实7条。最初48小时31条：17条FAILED、4条AI_COVER_PENDING、9条UNCERTAIN、1条TRANSCRIBING；系统类17条、策略5条、投递待核实9条。滚动窗口老化不算恢复，实际事实在 `live-audits/20261101T020602Z/audit.json`。
+
+继续核对本地投稿证据发现#7008、#7010均有同成片的submit_intent、submit_click_returned=true、manual_confirmation_required=true及禁止自动结果查询记录，但`operation_receipts.submission_feedback`只识别vertical/interactive文件名，漏认原生发布入口产出的`<prefix>_vocab.mp4`，错误降为RESULT_UNKNOWN。修复仅认可同任务/同切片的确切词汇片尾路径，仍要求全部原有标志、尝试路径边界与输入一致性；未知成片、其他任务/切片及坏证据继续拒绝。显示为“已执行发表，等待人工确认”，保留UNCERTAIN、不查询平台、不改写投稿账本、不重传。原始脱敏证据 `local-uncertain-submission-receipts-audit.json`。
+
+旧版本新增回归3项失败、26项通过，证据 `video-pytest-urm8qds7`（两项直接复现词汇片尾误判，通知分支一项进入错误兜底）。修复后最终候选97项隔离通过，边界探针及pytest均0，8项既有FastAPI弃用告警；证据 `video-pytest-hm2qw463`，源清单 `f6ad6e7e7b3b160a86a5a2a9903148a8c1fe15b72e277ab16dec100ac649416e`。独立提交导出及本轮运行采用另记。
