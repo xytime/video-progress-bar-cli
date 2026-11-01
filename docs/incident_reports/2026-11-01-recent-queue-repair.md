@@ -387,3 +387,12 @@ DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送�
 修复只为已进AI_COVER_PENDING且最后失败明确来自auto-caption的任务，读取正常subtitle_recovery目录的真实成功回执，重新校验原片、ASR、完整译文、当前合同模块/配置、ASS及COMPLETE成片摘要，并要求完成时间晚于最后失败。旧回执、错误来源/合同、未完成/损坏产物不接受；上传/封面故障、NEEDS_REPAIR、提交待核实、策略及观测未知继续保护。只读诊断显示同源成片与回执摘要，不改变队列或投递状态。
 
 #7031将此前已签发并验证的真实成功回执原字节复制到正常同源目录，created_at与全部绑定不改；原始调查回执仍保留，证据7031-completion-evidence-registration.json。运行候选首轮相关139项隔离通过，video-pytest-qx9_whmw / 0e98082dd731956c4d9e9af000df38762417af4ef437b694d7df9c82fb32c329。一次扩大测试命令误列不存在的test_deployment_control.py，收集退出4、未执行测试，保留video-pytest-s15b7z2r；更正为实际部署测试文件后重验，最终提交源与运行采用另记。
+
+
+## 13:28 BJ：恢复成片凭据诊断已上线，继续处理最后一条标题误识别
+
+提交25d109a16019250fe5e994cc8eaf28996628be34已推送，原生部署d7a16cb2c9394b159a954b8fd3f6152c（deployment-r38）13:27:53完成9步、verify.ok=true；5类驻留角色核对实际源码摘要c55645a00eb8b115d61bb5756149ab3c18e4c83037ccd9afc70b82bb1c014324，RUNNING276且unknown为空。运行候选360项隔离通过（video-pytest-bqtb4jth / 2d8f49a441f787e75b1e04ad80949d6cd7e2d4f0fae3d1f57ef95f5706bfec2c），独立提交359项通过（video-pytest-8o9xrrys / b255a2079a6d2f6e10aab6c7a5972a56833f099bd5a5d0c092ae27743080c4b2），均11项既有告警，边界探针/pytest均0。差异是工作区既有test_host_stop_terminates_both_ready_worker_and_wallstreet_worker，独立提交中没有；逐项XML差异已记录，未把359误报成360。证据r27-validation.json、runtime-adopted-r27.json、r27-push.log。
+
+实际后台端口由settings.dashboard_port读取；六条证据接口均200且success=true，#7031/#7042/#7059/#7065/#7121均AI_COVER_PENDING、RECOVERED_PENDING_DELIVERY、unresolved=false，不能冒充已发布。13:27一致备份固定初始24小时20条：2条恢复、14条提交待核实、4条策略；固定48小时31条：5条恢复、18条待核实、8条策略。滚动24小时24条：5恢复、14待核实、5策略；滚动48小时29条：5恢复、17待核实、7策略。分类系统项为0，但#7146仍有实际标题误识别技术问题，不能因此宣布所有异常清零。历史41条48小时事件保留。证据r27-live-api-readback.json、live-audits/20261101T052759Z/audit.json、human-review-queue-r27.md。
+
+#7146原片首帧白底三行片头标题被当成对白字幕；65段ASR完整且尾端165.12秒位于原片164.861678秒的一秒既有舍入容差内。首/中段原画面和全部对白已复核，原生原字幕采样为GENERATE。沿用本次同类标题片已采用的675x1200完整原画面与独立双语区，只新增这一原片SHA及完整65段时间轴绑定；未知来源、变化原片/对白仍拒绝，既有登记实现变化仍使旧版式凭据失效，后续单独重新验证受影响当前成片。publication_review_required仍保留，不因技术修复启动retry或发布。待完整成片、解码与实际抽帧完成后另记技术结果。
