@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 7135 已复核财富差距英文标题，绑定完整 33 段对白，保留原画面。 |
 | 1.1.0 | 2026-11-01 | Codex | 7031 绑定复核后的原片及 large-v3 完整对白，保留英文标题叠字。 |
 | 1.0.0 | 2026-11-01 | Codex | 三条已查明标题叠字的故障采用独立字幕区，不擦字、不裁切。 |
 """
@@ -13,6 +14,11 @@ from ..utils.render_source_binding import digest
 
 
 SOURCES = {
+    'ZVGS33A0nK0': dict(
+        source_sha256='aa91512004ed2d8a8d390e23f8d5c1d77d5dee9c349a87a6bf91cb56301a7015',
+        timeline_sha256='b3a29097498762c9b277abe020b66b34566671d094237adc17e634f6b35f522a',
+        duration=142.684208,
+    ),
     'CatuGloDkTQ': dict(
         source_sha256='2d525f43d92280d23c845880c60a1044ff6ea342b638fb40d93eccd29d5939ed',
         timeline_sha256='3c1ae232ed2905cf0d7892db40b3d5ec742317cf8b7d1d4d599e40ff57ea9289',

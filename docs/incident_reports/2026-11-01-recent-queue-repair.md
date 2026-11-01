@@ -128,3 +128,18 @@
 09:02 BJ一致备份：48小时31条历史故障任务现23条FAILED、6条AI_COVER_PENDING、2条UNCERTAIN；24小时20条任务仍有16条系统类未解、2条策略、2条提交待核实。字幕通过及封面等待不等于发布成功，未清零、未删除历史事件。
 
 本轮最终工作区及独立导出源各145项隔离回归通过，边界探针及pytest均为0，8项既有FastAPI弃用告警。证据分别`video-pytest-kwt3yeag`（源清单`3edffe4f04fd1b5323a01c0ec97edd16f75f00dc0b6da547f619caf2dea7421c`）及`video-pytest-glr4bnb6`（源清单`e4df115865095578eacda4a6d6a6f1ab1143aec1d325666031552e00962dc0ed`）。首次维护锁回归因上下文将内核锁异常按既有规则包装为MaintenanceDenied而失败，改正测试对该闭锁异常的期待后通过，未放宽生产行为。提交及运行采用另记。
+
+
+### 09:14 BJ：恢复批次实际采用与下一条英文标题阻断
+
+提交`94334ab6137599bfea07cb25fc5cf2b092624669`已推送；部署`1c8f4e4e1fc949ceb46821ff60cf787c`（外置`deployment-r11/`）9步全部COMPLETE、verify.ok=true。5类驻留角色回读同一源码摘要`b5d102fdafa4a5789a9b1bc2ccb195f4993d595dcd008fa03e7c42a8f9d81e6a`；证据`runtime-adopted-r9.json`。部署途中发现中间版本ready-worker，先逐文件核对其544份源码与已通过隔离测试清单及进程身份，再经原生维护退役；STOP_TIMEOUT原始失败回执保留。原部署恢复后已确认该身份退出，未改写失败回执或维护闸门，证据`intermediate-worker-retirement-{before,final}.json`。
+
+16条旧SKIPPED任务按新鲜48小时预览创建原生批次`55a52e67-7ba8-4236-9a1c-aef55a36368a`；#7031全片通过后创建原生批次`764ddb66-bcbd-49f4-94f5-76da14c4aa70`。额度、冷却、退避均未重置，入队不等于恢复成功。原调度器已对#7055/#7045执行发表，现为UNCERTAIN；保留防重投和当前不自动查询策略，不宣称平台公开。封面原生兜底恢复按已有许可执行；AGY仍需登录，Luna质量未过或未产出图的失败和确定性封面来源均留档，不宣称AI封面成功。
+
+09:11 BJ一致备份：48小时31条历史故障任务当前22条FAILED、4条UNCERTAIN、2条PENDING、1条PUBLISHING、1条PROCESSING、1条AI_COVER_PENDING；系统类21条未解、策略5条、投递待核实4条。24小时20条任务系统类14条未解、策略2条、投递待核实3条。计数保留历史事件；未清零。
+
+本地改进建议报告已通过`improvement_review.py report --refresh`刷新，73项记录及审批状态保留；报告`output/improvement/runs/dc3cdd784c7a4e9d8993d90df37989ff/report.md`，未发送消息。既有每日09:00报告与周一周报机制保持，已批准事项仍按7日观察验收。
+
+下一条#7135 `ZVGS33A0nK0`原生翻译33段通过后，在英文标题“Why the wealth gap may be hurting more than your wallet”被误当对白字幕时停止。真实首帧、70秒和136秒画面核实：首帧为中央英文标题，后续为原演讲画面，没有完整中文字幕。沿用既有具名独立双语区修复，保留全部原画面和原ASR，不擦标题。原片SHA256`aa91512004ed2d8a8d390e23f8d5c1d77d5dee9c349a87a6bf91cb56301a7015`；完整33段时间轴摘要`b3a29097498762c9b277abe020b66b34566671d094237adc17e634f6b35f522a`，绑定实际视频轨142.684208秒。真实完整翻译时间轴验证通过；尚待新版本采用及全片验收。
+
+候选完整运行源隔离74项通过，边界探针及pytest均为0、两项既有pysubs2弃用告警；证据`video-pytest-14mkj_66`，源清单`b5a47ccfe7228751cb90b13a977058882270ff11493f2602e617a6c0361d53df`。具名登记继续拒绝未知来源、错误源片和删改对白。既有登记文件摘要作为版式凭据的一部分，本轮登记变化会使旧版式凭据失效；由原生校验决定必要重渲，不伪造旧凭据或修改提交待核实任务。
