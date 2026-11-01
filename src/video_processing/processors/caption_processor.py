@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.44.0 | 2026-11-01 | Codex | 供应商份额按原持久兜底可执行余额预留，耗尽后保留缓存入口及全部质量门。 |
 | 1.43.0 | 2026-11-01 | Codex | 生词导出在单次调用内复用离线词典并批量预热，保留首现语境及已有音标词性。 |
 | 1.36.1 | 2026-10-11 | Antigravity | 修复切片视频生词路径关联数据库失败缺陷，清洗生词标点与字幕样式标签 |
 | 1.36.0 | 2026-10-11 | Antigravity | 新增 export_vocabulary_json 方法，导出结构化 vocabulary.json 资产并自动同步数据库 |
@@ -653,6 +654,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
         # 环境配置是运营者批准的故障转移顺序；模型池只负责排除冷却/不兼容 provider。
         provider_order = [provider for provider in configured_providers if provider in eligible_providers]
         arbiter = TranslationCandidateArbiter()
+        from ..utils.subtitle_provider_window import translation_provider_window, fallback_capacity_seconds
+        fallback_capacity = (fallback_capacity_seconds(texts, translation_prompt_context, settings)
+                             if 'codex' in provider_order else None)
         for idx, provider in enumerate(provider_order):
             if time.monotonic() >= self._translation_deadline:
                 logger.warning("[Translate] 整片翻译预算已耗尽，停止供应商切换。")
@@ -661,8 +665,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
             self._last_provider_error = ""
             self._last_provider_failure = None
             attempt_started = time.monotonic()
-            from ..utils.subtitle_provider_window import translation_provider_window
-            with translation_provider_window(self, provider_order, idx, settings) as available:
+            with translation_provider_window(self, provider_order, idx, settings,
+                                             fallback_capacity=fallback_capacity) as available:
                 candidate = self._build_translation_candidate(provider, texts, translation_prompt_context) if available else None
                 if not available:
                     self._last_provider_error = "translation_budget_exhausted:provider_window"

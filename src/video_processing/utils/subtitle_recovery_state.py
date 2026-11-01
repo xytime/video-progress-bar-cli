@@ -3,6 +3,7 @@
 依赖：codex_subtitle_provider → 本模块 → codex_text_provider；不访问任务库或音频。
 
 # Modification History
+| execution-capacity-v1 | 2026-11-01 | Codex | 只读持久预算可执行余额供时间预留，不创建或重置账本，忙碌及坏状态按零容量处理。 |
 | validated-rows-v1 | 2026-10-31 | Codex | 词汇错位拆批时保存已独立严格验证的行，续跑复核校验和，不重置预算。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -47,6 +48,26 @@ class SubtitleRecoveryState:
         self.data: dict = {}
         self._lock = None
         self._tick = 0.0
+
+    def execution_capacity_seconds(self) -> float:
+        """只用于份额预留；实际执行仍由原领取/预扣/缓存规则决定。"""
+        if not self.path.exists():
+            return self.total_timeout
+        try:
+            with self.path.with_suffix('.lock').open('a+') as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.data = json.loads(self.path.read_text(encoding='utf-8'))
+                self._validate_state()
+                if self.data['requests_used'] >= min(self.max_requests, self.data['max_requests']):
+                    return 0.
+                elapsed = self.data['elapsed_seconds']
+                active = self.data.get('active_window')
+                if active:
+                    elapsed += min(max(0., time.time()-active['started_at']), active['allowance_seconds'])
+                return max(0., min(self.total_timeout, self.data['total_timeout'])-elapsed)
+        except (OSError, ValueError, TypeError, KeyError, CodexTextError):
+            # 未知状态不能赋予请求预算；这里只把空闲份额交给仍可用的供应商。
+            return 0.
 
     def __enter__(self):
         self.directory.mkdir(parents=True, exist_ok=True)

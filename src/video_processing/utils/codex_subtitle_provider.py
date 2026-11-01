@@ -1,6 +1,7 @@
 """Codex 文字入口的分批字幕适配；只返回完整候选，不改写原文或时间轴。
 
 # Modification History
+| execution-capacity-v1 | 2026-11-01 | Codex | 份额只读查询与真实请求共享批量和请求上限计算，保留原恢复身份及累计预算。 |
 | validated-rows-v1 | 2026-10-31 | Codex | 仅词汇对齐失败时复用独立通过原质量门的其他行，坏行仍真实修复并重验整片。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -187,6 +188,23 @@ def _located_error(error: CodexTextError, offset: int, count: int) -> CodexSubti
                               quality_details=error.quality_details or _structure_details(offset, count, error.code))
 
 
+def _subtitle_plan(text_count, batch_size, max_attempts, adaptive):
+    effective = min(batch_size, MAX_SUBTITLE_BATCH_ROWS)
+    batches = (text_count + effective - 1) // effective
+    requests = batches * max_attempts + (2 * min(text_count, 10) if adaptive else 0)
+    return effective, batches, requests
+
+
+def codex_subtitle_capacity(texts, context, *, state_dir, model, effort, batch_size,
+                           total_timeout, request_timeout):
+    """同一原计划的可执行秒数；缓存资格由原候选构建器单独校验。"""
+    effective, _, requests = _subtitle_plan(len(texts), batch_size, 2, True)
+    state = SubtitleRecoveryState(state_dir, texts=texts, context=context, model=model,
+        effort=effort, batch_size=effective, max_attempts=2, max_requests=requests,
+        total_timeout=total_timeout, request_timeout=request_timeout)
+    return state.execution_capacity_seconds()
+
+
 def build_codex_subtitle_candidate(
     texts: list[str], context: str, *, state_dir: Path, command: str,
     model: str = "gpt-5.6-luna", effort: str = "medium", request_timeout: float = 120,
@@ -211,10 +229,8 @@ def build_codex_subtitle_candidate(
         raise CodexSubtitleError("subtitle_structure")
     repair_targets = set(repair_segment_numbers or ())
     started = time.monotonic()
-    effective = min(batch_size, MAX_SUBTITLE_BATCH_ROWS)
-    batch_count = (len(texts) + effective - 1) // effective
     adaptive = adaptive_recovery and max_attempts == 2
-    max_requests = batch_count * max_attempts + (2 * min(len(texts), 10) if adaptive else 0)
+    effective, batch_count, max_requests = _subtitle_plan(len(texts), batch_size, max_attempts, adaptive)
     logger.info("[CodexText] subtitle plan configured_batch_size=%d effective_batch_size=%d "
                 "batches=%d max_requests=%d total_timeout=%.1fs adaptive_recovery=%s",
                 batch_size, effective, batch_count, max_requests, total_timeout, adaptive)
