@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-11-02 | Grok Bot | 去掉 --mode plan，按次传入 --settings 禁止命令与工作区外访问（不改全局配置）。 |
 | 1.4.4 | 2026-10-20 | Codex | 关闭会返回空成功的 CLI 内部计时，由宿主超时识别基础设施故障。 |
 | 1.4.3 | 2026-10-15 | Antigravity | 自动映射已退役 gemini-3.7-flash-high 模型别名，并细分 model unavailable / location ineligible 脱敏分类。 |
 | 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
@@ -38,6 +39,15 @@ def _normalize_agy_model(model: str) -> str:
     return _RETIRED_MODEL_ALIASES.get(str(model).strip(), str(model))
 
 
+# 仅本次进程生效、从不落盘：覆盖用户全局放行名单，模型不能执行命令或访问临时工作区外文件。
+# plan 模式会诱导"先调研再动手"，在空目录里翻家目录直到被拒或超时，故不用。
+_HEADLESS_SETTINGS = json.dumps(
+    {"toolPermission": "strict", "permissions": {"allow": [], "deny": ["command"]},
+     "allowNonWorkspaceAccess": False},
+    separators=(",", ":"),
+)
+
+
 def run_agy_structured(
     prompt: str,
     *,
@@ -63,9 +73,9 @@ def run_agy_structured(
         raise ValueError("agy effort 必须是 low、medium 或 high")
     args = [
         command,
-        "--mode", "plan",
         "--sandbox",
         "--disable-slash-commands",
+        "--settings", _HEADLESS_SETTINGS,
         "--model", model,
         "--effort", effort,
         "--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),

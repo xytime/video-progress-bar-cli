@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Grok Bot | 覆盖去除 plan 模式、按次 --settings 禁止命令。 |
 | 1.0.3 | 2026-10-20 | Codex | 验证宿主单一超时边界及空成功输出不可触发兜底，防止敏感输出外泄。 |
 | 1.0.2 | 2026-09-25 | Codex | 识别结构化参数的 API 400，确保只输出安全分类而不泄漏原始错误文本。 |
 | 1.0.1 | 2026-09-22 | Codex | 覆盖本地启动分类、模型列表预检及敏感输出不外泄。 |
@@ -32,9 +33,12 @@ def test_agy_provider_uses_isolated_schema_command_and_extracts_structured_outpu
     result = run_agy_structured("translate", schema={"type": "object"}, model="test-model", command="agy", timeout_sec=17)
 
     assert result == {"items": []}
-    assert captured["args"][:7] == [
-        "agy", "--mode", "plan", "--sandbox", "--disable-slash-commands", "--model", "test-model",
-    ]
+    assert captured["args"][:3] == ["agy", "--sandbox", "--disable-slash-commands"]
+    assert "--mode" not in captured["args"]
+    settings = json.loads(captured["args"][captured["args"].index("--settings") + 1])
+    assert settings == {"toolPermission": "strict", "permissions": {"allow": [], "deny": ["command"]},
+                        "allowNonWorkspaceAccess": False}
+    assert captured["args"][captured["args"].index("--model") + 1] == "test-model"
     assert "--disable-slash-commands" in captured["args"]
     assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
     assert "--print=translate" in captured["args"]
@@ -145,3 +149,4 @@ def test_startup_probe_only_queries_model_list(monkeypatch, code, output, succes
             module.probe_agy_startup(command="agy", model="m")
         assert "private" not in str(exc.value)
     assert calls == [["agy", "models"]]
+
