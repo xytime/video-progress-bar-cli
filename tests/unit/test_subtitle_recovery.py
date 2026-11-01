@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 冷却到期用同一冻结时钟，避免高负载下墙钟漂移导致误失败。 |
 | 1.0.0 | 2026-10-27 | Codex | 覆盖幂等、跨重启、显式修复、投稿保护及正常候选/恢复领取。 |
 """
 import hashlib
@@ -272,7 +273,7 @@ def test_terminal_and_publication_states_are_never_requeued(fixture, state):
 
 
 def test_shared_candidate_and_atomic_claim_gates_before_limit(fixture):
-    db, _, _ = fixture
+    db, clock, _ = fixture
     row = record(fixture)
     db.add_video('next-task', 'next', 'test-channel', score=80, source='AUTO')
     assert [r['youtube_id'] for r in db.get_high_score_preparation_candidates(limit=1)] == ['next-task']
@@ -280,7 +281,7 @@ def test_shared_candidate_and_atomic_claim_gates_before_limit(fixture):
     assert not db.claim_video_for_processing('subtitle-test')
     assert any(b['code'] == 'SUBTITLE_RECOVERY' for b in db.get_publication_eligibility([video(db)['id']])[video(db)['id']]['blockers'])
     with db.get_connection() as c:
-        c.execute('UPDATE subtitle_recovery SET next_attempt_at=? WHERE id=?', (time.time() - 5, row['id']))
+        c.execute('UPDATE subtitle_recovery SET next_attempt_at=? WHERE id=?', (clock[0] - 5, row['id']))
     assert db.subtitle_recovery_blocker(video(db)['id']) is None
     assert db.get_high_score_preparation_candidates(limit=1)[0]['youtube_id'] == 'subtitle-test'
     assert db.claim_video_for_processing('subtitle-test')

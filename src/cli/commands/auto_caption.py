@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 1.10.0 | 2026-11-01 | Codex | 保留原片字幕的默认续跑采用摘要绑定的已复核 ASR 模型，显式参数优先。 |
 | 1.9.0 | 2026-10-27 | Codex | 具名字幕失败/成功回执，临时服务故障与待修复分别退出。 |
 | 1.9.0 | 2026-10-27 | Codex | 普通流水线可在翻译前分流原片中文字幕，独立制作默认不启用。 |
 | 1.8.0 | 2026-10-23 | Codex | 心跳保留已复用步骤，让字幕定位/渲染与转录分开展示。 |
@@ -136,6 +137,13 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
             progress_reporter.reused_steps.add('copy')
         progress_reporter.start()
     try:
+        if preserve_source_chinese and vertical:
+            from click.core import ParameterSource
+            if click.get_current_context().get_parameter_source('model') == ParameterSource.DEFAULT:
+                from video_processing.processors.reviewed_caption_sources import reviewed_asr_model
+                reviewed_model = reviewed_asr_model(input_path)
+                if reviewed_model:
+                    model = reviewed_model
         if vertical:
             processor = VerticalCaptionProcessor(
                 input_path=input_path,

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 默认续跑采用原片摘要绑定的已复核 ASR 模型，保留完整时间轴校验。 |
 | 1.2.0 | 2026-11-01 | Codex | 7135 已复核财富差距英文标题，绑定完整 33 段对白，保留原画面。 |
 | 1.1.0 | 2026-11-01 | Codex | 7031 绑定复核后的原片及 large-v3 完整对白，保留英文标题叠字。 |
 | 1.0.0 | 2026-11-01 | Codex | 三条已查明标题叠字的故障采用独立字幕区，不擦字、不裁切。 |
@@ -23,6 +24,7 @@ SOURCES = {
         source_sha256='2d525f43d92280d23c845880c60a1044ff6ea342b638fb40d93eccd29d5939ed',
         timeline_sha256='3c1ae232ed2905cf0d7892db40b3d5ec742317cf8b7d1d4d599e40ff57ea9289',
         duration=121.5214,
+        asr_model='large-v3',
     ),
     'z9VaYmwImt8': dict(
         source_sha256='fc19f07417a3207c60a5e3c5751289dd057d832f9cb21fba7c54c75bbd9b6777',
@@ -40,6 +42,16 @@ SOURCES = {
         duration=165.431933,
     ),
 }
+
+
+def reviewed_asr_model(source):
+    source = Path(source)
+    record = SOURCES.get(source.stem)
+    if record is None or not record.get('asr_model'):
+        return None
+    if digest(source) != record['source_sha256']:
+        raise ValueError('具名故障版式原片摘要不符，需要重新复核')
+    return record['asr_model']
 
 
 def reviewed_layout(source, source_hash):

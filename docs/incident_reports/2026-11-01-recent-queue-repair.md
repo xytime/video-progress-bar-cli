@@ -334,3 +334,17 @@
 旧源码在真实编排及DAL集成中两例IncompleteRead均复现异常、审计未收尾，`video-pytest-mevgkfgq` / `f3c47276276c3bb5d1b61ce10a1df7f152de1755efd4401719e813653d55480b`。新源码响应关闭、26段首批失败不再发请求、敏感正文不入日志、各类别、真实降级成功及全供应商失败结束审计、原ASR/时间轴不变共48项隔离通过，`video-pytest-5jj2r8w8` / 4baf2c6abc916e6c5da034b5457819ede09330c95c2b46a3c35ed8da835297aa。初轮47通过1失败来自测试同名视频同秒记录排序，改为独立视频标识并断言实际run_id，未修改DAL或业务行为。最终候选与独立提交源验证、部署采用另记。
 
 12:26固定初始24小时20条：系统3、待核实14、策略3；固定48小时31条：系统8、待核实17、策略6。#7000已原生执行发表、按现行不自动查询政策为UNCERTAIN，不能算公开发布成功；#7007仍等AI封面。#7137最新2041为Gemini无效响应、DeepSeek读取超时、Google限流、Codex原600秒预算已耗尽，不重置账本。#7042同样保留total_timeout。证据 `live-audits/20261101T042624Z/audit.json`；没有清零或删除历史。
+
+
+## 12:38 BJ：DeepSeek中断修复采用；恢复已复核ASR模型
+
+DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送。原生部署 `6c7ce1900785429b877b75ff23f7ddec`（deployment-r34）在12:36:48完成9步、verify.ok=true；5类实际进程匹配源码摘要 `941af23093931372c4f181530399b536030f4ae369669ec241395d069ca8b973`，RUNNING270、unknown为空。两份最终运行候选与独立提交源各308项隔离通过，8项既有FastAPI弃用告警：`video-pytest-1kqshhii` / `1e48b35589891a30be484ba346be04ea828a5da8066654b76d8f25da5618144d`、`video-pytest-ipgflame` / `abcf6411307193d347c3ac8a2d4868c50e6f6d0f2617e7cfe094442a01b2d56b`。证据 runtime-adopted-r24.json 与 r24-validation.json。
+
+#7031 CatuGloDkTQ 在12:29:21再次失败：自动CLI续跑默认small，旧small ASR第49段越过原片尾端而被正确拒绝；重新识别small 48段后翻译成功，最终仍不匹配已复核large-v3完整对白时间轴。此前09:01 large-v3全片121.58秒验证成功的证据不等于现存文件；这次自动续跑已淘汰旧成片，不能沿用旧成功声明。
+
+最小修复只为已登记且原片摘要相同的Catu来源指定large-v3，普通CLI的模型默认值在保留原片字幕路径采用该登记；用户显式--model优先、未知来源及无模型登记仍small，原片变化先拒绝，完整对白/时间轴校验仍原样执行。真实Click入口旧源码7例中3失败4通过（默认模型、变更原片、实际登记），`video-pytest-wadu1189` / `1852420ad758ccca17d5820f297756b49052d585872cd7c59ba69161feff0e72`；新源码加既有字幕登记与CLI心跳22项通过，`video-pytest-8etr8akr` / `e144a3db55d236ae07e8910ac3d272d69f13791c3574baba44eb4e2fbe2cfa45`。最终提交源与实际运行采用另记。
+
+#7137严格重验缓存得到185/189段，只有末尾4段缺失，未拒绝任何已验证缓存；本会话具名补译这4段，真实记录来源Codex current session/model unknown/provider_requests=0，原189段ASR及起止时间未改。候选通过现有容错政策，保留AMOUNT_CONSISTENCY_UNIT_DRIFT全局P1告警及坏例证据，原600秒预算账本未重置。12:38已在单视频任务锁和维护准入下安装当前合同快照，正常处理器实际报告ASR_REUSED、TRANSLATION_REUSED并开始全片渲染；尚未宣称成片验证或恢复发布完成。证据7137-current-repairable-cache.json、local-explicit-repair-7137/candidate.json、production-caption-validation/7137/local-checkpoint-installation.json。
+
+
+12:40最终广度验证：运行叠加候选303通过1失败，独立提交源304全通过。失败为既有测试test_shared_candidate_and_atomic_claim_gates_before_limit混用冻结DAL时钟与墙钟，在并发媒体负载下执行超过5秒，next_attempt_at相对于冻结时钟实际仍在未来；修正测试到期值为fixture clock[0]-5，未改业务期限或冷却。保留失败video-pytest-9zpm1_2d / 5ff118ba8a90fab12f9f012a69d557eb01d9f8f42b566868805b29a67b3d3f11与独立通过video-pytest-36olg8im / 2a7dbf3a580c87ec7c2e366db701202505007499c12910897823cf0c06e81ee4，重新生成完整提交源并整套验证。
