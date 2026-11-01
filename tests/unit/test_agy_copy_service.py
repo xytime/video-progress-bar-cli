@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-22 | Codex | 覆盖零 API 依赖、校验后缓存、限流、锁竞争与投稿保护。 |
 | 1.0.1 | 2026-11-01 | Grok Bot | 固定供应商顺序为仅 agy，隔离新的 CLI 文案链。 |
+| 1.0.2 | 2026-11-02 | Grok Bot | 代理合同：继承代理被丢弃、注入当前系统代理；业务凭据仍排除。 |
 """
 
 import fcntl
@@ -95,12 +96,16 @@ def test_app_environment_excludes_business_credentials(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "not-a-real-token")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "not-a-real-key")
-    monkeypatch.setenv("HTTPS_PROXY", "http://localhost:1234")
+    monkeypatch.setenv("HTTPS_PROXY", "http://stale-inherited:1234")
+    active = {"HTTPS_PROXY": "http://127.0.0.1:17890", "https_proxy": "http://127.0.0.1:17890"}
+    monkeypatch.setattr(type(settings), "get_active_proxies", lambda self, **kwargs: dict(active))
     env = settings.agy_app_environment()
     assert "GEMINI_API_KEY" not in env
     assert "TELEGRAM_BOT_TOKEN" not in env
     assert "DEEPSEEK_API_KEY" not in env
-    assert env["HTTPS_PROXY"] == "http://localhost:1234"
+    assert env["HTTPS_PROXY"] == env["https_proxy"] == "http://127.0.0.1:17890"
+    active.clear()
+    assert "HTTPS_PROXY" not in settings.agy_app_environment()
 
 
 def test_full_copy_works_without_api_or_fallback(tmp_path, monkeypatch):
