@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-11-01 | Codex | FAILED 且无实际进程或任务锁时，遗留字幕心跳不遮蔽真实失败。 |
 | 1.4.0 | 2026-11-01 | Codex | 封面及投稿后的实际状态优先于旧字幕阶段，保留恢复与公开凭据要求。 |
 | 1.3.0 | 2026-11-01 | Codex | 恢复项跳过仅报告已知状态，不推断监督停止且保留当前运行及审核优先级。 |
 | 1.2.0 | 2026-11-01 | Codex | 将 OCR 预算耗尽与对白字幕不完整分开诊断，保留质量门禁及原始错误。 |
@@ -143,6 +144,8 @@ def is_task_actively_running(
     """结合内核锁、进程存活与 caption_progress 心跳判断任务是否正在正常执行。"""
     if task.has_active_task_lock or task.process_alive:
         return True
+    if task.status == "FAILED":
+        return False
     if task.caption_progress_updated_epoch is not None:
         return 0 <= (env.now_epoch - task.caption_progress_updated_epoch) < thresholds.caption_progress_stale_seconds
     return False
