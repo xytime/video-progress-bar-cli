@@ -39,7 +39,7 @@ def test_agy_provider_uses_isolated_schema_command_and_extracts_structured_outpu
     assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
     assert "--print=translate" in captured["args"]
     assert captured["args"][captured["args"].index("--print-timeout") + 1] == "0s"
-    assert captured["kwargs"]["timeout"] == 32
+    assert captured["kwargs"]["timeout"] == 17
     assert captured["kwargs"]["cwd"] != "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing"
 
 
@@ -61,7 +61,7 @@ def test_host_timeout_is_infrastructure_failure_without_exposing_output(monkeypa
     from video_processing.utils.english_world_provider import infrastructure_error
 
     def timed_out(args, **kwargs):
-        assert kwargs["timeout"] == 16
+        assert kwargs["timeout"] == 1
         assert args[args.index("--print-timeout") + 1] == "0s"
         raise module.subprocess.TimeoutExpired(args, kwargs["timeout"], output="private subtitle")
 

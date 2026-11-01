@@ -34,7 +34,6 @@ from .translation_quality_guard import _complete_split_amount_fragment, evaluate
 
 logger = logging.getLogger(__name__)
 SUBTITLE_CACHE_CONTRACT = "subtitle-facts-adjacent-v5"
-MAX_SUBTITLE_BATCH_ROWS = 5
 FRAGMENT_OWNERSHIP_RULE = (
     "原文半句也必须保留半句，不补全悬空从句；禁止为中文通顺把when等从句搬到邻段。"
 )
@@ -189,7 +188,10 @@ def _located_error(error: CodexTextError, offset: int, count: int) -> CodexSubti
 
 
 def _subtitle_plan(text_count, batch_size, max_attempts, adaptive):
-    effective = min(batch_size, MAX_SUBTITLE_BATCH_ROWS)
+    effective = max(30, min(batch_size, 50))
+    if effective != batch_size:
+        logger.warning("[CodexText] subtitle batch size clamped configured=%d effective=%d range=30..50",
+                       batch_size, effective)
     batches = (text_count + effective - 1) // effective
     requests = batches * max_attempts + (2 * min(text_count, 10) if adaptive else 0)
     return effective, batches, requests
@@ -208,19 +210,19 @@ def codex_subtitle_capacity(texts, context, *, state_dir, model, effort, batch_s
 def build_codex_subtitle_candidate(
     texts: list[str], context: str, *, state_dir: Path, command: str,
     model: str = "gpt-5.6-luna", effort: str = "medium", request_timeout: float = 120,
-    total_timeout: float = 600, batch_size: int = 50, max_attempts: int = 2,
+    total_timeout: float = 600, batch_size: int = 40, max_attempts: int = 2,
     window_timeout: float | None = None,
     adaptive_recovery: bool = True,
     allow_quality_candidate: bool = False,
     initial_candidate: SubtitleTranslationCandidate | None = None,
     repair_segment_numbers: list[int] | None = None,
 ) -> SubtitleTranslationCandidate:
-    """每批最多5段；结构/质量拒绝可缩为单段，完整候选才返回。
+    """每批默认40段，可配置30–50段；结构/质量拒绝可缩为单段，完整候选才返回。
 
     batch_size 是请求段数上限。恢复计划持久共享真实调用和累计期限；
     max_attempts=1 不启用降级，adaptive_recovery=False 保留原整批修正行为。
     """
-    if (not texts or batch_size <= 0 or max_attempts not in {1, 2}
+    if (not texts or max_attempts not in {1, 2}
             or not math.isfinite(total_timeout) or total_timeout <= 0
             or not math.isfinite(request_timeout) or request_timeout <= 0
             or window_timeout is not None and (not math.isfinite(window_timeout) or window_timeout < 0)):

@@ -31,7 +31,7 @@ def config(root):
 def exhausted_state(root):
     context=build_translation_context([TEXT]).to_prompt_context()
     state=SubtitleRecoveryState(root/'codex_text_cache',texts=[TEXT],context=context,
-        model='gpt-5.6-luna',effort='medium',batch_size=5,max_attempts=2,max_requests=4,
+        model='gpt-5.6-luna',effort='medium',batch_size=50,max_attempts=2,max_requests=4,
         total_timeout=600,request_timeout=120)
     with state:
         state.data['elapsed_seconds']=600

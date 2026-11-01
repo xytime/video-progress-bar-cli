@@ -189,7 +189,7 @@ def test_first_singleton_translation_after_parent_structure_error_is_not_fact_re
 
     def generate(data, number):
         raw = _rows(data)
-        if len(data) == 5 and data[0]["id"] == 0:
+        if len(data) > 1 and data[0]["id"] == 0:
             # 父请求只有结构问题；它从未提供可用于定位金额错误的译文。
             raw["items"][0]["id"] = 99
         return raw
@@ -250,7 +250,7 @@ def test_restart_keeps_parent_quality_observation_before_any_child_executes(tmp_
         _build(segments, tmp_path)
     state = json.loads(next((tmp_path/"subtitle-recovery").glob("*.json")).read_text())
     assert state["requests_used"] == 1
-    assert len(transport.prompts) == 1 and len(_data(transport.prompts[0])) == 5
+    assert len(transport.prompts) == 1 and len(_data(transport.prompts[0])) == len(segments)
 
     candidate = _build(segments, tmp_path)
 
@@ -260,18 +260,19 @@ def test_restart_keeps_parent_quality_observation_before_any_child_executes(tmp_
                                        repair_history=candidate.repair_history)["status"] == "clean"
     parent_observations = [entry for entry in candidate.repair_history
                            if entry.get("strategy") == "quality_observation"
-                           and entry.get("segment_numbers") == [1, 2, 3, 4, 5]]
+                           and entry.get("segment_numbers") == list(range(1, len(segments) + 1))]
     assert parent_observations
-    assert any(entry.get("translations") == ["油价每桶1150亿美元。", *(["前景保持稳定。"]*4)]
+    assert any(entry.get("translations") == ["油价每桶1150亿美元。", *(["前景保持稳定。"]*(len(segments)-1))]
                and any(detail.get("code") == "NUMBER_MAGNITUDE_MISMATCH"
                        and detail.get("segment_number") == 1 for detail in entry.get("details", []))
                for entry in parent_observations)
-    assert sum(len(_data(item)) == 5 and _data(item)[0]["id"] == 0
+    assert sum(len(_data(item)) == len(segments) and _data(item)[0]["id"] == 0
                for item in transport.prompts) == 1
 
 
 def test_command_start_failure_after_admission_is_not_a_validated_repair(tmp_path, monkeypatch):
-    segments = _video()
+    # 单条视频保持同一单段恢复单元的两次计费，不依赖已取消的批次=1配置。
+    segments = _video(1)
     transport = _StructuredTransport(lambda data, number: _rows(data))
     admitted_without_result = []
 
@@ -286,7 +287,7 @@ def test_command_start_failure_after_admission_is_not_a_validated_repair(tmp_pat
 
     monkeypatch.setattr(provider, "run_codex_structured", command_unavailable)
     try:
-        candidate = _build(segments, tmp_path, batch_size=1)
+        candidate = _build(segments, tmp_path)
     except provider.CodexTextError as error:
         assert error.code == "command_unavailable"
     else:

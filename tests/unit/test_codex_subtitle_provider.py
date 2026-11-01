@@ -70,14 +70,14 @@ def test_batches_share_deadline_and_never_return_partial_candidate(tmp_path, mon
     monkeypatch.setattr(provider, "run_codex_structured", run)
     monkeypatch.setattr(provider.time, "monotonic", lambda: clock["now"])
     with pytest.raises(CodexTextError, match="total_timeout"):
-        provider.build_codex_subtitle_candidate(["business"] * 2, "", state_dir=tmp_path, command="codex", batch_size=1, total_timeout=10)
+        provider.build_codex_subtitle_candidate(["business"] * 31, "", state_dir=tmp_path, command="codex", batch_size=1, total_timeout=10)
     assert len(calls) == 1 and calls[0]["timeout_sec"] == 10
 
 
 @pytest.mark.parametrize(("configured", "expected_sizes"), [
-    (50, [5] * 9), (100, [5] * 9), (5, [5] * 9), (2, [2] * 22 + [1]),
+    (50, [45]), (100, [45]), (40, [40, 5]), (30, [30, 15]), (2, [30, 15]),
 ])
-def test_requested_batch_size_is_an_upper_bound_with_five_row_safety_cap(
+def test_configurable_batch_size_is_clamped_to_thirty_through_fifty(
     tmp_path, monkeypatch, caplog, configured, expected_sizes,
 ):
     texts = [f"A business can change. Segment {i}." for i in range(45)]
@@ -102,7 +102,7 @@ def test_requested_batch_size_is_an_upper_bound_with_five_row_safety_cap(
     assert len(result.translations) == 45 and len(result.vocabs) == 45
     assert adjacent == [(data[0]["id"], texts[data[-1]["id"] + 1] if data[-1]["id"] + 1 < 45 else "")
                         for data in calls] + [(0, "")]
-    assert f"configured_batch_size={configured} effective_batch_size={min(configured, 5)}" in caplog.text
+    assert f"configured_batch_size={configured} effective_batch_size={max(30, min(configured, 50))}" in caplog.text
     assert f"batches={len(expected_sizes)} max_requests={len(expected_sizes) * 2 + 20}" in caplog.text
 
 
@@ -119,8 +119,8 @@ def test_later_small_batch_rejection_never_returns_accepted_prefix(tmp_path, mon
     monkeypatch.setattr(provider, "run_codex_structured", run)
     with pytest.raises(provider.CodexSubtitleError, match="subtitle_ids"):
         provider.build_codex_subtitle_candidate(["A business can change."] * 45, "", state_dir=tmp_path,
-                                                 command="codex", batch_size=50, max_attempts=max_attempts)
-    assert offsets == ([0, 5] if max_attempts == 1 else [0, 5, 5, 5])
+                                                 command="codex", batch_size=30, max_attempts=max_attempts)
+    assert offsets == ([0, 30] if max_attempts == 1 else [0, 30, 30, 30])
 
 
 def test_capped_small_batches_keep_one_shared_deadline(tmp_path, monkeypatch):
@@ -130,13 +130,13 @@ def test_capped_small_batches_keep_one_shared_deadline(tmp_path, monkeypatch):
         kwargs["before_execute"]()
         calls.append(kwargs)
         clock["now"] = 11.0
-        payload = kwargs["validate"](_raw(range(5)))
+        payload = kwargs["validate"](_raw(range(30)))
         return CodexTextResult(payload, "gpt-5.6-luna", {}, 1)
     monkeypatch.setattr(provider, "run_codex_structured", run)
     monkeypatch.setattr(provider.time, "monotonic", lambda: clock["now"])
     with pytest.raises(CodexTextError, match="total_timeout"):
         provider.build_codex_subtitle_candidate(["A business can change."] * 45, "", state_dir=tmp_path,
-                                                 command="codex", batch_size=50, total_timeout=10)
+                                                 command="codex", batch_size=30, total_timeout=10)
     assert len(calls) == 1 and calls[0]["timeout_sec"] == 10
 
 
@@ -279,14 +279,15 @@ def test_batches_pass_real_next_source_and_versioned_cache_contract(tmp_path, mo
     calls = []
     def run(prompt, **kwargs):
         calls.append({**kwargs, "prompt": prompt})
-        payload = kwargs["validate"](_raw([len(calls) - 1]))
+        data = json.loads(prompt.split("源字幕 JSON: ", 1)[1])
+        payload = kwargs["validate"](_raw([row["id"] for row in data]))
         return CodexTextResult(payload, "gpt-5.6-luna", {}, 1)
     monkeypatch.setattr(provider, "_validate_batch", validate)
     monkeypatch.setattr(provider, "run_codex_structured", run)
-    result = provider.build_codex_subtitle_candidate(["A business can change."] * 2, "", state_dir=tmp_path,
-                                                     command="codex", batch_size=1)
-    assert result.translations == ["企业可以改变", "企业可以改变"]
-    assert seen == [(0, "A business can change."), (1, ""), (0, "")]
+    result = provider.build_codex_subtitle_candidate(["A business can change."] * 31, "", state_dir=tmp_path,
+                                                     command="codex", batch_size=30)
+    assert result.translations == ["企业可以改变"] * 31
+    assert seen == [(0, "A business can change."), (30, ""), (0, "")]
     assert all(call["cache_contract"] == provider.SUBTITLE_CACHE_CONTRACT for call in calls)
     assert provider.SUBTITLE_CACHE_CONTRACT == "subtitle-facts-adjacent-v5"
     assert all(call["repair_cached_output"] is provider._repair_prompt for call in calls)
@@ -322,23 +323,23 @@ def test_next_context_is_only_a_complete_amount_unit_token(source, next_source, 
 
 
 def test_prompt_exposes_only_amount_unit_and_host_receives_true_next_source(tmp_path, monkeypatch):
-    texts = ["The fund raised $600", "billion from investors. NEXT_ONLY_SENTINEL"]
+    texts = ["A business can change."] * 29 + ["The fund raised $600", "billion from investors. NEXT_ONLY_SENTINEL"]
     prompts, adjacent = [], []
     validate_batch = provider._validate_batch
     def validate(raw, batch, offset, context, **kwargs):
         adjacent.append(kwargs["next_source_text"])
         return validate_batch(raw, batch, offset, context, **kwargs)
     def run(prompt, **kwargs):
-        offset = len(prompts)
+        data = json.loads(prompt.split("源字幕 JSON: ", 1)[1])
         prompts.append(prompt)
-        raw = {"items": [{"id": offset, "translation": "该基金募集了6000亿美元。" if offset == 0 else "来自投资者。",
-                           "vocab": []}]}
+        raw = {"items": [{"id": row["id"], "translation": "该基金募集了6000亿美元。" if row["id"] == 29 else "来自投资者。" if row["id"] == 30 else "企业可以改变",
+                           "vocab": []} for row in data]}
         return CodexTextResult(kwargs["validate"](raw), "gpt-5.6-luna", {}, 1)
     monkeypatch.setattr(provider, "_validate_batch", validate)
     monkeypatch.setattr(provider, "run_codex_structured", run)
-    result = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex", batch_size=1)
-    assert len(result.translations) == 2
-    assert adjacent == [texts[1], "", ""]
+    result = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex", batch_size=30)
+    assert len(result.translations) == 31
+    assert adjacent == [texts[30], "", ""]
     assert '{"unit": "billion"}' in prompts[0]
     assert "from investors" not in prompts[0] and "NEXT_ONLY_SENTINEL" not in prompts[0]
     assert "下一段原文" not in prompts[0]
@@ -407,21 +408,21 @@ def _real_executor(monkeypatch, responder):
     return calls
 
 
-def test_failed_five_rows_all_regenerated_with_global_ids_and_completed_batch_rechecked(tmp_path, monkeypatch):
-    texts = ["A business can change."] * 9 + ["Oil is $115."]
+def test_failed_later_batch_all_regenerated_with_global_ids_and_completed_batch_rechecked(tmp_path, monkeypatch):
+    texts = ["A business can change."] * 44 + ["Oil is $115."]
     def respond(data, number, prompt, timeout):
         ids = [row["id"] for row in data]
-        if ids == list(range(5, 10)):
+        if ids == list(range(40, 45)):
             return {"items": [{"id": i, "translation": "被拒绝的普通段译文", "vocab": []} for i in ids]}
-        return {"items": [{"id": i, "translation": "油价115美元。" if i == 9 else "企业可以改变", "vocab": []}
+        return {"items": [{"id": i, "translation": "油价115美元。" if i == 44 else "企业可以改变", "vocab": []}
                           for i in ids]}
     calls = _real_executor(monkeypatch, respond)
     result = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
-    assert calls == [list(range(5)), list(range(5, 10)), [5], [6], [7], [8], [9]]
-    assert result.translations == ["企业可以改变"] * 9 + ["油价115美元。"]
+    assert calls == [list(range(40)), list(range(40, 45)), [40], [41], [42], [43], [44]]
+    assert result.translations == ["企业可以改变"] * 44 + ["油价115美元。"]
     ledger = json.loads(next((tmp_path / "subtitle-recovery").glob("*.json")).read_text())
     assert ledger["requests_used"] == 7 and ledger["max_requests"] == 24
-    assert "5:5" in ledger["split_batches"]
+    assert "40:5" in ledger["split_batches"]
     provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
     assert len(calls) == 7
 
@@ -463,7 +464,7 @@ def test_singleton_exhaustion_survives_resume_and_has_original_structural_locati
 
 def test_completed_caches_remain_readable_after_both_budgets_exhausted(tmp_path, monkeypatch):
     calls = _real_executor(monkeypatch, lambda data, *args: _raw([row["id"] for row in data]))
-    texts = ["A business can change."] * 10
+    texts = ["A business can change."] * 45
     first = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
     path = next((tmp_path / "subtitle-recovery").glob("*.json"))
     ledger = json.loads(path.read_text())
@@ -503,7 +504,7 @@ def test_adaptive_opt_out_keeps_original_two_whole_batch_attempts(tmp_path, monk
 
 def test_actual_request_budget_is_shared_with_new_batches_and_survives_restart(tmp_path, monkeypatch):
     calls = _real_executor(monkeypatch, lambda data, *args: _raw([row["id"] for row in data]))
-    texts = ["A business can change."] * 10
+    texts = ["A business can change."] * 45
     provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
     path = next((tmp_path / "subtitle-recovery").glob("*.json"))
     ledger = json.loads(path.read_text())
@@ -514,7 +515,7 @@ def test_actual_request_budget_is_shared_with_new_batches_and_survives_restart(t
             cached.unlink()
     with pytest.raises(CodexTextError, match="request_budget_exhausted"):
         provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
-    assert len(calls) == 3 and calls[-1] == list(range(5))
+    assert len(calls) == 3 and calls[-1] == list(range(40))
     with pytest.raises(CodexTextError, match="request_budget_exhausted"):
         provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
     assert len(calls) == 3
@@ -554,7 +555,7 @@ def test_singleton_repair_preserves_true_next_amount_unit_without_neighbor_conte
         return {"items": [{"id": source_id, "translation": translated, "vocab": []}]}
     calls = _real_executor(monkeypatch, respond)
     result = provider.build_codex_subtitle_candidate(texts, "", state_dir=tmp_path, command="codex")
-    assert calls == [list(range(5)), [0], [1], [2], [3], [4], [5]]
+    assert calls == [list(range(6)), [0], [1], [2], [3], [4], [5]]
     assert result.translations[4] == "该基金募集了6000亿美元。"
 
 

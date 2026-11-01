@@ -54,9 +54,16 @@ PROFILES = {
 def classify_error(message: str | None) -> str:
     """将供应商错误归一为可用于冷却策略的类别。"""
     text = (message or "").lower()
+    if "agy_auth_required" in text:
+        return "auth_or_permission"
+    if "agy" in text and any(token in text for token in ("timed out", "timeout")):
+        return "timeout"
+    if "agy command not found" in text:
+        return "command_not_found"
     if any(token in text for token in ("402", "insufficient balance", "billing", "payment required")):
         return "billing"
-    if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition")):
+    if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition",
+                                      "location_unsupported", "location ineligible")):
         return "region_restricted"
     if "deadline" in text or "budget" in text or "total_timeout" in text:
         return "budget_exhausted"
@@ -81,6 +88,8 @@ class DynamicTranslationModelPool:
         "region_restricted": 21600,
         "budget_exhausted": 180,
         "network": 180,
+        "timeout": 180,
+        "command_not_found": 3600,
         "invalid_response": 300,
         "quality_blocked": 600,
         "unknown": 180,

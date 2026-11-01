@@ -127,6 +127,7 @@
 | 7.1.0 | 2026-10-08 | Antigravity | 新增豆包语音 2.0 (Doubao Voice) 配置与沉稳克制转场过渡音效配置 |
 """
 import json
+import logging
 import os
 import re
 import socket
@@ -403,7 +404,7 @@ class Settings(BaseSettings):
     codex_text_effort: Literal["low", "medium", "high"] = "medium"
     codex_text_request_timeout_seconds: int = Field(default=120, ge=10, le=300)
     codex_subtitle_total_timeout_seconds: int = Field(default=900, ge=30, le=1800)
-    codex_subtitle_batch_size: int = Field(default=50, ge=5, le=100)
+    codex_subtitle_batch_size: int = 40
     # 双标题消费默认关闭：启用后仅封面读取 display_title，平台/视频顶部仍读 title.txt。
     enable_dual_title_display: bool = False
 
@@ -418,8 +419,8 @@ class Settings(BaseSettings):
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
 
-    # 字幕翻译生产链：影子期固定 Gemini → DeepSeek → Google；AGY 不得影响真实成片。
-    subtitle_translation_provider_order: str = "gemini,deepseek,google"
+    # 字幕翻译生产链：AGY → DeepSeek → Gemini → Google，启用时 Codex 自动最后兜底。
+    subtitle_translation_provider_order: str = "agy,deepseek,gemini,google"
     # Google 仅作终级兜底；请求保持系统 CA 验证，超时后返回空候选并交给现有质量门处理。
     google_translate_request_timeout_seconds: int = Field(default=90, ge=5, le=300)
     google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
@@ -448,7 +449,8 @@ class Settings(BaseSettings):
     english_world_codex_model: Literal["gpt-6-luna", "gpt-5.6-luna"] = "gpt-5.6-luna"
     # 英语世界安全回执在影子期由命令显式生成；启用后交付记录器不接受无回执成片。
     enable_english_world_safety_gate: bool = False
-    agy_timeout_sec: int = 90
+    agy_timeout_sec: int = Field(default=150, ge=120, le=180)
+    agy_subtitle_batch_size: int = Field(default=80, ge=60, le=100)
     agy_subtitle_model: str = AGY_DEFAULT_MODEL
     agy_dubbing_model: str = "claude-sonnet-4-6"
     # AGY 影子评估只读取已有双语 ASS 并输出不含字幕正文的比较报告。
@@ -1010,6 +1012,15 @@ class Settings(BaseSettings):
             return None
         return hour * 60 + minute
 
+    @field_validator("codex_subtitle_batch_size")
+    @classmethod
+    def clamp_codex_subtitle_batch_size(cls, value: int) -> int:
+        effective = max(30, min(value, 50))
+        if effective != value:
+            logging.getLogger(__name__).warning(
+                "Codex subtitle batch size clamped configured=%d effective=%d range=30..50", value, effective)
+        return effective
+
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:
         """字幕翻译供应商顺序（过滤未知值，空配置回退默认顺序）。"""
@@ -1019,7 +1030,7 @@ class Settings(BaseSettings):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        providers = providers or ["gemini", "deepseek", "google"]
+        providers = providers or ["agy", "deepseek", "gemini", "google"]
         if self.enable_codex_text_fallback:
             providers.append("codex")
         return providers

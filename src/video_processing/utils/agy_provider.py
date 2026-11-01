@@ -85,7 +85,7 @@ def run_agy_structured(
                 encoding="utf-8",
                 errors="replace",
                 capture_output=True,
-                timeout=max(1, int(timeout_sec)) + 15,
+                timeout=max(0.001, float(timeout_sec)),
                 check=False,
                 **({"env": environment} if environment is not None else {}),
             )
@@ -95,7 +95,7 @@ def run_agy_structured(
         raise AgyProviderError(f"agy timed out after {timeout_sec}s") from exc
     if result.returncode != 0:
         # stdout/stderr 来自外部 CLI；不得把可能回显输入的内容带入数据库、日志或审计产物。
-        detail = _safe_failure_category(result.stderr or result.stdout)
+        detail = _safe_failure_category((result.stderr or "") + "\n" + (result.stdout or ""))
         raise AgyProviderError(f"agy exit {result.returncode}: {detail}")
     try:
         envelope = json.loads(result.stdout)
@@ -103,6 +103,9 @@ def run_agy_structured(
         raise AgyProviderError("agy returned invalid JSON envelope") from exc
     structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
     if not isinstance(structured, dict):
+        category = _safe_failure_category((result.stderr or "") + "\n" + (result.stdout or ""))
+        if category in {"AGY_AUTH_REQUIRED", "location ineligible", "timeout"}:
+            raise AgyProviderError("agy: " + category)
         raise AgyProviderError("agy returned no structured_output")
     if include_usage:
         return {"structured_result": structured, "usage": envelope.get("usage")}
@@ -117,7 +120,10 @@ def _safe_failure_category(value: str | None) -> str:
         return "local startup blocked"
     if "invalid_argument" in text and ("schema" in text or "function_declarations" in text):
         return "invalid schema"
-    if "eligibility check failed" in text or "not currently available in your location" in text:
+    if any(token in text for token in ("agy_auth_required", "authentication required", "not logged in", "login required")):
+        return "AGY_AUTH_REQUIRED"
+    if any(token in text for token in ("eligibility check failed", "not currently available in your location",
+                                      "location_unsupported", "location ineligible", "user location is not supported")):
         return "location ineligible"
     if any(token in text for token in ("model unavailable", "unknown model", "unsupported model", "model not found")):
         return "model unavailable"

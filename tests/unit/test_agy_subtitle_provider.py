@@ -21,8 +21,8 @@ def _processor() -> AutoCaptionProcessor:
 def test_agy_subtitle_candidate_keeps_alignment_and_filters_non_substring_vocab(mock_agy):
     mock_agy.return_value = {
         "items": [
-            {"id": 1, "translation": "市场波动正在加剧。", "vocab": {"volatility": "波动", "bad": "不存在"}},
             {"id": 0, "translation": "基金最终募集规模达490亿美元。", "vocab": {"final close": "最终募集", "fund": "基金"}},
+            {"id": 1, "translation": "市场波动正在加剧。", "vocab": {"volatility": "波动", "bad": "不存在"}},
         ]
     }
 
