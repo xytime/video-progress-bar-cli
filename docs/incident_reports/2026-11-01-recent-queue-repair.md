@@ -414,3 +414,20 @@ DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送�
 上线前在独立媒体副本调用正常_generate_ass_file完整处理65段，绑定原片SHA与真实视频流时长，最大实际宽928.2359375/940、高342/350，已全部通过；原画面675x1200保留，未裁切或擦字。证据7146-full-ass-layout-proof-r30.json、外置title-layout-proof-r30/ASS和plan。首轮完整源OCR缓存4944/4944帧核验摘要一致、含中文OCR帧0，片头标题持续0–3.8秒，证据7146-source-ocr-review-r29.json。正式全片渲染、解码和画面验收另记，不提前算成功。
 
 原授权后台在13:33将7042推进PUBLISHING，13:35:59自然结束为UNCERTAIN；原因明确“已执行发表操作；按当前策略不自动查询结果”，原生ID仍缺，submission_protected保护保持。没有将PUBLISHING或UNCERTAIN计为公开交付，未手工重投/查询；新事实纳入后续一致备份，不能沿用先前5条全在等待封面的过时计数。
+
+
+## 13:48 BJ：字幕故障完整验收、运行采用及剩余队列
+
+提交08b810d3d7f96111465723674c88cef354cc0762已推送，原生部署0da16ba038ed48e69ff8b7c43f1f7df0（deployment-r43）13:44:53完成9步，verify.ok=true；5类驻留角色实际PID/出生时间/工作目录及源码摘要81ef0b5e18d456d4a33a14b0d3c826218fe7c364bbf66057cd48514f6b74924d一致，RUNNING282、unknown为空。运行候选及独立提交源各72项隔离通过、6项既有告警，边界探针和pytest均0：video-pytest-y2vxiptm / df325824d4500fd13872f1cba7cceec503fcf470b453da827a8cc7449d10053e；video-pytest-es_q69bs / 089f3a1047fc09792c77f370f261a408f0328b760db759e16f7b1fcc2506e16f。证据r30-validation.json、runtime-adopted-r30.json、r30-push.log。
+
+部署r41/r42在计划阶段遇周期任务SCHEDULE_JOB_ACTIVE，未生成计划或更改运行。r43冻结后第一次现场检查因正在自然退出的工作返回MAINTENANCE_NOT_IDLE；维护版本281及原计划保留，未改写日志/锁/身份。随后只读逐项核实已冻结、无活跃/未知、原生verify(freeze)通过且reconcile=DONE，交回原生recover完成剩余步骤，不使用只支持尚未冻结状态的partial-freeze恢复器。
+
+#7146正式复用65段原ASR与完整译文，在具名登记的74字号上限内完成164.861678秒成片（24760937字节），SHA256 bbd5f4a271cefff7ecffe729abeb7462da58340f8599da375a75d5f326b4e699。质量clean、段级问题0、全局告警0；原ASR字节及全部时间轴不变。第16段中文“我在”纠正为“我妈妈在”，保留原检查点、前后文本及本会话Codex/model unknown审计；本次外部供应商请求0。全片解码无错误，实际查看首中尾及35.76–40.72秒原超宽长句，完整英文、妈妈修译及中英高亮均在安全区。82.43秒灰白原画面已与同刻原片核对一致。证据reviewed-title-validation-r30/7146/result.json、full-decode.log、frame-review.json；不能再把此前r28/r29失败算成功。
+
+#7031因登记实现摘要改变而依当前配置重烧录，完整38段、121.579683秒，成片SHA256仍为7c29cd943a78cc88bf843e7d7f97bc43f274b0ba37cae752bea3e20303128628，ASR与译文未改，外部供应商请求0。全片解码和首中尾实际画面均通过，证据reviewed-title-validation-r30/7031/。两条成功回执原字节登记到正常同源subtitle_recovery目录，created_at和全部绑定不改，当前正常读取器重新验证成功，记录r30-completion-evidence-registration.json。#7146无结构化恢复链需要解除，原FAILED/source AUTO/score91、publication_review_required=1与原失败记录保留；本轮未调用retry/发布，娱乐选题仍待人工复核。
+
+13:46实际后台8条证据接口均HTTP200、success=true；#7031/#7059/#7065/#7121均AI_COVER_PENDING、RECOVERED_PENDING_DELIVERY、unresolved=false。#7042由原流水线提交后UNCERTAIN，不再等封面；#7012/#7146仍PUBLICATION_POLICY_GATE，#7137仍CONTENT_CENSOR_BLOCK。当前已知字幕技术问题均有完成证据，未将内容审核分类本身当作技术修复。后台及5类驻留角色再次核对实际源码摘要通过，证据r30-live-api-readback.json。
+
+13:46一致备份：滚动24小时34条历史失败事件涉及24条任务，其中4条已恢复等封面、15条投稿待核实、5条内容/策略门禁；滚动48小时41条事件涉及29条任务，其中4条等封面、18条待核实、7条内容/策略门禁。原始固定48小时31条仍单独保留比较，当前4条等封面、19条待核实、8条内容/策略门禁；历史事件没有删除，不能靠窗口老化制造清零。当前已知字幕技术未解0，不等于全部异常0或视频已发布。
+
+逐条只读核验固定及滚动队列合计19条UNCERTAIN：原生作品ID绑定均0，19条提交保护全部保持，未查平台、重投或伪造确认；#7042原记录明确按当前策略不自动查询结果。剩余8条内容/策略人工复核也逐条列出，不豁免现有题材政策。证据live-audits/20261101T054619Z/audit.json、uncertain-native-records-r30.json、human-review-queue-r30.md。后续需要实际平台回执及内容审核结论才可真实闭环，不能用技术重试清掉这些记录。
