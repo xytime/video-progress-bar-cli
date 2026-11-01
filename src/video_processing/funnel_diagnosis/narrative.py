@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 显示已核验字幕完成的时间、成片与回执摘要，公开交付仍独立核实。 |
 | 1.2.0 | 2026-11-01 | Codex | 跳过原因沿用实际恢复项证据，不虚构版本变更或监督器退出。 |
 | 1.1.0 | 2026-10-29 | Codex | 当前受影响任务族互斥主态、恢复历史分离、统一证据时间与真实运行观测。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 实现按主任务族去重的三层汇总、原因聚合排序、事实/推测/建议证据组装与确定性诊断句生成。 |
@@ -48,6 +49,9 @@ def attach_task_evidence(
         facts.append(f"失败事件 #{ev.get('id')}: {format_bj_timestamp(ev.get('failed_epoch'), str(ev.get('failed_at') or ''))} 状态={ev.get('status')}")
     for item in task.recovery_items[:3]:
         facts.append(f"恢复项 #{item.get('id')}: 状态={item.get('state')}，原因={item.get('reason') or '无'}，批次={item.get('op_state') or '未知'}")
+    if task.caption_completion_evidence:
+        proof = task.caption_completion_evidence
+        facts.append(f"字幕同源完成回执：{format_bj_timestamp(proof.get('completed_epoch'))}；成片 SHA256={proof.get('output_sha256')}；回执 SHA256={proof.get('receipt_sha256')}")
     if not task.runtime_observation_available:
         facts.append("任务锁/进度：当前观测不可用（不是未占用）")
     elif task.has_active_task_lock:

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 增加独立核验的同源字幕成片完成证据，不替代平台投递回执。 |
 | 1.1.0 | 2026-10-29 | Codex | 补充来源、运行观测可用性与独立公开证据，避免未知状态推断成功。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 初始创建入库批次异常诊断分类、处理状态、任务事实与聚合结果数据类。 |
 """
@@ -147,6 +148,7 @@ class TaskUnitFacts:
     caption_stage: Optional[str] = None
     caption_stage_started_epoch: Optional[float] = None
     caption_progress_updated_epoch: Optional[float] = None
+    caption_completion_evidence: Optional[dict[str, Any]] = None
     failure_events: tuple[dict[str, Any], ...] = ()
     recovery_items: tuple[dict[str, Any], ...] = ()
     subtitle_recovery: Optional[dict[str, Any]] = None

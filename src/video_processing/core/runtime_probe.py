@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 仅对已进封面且缺少恢复证明的字幕故障，读取并重验正常同源完成回执。 |
 | 1.2.0 | 2026-10-29 | Codex | 正确读取配置，保留锁/进度/窗口观测失败，统一观测时间。 |
 | 1.1.0 | 2026-10-29 | Antigravity | 修复规范化授权状态文件路径（移除多余前导点）、支持 requests.json 重新登录检测与 market 窗口 epoch 透传。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 初始创建运行环境锁快照、任务锁与进度文件只读探测能力。 |
@@ -19,6 +20,9 @@ from typing import Any, Optional, Sequence
 
 from ..funnel_diagnosis.models import RuntimeEnvironmentFacts, TaskUnitFacts
 from ..funnel_diagnosis.rules import format_bj_timestamp
+from ..funnel_diagnosis.delivery_rules import (
+    has_recovery_completion_proof, latest_failure_epoch, needs_caption_completion_proof,
+)
 from .task_lease import read_lease_owner
 
 
@@ -230,6 +234,11 @@ def enrich_task_facts_with_runtime(
     task_owner = _observe(lambda: read_task_lease_owner(out / "task_locks" / f"{prefix}.lock"), {}, errors, "task_lease")
     cp = _observe(lambda: read_caption_progress(out, prefix), {}, errors, "caption_progress")
     alive = _observe(lambda: is_pid_alive(task.process_pid) or is_pid_alive(task_owner.get("pid")), False, errors, "process")
+    completion = None
+    if needs_caption_completion_proof(task) and not has_recovery_completion_proof(task, time.time()):
+        from ..utils.caption_completion_evidence import read_caption_completion
+        completion = _observe(lambda: read_caption_completion(out, prefix, latest_failure_epoch(task)),
+                              None, errors, "caption_completion")
 
     return replace(
         task,
@@ -238,6 +247,7 @@ def enrich_task_facts_with_runtime(
         caption_stage=cp.get("stage"),
         caption_stage_started_epoch=cp.get("stage_started_epoch"),
         caption_progress_updated_epoch=cp.get("updated_epoch"),
+        caption_completion_evidence=completion,
         process_alive=alive,
         runtime_observation_available=not errors,
         runtime_observed_at_bj=format_bj_timestamp(time.time()),

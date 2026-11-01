@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 字幕故障后到达封面阶段时接受经宿主校验的同源成片回执，保留非字幕及投递故障。 |
 | 1.0.0 | 2026-10-29 | Codex | 集中提交待核优先级、独立公开证据与故障解除证据校验。 |
 """
 from __future__ import annotations
@@ -115,4 +116,21 @@ def has_recovery_completion_proof(task: TaskUnitFacts, now_epoch: float) -> bool
         completed = evidence_epoch(record.get("updated"))
         if record.get("state") == "PUBLISHED" and completed is not None and failed < completed <= now_epoch:
             return True
+    if needs_caption_completion_proof(task):
+        completed = evidence_epoch((task.caption_completion_evidence or {}).get('completed_epoch'))
+        if completed is not None and failed < completed <= now_epoch:
+            return True
     return False
+
+
+def needs_caption_completion_proof(task: TaskUnitFacts) -> bool:
+    """仅核验已经过字幕阶段的字幕故障；后续上传/封面失败不能靠字幕完成解除。"""
+    if task.status != 'AI_COVER_PENDING' or has_unresolved_submission(task):
+        return False
+    latest = max(task.failure_events,
+                 key=lambda e: evidence_epoch(e.get('failed_epoch') or e.get('failed_at')) or 0,
+                 default={})
+    reason = str(latest.get('reason') or '')
+    return ('wechat_uploader' not in reason and any(marker in reason for marker in
+            ('cli.commands.auto_caption', 'cli/commands/auto_caption.py',
+             '[NativeCaptionReview]', 'SUBTITLE_NEEDS_REPAIR')))

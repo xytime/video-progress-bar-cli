@@ -359,3 +359,31 @@ DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送�
 #7042严格重验原缓存245/283段，具名本会话补全剩余38段，原ASR及时间轴未变，原600.489920084秒预算未重置。全部283段当前合同质量clean，无段级或全局告警。正常处理器实际复用ASR及翻译后完整渲染733.216秒成片，全量解码无错，首、中、尾画面已实际查看。成片SHA256 26307677b9700d67a9c7ccea49f0d8fdae104a905454361cf5ef583052ee4056，provider_requests=0。证据7042-current-repairable-cache.json、local-explicit-repair-7042/candidate.json、production-caption-validation/7042/。恢复队列和后续平台状态另记，不冒充公开发布。
 
 12:38现场#7031、#7059已FAILED且无实际进程/内核任务锁，caption_progress残留心跳仍在900秒窗口，诊断误报RUNNING并隐藏修复入口。最小修复在实际进程/锁保护之后识别FAILED，不再让旧心跳遮蔽失败；仍保留真实运行、未知观测、提交保护与原失败事件，不改变业务状态或计数。旧源码真实回归6失败3通过（video-pytest-r7jfkakf / 9635466fb3afc91091b3ac6b7ac047cdcbd6740e651291e5d665bd6948bf74af）；新源码9项加既有诊断规则共65项隔离通过（video-pytest-dhpt864h / cd5909bf730f0eec026bc565d82cb01041a009efecbda3d936128d181fe42cab）。首轮测试夹具缺少必填now_bj_iso，在复现前已修正，未将该夹具失败当作业务RED。完整提交源与实际采用另记。
+
+
+## 13:02 BJ：失败心跳诊断实际采用与最后一批字幕补全
+
+提交 `4e0f1d8715db8169236448fefcb16c1ada6e8357` 已推送。原生部署 `6cff3fe4158b45cd99f66e0aafa1e79d`（deployment-r37）完成9步、verify.ok=true；5类运行角色核对源码摘要 `d62752a47e41627d04a6273395eda0a421bdf74918684c8367f07ab148f01b5f`，维护恢复RUNNING274、unknown为空。运行候选与独立提交源各240项隔离通过、11项既有告警，证据分别 `video-pytest-gxqsi7wi` / `87f80c348439b5f56f72c905905ef1abbdaebc927f9b437a428e8bc970155824`、`video-pytest-pelzrsmz` / `0f8739d55f04758fddae2a118d35d6cb10a40422fd6cfa103b427fa06ef026d0`。运行与推送证据 runtime-adopted-r26.json、r26-push.log。排空期间短暂SCHEDULE_JOB_ACTIVE按原闸门版本273保留现场，周期任务自然结束后重验同一计划并完成原生恢复；未强停、改锁或改写部署账本。
+
+#7031按已复核large-v3的38段ASR与原完整译文重验当前合同，全片121.579683秒渲染与解码通过；成片SHA256 `7c29cd943a78cc88bf843e7d7f97bc43f274b0ba37cae752bea3e20303128628`。#7121复用原127段ASR及译文，825.725011秒全片验证通过，成片SHA256 `dc95a552f063dd24bd0edec69b2d73d13e7ed6452fa1fcca8b9b643815dcc2c7`；原金额全局告警和不可变坏例保留。两条首中尾真实画面均已查看，ASR与译文字节不变、无供应商调用；依有效同源成功回执，经正常DAL和带版本校验的原生retry入口13:02恢复，均实际PROCESSING。证据 completed-revalidation-current/7031/、completed-revalidation-current/7121/、7031-native-restoration.json、7121-native-restoration.json。局部数字跨行记录为后续版式改进，不阻断完整字幕视频。
+
+#7042经原生恢复后12:59已到AI_COVER_PENDING，字幕技术故障已越过；#7137字幕恢复后命中Social Unrest Review（抗议、爆发）题材门禁，保留人工审核，不予内容豁免。
+
+最后三条本会话具名补译：#7059严格缓存215段并补248段，共463段；#7065当前合同无可复用完整候选，补105段；#7012严格缓存145段并补74段，共219段。三者均通过当前完整候选质量门且clean，原ASR、全部时间轴不变；本次provider_requests=0。#7059原600.259836709秒耗尽账本、#7012原299.235897375/600秒账本均未重置；#7065原Codex账本不存在，未为补全创建账本。#7012本次native失败为供应商窗口耗尽，不能描述成其累计600秒耗尽。全片渲染/解码及真实抽帧验证正在既有全局FFmpeg单名额下顺序进行，未把候选完整当作成片完成。
+
+只读复核初始固定队列18条UNCERTAIN：均缺原生作品ID及独立公开回读证据，全部保留submission_protected；未查询平台、未重投、未伪造确认。另整理7条内容/发布策略待复核，证据 uncertain-native-records-r26.json、human-review-queue-r26.md。它们不能通过删除失败事件或清状态制造清零。
+
+
+## 13:15 BJ：最后三条全片完成与逐条原生恢复
+
+#7059完成2614.171995秒全片，SHA256 `ffead00bb32071605ba1aab47eb8820a005643e5aba42c11ef0d7a73df8242fd`；#7065完成375.442993秒全片，SHA256 `4207ea188b3d2c920780d7d527c6007296dc19e9d1e5f3bc70ece16d4d75d283`；#7012完成970.106009秒全片，SHA256 `3153ffa91aaa1789fa557c661f77e6d2d73785af7d0253de88c3903d1730df20`。全部经过完整解码及首中尾真实画面查看，当前质量clean，无段级或全局告警，原ASR与预算账本字节保持不变，本次外部供应商请求0。每条frame-review.json绑定实际输出摘要。#7059、#7065经同源成功回执、正常DAL及带版本校验的原生retry入口13:15恢复，均实际PROCESSING，未直发平台。
+
+#7012完整字幕技术问题已经解决、原修复链同源解除；另按既有AGENTS.md及受众题材规则核验，其为泛个人成长/艺术与社交媒体坚持类演讲，AUTO评分50且无人工内容批准。只启用现有publication_review_required人工闸，状态、评分、来源、原错误及发布许可未改，未调用retry/发布入口。技术完成与内容复核分别记录，不能把分类改变本身算技术修复。证据production-caption-validation/7012/、7012-validated-policy-hold.json及链前后快照。
+
+## 13:20 BJ：普通字幕故障的恢复完成证据缺口
+
+#7031已在13:12:35原生推进至AI_COVER_PENDING，但它此前不是结构化字幕恢复链，现有诊断只识别RESOLVED链或PUBLISHED恢复项，遗漏已经验证的正常同源成片。13:17一致备份显示：原始24小时20条技术未解0、投递待核实14、策略4；原始48小时31条仍有1条恢复凭据未识别、投递待核实18、策略8。最近滚动24/48小时同样只剩该1条技术诊断项。没有删除历史事件或把进入封面阶段直接当作恢复证明。
+
+修复只为已进AI_COVER_PENDING且最后失败明确来自auto-caption的任务，读取正常subtitle_recovery目录的真实成功回执，重新校验原片、ASR、完整译文、当前合同模块/配置、ASS及COMPLETE成片摘要，并要求完成时间晚于最后失败。旧回执、错误来源/合同、未完成/损坏产物不接受；上传/封面故障、NEEDS_REPAIR、提交待核实、策略及观测未知继续保护。只读诊断显示同源成片与回执摘要，不改变队列或投递状态。
+
+#7031将此前已签发并验证的真实成功回执原字节复制到正常同源目录，created_at与全部绑定不改；原始调查回执仍保留，证据7031-completion-evidence-registration.json。运行候选首轮相关139项隔离通过，video-pytest-qx9_whmw / 0e98082dd731956c4d9e9af000df38762417af4ef437b694d7df9c82fb32c329。一次扩大测试命令误列不存在的test_deployment_control.py，收集退出4、未执行测试，保留video-pytest-s15b7z2r；更正为实际部署测试文件后重验，最终提交源与运行采用另记。
