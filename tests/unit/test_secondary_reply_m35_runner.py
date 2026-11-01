@@ -291,8 +291,9 @@ def test_agy_secondary_reply_provider_guardrails_and_schema_validation(monkeypat
         "http_proxy", "https_proxy", "all_proxy",
     ):
         monkeypatch.delenv(key, raising=False)
+    # Pydantic Settings forbids setattr of methods on the instance; patch the class.
     monkeypatch.setattr(
-        settings,
+        type(settings),
         "get_active_proxies",
         lambda *a, **k: {
             "HTTP_PROXY": "http://127.0.0.1:7890",
