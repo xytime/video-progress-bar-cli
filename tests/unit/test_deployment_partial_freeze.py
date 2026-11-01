@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 真实跨进程角色锁证明自然退出可接续，活进程空锁和新增身份继续闭锁。 |
 | partial-freeze-v1 | 2026-10-26 | Codex | 版本/身份/在途/账本/调度漂移、崩溃及真实冻结后原recover判定。 |
 """
 import json
@@ -143,3 +144,63 @@ def test_real_cli_routes_explicit_recovery_and_refuses_new_plan(tmp_path,extra,c
     assert process.returncode==2
     assert json.loads(process.stdout)['code']==code
     assert not (directory/'journal.json').exists()
+
+
+def _planned_child(partial):
+    p = partial
+    from video_processing.core.maintenance_runtime import process_birth
+    from video_processing.core.task_lease import read_lease_owner
+    role = 'publishing-recovery-worker'
+    path = p.host.control.path.with_suffix('.workers') / (role + '.lock')
+    script = ("from pathlib import Path; import sys; "
+              "from video_processing.core.task_lease import TaskLease; "
+              "lease=TaskLease(Path(sys.argv[1])); lease.__enter__(); "
+              "print('locked',flush=True); sys.stdin.readline(); lease.__exit__(); "
+              "print('released',flush=True); sys.stdin.readline()")
+    child = subprocess.Popen([sys.executable, '-c', script, str(path)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == 'locked'
+    owner = dict(read_lease_owner(path), role=role, birth=process_birth(child.pid))
+    p.host.plan['retirement']['owners'][role] = owner
+    p.row['plan'] = deployment.digest(p.host.plan)
+    write_json(p.host.directory/'journal.json', p.row)
+    return child, role, owner
+
+
+def test_planned_worker_natural_exit_is_proved_without_changing_plan_or_gate(partial):
+    p = partial
+    child, role, owner = _planned_child(p)
+    child.communicate('release\nexit\n', timeout=10)
+    assert child.returncode == 0
+    before_plan = json.dumps(p.host.plan, sort_keys=True)
+    before_gate = p.host.control.path.read_bytes()
+    complete_partial_freeze(p.host, p.version)
+    receipt = json.loads((p.host.directory/'partial-freeze-recovery.json').read_text())
+    assert receipt['exited_owners'] == {role: owner}
+    assert receipt['state'] == 'FROZEN_VERIFIED'
+    assert json.dumps(p.host.plan, sort_keys=True) == before_plan
+    assert p.host.control.path.read_bytes() == before_gate
+    assert Deployment(p.host.plan, p.host.directory, p.host).status() == p.row
+    assert p.host.reconcile(p.row) == 'DONE'
+
+
+def test_missing_worker_with_live_original_pid_refuses_even_after_kernel_lock_released(partial):
+    p = partial
+    child, role, owner = _planned_child(p)
+    try:
+        child.stdin.write('release\n'); child.stdin.flush()
+        assert child.stdout.readline().strip() == 'released'
+        assert child.poll() is None
+        with pytest.raises(DeploymentDenied, match='OWNER_STILL_ALIVE'):
+            complete_partial_freeze(p.host, p.version)
+        assert not mutations(p.commands)
+    finally:
+        child.communicate('exit\n', timeout=10)
+
+
+def test_unplanned_worker_refuses_partial_freeze_before_any_mutation(partial):
+    p = partial
+    p.injection['workers']['new-worker'] = dict(role='new-worker', pid=999, birth='new')
+    with pytest.raises(DeploymentDenied, match='OWNER_DRIFT'):
+        complete_partial_freeze(p.host, p.version)
+    assert not mutations(p.commands)

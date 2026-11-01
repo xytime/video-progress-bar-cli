@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 接受计划内任务自然退出，仍逐项核对真实锁和原PID已消失，保留活跃及未知身份拒绝。 |
 | partial-freeze-v1 | 2026-10-26 | Codex | 维护版本/计划/身份/源码/调度/账本闭锁，完成真实冻结后交回原生recover。 |
 """
 from pathlib import Path
@@ -20,7 +21,8 @@ def complete_partial_freeze(host, expected_version):
     """只支持准确的闸门关闭阶段；真正冻结并验证后，原引擎才可确认该步骤。"""
     from video_processing.core.deployment import Deployment, require, project_lock, write_json
     from video_processing.core.deployment_host import retirement_owners
-    from video_processing.core.maintenance_runtime import inspection, code_hash
+    from video_processing.core.maintenance_runtime import inspection, code_hash, process_birth
+    from video_processing.core.task_lease import read_lease_owner
     from video_processing.db.database import PipelineDB
 
     def control_check():
@@ -44,13 +46,29 @@ def complete_partial_freeze(host, expected_version):
         raw = inspection(host.control, retiring_workers=owners)
         require(raw['version'] == expected_version and not raw['active']
                 and raw['unknown'] == [{'code': 'SOURCES_NOT_VERIFIED'}], 'PARTIAL_FREEZE_NOT_IDLE')
-        require(owners.get('ui') and raw['workers'] == owners, 'PARTIAL_FREEZE_OWNER_DRIFT')
+        require(owners.get('ui') and raw['workers'].get('ui') == owners['ui']
+                and all(owners.get(role) == row for role, row in raw['workers'].items()),
+                'PARTIAL_FREEZE_OWNER_DRIFT')
+        exited_owners = {}
+        for role, owner in owners.items():
+            if role in raw['workers']:
+                continue
+            # 在途任务自然退出会释放角色锁；不能要求已经消失的 worker 仍持锁。
+            # 原 PID 仍存在、被复用或无法读取均拒绝，绝不只相信空锁文件。
+            require(not read_lease_owner(host.control.path.with_suffix('.workers') / (role + '.lock')),
+                    'PARTIAL_FREEZE_OWNER_DRIFT')
+            try:
+                process_birth(owner['pid'])
+            except ProcessLookupError:
+                exited_owners[role] = owner
+            else:
+                require(False, 'PARTIAL_FREEZE_OWNER_STILL_ALIVE')
         require(not PipelineDB.maintenance_active_work(host.root / 'output/pipeline.db'),
                 'PARTIAL_FREEZE_UNFINISHED_LEDGER')
         intent = {'schema': 1, 'plan_id': host.plan['id'], 'version': expected_version,
                   'source_hash': code_hash(), 'at': time.time(), 'state': 'VERIFIED_UNFROZEN',
                   'tool_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                  'workers': raw['workers'], 'control_at': state['at']}
+                  'workers': raw['workers'], 'exited_owners': exited_owners, 'control_at': state['at']}
         write_json(host.directory / 'partial-freeze-recovery.json', intent)
         control_check()
         # 原生freeze再次校验原调度、Bot身份及无在途，按原计划冻结，绝不自行解锁/开闸。
