@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 跳过原因沿用实际恢复项证据，不虚构版本变更或监督器退出。 |
 | 1.1.0 | 2026-10-29 | Codex | 当前受影响任务族互斥主态、恢复历史分离、统一证据时间与真实运行观测。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 实现按主任务族去重的三层汇总、原因聚合排序、事实/推测/建议证据组装与确定性诊断句生成。 |
 """
@@ -69,8 +70,8 @@ def attach_task_evidence(
 def _infer_and_recommend(diag: TaskAnomalyDiagnosis) -> tuple[str, str]:
     if diag.is_uncertain_delivery:
         return "提交证据未完成核对，平台可能已受理；身份回执与公开可见性需分别核实。", "请通过平台回执核实入口核对视频号后台，确认前严禁直接重发。"
-    if diag.cause_code == "RECOVERY_SKIPPED_SUPERVISOR_STOPPED":
-        return "恢复批次入队后任务版本发生变化，触发防误发跳过保护，且原批次已结束、监督进程已退出。", "请重新打开恢复预览生成新版本快照后入队。"
+    if diag.cause_code == "RECOVERY_ITEM_SKIPPED":
+        return "该恢复项已跳过且未取得完成证据，原因以恢复项记录为准。", "请重新打开恢复预览生成新版本快照后入队。"
     if diag.category == AnomalyCategory.QUALITY_POLICY_BLOCK.value:
         return "命中内容审核、题材风险或频道策略门禁（不计入系统执行故障）。", "请人工复核并遵守既有发布前审查门禁。"
     if diag.handling_state == HandlingState.WAITING_CONDITION.value:

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 恢复项跳过仅报告已知状态，不推断监督停止且保留当前运行及审核优先级。 |
 | 1.2.0 | 2026-11-01 | Codex | 将 OCR 预算耗尽与对白字幕不完整分开诊断，保留质量门禁及原始错误。 |
 | 1.1.0 | 2026-10-29 | Codex | 提交证据优先、恢复凭据验证、未知运行观测保护及阶段化停滞。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 实现六大异常分类、尾部异常签名提取、字幕子阶段细分、锁探活保护与处理状态推导。 |
@@ -189,14 +190,15 @@ def _evaluate_special_states(
                 "latest_progress": f"恢复项状态 {r_state}（入队未完成≠已恢复）", "handling_state": HandlingState.QUEUED.value,
                 "next_step": "等待恢复监督器执行", "action_kind": "none", "unresolved": True, "is_system_fault": True, "is_stalled": False, "is_recovered": False,
             }
-        if r_state == "SKIPPED" and (latest.get("op_state") in ("COMPLETED", "CANCELLED", None) or not env.recovery_worker_lock_held):
+        if (r_state == "SKIPPED" and not active
+                and extract_tail_error_signature(task)[0] != AnomalyCategory.QUALITY_POLICY_BLOCK.value):
             upd_ep = float(latest.get("updated") or env.now_epoch)
             reason = str(latest.get("reason") or "预览后任务已变化，未执行")
             return {
-                "category": AnomalyCategory.FLOW_STALL.value, "cause_code": "RECOVERY_SKIPPED_SUPERVISOR_STOPPED",
-                "cause_title": "恢复已入队，因任务变化被跳过且监督已停止", "stage": "发布恢复 (PUBLISHING_RECOVERY)",
-                "reason_summary": f"恢复项被跳过（{reason}），恢复批次已结束且监督进程已退出", "occurred_epoch": upd_ep, "occurred_at": format_bj_timestamp(upd_ep), "time_estimated": False,
-                "latest_progress": f"恢复项 SKIPPED（{reason}）；批次 {latest.get('op_state') or 'COMPLETED'}", "handling_state": HandlingState.MANUAL_REQUIRED.value,
+                "category": AnomalyCategory.FLOW_STALL.value, "cause_code": "RECOVERY_ITEM_SKIPPED",
+                "cause_title": "恢复项被跳过，需要重新预览", "stage": "发布恢复 (PUBLISHING_RECOVERY)",
+                "reason_summary": f"恢复项被跳过（{reason}）；批次当前状态 {latest.get('op_state') or '未知'}", "occurred_epoch": upd_ep, "occurred_at": format_bj_timestamp(upd_ep), "time_estimated": False,
+                "latest_progress": f"恢复项 SKIPPED（{reason}）；批次 {latest.get('op_state') or '未知'}", "handling_state": HandlingState.MANUAL_REQUIRED.value,
                 "next_step": "重新生成恢复预览并入队", "action_kind": "open_recovery_preview", "unresolved": True, "is_system_fault": True, "is_stalled": True, "is_recovered": False,
             }
     if extract_tail_error_signature(task)[0] == AnomalyCategory.QUALITY_POLICY_BLOCK.value:

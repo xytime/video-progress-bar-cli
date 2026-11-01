@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-11-01 | Codex | 恢复跳过不虚构批次或监督器退出，不遮蔽当前运行和审核保护。 |
 | 1.2.0 | 2026-11-01 | Codex | 覆盖 OCR 预算分类、相邻原因不退化、原始证据及投稿保护优先级。 |
 | 1.1.0 | 2026-10-29 | Codex | 覆盖冲突提交、公开证据、恢复凭据、互斥分母、配置与运行未知边界。 |
 | 1.0.0 | 2026-10-29 | Antigravity | 覆盖六大异常分类、恢复跳过、避让vs停滞、分集去重、防误导门禁及真实报错尾部提取。 |
@@ -112,11 +113,38 @@ def test_scenario_3_recovery_skipped_and_supervisor_stopped():
     diag = diagnose_task_unit(task, _env(recovery_worker_lock_held=False))
     assert diag is not None
     assert diag.category == AnomalyCategory.FLOW_STALL.value
-    assert diag.cause_code == "RECOVERY_SKIPPED_SUPERVISOR_STOPPED"
+    assert diag.cause_code == "RECOVERY_ITEM_SKIPPED"
     assert diag.handling_state == HandlingState.MANUAL_REQUIRED.value
     assert diag.is_stalled is True
     assert diag.unresolved is True
     assert "预览后任务已变化" in diag.reason_summary
+
+
+@pytest.mark.parametrize('worker_held', [False, True])
+@pytest.mark.parametrize('op_state', ['QUEUED', 'COMPLETED', None])
+def test_skipped_item_does_not_invent_batch_or_worker_exit(worker_held, op_state):
+    task = TaskUnitFacts(video_id=1, youtube_id='x', status='FAILED', error_msg='technical failure',
+                         recovery_items=({'state': 'SKIPPED', 'op_state': op_state,
+                                          'reason': '预览后任务已变化，未执行', 'updated': NOW_EPOCH - 60},))
+    result = evaluate_cohort_diagnosis([task], _env(recovery_worker_lock_held=worker_held))
+    diag = result['tasks'][0]
+    assert diag.cause_code == 'RECOVERY_ITEM_SKIPPED'
+    assert diag.action_kind == 'open_recovery_preview'
+    assert diag.unresolved and not diag.is_recovered
+    for value in [diag.reason_summary, diag.cause_title, *diag.inferences]:
+        assert '监督' not in value and '进程已退出' not in value and '批次已结束' not in value
+
+
+def test_old_skipped_item_does_not_override_new_task_or_review():
+    task = TaskUnitFacts(video_id=1, youtube_id='x', status='TRANSCRIBING',
+                         has_active_task_lock=True,
+                         recovery_items=({'state': 'SKIPPED', 'op_state': 'COMPLETED',
+                                          'updated': NOW_EPOCH - 60},))
+    diag = diagnose_task_unit(task, _env())
+    assert diag.handling_state == HandlingState.RUNNING.value and not diag.is_stalled
+    review = replace(task, status='FAILED', has_active_task_lock=False, publication_review_required=True)
+    diag = diagnose_task_unit(review, _env())
+    assert diag.category == AnomalyCategory.QUALITY_POLICY_BLOCK.value and not diag.is_system_fault
 
 
 @pytest.mark.parametrize(("reason", "expected_code"), [

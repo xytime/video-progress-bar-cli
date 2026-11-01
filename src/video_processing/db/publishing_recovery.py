@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| cover-wait-maintenance-v1 | 2026-11-01 | Codex | 维护中精确对账已退出的封面等待恢复项，不变更视频或许可。 |
+| 1.2.0 | 2026-11-01 | Codex | 恢复版本排除监控热度及刷新时间，保留全部执行与审核字段绑定。 |
 | 1.0.0 | 2026-10-23 | Codex | 增量失败时间、预览绑定、幂等批次与逐项领取／取消。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 发布恢复等待与启动事务复核字幕冷却，禁止清账绕过。 |
 """
@@ -15,10 +17,86 @@ import uuid
 
 
 def revision(video):
-    return hashlib.sha256(json.dumps(dict(video), sort_keys=True, default=str).encode()).hexdigest()
+    """统计刷新不改变恢复意图；新字段仍默认参与校验，旧快照须重新预览。"""
+    decision = {key: value for key, value in dict(video).items()
+                if key not in {"updated_at", "view_count", "like_count"}}
+    return hashlib.sha256(json.dumps(decision, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class PublishingRecoveryDAL:
+    @staticmethod
+    def maintenance_finish_stopped_cover_wait(path, *, expected_item, expected_video, pid, expected_version):
+        """只对账已退出且进入封面等待的恢复项；不改视频、许可或投稿账本。
+
+        调用方保存冻结来源与旧进程证据；本事务复验维护版本、准入、内核锁、
+        精确原记录与所有平台提交保护。PID 不确定、状态漂移均拒绝。
+        """
+        import fcntl
+        import os
+        import re
+        import sqlite3
+        from contextlib import ExitStack, closing
+        from pathlib import Path
+        from config.settings import settings
+        from ..core.maintenance import gate, MaintenanceDenied
+
+        out = settings.default_output_dir.resolve()
+        if Path(path).resolve() != out / "pipeline.db":
+            raise ValueError("RECOVERY_DATABASE_MISMATCH")
+        if (expected_item.get("state") != "RUNNING"
+                or expected_video.get("status") != "AI_COVER_PENDING"
+                or expected_item.get("video_id") != expected_video.get("id")
+                or not expected_video.get("error_msg")
+                or expected_video.get("source") in {"COMPLIANCE_REMIX", "DISCOVERY"}
+                or type(pid) is not int or pid < 1):
+            raise ValueError("RECOVERY_RECORD_INVALID")
+        control = gate()
+        with control._locked(), ExitStack() as locks:
+            state = control._read()
+            active, unknown = control._leases()
+            if state["state"] != "MAINTENANCE" or state["version"] != expected_version or active or unknown:
+                raise MaintenanceDenied("NOT_VERIFIED_IDLE")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise ValueError("RECOVERY_PID_PRESENT")
+            prefix = expected_video["youtube_id"]
+            if int(expected_video.get("slice_index") or 0):
+                prefix += f"_s{expected_video['slice_index']}"
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+                raise ValueError("RECOVERY_PREFIX_INVALID")
+            paths = (out / "pipeline.lock", out / "task_locks" / (prefix + ".lock"),
+                     out / "publishing_recovery_worker.lock", out / "publication_window_runner.lock")
+            for lock_path in paths:
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                handle = locks.enter_context(lock_path.open("a+", encoding="utf-8"))
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with closing(sqlite3.connect(path, timeout=2)) as conn, conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute("BEGIN IMMEDIATE")
+                item = conn.execute("SELECT * FROM publishing_recovery_items WHERE id=?", (expected_item["id"],)).fetchone()
+                video = conn.execute("SELECT * FROM processed_videos WHERE id=?", (expected_video["id"],)).fetchone()
+                if not item or not video or dict(item) != expected_item or dict(video) != expected_video:
+                    raise ValueError("RECOVERY_STATE_CHANGED")
+                operation = conn.execute("SELECT state FROM publishing_recovery_operations WHERE id=?", (item["operation_id"],)).fetchone()
+                if not operation or operation[0] != "QUEUED":
+                    raise ValueError("RECOVERY_OPERATION_CHANGED")
+                for table in ("wechat_publications", "wechat_publications_historical_archive",
+                              "wechat_submission_attempts", "douyin_publications", "kuaishou_publications"):
+                    if conn.execute(f"SELECT 1 FROM {table} WHERE video_id=? LIMIT 1", (video["id"],)).fetchone():
+                        raise ValueError("RECOVERY_PUBLICATION_EXISTS")
+                now = time.time()
+                conn.execute("UPDATE publishing_recovery_items SET state='FAILED',reason=?,updated=? WHERE id=?",
+                             (video["error_msg"], now, item["id"]))
+                conn.execute("""UPDATE publishing_recovery_operations SET state='COMPLETED',updated=?
+                    WHERE id=? AND state='QUEUED' AND NOT EXISTS (SELECT 1 FROM publishing_recovery_items
+                    WHERE operation_id=? AND state IN ('RESERVED','WAITING','RUNNING'))""",
+                             (now, item["operation_id"], item["operation_id"]))
+                return {"item_id": item["id"], "video_id": video["id"], "state": "FAILED",
+                        "reason": video["error_msg"], "video_unchanged": True}
+
     def initialize_publishing_recovery(self):
         with self.get_connection() as c:
             columns = {r[1] for r in c.execute("PRAGMA table_info(processed_videos)")}

@@ -1,6 +1,7 @@
 """发布恢复的真实 SQLite、原生 flock、固定身份和幂等操作验证。
 
 # Modification History
+| 1.2.0 | 2026-11-01 | Codex | 验证热度刷新不撤销恢复身份，实质变更及启动事务仍闭锁。 |
 | 1.1.0 | 2026-10-31 | Codex | 验证真实 SQLite 恢复交接与本批失败不重复领取。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -46,6 +47,58 @@ def request(service, preview=None, ids=(), **options):
     return dict(operation_id=str(uuid.uuid4()), expected_version=preview['account_version'] if preview else service.status()['version'],
                 preview_id=preview['preview_id'] if preview else None,selected_ids=list(ids),reset_quota=False,
                 reset_cooldown=False,priority=False,reset_backoff=False,skip_avoidance=False,**{}) | options
+
+
+@pytest.mark.parametrize('phase', ['preview', 'waiting', 'activation'])
+def test_monitor_counter_refresh_preserves_recovery_identity(recovery, monkeypatch, phase):
+    video = add(recovery, 'stats-refresh', score=80)
+    preview = recovery.preview()
+    command = request(recovery, preview, [video['id']])
+    if phase != 'preview':
+        operation = recovery.execute(command)
+    assert recovery.db.upsert_monitored_video(
+        video['youtube_id'], video['title'], video['channel_id'], zh_title=None,
+        duration_sec=None, view_count=4710, like_count=237, upload_date=None,
+        metadata_complete=True,
+    ) == 'refreshed'
+    if phase == 'preview':
+        operation = recovery.execute(command)
+    assert operation['items'][0]['state'] == 'WAITING'
+    if phase == 'waiting':
+        monkeypatch.setattr(type(settings), 'is_us_market_guard_window', lambda _: False)
+        monkeypatch.setattr(type(settings), 'is_public_publish_window', lambda _: True)
+        calls = []
+        manager = SimpleNamespace(_process_single_video=lambda row, **kw: calls.append((row, kw)))
+        assert recovery.dispatch_once(manager)
+        assert len(calls) == 1 and calls[0][0]['youtube_id'] == video['youtube_id']
+    else:
+        assert recovery.db.activate_publishing_recovery_item(operation['items'][0]['id'])
+    current = recovery.db.get_video_by_youtube_id(video['youtube_id'])
+    assert current['view_count'] == 4710 and current['like_count'] == 237
+    assert current['score'] == video['score'] and current['source'] == video['source']
+
+
+@pytest.mark.parametrize('phase', ['preview', 'activation'])
+@pytest.mark.parametrize('field,value', [
+    ('status', 'UNCERTAIN'), ('zh_title', '内容已经修改'), ('score', 10),
+    ('source', 'DISCOVERY'), ('publication_review_required', 1),
+    ('bypass_censorship', 1), ('trim_start', 2), ('error_msg', '新的故障证据'),
+])
+def test_material_recovery_changes_still_invalidate_snapshot(recovery, phase, field, value):
+    video = add(recovery, 'material-change', score=80)
+    preview = recovery.preview()
+    command = request(recovery, preview, [video['id']])
+    if phase == 'activation':
+        operation = recovery.execute(command)
+    with recovery.db.get_connection() as connection:
+        connection.execute(f'UPDATE processed_videos SET {field}=? WHERE id=?', (value, video['id']))
+    if phase == 'preview':
+        operation = recovery.execute(command)
+    else:
+        assert recovery.db.activate_publishing_recovery_item(operation['items'][0]['id']) is None
+        operation = recovery.db.get_publishing_recovery_operation(operation['id'])
+    assert operation['items'][0]['state'] == 'SKIPPED'
+    assert not recovery.db.has_active_manual_publish_lease(video['youtube_id'])
 
 
 def test_all_blockers_quota_rolls_to_twentieth_remaining_and_epoch_reset(recovery):
