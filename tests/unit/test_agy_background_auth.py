@@ -36,6 +36,22 @@ def test_missing_isolator_fails_closed(monkeypatch):
         auth.background_command(['agy', '--print', 'test'])
 
 
+@pytest.mark.parametrize('log,stderr,expected', [
+    ('error getting token source: You are not logged into Antigravity.', '', auth.AgyAuthRequired),
+    ('', 'Error: Please sign in to view available models. Launch the CLI without arguments to sign in.', auth.AgyAuthRequired),
+    ('OAuth: authenticated successfully', 'Please sign in to view available models.', auth.AgyAuthRequired),
+    ('available models from cache', 'Error: backend unavailable', auth.AgyAuthUnavailable),
+])
+def test_current_cli_login_failure_is_distinct_from_unavailable_probe(tmp_path, log, stderr, expected):
+    def runner(command, **kw):
+        Path(command[command.index('--log-file') + 1]).write_text(log)
+        return subprocess.CompletedProcess(command, 1, '', stderr)
+    with pytest.raises(expected) as error:
+        auth.require_auth('agy', cwd=tmp_path, env={}, runner=runner)
+    assert type(error.value) is expected
+    assert not list(tmp_path.glob('agy-auth-*'))
+
+
 def test_auth_failure_never_launches_generation(tmp_path, monkeypatch):
     def unavailable(*a, **k):
         raise auth.AgyAuthRequired('AGY_AUTH_REQUIRED')

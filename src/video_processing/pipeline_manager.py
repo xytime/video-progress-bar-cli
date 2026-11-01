@@ -11,6 +11,7 @@
 | caption-recovery-v1 | 2026-10-28 | Codex | 原片字幕扫描按实际帧数与核验批次分配父任务和阶段预算。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 复用文案及成片时保留准备状态，不再误报生成或转录。 |
 | maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
+| caption-continuation-v1 | 2026-11-01 | Codex | 字幕使用受凭据校验的脚本入口，原在途任务排空期间仍可写入供应商审计。 |
 | Version | Date       | Author                              | Description                                                                    |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
@@ -5018,7 +5019,7 @@ class PipelineManager:
                         logger.warning("[CaptionProgress] Cannot clear stale progress for %s: %s", prefix, exc)
                     render_cmd = [
                         "nice", "-n", "19",
-                        self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
+                        self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/run_caption_task.py"), "auto-caption",
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                         "--progress-file", str(progress_file),

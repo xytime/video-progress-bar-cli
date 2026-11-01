@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 7031 绑定复核后的原片及 large-v3 完整对白，保留英文标题叠字。 |
 | 1.0.0 | 2026-11-01 | Codex | 三条已查明标题叠字的故障采用独立字幕区，不擦字、不裁切。 |
 """
 from pathlib import Path
@@ -12,6 +13,11 @@ from ..utils.render_source_binding import digest
 
 
 SOURCES = {
+    'CatuGloDkTQ': dict(
+        source_sha256='2d525f43d92280d23c845880c60a1044ff6ea342b638fb40d93eccd29d5939ed',
+        timeline_sha256='3c1ae232ed2905cf0d7892db40b3d5ec742317cf8b7d1d4d599e40ff57ea9289',
+        duration=121.5214,
+    ),
     'z9VaYmwImt8': dict(
         source_sha256='fc19f07417a3207c60a5e3c5751289dd057d832f9cb21fba7c54c75bbd9b6777',
         timeline_sha256='314ff18a36fa2f8cf0123d3dcb4bece0ea0fecd2f823a6c7c68fce251938e354',

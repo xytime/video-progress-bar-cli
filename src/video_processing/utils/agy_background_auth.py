@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.1 | 2026-10-25 | Codex | 认证结果带时效与检查失败分类，独立文件锁保护强制核实及后台刷新。 |
+| 1.2 | 2026-11-01 | Codex | 识别当前 CLI 日志及标准错误的明确未登录提示，未知检查仍失败关闭。 |
 """
 from __future__ import annotations
 
@@ -56,7 +57,14 @@ def require_auth(command: str, *, cwd: Path, env: dict, runner) -> None:
         authenticated = ('ChainedAuth: authenticated via' in evidence
                          or 'OAuth: authenticated successfully' in evidence)
         interactive = 'triggering interactive OAuth' in evidence or 'Starting OAuth authentication flow' in evidence
-        if interactive or 'not authenticated' in evidence or 'no stored credentials' in evidence:
+        # models 的新版错误可只写入 stderr；正向证据仍必须来自本次认证日志。
+        failure_evidence = '\n'.join((evidence, result.stdout or '', result.stderr or '')).casefold()
+        missing_login = any(marker in failure_evidence for marker in (
+            'not authenticated', 'no stored credentials',
+            'you are not logged into antigravity',
+            'please sign in to view available models',
+        ))
+        if interactive or missing_login:
             raise AgyAuthRequired('AGY_AUTH_REQUIRED: please log in manually with agy')
         if result.returncode or not authenticated:
             raise AgyAuthUnavailable('AGY_AUTH_UNKNOWN: no current authentication evidence')

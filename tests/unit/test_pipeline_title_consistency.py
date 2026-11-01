@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                          |
 |---------|------------|-------------------------------------|----------------------------------------------------------------------|
+| isolation-v2 | 2026-11-01 | Codex | 标题迁移测试使用独立关闭片尾的配置，不依赖生产配置开关。 |
 | isolation-v1 | 2026-10-31 | Codex | 标题迁移夹具提供真实格式的媒体元数据与绑定字幕成功凭据。 |
 | 1.3.0 | 2026-09-09 | Codex | 渲染替身生成真实 ASS；坏字幕须在封面/发布前被拒绝 |
 | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 新增切片进度标题测试（v2.9.0）: "AI写代码 3/9"                          |
@@ -227,6 +228,13 @@ class TestRenderTitleConsistency:
 
         monkeypatch.setattr("video_processing.pipeline_manager.settings.enable_dual_title_display", True)
         monkeypatch.setattr("video_processing.pipeline_manager.settings.enable_codex_cover_queue", False)
+        import json
+        from config.settings import settings
+        policy = json.loads(settings.vocabulary_outro_policy_path.read_text())
+        policy["enabled"] = False
+        isolated_policy = tmp_path / "outro-policy.json"
+        isolated_policy.write_text(json.dumps(policy))
+        monkeypatch.setattr(settings, "vocabulary_outro_policy_path", isolated_policy)
         pm._check_censorship = MagicMock(return_value=False)
         pm._find_downloaded_video = MagicMock(return_value=str(source))
         pm._is_dedicated_cover = MagicMock(return_value=True)
