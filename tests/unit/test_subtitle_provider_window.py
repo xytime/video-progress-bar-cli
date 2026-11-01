@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-31 | Codex | 验证份额转让、异常恢复、原时间轴与完整质量阻断。 |
+| 1.1.0 | 2026-11-01 | Grok Bot | CLI 优先顺序下 Codex 居中不独占剩余期限。 |
 """
 from types import SimpleNamespace
 
@@ -37,6 +38,14 @@ def test_fast_auth_or_network_failures_donate_unused_time():
 def test_unavailable_fallback_does_not_reserve_idle_time():
     assert deadline(['gemini', 'google'], 0) == 240
     assert deadline(['gemini', 'google'], 1, now=240) == 480
+
+
+def test_cli_first_order_shares_time_fairly_when_codex_is_not_last():
+    providers = ['agy', 'codex', 'grok', 'deepseek', 'gemini', 'google']
+    assert deadline(providers, 0) == 80
+    assert deadline(providers, 1, now=80) == 160
+    # agy 快速失败时未用份额顺延给 Codex，但 Codex 不能吞掉后续供应商的时间。
+    assert deadline(providers, 1, now=10) == 10 + 470 / 5
 
 
 def test_no_new_candidate_request_during_quality_reserve():

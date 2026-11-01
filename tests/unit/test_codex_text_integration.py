@@ -80,9 +80,11 @@ def test_codex_quota_remains_deferred_without_retries_or_content(tmp_path, monke
     assert not list(tmp_path.glob("*_title.txt"))
 
 
-def test_codex_is_appended_after_approved_order_and_is_opt_in(tmp_path):
+def test_codex_keeps_configured_position_and_is_opt_in(tmp_path):
     assert _settings(tmp_path, False, subtitle_translation_provider_order="codex,google,gemini").subtitle_translation_provider_order_list == ["google", "gemini"]
-    assert _settings(tmp_path, subtitle_translation_provider_order="codex,google,gemini").subtitle_translation_provider_order_list == ["google", "gemini", "codex"]
+    assert _settings(tmp_path, subtitle_translation_provider_order="codex,google,gemini").subtitle_translation_provider_order_list == ["codex", "google", "gemini"]
+    # 未写入顺序的旧配置仍在末尾追加一次 Codex 兜底，不重复。
+    assert _settings(tmp_path, subtitle_translation_provider_order="google,gemini").subtitle_translation_provider_order_list == ["google", "gemini", "codex"]
 
 
 def _processor():
