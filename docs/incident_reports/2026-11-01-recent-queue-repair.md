@@ -321,3 +321,16 @@
 受控恢复工具从已测隔离副本执行，只接受原计划绑定的ready-worker、准确维护版本和唯一delivery-recovery-launch失主ID；逐项校验源/策略/调度、真实角色锁/birth/cwd、无活跃准入、无业务锁/在途账本、无存活或未知子进程，再正常SIGTERM该精确空闲巡检。原生MaintenanceRecovery随后按原始字节、inode、SHA、PID消失与维护版本归档登记，不改业务状态、原部署计划或journal，也不开闸。现场归档 `dd37a6fe6a414a0eb344da1915e18e87`，记录SHA `8eabaefa8c9cae4d7da770eb9b4604d86d551bc38c968869d971a06baa4e902a`，原生归档计划摘要 `08cc86a6704ae31c62447ae3512c1d5e533ae3c803a4ee9f8753ac6e829d7bdc`。证据为 `deployment-r32/abandoned-ready-worker-complete.json` 与 `abandoned-ready-admission/`；原部署随后自行接续9步并恢复运行。若停止后中断，保留审计及登记，由原生reconcile_maintenance显式对账，不静默重复停止或删除文件。
 
 12:20固定初始24小时20条：系统3、待核实14、策略3；固定48小时31条：系统9、待核实16、策略6。滚动24小时21条：系统4、待核实14、策略3；证据 `live-audits/20261101T042000Z/audit.json`。#7042原600秒累计翻译预算已经600.489920084秒耗尽，51次请求，未重置或再次盲目释放；#7137上轮Gemini/DeepSeek无效对齐，仍无有效新结果。未清零、未删除历史、未把重启当业务恢复。
+
+
+## 12:29 BJ：维护争用修复实际采用；DeepSeek读取中断进入正常降级
+
+维护清理与受控失主恢复提交 `25d4ac4852beea8c272987efc6916a6fa4178290` 已推送，原生部署 `f81775d36ac14e3ea729a930cc32bf44`（`deployment-r33/`）在12:25:44完成9步、verify.ok=true。5类驻留角色匹配实际源码摘要 `4de0a9940186dad478063fc7ba102ab192336c313816870dcdf338f132ff80ca`，maintenance=RUNNING，无unknown；证据 `runtime-adopted-r23.json`、`r23-validation.json`。该轮完整运行候选和独立提交源各194项隔离通过，分别 `video-pytest-54978q5_` / `5ab185674a9c4ce47e218e98ae97b8b5c06a0d6453f07f6f45e948742957670f`、`video-pytest-5ejg_sal` / `32ce0bf5d3ba16ece3d0fb8d8dc173ce14583715178942771bd09c49592e7a3b`，8项既有FastAPI弃用告警。
+
+#7012运行2040在12:19:54启动，Gemini503网络失败后DeepSeek发生IncompleteRead(0 bytes read)，异常从resp.read逃出，跳过后续供应商，进程exit=1；审计仍RUNNING且无finished_at，不能伪装为已完成。后续真实运行2042已经正常记FAILED并结束，旧运行2040保留原证据。证据 `ai-audit-1231.json` 与同名一致数据库备份，流水线脱敏错误摘录记录在 `r24-deepseek-incident.json`。
+
+修复普通翻译及翻译+词汇两个HTTP边界：只捕获OSError、HTTPException（包含IncompleteRead/BadStatusLine/RemoteDisconnected）、UnicodeError与JSONDecodeError；传输故障归类connection failure，保留401/402/429/503 HTTP类别，非法JSON/UTF8归类invalid_response。日志与error_out仅保留固定类别/异常类名，绝不包含响应正文或URL。返回None后复用现有供应商降级、冷却、全片期限和审计结束流程；程序逻辑ValueError仍传播，不增加请求重试或预算。
+
+旧源码在真实编排及DAL集成中两例IncompleteRead均复现异常、审计未收尾，`video-pytest-mevgkfgq` / `f3c47276276c3bb5d1b61ce10a1df7f152de1755efd4401719e813653d55480b`。新源码响应关闭、26段首批失败不再发请求、敏感正文不入日志、各类别、真实降级成功及全供应商失败结束审计、原ASR/时间轴不变共48项隔离通过，`video-pytest-5jj2r8w8` / 4baf2c6abc916e6c5da034b5457819ede09330c95c2b46a3c35ed8da835297aa。初轮47通过1失败来自测试同名视频同秒记录排序，改为独立视频标识并断言实际run_id，未修改DAL或业务行为。最终候选与独立提交源验证、部署采用另记。
+
+12:26固定初始24小时20条：系统3、待核实14、策略3；固定48小时31条：系统8、待核实17、策略6。#7000已原生执行发表、按现行不自动查询政策为UNCERTAIN，不能算公开发布成功；#7007仍等AI封面。#7137最新2041为Gemini无效响应、DeepSeek读取超时、Google限流、Codex原600秒预算已耗尽，不重置账本。#7042同样保留total_timeout。证据 `live-audits/20261101T042624Z/audit.json`；没有清零或删除历史。

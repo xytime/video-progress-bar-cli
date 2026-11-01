@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 2.3.0 | 2026-11-01 | Codex | 响应读取中断按网络失败交回降级；保留HTTP类别，不记录响应正文。 |
 | 2.2.0 | 2026-10-05 | Codex | DeepSeek 批次服从字幕全供应商共享期限。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：DeepSeek OpenAI-compatible 字幕批量翻译 provider |
 | 1.1.0   | 2026-07-06 | Codex  | 强化全局上下文硬约束提示，降低金融 close/金额单位误译 |
@@ -25,6 +26,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import time
@@ -37,6 +39,15 @@ from .translation_prompt_constraints import render_translation_constraints
 logger = logging.getLogger(__name__)
 
 _VOCAB_BATCH_SIZE = 25
+
+
+def _provider_error_message(error: Exception) -> str:
+    """只保留用于降级/冷却的类别，避免响应正文或URL进入审计。"""
+    if isinstance(error, urllib.error.HTTPError):
+        return f"DeepSeek HTTP {error.code}"
+    if isinstance(error, (UnicodeError, json.JSONDecodeError)):
+        return "DeepSeek invalid JSON response"
+    return f"DeepSeek connection failure ({type(error).__name__})"
 
 
 def translate_batch_deepseek(
@@ -76,8 +87,8 @@ def translate_batch_deepseek(
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        logger.warning(f"[DeepSeek] API call failed: {e}")
+    except (OSError, http.client.HTTPException, UnicodeError, json.JSONDecodeError) as e:
+        logger.warning("[DeepSeek] API call failed: %s", _provider_error_message(e))
         return None
 
     content = _extract_message_content(data)
@@ -139,9 +150,10 @@ def translate_batch_with_vocab_deepseek(
         try:
             with urllib.request.urlopen(req, timeout=min(90, max(1, int(remaining)))) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-            logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")
-            record_error(str(e))
+        except (OSError, http.client.HTTPException, UnicodeError, json.JSONDecodeError) as e:
+            message = _provider_error_message(e)
+            logger.warning("[DeepSeek] Translation+vocab API call failed: %s", message)
+            record_error(message)
             return None
         content = _extract_message_content(data)
         items = _parse_translation_vocab_json(content, expected_count=len(batch)) if content else None
