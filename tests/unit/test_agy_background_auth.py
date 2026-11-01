@@ -14,6 +14,7 @@ from video_processing.utils import cover_agy
     ('available models from cache', 0, False),
     ('not authenticated: no stored credentials found', 1, False),
     ('OAuth: authenticated successfully\nStarting OAuth authentication flow', 0, False),
+    ('You are not logged into Antigravity.\nChainedAuth: authenticated via keyring (effective: keyring)\nOAuth: authenticated successfully as test', 0, True),
 ])
 def test_preflight_requires_current_positive_auth_evidence(tmp_path, evidence, exit_code, ready):
     def runner(command, **kw):
@@ -39,7 +40,8 @@ def test_missing_isolator_fails_closed(monkeypatch):
 @pytest.mark.parametrize('log,stderr,expected', [
     ('error getting token source: You are not logged into Antigravity.', '', auth.AgyAuthRequired),
     ('', 'Error: Please sign in to view available models. Launch the CLI without arguments to sign in.', auth.AgyAuthRequired),
-    ('OAuth: authenticated successfully', 'Please sign in to view available models.', auth.AgyAuthRequired),
+    ('OAuth: authenticated successfully', 'Please sign in to view available models.', auth.AgyAuthUnavailable),
+    ('You are not logged into Antigravity.\nChainedAuth: authenticated via keyring', 'Eligibility check failed: EOF', auth.AgyAuthUnavailable),
     ('available models from cache', 'Error: backend unavailable', auth.AgyAuthUnavailable),
 ])
 def test_current_cli_login_failure_is_distinct_from_unavailable_probe(tmp_path, log, stderr, expected):

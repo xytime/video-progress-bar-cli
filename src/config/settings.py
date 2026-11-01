@@ -1070,14 +1070,29 @@ class Settings(BaseSettings):
         return self.project_root / "output"
 
     def agy_app_environment(self) -> dict[str, str]:
-        """仅继承 App 运行和网络所需环境，不传入业务 API 或机器人凭据。"""
+        """仅继承 App 运行和网络所需环境，不传入业务 API 或机器人凭据。
+
+        与 build_subprocess_env 同契约：cron 等消毒父进程常无代理变量，
+        因此在白名单过滤后注入 get_active_proxies()；代理关闭/不可达时不注入。
+        """
         allowed = {
             "HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "all_proxy", "no_proxy",
             "SSL_CERT_FILE", "SSL_CERT_DIR",
         }
-        return {key: value for key, value in os.environ.items() if key in allowed}
+        env = {key: value for key, value in os.environ.items() if key in allowed}
+        for key in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ):
+            env.pop(key, None)
+        env.update(self.get_active_proxies())
+        return env
 
     @computed_field  # type: ignore[misc]
     @property

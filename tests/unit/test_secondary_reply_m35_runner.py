@@ -15,6 +15,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | scan-timer-regression | 2026-10-25 | Codex | 审批回调与场景共用合成时钟，避免固定日期七天后测试被宿主时间误判过期。 |
+| 1.1.0 | 2026-10-18 | Antigravity | 新增 agy -> codex 沙箱兜底单元测试，并同步 TelegramApprovalTransport 真实 send_text 签名断言 |
 | 1.0.0 | 2026-10-17 | Antigravity | 初始创建：覆盖 M3.5 全部核心模块与 SR-01~SR-04 / CR-01~CR-04 回归测试 |
 """
 
@@ -60,6 +61,8 @@ from video_processing.interaction.secondary_reply_service import (
     SecondaryReplyService,
 )
 from video_processing.telegram_delivery import TelegramDeliveryResult
+from video_processing.utils.agy_provider import AgyProviderError
+from video_processing.utils.codex_text_provider import CodexTextError, CodexTextResult
 
 UTC = datetime.timezone.utc
 TEST_ACCT = "acct_m35_test"
@@ -151,7 +154,7 @@ def test_telegram_approval_transport_persists_message_id_and_checks_accepted(tmp
 
     captured_calls = []
 
-    def fake_send_text(text, **kwargs):
+    def fake_send_text(*, text, **kwargs):
         captured_calls.append({"text": text, "kwargs": kwargs})
         return TelegramDeliveryResult(
             state="ACCEPTED",
@@ -171,7 +174,8 @@ def test_telegram_approval_transport_persists_message_id_and_checks_accepted(tmp
     )
     assert ok is True, msg
     assert len(captured_calls) == 1
-    assert captured_calls[0]["kwargs"]["parse_mode"] == "HTML"
+    assert captured_calls[0]["kwargs"]["event_type"] == "wechat_secondary_reply_approval"
+    assert captured_calls[0]["kwargs"]["priority"] == "P1"
     kb = captured_calls[0]["kwargs"]["reply_markup"]["inline_keyboard"]
     assert kb[0][0]["callback_data"].startswith(f"rep:{tid}:")
 
@@ -281,8 +285,25 @@ def test_telegram_bot_handle_secondary_reply_callback(tmp_path, monkeypatch):
 
 def test_agy_secondary_reply_provider_guardrails_and_schema_validation(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "secret_token_should_not_leak")
+    # Simulate cron: parent has no proxy vars; sanitizer must still inject reachable system proxies.
+    for key in (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "get_active_proxies",
+        lambda *a, **k: {
+            "HTTP_PROXY": "http://127.0.0.1:7890",
+            "HTTPS_PROXY": "http://127.0.0.1:7890",
+            "http_proxy": "http://127.0.0.1:7890",
+            "https_proxy": "http://127.0.0.1:7890",
+        },
+    )
     sanitized_env = _build_sanitized_agy_env()
     assert "TELEGRAM_BOT_TOKEN" not in sanitized_env
+    assert sanitized_env.get("HTTPS_PROXY") == "http://127.0.0.1:7890"
 
     calls = []
     svc = _make_mock_agy_service(call_counter=calls)
@@ -305,6 +326,20 @@ def test_agy_secondary_reply_provider_guardrails_and_schema_validation(monkeypat
     d_inj = svc.generate_draft(inj_comment, video_context=ctx)
     assert d_inj.intent == SecondaryReplyIntent.MANUAL
     assert d_inj.reason_code == "PROMPT_INJECTION_DETECTED"
+    assert calls == []
+
+    # 1b) 观众呼叫平台内置 AI 助手 (@元宝)：不调用模型，直接返回 SKIP
+    bot_comment = AudienceCommentRecord(
+        platform_post_id=TEST_POST,
+        comment_id="cmt_yuanbao",
+        nickname="李树庭",
+        content="@元宝 详细总结一下，要点分开展示",
+        content_hash="h_yb",
+        createtime="1700000000",
+    )
+    d_bot = svc.generate_draft(bot_comment, video_context=ctx)
+    assert d_bot.intent == SecondaryReplyIntent.SKIP
+    assert d_bot.reason_code == "PLATFORM_BOT_MENTION_SKIP"
     assert calls == []
 
     # 2) 正常观众提问：调用沙箱模型并返回合格双语草稿
@@ -337,6 +372,136 @@ def test_agy_secondary_reply_provider_guardrails_and_schema_validation(monkeypat
         bad_provider.generate(ok_comment, video_context=ctx)
 
 
+def test_agy_secondary_reply_provider_codex_fallback(tmp_path):
+    ctx = build_verified_video_context(
+        {
+            "video_title": "CoreWeave债务与融资结构分析",
+            "published_description": "剖析高利率私募债与优先清偿权对股权投资者的挤压。",
+        }
+    )
+    ok_comment = AudienceCommentRecord(
+        platform_post_id=TEST_POST,
+        comment_id="cmt_codex_fb",
+        nickname="chaojun",
+        content="债券投资人有优先清偿权，小散股东承担了最大风险。",
+        content_hash="h_fb",
+        createtime="1700000002",
+    )
+
+    codex_calls = []
+
+    def failing_agy(prompt: str, **kwargs: Any) -> Dict[str, Any]:
+        raise AgyProviderError("agy exit 1: location ineligible")
+
+    def fake_codex(prompt: str, **kwargs: Any) -> CodexTextResult:
+        codex_calls.append({"prompt": prompt, "kwargs": kwargs})
+        raw = {
+            "intent": "REPLY",
+            "style": "MACRO",
+            "chinese_reply": "债权优先于股权清偿，高息融资确实会先挤压普通股东的安全垫。",
+            "english_reply": "Debt ranks ahead of equity in liquidation; high-yield financing squeezes common shareholders first.",
+            "reason_code": "CAPITAL_STRUCTURE_PRIORITY",
+            "evidence_refs": ["published_description"],
+        }
+        validate_fn = kwargs.get("validate")
+        payload = validate_fn(raw) if validate_fn else raw
+        return CodexTextResult(
+            payload=payload,
+            model=kwargs.get("model", "gpt-5.6-luna"),
+            usage={"input_tokens": 120, "output_tokens": 60},
+            duration_ms=450,
+            cached=False,
+        )
+
+    provider = AgySecondaryReplyProvider(
+        model="gemini-3.8-flash-high",
+        runner_fn=failing_agy,
+        codex_model="gpt-5.6-luna",
+        codex_state_dir=tmp_path / "codex_cache",
+        codex_runner_fn=fake_codex,
+        enable_codex_fallback=True,
+    )
+    svc = SecondaryReplyService(provider=provider, censor=SecondaryReplyCensor())
+    draft = svc.generate_draft(ok_comment, video_context=ctx)
+    assert draft.intent == SecondaryReplyIntent.REPLY
+    assert draft.provider == "codex:gpt-5.6-luna"
+    assert draft.evidence_refs == ["published_description"]
+    assert len(codex_calls) == 1
+    assert codex_calls[0]["kwargs"]["state_dir"] == tmp_path / "codex_cache"
+
+    # 若 Codex 首次返回英文超长 (>150 chars)，自动触发精炼重试并在第二次成功
+    retry_prompts = []
+
+    def overlong_then_concise_codex(prompt: str, **kwargs: Any) -> CodexTextResult:
+        retry_prompts.append(prompt)
+        if len(retry_prompts) == 1:
+            raw = {
+                "intent": "REPLY",
+                "style": "MACRO",
+                "chinese_reply": "债权优先于股权清偿，高息融资确实会先挤压普通股东的安全垫。",
+                "english_reply": "A" * 165,
+                "reason_code": "CAPITAL_STRUCTURE_PRIORITY",
+                "evidence_refs": ["published_description"],
+            }
+        else:
+            raw = {
+                "intent": "REPLY",
+                "style": "MACRO",
+                "chinese_reply": "债权优先于股权清偿，高息融资会先挤压普通股东的安全垫。",
+                "english_reply": "Debt ranks ahead of equity; high-cost financing squeezes common shareholders first.",
+                "reason_code": "CAPITAL_STRUCTURE_PRIORITY",
+                "evidence_refs": ["published_description"],
+            }
+        validate_fn = kwargs.get("validate")
+        payload = validate_fn(raw) if validate_fn else raw
+        return CodexTextResult(payload=payload, model="gpt-5.6-luna", usage={}, duration_ms=10)
+
+    retry_provider = AgySecondaryReplyProvider(
+        model="gemini-3.8-flash-high",
+        runner_fn=failing_agy,
+        codex_runner_fn=overlong_then_concise_codex,
+        enable_codex_fallback=True,
+    )
+    retry_draft = retry_provider.generate(ok_comment, video_context=ctx)
+    assert retry_draft.intent == SecondaryReplyIntent.REPLY
+    assert len(retry_prompts) == 2
+    assert "超过方案 A 上限" in retry_prompts[1]
+
+    # 若 Codex 兜底返回未授权 evidence_refs，同样被 validate 拦截并抛出 SecondaryReplyContractError
+    def bad_codex(prompt: str, **kwargs: Any) -> CodexTextResult:
+        raw = {
+            "intent": "REPLY",
+            "style": "MACRO",
+            "chinese_reply": "债权优先于股权清偿。",
+            "english_reply": "Debt ranks ahead of equity.",
+            "reason_code": "OK",
+            "evidence_refs": ["unauthorized_source"],
+        }
+        validate_fn = kwargs.get("validate")
+        payload = validate_fn(raw) if validate_fn else raw
+        return CodexTextResult(payload=payload, model="gpt-5.6-luna", usage={}, duration_ms=10)
+
+    bad_fb_provider = AgySecondaryReplyProvider(
+        model="gemini-3.8-flash-high",
+        runner_fn=failing_agy,
+        codex_runner_fn=bad_codex,
+        enable_codex_fallback=True,
+    )
+    with pytest.raises(SecondaryReplyContractError, match="evidence_refs"):
+        bad_fb_provider.generate(ok_comment, video_context=ctx)
+
+    # 若 Codex 兜底自身不可用，则向上抛出 CodexTextError
+    err_fb_provider = AgySecondaryReplyProvider(
+        model="gemini-3.8-flash-high",
+        runner_fn=failing_agy,
+        codex_runner_fn=lambda *a, **k: (_ for _ in ()).throw(CodexTextError("unavailable")),
+        enable_codex_fallback=True,
+    )
+    with pytest.raises(CodexTextError):
+        err_fb_provider.generate(ok_comment, video_context=ctx)
+
+
+
 # ---------------------------------------------------------------------------
 # 4. run_secondary_reply_tick 四阶段完整验收 (SR-01 / SR-02 / SR-03 / SR-04)
 # ---------------------------------------------------------------------------
@@ -345,6 +510,7 @@ def test_tick_runner_phases_watermark_anti_reentrancy_night_window_and_backoff(t
     db = PipelineDB(db_path=str(tmp_path / "tick_runner.db"))
     _seed_published_post(db, TEST_POST)
 
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path / "no_policy.json", raising=False)
     monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
     monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
     monkeypatch.setattr(settings, "wechat_reply_account_key", TEST_ACCT, raising=False)
@@ -353,6 +519,9 @@ def test_tick_runner_phases_watermark_anti_reentrancy_night_window_and_backoff(t
     monkeypatch.setattr(settings, "wechat_reply_approver_telegram_id", TEST_APPROVER, raising=False)
     monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", TEST_CHAT, raising=False)
     monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 0, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approval_mode", "manual", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "08:30", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:00", raising=False)
 
     platform = FakeSecondaryReplyPlatform(account_finder_id=TEST_FINDER)
     platform.comment_list_payloads[TEST_POST] = {
@@ -435,7 +604,9 @@ def test_tick_runner_phases_watermark_anti_reentrancy_night_window_and_backoff(t
     assert app_res["ok"] is True
     assert db.get_secondary_reply_task(task_id)["status"] == "APPROVED"
 
-    # --- Tick 3 (SR-01 夜间窗口非破坏性推迟验证): 凌晨 02:40 Tick 不得把 APPROVED 打成 FAILED ---
+    # --- Tick 3 (SR-01 夜间窗口非破坏性推迟验证): 配置 08:30-23:00 窗口时，凌晨 02:40 Tick 不得把 APPROVED 打成 FAILED ---
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "08:30", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "23:00", raising=False)
     clock_box[0] += datetime.timedelta(minutes=5)
     res3 = run_secondary_reply_tick(
         db,
@@ -560,3 +731,449 @@ def test_cli_tick_subcommand_and_db_post_hints(tmp_path, monkeypatch, capsys):
     assert out["ok"] is True
     assert out["status"] == "COMPLETED"
     assert out["submit_skipped_reason"] == "FLAG_enable_wechat_secondary_reply_live_submission_OFF"
+
+
+# ---------------------------------------------------------------------------
+# 6. 运营策略热加载、Web 设置路由与 hybrid_auto 自动回复+事后通告验证
+# ---------------------------------------------------------------------------
+
+def test_secondary_reply_policy_web_api_hot_reload_and_hybrid_auto(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from web.secondary_reply_settings import create_secondary_reply_settings_router
+
+    policy_file = tmp_path / "secondary_reply_policy.json"
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", policy_file, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_start_shanghai", "00:00", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_window_end_shanghai", "24:00", raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_min_interval_seconds", 3600, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_hourly_quota", 10, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_max_per_video", 3, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approval_mode", "manual", raising=False)
+
+    app = FastAPI()
+    app.include_router(create_secondary_reply_settings_router(active=policy_file))
+    with TestClient(app) as client:
+        # 1. GET 页面与默认配置（全天 00:00-24:00 + 3600 秒间隔）
+        assert client.get("/secondary-reply-settings").status_code == 200
+        cur = client.get("/api/secondary-reply-settings").json()
+        assert cur["config"]["window_start_shanghai"] == "00:00"
+        assert cur["config"]["window_end_shanghai"] == "24:00"
+        assert cur["config"]["min_interval_seconds"] == 3600
+        assert cur["config"]["approval_mode"] == "manual"
+
+        # 2. 跨源写请求拦截 (403) 与非法参数拦截 (422)
+        bad_cfg = dict(cur["config"], window_start_shanghai="25:00")
+        assert client.put(
+            "/api/secondary-reply-settings",
+            json={"config": cur["config"], "expected_digest": cur["digest"]},
+            headers={"origin": "https://evil.invalid"},
+        ).status_code == 403
+        assert client.put(
+            "/api/secondary-reply-settings",
+            json={"config": bad_cfg, "expected_digest": cur["digest"]},
+        ).status_code == 422
+
+        # 3. CAS 保存并验证立即热加载到 settings
+        updated_cfg = dict(
+            cur["config"],
+            window_start_shanghai="00:00",
+            window_end_shanghai="24:00",
+            min_interval_seconds=7200,
+            hourly_quota=8,
+            max_per_video=4,
+            approval_mode="hybrid_auto",
+        )
+        res_put = client.put(
+            "/api/secondary-reply-settings",
+            json={"config": updated_cfg, "expected_digest": cur["digest"]},
+        )
+        assert res_put.status_code == 200
+        assert settings.wechat_reply_min_interval_seconds == 7200
+        assert settings.wechat_reply_approval_mode == "hybrid_auto"
+
+        # 旧 digest 再次提交触发 409 CAS 冲突
+        assert client.put(
+            "/api/secondary-reply-settings",
+            json={"config": updated_cfg, "expected_digest": cur["digest"]},
+        ).status_code == 409
+
+    # 4. 验证 hybrid_auto 模式下 Tick 自动批准并在 VERIFIED 后发送事后 Telegram 通告
+    db = PipelineDB(db_path=str(tmp_path / "hybrid.db"))
+    _seed_published_post(db, TEST_POST)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_account_key", TEST_ACCT, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_author_finder_id", TEST_FINDER, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_telegram_id", TEST_APPROVER, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", TEST_CHAT, raising=False)
+    monkeypatch.setattr(settings, "telegram_admin_ids", TEST_APPROVER, raising=False)
+
+    platform = FakeSecondaryReplyPlatform(account_finder_id=TEST_FINDER)
+    platform.comment_list_payloads[TEST_POST] = {
+        "errCode": 0,
+        "data": {
+            "downContinueFlag": 0,
+            "lastBuff": "buff_auto",
+            "comment": [
+                {
+                    "commentId": "c_auto_1",
+                    "commentNickname": "Alex",
+                    "commentContent": "新加坡的住房压力如何？",
+                    "commentCreatetime": "1760000100",
+                    "commentLikeCount": 2,
+                    "downContinueFlag": 0,
+                    "levelTwoComment": [],
+                }
+            ],
+        },
+    }
+    transport = FakeApprovalTransport()
+    svc = _make_mock_agy_service()
+    now_box = [datetime.datetime(2026, 10, 18, 15, 30, 0, tzinfo=UTC)]  # 北京时间 23:30，全天窗口开放
+
+    # 第 1 次 Tick：扫描并自动批准（hybrid_auto），不发事前审批卡
+    tick1 = run_secondary_reply_tick(
+        db,
+        platform=platform,
+        service=svc,
+        approval_transport=transport,
+        clock=lambda: now_box[0],
+        evidence_dir=tmp_path / "ev_auto",
+    )
+    assert len(tick1["drafted"]) == 1
+    assert tick1["drafted"][0]["status"] == "APPROVED"
+    assert len(transport.sent_messages) == 0
+
+    # 第 2 次 Tick：发送已自动批准的任务，并在 VERIFIED 后推送事后 Telegram 通告
+    now_box[0] += datetime.timedelta(minutes=5)
+    tick2 = run_secondary_reply_tick(
+        db,
+        platform=platform,
+        service=svc,
+        approval_transport=transport,
+        clock=lambda: now_box[0],
+        evidence_dir=tmp_path / "ev_auto",
+    )
+    assert len(tick2["submitted"]) == 1
+    assert tick2["submitted"][0]["outcome"] == "VERIFIED"
+    assert tick2["submitted"][0]["post_reply_notified"] is True
+    assert len(transport.sent_messages) == 1
+    assert "视频号二级回复已发送并回读核实" in transport.sent_messages[0]["text"]
+    assert transport.sent_messages[0]["inline_keyboard"] == []
+
+    # 额外验证：当浏览器会话锁正忙 (SESSION_BUSY) 时，APPROVED 任务安全退回 APPROVED，不误标 FAILED
+    platform.comment_list_payloads[TEST_POST] = {
+        "errCode": 0,
+        "data": {
+            "downContinueFlag": 0,
+            "lastBuff": "buff_auto_2",
+            "comment": [
+                {
+                    "commentId": "c_auto_2",
+                    "commentNickname": "Bob",
+                    "commentContent": "家庭收入如何应对生活成本？",
+                    "commentCreatetime": "1760000200",
+                    "commentLikeCount": 3,
+                    "downContinueFlag": 0,
+                    "levelTwoComment": [],
+                }
+            ],
+        },
+    }
+    now_box[0] += datetime.timedelta(minutes=5)
+    tick3 = run_secondary_reply_tick(
+        db,
+        platform=platform,
+        service=svc,
+        approval_transport=transport,
+        clock=lambda: now_box[0],
+        platform_post_id=TEST_POST,
+        max_submit_per_tick=0,
+        evidence_dir=tmp_path / "ev_auto",
+    )
+    tid2 = tick3["drafted"][0]["task_id"]
+    assert db.get_secondary_reply_task(tid2)["status"] == "APPROVED"
+
+    platform.mode = "session-busy"
+    now_box[0] += datetime.timedelta(hours=3)
+    tick4 = run_secondary_reply_tick(
+        db,
+        platform=platform,
+        service=svc,
+        approval_transport=transport,
+        clock=lambda: now_box[0],
+        scan_posts_per_tick=0,
+        max_drafts_per_tick=0,
+        evidence_dir=tmp_path / "ev_auto",
+    )
+    assert len(tick4["submitted"]) == 0
+    assert len(tick4["submit_deferred"]) == 1
+    assert tick4["submit_deferred"][0]["action"] == "DEFERRED_KEEP_APPROVED"
+    assert db.get_secondary_reply_task(tid2)["status"] == "APPROVED"
+
+
+def test_browser_adapter_matches_comment_with_wechat_bracket_emoji():
+    from video_processing.interaction.secondary_reply_browser_adapter import SecondaryReplyBrowserAdapter
+
+    adapter = SecondaryReplyBrowserAdapter()
+    adapter._active_export_id = TEST_POST
+    adapter._captured_comments["15034076747432598198"] = {
+        "export_id": TEST_POST,
+        "commentId": "15034076747432598198",
+        "nickname": "chaojun",
+        "content_prefix": "说的对，这些债券投资人能获得公司资产的优先清偿权，而我们小散连毛都没有[捂脸][捂脸][捂脸]",
+        "downContinueFlag": 0,
+        "levelTwoComment": [],
+        "has_author_reply": False,
+    }
+
+    class FakeLoc:
+        def __init__(self, items):
+            self._items = list(items)
+
+        def filter(self, *, visible=None, has_text=None):
+            if has_text is not None:
+                return FakeLoc([x for x in self._items if has_text in x.text])
+            return self
+
+        def count(self):
+            return len(self._items)
+
+        @property
+        def first(self):
+            return self._items[0]
+
+        def locator(self, _sel):
+            return FakeLoc([])
+
+        def get_attribute(self, _attr):
+            return None
+
+    class FakeNode:
+        def __init__(self, text: str):
+            self.text = text
+
+        def locator(self, _sel):
+            return FakeLoc([])
+
+        def get_attribute(self, _attr):
+            return None
+
+    class FakePage:
+        def locator(self, sel: str):
+            if sel == ".comment-item:visible":
+                # DOM 中 [捂脸] 已被渲染为 <img>，innerText 不含字面量 "[捂脸]"
+                return FakeLoc([FakeNode("说的对，这些债券投资人能获得公司资产的优先清偿权，而我们小散连毛都没有")])
+            return FakeLoc([])
+
+    replied, comp, node = adapter._check_author_already_replied(
+        FakePage(), "15034076747432598198", TEST_FINDER
+    )
+    assert replied is False
+    assert comp == "COMPLETE"
+    assert node is not None
+
+
+def test_manual_intent_with_suggested_draft_dispatches_telegram_approval_in_hybrid_auto(tmp_path, monkeypatch):
+    db = PipelineDB(db_path=str(tmp_path / "manual_suggested.db"))
+    _seed_published_post(db, TEST_POST)
+
+    monkeypatch.setattr(settings, "wechat_reply_policy_path", tmp_path / "no_policy.json", raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply", True, raising=False)
+    monkeypatch.setattr(settings, "enable_wechat_secondary_reply_live_submission", True, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_account_key", TEST_ACCT, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_author_finder_id", TEST_FINDER, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_telegram_id", TEST_APPROVER, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approver_chat_id", TEST_CHAT, raising=False)
+    monkeypatch.setattr(settings, "telegram_admin_ids", TEST_APPROVER, raising=False)
+    monkeypatch.setattr(settings, "wechat_reply_approval_mode", "hybrid_auto", raising=False)
+
+    platform = FakeSecondaryReplyPlatform(account_finder_id=TEST_FINDER)
+    platform.comment_list_payloads[TEST_POST] = {
+        "errCode": 0,
+        "data": {
+            "downContinueFlag": 0,
+            "lastBuff": "buff_man_1",
+            "comment": [
+                {
+                    "commentId": "cmt_manual_draft_1",
+                    "commentNickname": "舟",
+                    "commentContent": "因为大家都想暴富，都觉得自己是天选之子",
+                    "commentCreatetime": "1760000300",
+                    "commentLikeCount": 1,
+                    "downContinueFlag": 0,
+                    "levelTwoComment": [],
+                }
+            ],
+        },
+    }
+
+    def manual_with_draft_runner(prompt: str, **kwargs: Any) -> Dict[str, Any]:
+        return {
+            "intent": "MANUAL",
+            "style": "PHILOSOPHICAL",
+            "chinese_reply": "牛市叙事最容易放大幸存者偏差，看清债务与现金流结构才能守住安全边际。",
+            "english_reply": "Bull-market narratives amplify survivorship bias; scrutinizing debt and cash-flow structure preserves a margin of safety.",
+            "reason_code": "SUGGESTED_DRAFT_FOR_REVIEW",
+            "evidence_refs": ["video_title"],
+        }
+
+    provider = AgySecondaryReplyProvider(
+        model="gemini-3.8-flash-high",
+        runner_fn=manual_with_draft_runner,
+    )
+    svc = SecondaryReplyService(provider=provider, censor=SecondaryReplyCensor())
+    transport = FakeApprovalTransport()
+
+    res = run_secondary_reply_tick(
+        db,
+        platform=platform,
+        service=svc,
+        approval_transport=transport,
+        max_submit_per_tick=0,
+        evidence_dir=tmp_path / "ev_man",
+    )
+    assert len(res["drafted"]) == 1
+    assert res["drafted"][0]["status"] == "PENDING_REVIEW"
+    assert res["drafted"][0]["approval_dispatched"] is True
+    assert len(transport.sent_messages) == 1
+    assert "视频号二级回复待审批" in transport.sent_messages[0]["text"]
+    assert "牛市叙事最容易放大幸存者偏差" in transport.sent_messages[0]["text"]
+
+
+def test_secondary_reply_history_pagination_sorting_filtering_and_comment_timestamps(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from web.secondary_reply_settings import create_secondary_reply_settings_router
+
+    db = PipelineDB(db_path=str(tmp_path / "history_ledger.db"))
+    post_a = "export/UzFfBgAA_POST_A"
+    post_b = "export/UzFfBgAA_POST_B"
+    _seed_published_post(db, post_a, youtube_id="yt_m35_a")
+    _seed_published_post(db, post_b, youtube_id="yt_m35_b")
+
+    # 录入 3 条不同时间、不同点赞数、不同状态的评论与任务
+    db.save_discovered_audience_comments(
+        post_a,
+        [
+            {
+                "comment_id": "cmt_old_verified",
+                "nickname": "老观众甲",
+                "content": "早期评论：债券清偿优先级更高",
+                "createtime": "1760000100",
+                "like_count": 1,
+            },
+            {
+                "comment_id": "cmt_new_approved",
+                "nickname": "新观众丙",
+                "content": "最新评论：半导体下跌30%买入",
+                "createtime": "1760000300",
+                "like_count": 9,
+            },
+        ],
+        account_key=TEST_ACCT,
+    )
+    db.save_discovered_audience_comments(
+        post_b,
+        [
+            {
+                "comment_id": "cmt_mid_skipped",
+                "nickname": "观众乙",
+                "content": "@元宝 总结一下",
+                "createtime": "1760000500",
+                "like_count": 0,
+            }
+        ],
+        account_key=TEST_ACCT,
+    )
+
+    t1_id = db.create_or_update_secondary_reply_task(
+        account_key=TEST_ACCT,
+        platform_post_id=post_a,
+        comment_id="cmt_old_verified",
+        intent="REPLY",
+        style="PRAGMATIC",
+        chinese_reply="早期回复中文",
+        english_reply="Early reply English",
+        formatted_reply="早期回复中文\nEarly reply English",
+        reason_code="OK_1",
+        evidence_refs=["video_title"],
+        provider="manual_import",
+        status="VERIFIED",
+    )
+    t2_id = db.create_or_update_secondary_reply_task(
+        account_key=TEST_ACCT,
+        platform_post_id=post_b,
+        comment_id="cmt_mid_skipped",
+        intent="SKIP",
+        style="PHILOSOPHICAL",
+        chinese_reply="",
+        english_reply="",
+        formatted_reply="",
+        reason_code="PLATFORM_BOT_MENTION_SKIP",
+        evidence_refs=[],
+        provider="codex:gpt-5.6-luna",
+        status="SKIPPED",
+    )
+    t3_id = db.create_or_update_secondary_reply_task(
+        account_key=TEST_ACCT,
+        platform_post_id=post_a,
+        comment_id="cmt_new_approved",
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="最新宏观回复",
+        english_reply="Latest macro reply",
+        formatted_reply="最新宏观回复\nLatest macro reply",
+        reason_code="OK_3",
+        evidence_refs=["video_title"],
+        provider="codex:gpt-5.6-luna",
+        status="APPROVED",
+    )
+
+    policy_file = tmp_path / "policy.json"
+    app = FastAPI()
+    app.include_router(
+        create_secondary_reply_settings_router(
+            active=policy_file,
+            history_lookup=lambda lim: db.list_secondary_reply_history(limit=lim),
+        )
+    )
+
+    with TestClient(app) as client:
+        # 1. 默认排序必须是 newest_desc（最新创建的 t3_id 在最上面，绝不能让旧的 VERIFIED t1_id 排在前面）
+        r_default = client.get("/api/secondary-reply-settings/history?page=1&size=2").json()
+        assert r_default["total_count"] == 3
+        assert r_default["global_total"] == 3
+        assert r_default["total_pages"] == 2
+        assert r_default["page"] == 1
+        assert [x["task_id"] for x in r_default["items"]] == [t3_id, t2_id]
+        assert r_default["items"][0]["comment_createtime"] == "1760000300"
+        assert r_default["items"][0]["comment_like_count"] == 9
+
+        # 2. 第二页返回最早的任务 t1_id
+        r_page2 = client.get("/api/secondary-reply-settings/history?page=2&size=2").json()
+        assert [x["task_id"] for x in r_page2["items"]] == [t1_id]
+
+        # 3. 按原评论发布时间从新到旧排序 (comment_time_desc: 1760000500 > 1760000300 > 1760000100)
+        r_ctime = client.get("/api/secondary-reply-settings/history?sort=comment_time_desc&size=10").json()
+        assert [x["task_id"] for x in r_ctime["items"]] == [t2_id, t3_id, t1_id]
+
+        # 4. 多维筛选（按状态、作品、风格、AI/人工来源、关键词）
+        r_status = client.get("/api/secondary-reply-settings/history?status=APPROVED").json()
+        assert [x["task_id"] for x in r_status["items"]] == [t3_id]
+        # 全局 counts 不受当前 status 过滤影响
+        assert r_status["counts"]["VERIFIED"] == 1
+        assert r_status["counts"]["APPROVED"] == 1
+        assert r_status["counts"]["SKIPPED"] == 1
+
+        r_video = client.get(f"/api/secondary-reply-settings/history?platform_post_id={post_b}").json()
+        assert [x["task_id"] for x in r_video["items"]] == [t2_id]
+
+        r_prov = client.get("/api/secondary-reply-settings/history?provider_kind=manual").json()
+        assert [x["task_id"] for x in r_prov["items"]] == [t1_id]
+
+        r_search = client.get("/api/secondary-reply-settings/history?search=半导体").json()
+        assert [x["task_id"] for x in r_search["items"]] == [t3_id]
+
+

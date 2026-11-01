@@ -7,6 +7,7 @@
 | --- | --- | --- | --- |
 | 1.1 | 2026-10-25 | Codex | 认证结果带时效与检查失败分类，独立文件锁保护强制核实及后台刷新。 |
 | 1.2 | 2026-11-01 | Codex | 识别当前 CLI 日志及标准错误的明确未登录提示，未知检查仍失败关闭。 |
+| 1.3 | 2026-11-01 | Musk | 出现正向认证证据即视为已登录；models 非零记为检查失败而非要求重登。 |
 """
 from __future__ import annotations
 
@@ -64,10 +65,17 @@ def require_auth(command: str, *, cwd: Path, env: dict, runner) -> None:
             'you are not logged into antigravity',
             'please sign in to view available models',
         ))
-        if interactive or missing_login:
+        # 同一次 probe 日志里常混有后台 reconcile 的旧 "not logged in" 噪声。
+        # 只要出现本次正向认证证据：已登录；models 非零只算检查设施/网络失败，不要求重登。
+        if interactive:
             raise AgyAuthRequired('AGY_AUTH_REQUIRED: please log in manually with agy')
-        if result.returncode or not authenticated:
-            raise AgyAuthUnavailable('AGY_AUTH_UNKNOWN: no current authentication evidence')
+        if authenticated:
+            if result.returncode:
+                raise AgyAuthUnavailable('AGY_AUTH_UNKNOWN: authenticated but models probe failed')
+            return
+        if missing_login:
+            raise AgyAuthRequired('AGY_AUTH_REQUIRED: please log in manually with agy')
+        raise AgyAuthUnavailable('AGY_AUTH_UNKNOWN: no current authentication evidence')
 
 
 def auth_snapshot(path: Path, *, now: float) -> dict:
