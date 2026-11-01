@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.1 | 2026-11-01 | Codex | 真实子进程参数解析覆盖负号开头视频和分片身份，等待实际线程收尾 |
 | 1.3.0 | 2026-09-23 | Antigravity | [Code Review Fix] 懒抢占测试接入真实 SQLite 校验 PROCESSING；看门狗测试接入真实进程与 PID 过滤；增加取消信号/SystemExit 拦截、自杀防御与特定审核抢占单测 |
 | 1.2.0 | 2026-09-23 | Codex | 下载验真测试使用真实音视频；验证回退保留续传缓存。 |
 | 1.1.0 | 2026-09-23 | Antigravity | 补充产物验真 (<50KB) 回退、损坏文件清理、死循环防护与盘中开盘回滚单测 |
@@ -425,27 +426,41 @@ def test_market_guard_midway_leaves_unclaimed_video_pending(tmp_path, monkeypatc
 # ── Pillar 3: Web 进程生命周期与看门狗加固 ───────────────────────────────────────
 
 
-def test_trigger_video_async_popen_and_pid_tracking():
+@pytest.mark.parametrize("yid,slice_index", [("async_yid_test", 0), ("-D4TV5q5yOM", 0),
+                                           ("-D4TV5q5yOM", 3)])
+def test_trigger_video_async_popen_and_pid_tracking(yid, slice_index):
     """_trigger_video_async 使用 Popen 启动独立进程组并记录/清理 PID。"""
     import web.app as web_app
+    import json
+    from scripts.run_video_task import parse_arguments
 
-    video = {"youtube_id": "async_yid_test", "slice_index": 0}
+    video = {"youtube_id": yid, "slice_index": slice_index}
     pid_updates = []
+    finished = threading.Event()
+
+    def record_pid(yid, pid, slice_index=0):
+        pid_updates.append((yid, pid, slice_index))
+        if pid is None:
+            finished.set()
 
     mock_proc = MagicMock()
     mock_proc.pid = 12345
     mock_proc.communicate.return_value = ("", "")
 
-    with patch.object(web_app.db, "update_process_pid", side_effect=lambda yid, pid, slice_index=0: pid_updates.append((yid, pid, slice_index))), \
+    with patch.object(web_app.db, "update_process_pid", side_effect=record_pid), \
          patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
 
         web_app._trigger_video_async(video)
-        time.sleep(0.1)
+        assert finished.wait(3), "单视频派发线程未收尾"
 
     mock_popen.assert_called_once()
     assert mock_popen.call_args.kwargs.get("start_new_session") is True
-    assert ("async_yid_test", 12345, 0) in pid_updates
-    assert ("async_yid_test", None, 0) in pid_updates
+    args = parse_arguments(mock_popen.call_args.args[0][3:])
+    assert args.object_key == f"{yid}:{slice_index}"
+    assert args.trigger_source == "dashboard_manual_item"
+    assert json.loads(mock_proc.communicate.call_args.kwargs["input"]) == video
+    assert (yid, 12345, slice_index) in pid_updates
+    assert (yid, None, slice_index) in pid_updates
 
 
 def test_recover_orphaned_pre_submission_tasks_guard(tmp_path, monkeypatch):

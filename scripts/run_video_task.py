@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-11-01 | Codex | 提取真实参数解析入口，验证负号开头视频身份不会被解释为选项 |
 | 1.0.0 | 2026-10-12 | Codex | 替换 Web 内联执行并保持单项维护归属 |
 """
 import argparse
@@ -15,12 +16,16 @@ from video_processing.core.maintenance_child import single_script
 from video_processing.pipeline_manager import PipelineManager
 
 
-@single_script
-def main():
+def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--trigger-source", required=True)
     parser.add_argument("--object-key", required=True)
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+@single_script
+def main():
+    args = parse_arguments()
     video = json.load(sys.stdin)
     key = f"{video['youtube_id']}:{int(video.get('slice_index') or 0)}"
     if key != args.object_key or (current().row.get("parent") and current().key != key):

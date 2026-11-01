@@ -209,3 +209,27 @@ def test_recovered_adoption_requires_complete_native_receipts(tmp_path, monkeypa
         assert proof["owners"] == {"ui": owner}
         assert "adopt.json" not in proof["files"]
         assert "adopt-intent.json" in proof["files"]
+
+
+def test_browser_capability_preflight_and_backoff_and_loaded_modules_hash():
+    from video_processing.core.maintenance_runtime import (
+        compute_browser_capability_backoff_seconds,
+        loaded_modules_hash,
+        verify_browser_launch_capability,
+    )
+
+    mod_hash = loaded_modules_hash()
+    assert len(mod_hash) == 64 and all(c in "0123456789abcdef" for c in mod_hash)
+
+    assert compute_browser_capability_backoff_seconds(1) == 120
+    assert compute_browser_capability_backoff_seconds(2) == 300
+    assert compute_browser_capability_backoff_seconds(3) == 900
+    assert compute_browser_capability_backoff_seconds(9) == 900
+
+    ok_res = verify_browser_launch_capability(probe_runner=lambda: (True, None))
+    assert ok_res["ok"] is True
+    assert ok_res["reason"] is None
+
+    fail_res = verify_browser_launch_capability(probe_runner=lambda: (False, "MachPort denied"))
+    assert fail_res["ok"] is False
+    assert "MachPort denied" in fail_res["reason"]
