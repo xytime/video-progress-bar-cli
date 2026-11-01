@@ -3,7 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.1.0 | 2026-11-02 | Grok Bot | 覆盖去除 plan 模式、按次 --settings 禁止命令。 |
+| 1.1.0 | 2026-11-02 | Grok Bot | 覆盖去除 plan 模式、按次 --settings 禁止命令，以及地区不支持优先于 invalid schema。 |
 | 1.0.3 | 2026-10-20 | Codex | 验证宿主单一超时边界及空成功输出不可触发兜底，防止敏感输出外泄。 |
 | 1.0.2 | 2026-09-25 | Codex | 识别结构化参数的 API 400，确保只输出安全分类而不泄漏原始错误文本。 |
 | 1.0.1 | 2026-09-22 | Codex | 覆盖本地启动分类、模型列表预检及敏感输出不外泄。 |
@@ -150,3 +150,10 @@ def test_startup_probe_only_queries_model_list(monkeypatch, code, output, succes
         assert "private" not in str(exc.value)
     assert calls == [["agy", "models"]]
 
+
+def test_region_unsupported_wins_over_invalid_schema_wording():
+    from video_processing.utils.agy_provider import _safe_failure_category
+    message = ("INVALID_ARGUMENT --json-schema ... FAILED_PRECONDITION (code 400): "
+               "User location is not supported for the API use.")
+    assert _safe_failure_category(message) == "location ineligible"
+    assert _safe_failure_category("400 INVALID_ARGUMENT: function_declarations rejected") == "invalid schema"

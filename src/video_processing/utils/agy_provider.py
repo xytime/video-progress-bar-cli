@@ -6,7 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.5.0 | 2026-11-02 | Grok Bot | 去掉 --mode plan，按次传入 --settings 禁止命令与工作区外访问（不改全局配置）。 |
+| 1.5.0 | 2026-11-02 | Grok Bot | 去掉 --mode plan，按次传入 --settings 禁止命令与工作区外访问（不改全局配置）；地区不支持先于 invalid schema 分类。 |
 | 1.4.4 | 2026-10-20 | Codex | 关闭会返回空成功的 CLI 内部计时，由宿主超时识别基础设施故障。 |
 | 1.4.3 | 2026-10-15 | Antigravity | 自动映射已退役 gemini-3.7-flash-high 模型别名，并细分 model unavailable / location ineligible 脱敏分类。 |
 | 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
@@ -128,13 +128,13 @@ def _safe_failure_category(value: str | None) -> str:
     if ("failed to start" in text and "operation not permitted" in text
             and ("listen tcp" in text or "creating log file" in text)):
         return "local startup blocked"
+    if any(token in text for token in ("eligibility check failed", "not currently available in your location",
+                                      "location_unsupported", "location ineligible", "user location is not supported")):
+        return "location ineligible"
     if "invalid_argument" in text and ("schema" in text or "function_declarations" in text):
         return "invalid schema"
     if any(token in text for token in ("agy_auth_required", "authentication required", "not logged in", "login required")):
         return "AGY_AUTH_REQUIRED"
-    if any(token in text for token in ("eligibility check failed", "not currently available in your location",
-                                      "location_unsupported", "location ineligible", "user location is not supported")):
-        return "location ineligible"
     if any(token in text for token in ("model unavailable", "unknown model", "unsupported model", "model not found")):
         return "model unavailable"
     if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
