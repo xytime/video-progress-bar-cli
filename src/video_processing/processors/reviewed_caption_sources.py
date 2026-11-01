@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-11-01 | Codex | 7146 绑定处理器实际校验的视频流时长164.8秒，保持原有严格容差。 |
 | 1.4.0 | 2026-11-01 | Codex | 7146 绑定已复核片头标题、原片与完整 65 段对白；保留画面并复用既有独立双语区。 |
 | 1.3.0 | 2026-11-01 | Codex | 默认续跑采用原片摘要绑定的已复核 ASR 模型，保留完整时间轴校验。 |
 | 1.2.0 | 2026-11-01 | Codex | 7135 已复核财富差距英文标题，绑定完整 33 段对白，保留原画面。 |
@@ -19,7 +20,7 @@ SOURCES = {
     'RYYM-6C4Vs4': dict(
         source_sha256='f58052062dad793e8dfc6169a43ca60992c6ee74836b5d66ebfa1e765e1feff8',
         timeline_sha256='c1adf016e2d7a826062c5696fce06b217581da536cb177f7c262484ca1165f68',
-        duration=164.861678,
+        duration=164.8,
     ),
     'ZVGS33A0nK0': dict(
         source_sha256='aa91512004ed2d8a8d390e23f8d5c1d77d5dee9c349a87a6bf91cb56301a7015',

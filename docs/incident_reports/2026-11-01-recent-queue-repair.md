@@ -396,3 +396,10 @@ DeepSeek传输边界提交 `0fe5d77171e9fb02dbfefbaf78b078b520f84393` 已推送�
 实际后台端口由settings.dashboard_port读取；六条证据接口均200且success=true，#7031/#7042/#7059/#7065/#7121均AI_COVER_PENDING、RECOVERED_PENDING_DELIVERY、unresolved=false，不能冒充已发布。13:27一致备份固定初始24小时20条：2条恢复、14条提交待核实、4条策略；固定48小时31条：5条恢复、18条待核实、8条策略。滚动24小时24条：5恢复、14待核实、5策略；滚动48小时29条：5恢复、17待核实、7策略。分类系统项为0，但#7146仍有实际标题误识别技术问题，不能因此宣布所有异常清零。历史41条48小时事件保留。证据r27-live-api-readback.json、live-audits/20261101T052759Z/audit.json、human-review-queue-r27.md。
 
 #7146原片首帧白底三行片头标题被当成对白字幕；65段ASR完整且尾端165.12秒位于原片164.861678秒的一秒既有舍入容差内。首/中段原画面和全部对白已复核，原生原字幕采样为GENERATE。沿用本次同类标题片已采用的675x1200完整原画面与独立双语区，只新增这一原片SHA及完整65段时间轴绑定；未知来源、变化原片/对白仍拒绝，既有登记实现变化仍使旧版式凭据失效，后续单独重新验证受影响当前成片。publication_review_required仍保留，不因技术修复启动retry或发布。待完整成片、解码与实际抽帧完成后另记技术结果。
+
+
+## 13:33 BJ：7146首轮全片验证拒绝，纠正视频流时长绑定
+
+具名标题登记提交971221f4b29a8cd06184c30f5d22ef9ca905e8cb已推送并实际采用：部署70a7f7e8026e4afc9df421c8b7224814（deployment-r39）13:31:51完成9步、verify.ok=true，5类运行角色核对源码摘要4391786b943d7f47237fa948afebfffb84468b2ea35eea997f908a0bf0392cfa，RUNNING278、unknown为空。运行候选及独立提交各71项隔离通过、6项既有告警（video-pytest-2feyneqx / f4977212597f2bde05cb0755d8e987decd2c13efa18e6b01d7b120dc40cb8fec；video-pytest-e81qw4ls / 94002c754e11dad63f8c68f4fb3d19decf1b34de5c5ae0850d5e85986fa0dfb1），边界探针/pytest均0，r28-validation.json记录。
+
+首轮正式全片验证ASR_REUSED、TRANSLATION_REUSED后在SOURCE_CAPTION_LOCATING严格拒绝：记录错误使用容器总时长164.861678秒，prepare_source实际读取零起点30fps视频流164.8秒，差0.061678秒超过原0.05容差。之前只读绑定验证也使用容器值，未覆盖该差异；不能算全片验证通过，保留reviewed-title-validation-r28/7146/result.json及原检查点。只纠正该登记为真实视频流164.8秒，原65段ASR/起止时间与译文字段不变，不扩大容差或改变时长。重验将直接调用同一_probe取得真实视频流并validate_reviewed_timeline，通过后再原生采用及完整烧录。#7031本轮尚未执行，不沿用未发生的成功。
