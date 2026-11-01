@@ -125,6 +125,7 @@
 | 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
 | 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
 | 7.1.0 | 2026-10-08 | Antigravity | 新增豆包语音 2.0 (Doubao Voice) 配置与沉稳克制转场过渡音效配置 |
+| 7.4.0 | 2026-11-02 | Grok Bot | 新增 copywriter_chain_timeout_seconds：外层文案子进程超时由供应商预算求和推导 |
 | 7.3.0 | 2026-11-01 | Grok Bot | 标题/全文案供应商顺序支持 codex、grok；默认 agy,codex,grok,gemini；新增 copywriter_grok_timeout_seconds（默认 150s，实测 grok 全文案 95–117s） |
 | 7.2.0 | 2026-11-01 | Grok Bot | 字幕翻译 CLI 优先：codex 成为可排序供应商（不再重复追加），新增 grok CLI 配置；默认 agy,codex,grok,deepseek,gemini,google |
 """
@@ -1060,6 +1061,25 @@ class Settings(BaseSettings):
             if provider in allowed and provider not in providers:
                 providers.append(provider)
         return providers or ["deepseek"]
+
+    @property
+    def copywriter_chain_timeout_seconds(self) -> int:
+        """copywriter.py 子进程外层超时：链上各供应商预算之和 + 60s 余量，避免魔法数。
+
+        Gemini API 路径（含标题仲裁与质量门）按 120s 计；codex 仅在开关开启时计入。
+        """
+        budgets = {
+            "agy": self.copywriter_agy_timeout_seconds,
+            "codex": self.codex_text_request_timeout_seconds,
+            "grok": self.copywriter_grok_timeout_seconds,
+            "gemini": 120,
+        }
+        providers = set(self.copywriter_title_provider_order_list) | {"gemini"}
+        if self.enable_codex_text_fallback:
+            providers.add("codex")
+        else:
+            providers.discard("codex")
+        return sum(budgets[provider] for provider in providers) + 60
 
     @property
     def copywriter_title_provider_order_list(self) -> list[str]:

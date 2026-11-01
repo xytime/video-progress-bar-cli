@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-11-02 | Grok Bot | 覆盖 Highlight 文案外层超时随供应商链预算推导 |
 | 1.3.0 | 2026-08-20 | Codex | 覆盖独立渲染资产、人工审核账本及其与源片状态隔离 |
 | 1.2.0 | 2026-08-20 | Codex | 覆盖 YouTube 滚动 VTT 去重，阻断重复字幕进入候选文案 |
 | 1.1.0 | 2026-08-20 | Codex | 覆盖 Highlight Clip 的独立发布主体和 post_id 账本边界 |
@@ -180,3 +181,23 @@ def test_rolling_webvtt_keeps_only_new_words_in_each_timed_cue():
 
     assert [cue.text for cue in cues] == ["Markets are never", "just numbers.", "They are stories."]
     assert [cue.start_ms for cue in cues] == [0, 1_000, 2_000]
+
+
+def test_highlight_copy_timeout_covers_full_provider_chain(tmp_path, monkeypatch):
+    from config.settings import Settings
+    from video_processing.highlight import render
+
+    chain = Settings(_env_file=None, copywriter_title_provider_order="agy,codex,grok,gemini",
+                     enable_codex_text_fallback=True, copywriter_agy_timeout_seconds=45,
+                     codex_text_request_timeout_seconds=120, copywriter_grok_timeout_seconds=150)
+    assert chain.copywriter_chain_timeout_seconds == 45 + 120 + 150 + 120 + 60
+    monkeypatch.setattr(render, "settings", chain)
+    seen = []
+    service = render.HighlightRenderService(db=None, project_root=tmp_path)
+    monkeypatch.setattr(service, "_run", lambda command, *, timeout, label: seen.append(timeout))
+    service._generate_copy("clip", "title", tmp_path / "excerpt.txt", tmp_path)
+    assert seen == [chain.copywriter_chain_timeout_seconds]
+    no_codex = Settings(_env_file=None, copywriter_title_provider_order="agy,codex,grok,gemini",
+                        enable_codex_text_fallback=False, copywriter_agy_timeout_seconds=45,
+                        copywriter_grok_timeout_seconds=150)
+    assert no_codex.copywriter_chain_timeout_seconds == 45 + 150 + 120 + 60

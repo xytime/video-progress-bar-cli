@@ -8,6 +8,7 @@ Clip，不修改 ``processed_videos``，也不会调用视频号上传器；发�
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-20 | Codex | 新增独立 Clip 渲染、文案、专用封面和可审计资产清单服务 |
+| 1.0.1 | 2026-11-02 | Grok Bot | 文案超时改由 settings.copywriter_chain_timeout_seconds 推导，覆盖 agy→codex→grok→gemini 全链 |
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Any
 
 import imageio_ffmpeg
 
+from config.settings import settings
 from video_processing.db.database import PipelineDB
 
 logger = logging.getLogger(__name__)
@@ -182,7 +184,7 @@ class HighlightRenderService:
                 str(self.python), "scripts/copywriter.py", "--youtube-id", clip_id,
                 "--title", title, "--desc-file", str(excerpt_path), "--output-dir", str(workspace),
             ],
-            timeout=240,
+            timeout=settings.copywriter_chain_timeout_seconds,
             label="Highlight 文案生成",
         )
 
