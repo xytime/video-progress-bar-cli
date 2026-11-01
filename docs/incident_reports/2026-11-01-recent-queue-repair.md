@@ -297,3 +297,16 @@
 真实#7000共128段离线对比：原全片AMOUNT_CONSISTENCY_UNIT_DRIFT一项，候选为0；两版逐段检查均0异常。没有调用供应商，没有改动原检查点、审计或视频。检查点SHA256 `4b7119803687481e88beb5ddc920ddf1a8d5034d1c57b015e45d47e42c95f6b5` 与mtime均保持；两版新解释器确认实际导入对应源码，证据 `7000-real-amount-comparison-r21.json`。独立提交源验证与本次实际采用另记。
 
 12:00固定初始24小时20条：系统未解3、提交待核实14、策略3；固定48小时31条：系统9、待核实16、策略6。滚动24小时因新失败记录为21条、系统4；不能用滚动窗口老化冒充修复。证据 `live-audits/20261101T040058Z/audit.json`。未清零，保留原生提交意图与UNCERTAIN，未手工重发或查询平台。
+
+
+## 12:11 BJ：金额修复实际采用与直接启动入口补全
+
+金额修复提交 `334e461a73a13d2e625761995bf4b924450e3ae0` 已推送；原生部署 `88bb8cfddbe04d30a6e5f5e4698f01e4`（外置 `deployment-r31/`）9步COMPLETE、verify.ok=true，5类驻留角色匹配实际源码摘要 `7121cd99b7e1cf2bb4fca041a61f1c1dcbd925c455c4bb5fbb7b863ecf0c02a7`。证据 `runtime-adopted-r21.json`、`r21-validation.json`；最终完整运行候选及独立提交源各247项隔离通过，分别 `video-pytest-7behqaa6` / `46d2c5c1eacfea8310eda9715337b38c081cc24468d2496d4d0cd39256e05071` 与 `video-pytest-6tjya31b` / `b68fb3a4ebf6cae47214c85106d9f0fa5541238583972432848ce894ea002ad9`。排空等待#7042自然结束，没有强行终止原任务。
+
+#7042最新运行2038仍失败：Gemini78.445秒预算不足、DeepSeek78.579秒网络读取超时、Google9.288秒限流、Codex245.672秒total_timeout。原累计600秒上限保持，未再次释放或重置；不能称该视频已修复。证据 `7042-latest-provider-audit-r21.json`。#7137上一次无效对齐回执仍保留，未伪装供应商成功。
+
+这次排空真实暴露直接启动入口漏口：`python -m video_processing.pipeline_manager` 绕过巡航CLI包装，单片结束后在维护闸门正常拒绝后仍打印MaintenanceDenied堆栈并退出1。新增可测试的直接命令main，构造管理器前检查闸门；只将code=MAINTENANCE且实际状态=MAINTENANCE视为正常退出0。原触发源、共享任务锁、分阶段准入保持；真实业务异常、控制UNKNOWN、运行状态下的维护异常均传播。同步修正巡航两个捕获点原来用running()==False误将UNKNOWN标为正常排空的问题，UNKNOWN仍记FAILED并保留结束时间与原异常。
+
+旧直接入口真实跨解释器命令失败并打印相同堆栈，新增7项旧源均失败（其他6项因缺少可测试main入口），证据 `video-pytest-7o7cql7a` / `c09c85f1a108bcb95d91313ba018528016672f6c7997d1f94a65b12105ca9362`。旧巡航UNKNOWN两例均复现错误吞没，证据 `video-pytest-lmt9e7z5` / `4b9b771f59fb537a7c4373c9171c3267a22bf25df95a0db91c9aec4b6e23c4dc`。只补直接入口阶段160项通过；补齐UNKNOWN后完整候选162项通过，证据 `video-pytest-ldrkn9s4` / 83f8ee671ffac158c81725f2e5483c166b12b84184cae587a2bf4bfcd7f4a9db，探针及pytest均0，8项既有FastAPI弃用告警。独立提交源、本次运行采用另记。
+
+12:08固定初始24小时20条系统未解3、待核实14、策略3；固定48小时31条系统9、待核实16、策略6。#7007已经原生完成字幕、正文和互动图层，仍等待封面；不以字幕完成代替完整队列恢复或公开发布。证据 `live-audits/20261101T040816Z/audit.json`。未清零，历史事件不删，UNCERTAIN不重投。

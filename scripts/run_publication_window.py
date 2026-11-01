@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| maintenance-cli-drain-v2 | 2026-11-01 | Codex | 只有明确维护状态可记正常排空；未知控制仍记FAILED并传播。 |
 | maintenance-drain-v1 | 2026-11-01 | Codex | 维护关闭后正常记录排空并退出，保留真实失败与原始批量入口拒绝。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.11.1 | 2026-10-21 | Codex | 公开归档兼容同原生 ID 的已发表组件凭据，逐项核验公开、处理与预约状态。 |
@@ -210,7 +211,7 @@ def run_publication_window() -> int:
             ).run_daily_job()
             _update_run_status(status, status_lock, state="COMPLETED")
         except MaintenanceDenied as exc:
-            if running():
+            if exc.code != "MAINTENANCE" or gate().status()["state"] != "MAINTENANCE":
                 _update_run_status(status, status_lock, state="FAILED", error=str(exc))
                 raise
             _update_run_status(status, status_lock, state="DRAINED", reason="MAINTENANCE")
@@ -784,8 +785,8 @@ def cli_main() -> int:
     """定时入口将真实维护拒绝记为正常延后，业务异常仍传播。"""
     try:
         return main()
-    except MaintenanceDenied:
-        if running():
+    except MaintenanceDenied as exc:
+        if exc.code != "MAINTENANCE" or gate().status()["state"] != "MAINTENANCE":
             raise
         logging.info("[PublicationWindow] 维护中，本轮未领取新任务。")
         return 0

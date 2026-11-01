@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| maintenance-cli-drain-v1 | 2026-11-01 | Codex | 直接启动入口识别真实维护排空，未知控制状态及业务失败仍报错。 |
 | maintenance-drain-v1 | 2026-11-01 | Codex | 单片排空后在后续阶段前复验维护闸门，不产生新的健康通知、补发或互动。 |
 | recovery-fairness-v1 | 2026-10-31 | Codex | 单片边界交替批准恢复与普通任务，沿用原准入并共享本批去重。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
@@ -5545,7 +5546,8 @@ class PipelineManager:
         logger.info("--- Daily Pipeline Job Completed ---")
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """直接命令入口只把已确认维护的正常排空转换为成功退出。"""
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the video processing pipeline")
@@ -5554,6 +5556,17 @@ if __name__ == "__main__":
         choices=("dashboard_scheduler", "dashboard_manual_full", "direct_cli"),
         default="direct_cli",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
-    PipelineManager(trigger_source=args.trigger_source).run_daily_job()
+    try:
+        gate().require_running()
+        PipelineManager(trigger_source=args.trigger_source).run_daily_job()
+    except MaintenanceDenied as exc:
+        if exc.code != "MAINTENANCE" or gate().status()["state"] != "MAINTENANCE":
+            raise
+        logger.info("[PipelineCLI] 当前单片已结束或未领取新工作；维护中正常排空退出。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
