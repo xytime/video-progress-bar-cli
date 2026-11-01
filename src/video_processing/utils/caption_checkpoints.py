@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-01 | Codex | 新批次快照实现纳入翻译完成合同；原ASR和Codex累计账本身份不变。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 容错政策与案例存储纳入合同，完成快照绑定最终质量告警。 |
 | 1.1.0 | 2026-10-27 | Codex | 翻译恢复计划、回执及离线音频诊断实现纳入完成快照合同。 |
 | 1.0.0 | 2026-10-23 | Codex | 独立保存 ASR 与已通过质量门的翻译，供下游失败后续跑。 |
@@ -27,7 +28,7 @@ TRANSLATION_MODULES = (
     'translation_quality_evaluator', 'translation_consistency_guard', 'translation_fluency_guard',
     'translation_entity_guard',
     'translation_prompt_constraints', 'vocab_helper', 'translation_helper', 'deepseek_translation',
-    'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
+    'gemini_batch_cache', 'translation_model_pool', 'agy_provider', 'codex_subtitle_provider', 'codex_text_provider',
     'subtitle_recovery_state', 'subtitle_failure_receipt', 'subtitle_audio_review', 'subtitle_audio_review_worker',
     'subtitle_sparse_policy', 'subtitle_quality_recovery', 'subtitle_bad_cases', 'subtitle_targeted_repair',
 )

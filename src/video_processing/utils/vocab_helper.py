@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| 2.11.0 | 2026-11-01 | Codex | 完整 Gemini 批次按全文及实现绑定保存；超时续跑不重译已完成批次，全片质量守门保持。 |
 | 2.10.0 | 2026-11-01 | Codex | 问题段修复可将全片背景降为消歧提示；原文逐段权威保持最高。 |
 | 2.8.0 | 2026-10-05 | Codex | 共享截止时间，每次请求动态收紧时限并拒绝不足10秒的 Gemini 请求。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
@@ -37,11 +38,14 @@
   青绿色（&HC7D36F&）高亮下划线。
 """
 
+import hashlib
 import json
+from pathlib import Path
 import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from .gemini_batch_cache import GeminiBatchCache
 from .translation_prompt_constraints import render_translation_constraints
 from .translation_model_pool import DynamicTranslationModelPool, classify_error
 
@@ -134,6 +138,12 @@ def extract_vocab_batch(
     )
     local_deadline = time.monotonic() + total_timeout
     deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+    cache_root = getattr(settings_obj, 'default_output_dir', None)
+    cache = GeminiBatchCache(cache_root / 'gemini_subtitle_cache' if cache_root is not None else None,
+        dict(english=english_texts, chinese=chinese_translations, context=context_text,
+             maximum=max_vocabulary_items, minimum=min_vocabulary_items,
+             authoritative=context_is_authoritative,
+             implementation=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()), _MODELS_TO_TRY)
     for batch_start in range(0, total, _BATCH_SIZE):
         request_timeout_ms = _remaining_request_timeout_ms(deadline)
         if request_timeout_ms <= 0:
@@ -141,10 +151,6 @@ def extract_vocab_batch(
                 error_out.append("Gemini budget below minimum request deadline (10s)")
             logger.warning("[vocab_helper] Gemini subtitle candidate budget exceeded (%ss).", total_timeout)
             return None
-        client = _genai.Client(
-            api_key=api_key,
-            http_options=_genai_types.HttpOptions(timeout=request_timeout_ms),
-        )
         batch_end = min(batch_start + _BATCH_SIZE, total)
         en_batch = english_texts[batch_start:batch_end]
         zh_batch = chinese_translations[batch_start:batch_end] if chinese_translations else None
@@ -157,9 +163,21 @@ def extract_vocab_batch(
             min_vocabulary_items=min_vocabulary_items,
             context_is_authoritative=context_is_authoritative,
         )
+        cached = cache.load(prompt, len(en_batch), _parse_response)
+        if cached is not None:
+            batch_result, model_name = cached
+            if model_out is not None and model_name not in model_out:
+                model_out.append(model_name)
+            all_results.extend(batch_result)
+            logger.info('[vocab_helper] Reusing complete Gemini batch %s.', batch_start//_BATCH_SIZE + 1)
+            continue
         state_path = (
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
             if getattr(settings_obj, "project_root", None) is not None else None
+        )
+        client = _genai.Client(
+            api_key=api_key,
+            http_options=_genai_types.HttpOptions(timeout=request_timeout_ms),
         )
         try:
             call_result = _call_with_retry(
@@ -179,6 +197,7 @@ def extract_vocab_batch(
             )
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} parse failed. Aborting.")
             return None
+        cache.save(prompt, response.text, model_name, len(en_batch), _parse_response)
         if model_out is not None and model_name not in model_out:
             model_out.append(model_name)
 
