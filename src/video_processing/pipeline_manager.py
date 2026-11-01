@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| maintenance-drain-v1 | 2026-11-01 | Codex | 单片排空后在后续阶段前复验维护闸门，不产生新的健康通知、补发或互动。 |
 | recovery-fairness-v1 | 2026-10-31 | Codex | 单片边界交替批准恢复与普通任务，沿用原准入并共享本批去重。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 成功字幕告警持久入箱、P1投递与退避，渲染缓存复用仍核对质量案例。 |
 | subtitle-recovery-v1 | 2026-10-27 | Codex | 字幕具名回执驱动持久退避和待修复，成功快照验证后收敛恢复账。 |
@@ -5515,6 +5516,8 @@ class PipelineManager:
             logger.info("Evicted %s expired waitlist video(s) older than %s days.", evicted_waitlist, settings.waitlist_ttl_days)
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
+        # 已接纳单片可自然结束；后续健康通知、补发及互动属于新工作。
+        gate().require_running()
         self._check_wechat_delivery_health()
         if not settings.wechat_publishing_paused:
             recovered = self.recover_deferred_wechat_publications()

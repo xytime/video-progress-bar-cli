@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| maintenance-drain-v1 | 2026-11-01 | Codex | 维护关闭后正常记录排空并退出，保留真实失败与原始批量入口拒绝。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 1.11.1 | 2026-10-21 | Codex | 公开归档兼容同原生 ID 的已发表组件凭据，逐项核验公开、处理与预约状态。 |
 | 1.10.0 | 2026-10-09 | Codex | 复用已有每分钟巡航恢复二创队列。 |
@@ -208,6 +209,12 @@ def run_publication_window() -> int:
                 status_reporter=report_pipeline_stage, trigger_source="cron",
             ).run_daily_job()
             _update_run_status(status, status_lock, state="COMPLETED")
+        except MaintenanceDenied as exc:
+            if running():
+                _update_run_status(status, status_lock, state="FAILED", error=str(exc))
+                raise
+            _update_run_status(status, status_lock, state="DRAINED", reason="MAINTENANCE")
+            logging.info("[PublicationWindow] 当前任务已结束；维护关闭后续领取，本轮排空退出。")
         except Exception as exc:
             _update_run_status(status, status_lock, state="FAILED", error=str(exc))
             raise
@@ -773,5 +780,16 @@ def main(argv: list[str] | None = None) -> int:
     return run_publication_window()
 
 
+def cli_main() -> int:
+    """定时入口将真实维护拒绝记为正常延后，业务异常仍传播。"""
+    try:
+        return main()
+    except MaintenanceDenied:
+        if running():
+            raise
+        logging.info("[PublicationWindow] 维护中，本轮未领取新任务。")
+        return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli_main())
