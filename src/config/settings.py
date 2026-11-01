@@ -125,7 +125,7 @@
 | 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
 | 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
 | 7.1.0 | 2026-10-08 | Antigravity | 新增豆包语音 2.0 (Doubao Voice) 配置与沉稳克制转场过渡音效配置 |
-| 7.3.0 | 2026-11-01 | Grok Bot | 标题/全文案供应商顺序支持 codex、grok；默认 agy,codex,grok,gemini；新增 copywriter_grok_timeout_seconds |
+| 7.3.0 | 2026-11-01 | Grok Bot | 标题/全文案供应商顺序支持 codex、grok；默认 agy,codex,grok,gemini；新增 copywriter_grok_timeout_seconds（默认 150s，实测 grok 全文案 95–117s） |
 | 7.2.0 | 2026-11-01 | Grok Bot | 字幕翻译 CLI 优先：codex 成为可排序供应商（不再重复追加），新增 grok CLI 配置；默认 agy,codex,grok,deepseek,gemini,google |
 """
 import json
@@ -396,7 +396,7 @@ class Settings(BaseSettings):
     # 仅改变标题字段，正文仍由现有文案器生成；未知 provider 会被忽略。
     # AGY 全文案模式下也是整套文案的供应商顺序：CLI 优先，Gemini API 最后。
     copywriter_title_provider_order: str = "agy,codex,grok,gemini"
-    copywriter_grok_timeout_seconds: int = Field(default=90, ge=30, le=180)
+    copywriter_grok_timeout_seconds: int = Field(default=150, ge=30, le=180)
     copywriter_agy_bin: str = "agy"
     copywriter_agy_model: str = AGY_DEFAULT_MODEL
     copywriter_agy_timeout_seconds: int = 45

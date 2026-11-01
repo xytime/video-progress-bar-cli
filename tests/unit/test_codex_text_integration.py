@@ -147,7 +147,7 @@ def test_chain_order_cli_first_grok_recovers_before_gemini(tmp_path, monkeypatch
     monkeypatch.setattr(copywriter, "run_codex_structured", codex)
     def grok(prompt, **kwargs):
         calls.append("grok")
-        assert kwargs["command"] == "grok-test" and kwargs["timeout_sec"] <= 90
+        assert kwargs["command"] == "grok-test" and kwargs["timeout_sec"] <= 150
         assert "PATH" in kwargs["environment"]
         return dict(RAW)
     monkeypatch.setattr(copywriter, "run_grok_structured", grok)
