@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-11-01 | Codex | 封面及投稿后的实际状态优先于旧字幕阶段，保留恢复与公开凭据要求。 |
 | 1.3.0 | 2026-11-01 | Codex | 恢复项跳过仅报告已知状态，不推断监督停止且保留当前运行及审核优先级。 |
 | 1.2.0 | 2026-11-01 | Codex | 将 OCR 预算耗尽与对白字幕不完整分开诊断，保留质量门禁及原始错误。 |
 | 1.1.0 | 2026-10-29 | Codex | 提交证据优先、恢复凭据验证、未知运行观测保护及阶段化停滞。 |
@@ -40,14 +41,23 @@ _STAGE_MAP: dict[str, str] = {
     "DOWNLOADING": "视频下载 (DOWNLOADING)",
     "COPYWRITING": "文案生成 (COPYWRITING)",
     "RENDERING": "成片渲染 (RENDERING)",
+    "AI_COVER_PENDING": "封面素材等待 (AI_COVER_PENDING)",
     "PUBLISHING": "平台上传 (PUBLISHING)",
     "UNCERTAIN": "平台投递核实 (UNCERTAIN)",
     "SUBMITTED_UNBOUND": "平台受理待绑定 (SUBMITTED_UNBOUND)",
     "SUBMITTED_BOUND": "平台已受理 (SUBMITTED_BOUND)",
+    "UNDER_REVIEW": "平台审核中 (UNDER_REVIEW)",
     "WECHAT_DEFERRED": "微信延后补发 (WECHAT_DEFERRED)",
     "LOGIN_REQUIRED": "登录授权门禁 (LOGIN_REQUIRED)",
     "PUBLISHED": "已发布记录 (PUBLISHED)",
+    "COMPLETED": "已完成记录 (COMPLETED)",
 }
+
+_POST_CAPTION_STATUSES = frozenset({
+    "AI_COVER_PENDING", "PUBLISH_PRECHECK", "PUBLISHING", "UNCERTAIN",
+    "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNDER_REVIEW", "WECHAT_DEFERRED",
+    "PUBLISHED", "COMPLETED",
+})
 
 _ERR_SIGNATURES: tuple[tuple[str, str, str, str, str], ...] = (
     ("VISUAL_REVIEW_BUDGET_EXCEEDED", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_VISUAL_BUDGET", "原片内嵌字幕识别未完成：视觉核验预算耗尽", "原片字幕路由 (native_caption_router) 视觉核验超出预算 (VISUAL_REVIEW_BUDGET_EXCEEDED)"),
@@ -73,6 +83,9 @@ def sanitize_error_excerpt(raw: str, max_chars: int = 420) -> str:
 
 def resolve_stage_label(task: TaskUnitFacts) -> str:
     """结合 DB 状态、字幕进度文件 stage 与尾部报错特征，解析精确发生阶段。"""
+    # 字幕缓存复用后可能不重写旧进度；已到后续阶段时以当前状态为准。
+    if task.status in _POST_CAPTION_STATUSES:
+        return _STAGE_MAP[task.status]
     err = task.error_msg or ""
     c_stage = (task.caption_stage or "").upper()
     if c_stage == "SOURCE_CAPTION_LOCATING" or "[NativeCaptionReview]" in err or "burned_caption_repair" in err:

@@ -159,3 +159,18 @@
 
 
 独立提交导出首次104项中102通过、2项既有发布窗口测试失败，证据 `video-pytest-gu7h2wbz`。查明主干缺失已经在线采用的“旧视频号作品不自动回查”无动作实现，而测试已进入主干；本次只选择性补入该无动作兼容入口及原有对应历史说明，不纳入工作区的保活告警改动。真实运行行为保持不查询、不领取、不通知，继续保护UNCERTAIN原始提交事实。
+
+
+## 09:43 BJ：收尾修复实际采用、全片结果与诊断阶段纠正
+
+提交 `5ee015953a63debdc00eab716388d2f5224e9461` 已推送；原生部署 `a9623c06a890422297a820bf74491e16`（外置 `deployment-r14/`）9步COMPLETE、verify.ok=true，维护闸门RUNNING。5类驻留角色在新进程身份下采用源码摘要 `0831d233fb9d54f241118d96eeef72846141868048e23d2da107ba4a1d5e9a06`，证据 `runtime-adopted-r11.json`。完整候选及独立提交导出源各104项隔离通过，后者为 `video-pytest-orf2trey`、清单 `7c24efbea72c5bf5e69306ab8c1a4eeada4826e217e9b8954af24f571f2b0509`。此前计划因定时任务活动被拒绝，以及维护恢复暂时拒绝的原始证据均保留，没有绕过准入。#7073 原生正文和片尾完成进入AI_COVER_PENDING，恢复项已正常结束而未遗留RUNNING；实际回执 `r11-first-native-recovery-finalization.json`。
+
+#7135 正式完整字幕制作通过：142.756281秒，与原片容器时长一致，整片FFmpeg解码退出0，质量告警0，同源及成功回执有效；成片SHA256 `edb66194ebbaa6672c6f048cb620ce4480c3e0479705b46c01204a75e1c101a5`。0秒、70秒和136秒真实成片画面已复核，原英文标题与演讲全画面保留，双语字幕位于独立区域。官方单项重试API在新鲜版本、真实空闲单片锁及无投稿保护的前提下恢复原流水线；09:37原生正文、互动及片尾完成，进入AI_COVER_PENDING，证据 `production-caption-validation/7135/` 与 `7135-native-restoration.json`。等待封面不等于已发表。
+
+#7059 在既有持久预算内的续跑于09:28实际失败，完整463段译文未完成，原始原因total_timeout。Codex有效分批缓存由155增至215段，但仍非完整翻译；持久账本累计45次请求、600.022秒，原上限600秒已耗尽，active_window为空。证据 `production-caption-validation/7059/result.json`、`7059-budget-{before,after}-continuation.json`。没有重置预算、截断字幕或把部分缓存算作恢复。这与少量不影响全片的字幕瑕疵不同，仍为真实未解决项。
+
+09:37一致备份按初始固定队列计数，避免滚动窗口老化误算恢复：最初24小时20条现10条FAILED、3条AI_COVER_PENDING、6条UNCERTAIN、1条TRANSCRIBING；系统类未解11条、策略2条、提交待核实6条。最初48小时31条现19条FAILED、3条AI_COVER_PENDING、8条UNCERTAIN、1条TRANSCRIBING；系统类未解17条、策略5条、提交待核实8条。滚动48小时现30条，减少的一条是窗口老化，不是修复。固定计数及逐条事实见 `live-audits/20261101T013735Z/audit.json`。原审批与禁止自动回查、重投保持。
+
+后台阶段误判已复现：#7135已等封面，旧字幕进度仍显示SOURCE_CAPTION_LOCATING；投稿后的任务也被旧TRANSLATING覆盖。仅让已知字幕后续状态决定当前阶段，不修改异常分类、恢复判据或投稿凭据。8项旧版复现失败、2项当前字幕反例通过，证据 `video-pytest-4dlt10x7`。候选完整运行源143项隔离通过，边界探针/pytest均0、8项既有FastAPI弃用告警，证据 `video-pytest-4jgp0862`、源清单 `74d47d38b0522125ff3be5e1758568f7a9db19412e3af6590aa93d02dafe1a75`。独立提交导出、运行采用及线上回读另记，不提前声明上线。
+
+本地改进报告已刷新，73项建议保留审批及7日观察期，文件 `output/improvement/runs/efb78e61e0104455991841690c5a4ee3/report.md`；没有发送外部消息。恢复队列下一条#7068自09:37正常转录，尚无新的失败回执，不因耗时推断根因或重启。

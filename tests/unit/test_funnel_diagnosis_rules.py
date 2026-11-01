@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-11-01 | Codex | 后续封面和投稿阶段不被旧字幕进度覆盖；当前字幕失败仍保留真实阶段。 |
 | 1.3.0 | 2026-11-01 | Codex | 恢复跳过不虚构批次或监督器退出，不遮蔽当前运行和审核保护。 |
 | 1.2.0 | 2026-11-01 | Codex | 覆盖 OCR 预算分类、相邻原因不退化、原始证据及投稿保护优先级。 |
 | 1.1.0 | 2026-10-29 | Codex | 覆盖冲突提交、公开证据、恢复凭据、互斥分母、配置与运行未知边界。 |
@@ -26,6 +27,36 @@ from video_processing.funnel_diagnosis import (
     resolve_delivery_state,
     sanitize_error_excerpt,
 )
+from video_processing.funnel_diagnosis.rules import resolve_stage_label
+
+
+@pytest.mark.parametrize('status,expected', [
+    ('AI_COVER_PENDING', '封面素材等待 (AI_COVER_PENDING)'),
+    ('UNCERTAIN', '平台投递核实 (UNCERTAIN)'),
+    ('UNDER_REVIEW', '平台审核中 (UNDER_REVIEW)'),
+    ('COMPLETED', '已完成记录 (COMPLETED)'),
+])
+@pytest.mark.parametrize('caption_stage', ['SOURCE_CAPTION_LOCATING', 'TRANSLATING'])
+def test_later_pipeline_stage_precedes_previous_caption_progress(status, expected, caption_stage):
+    """7135 已在等封面、7008 已有发表动作，旧字幕进度不代表当前阶段。"""
+    task = TaskUnitFacts(video_id=7135, youtube_id='ZVGS33A0nK0', status=status,
+                         caption_stage=caption_stage, failed_epoch=NOW_EPOCH - 1000,
+                         failure_events=({'failed_epoch': NOW_EPOCH - 1000},))
+    diagnosis = diagnose_task_unit(task, _env())
+    assert resolve_stage_label(task) == expected
+    assert diagnosis is not None and diagnosis.stage == expected
+    assert diagnosis.unresolved  # 阶段纠正不补造恢复完成或公开回执。
+    assert not diagnosis.is_recovered
+
+
+@pytest.mark.parametrize('status,stage,expected', [
+    ('TRANSCRIBING', 'SOURCE_CAPTION_LOCATING', '字幕·原片识别与擦除 (SOURCE_CAPTION_LOCATING)'),
+    ('FAILED', 'TRANSLATING', '字幕·双语翻译 (TRANSLATING)'),
+])
+def test_current_caption_failure_retains_its_specific_stage(status, stage, expected):
+    task = TaskUnitFacts(video_id=7059, youtube_id='w21d64pB9jk', status=status,
+                         caption_stage=stage)
+    assert resolve_stage_label(task) == expected
 
 NOW_EPOCH = 1793233200.0  # 2026-10-29 08:20:00 BJ
 
