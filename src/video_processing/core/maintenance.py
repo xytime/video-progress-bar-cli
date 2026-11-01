@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-01 | Codex | 已结束准入清理等待全局锁，保持真实票据锁直到登记删除，避免争用产生失主。 |
 | 1.0.0 | 2026-10-12 | Codex | v0.2.1 跨进程单项准入、等待重检、CAS 与故障闭锁 |
 """
 from __future__ import annotations
@@ -34,17 +35,17 @@ class MaintenanceGate:
         self.directory = self.path.with_suffix(".leases")
 
     @contextmanager
-    def _locked(self):
+    def _locked(self, *, timeout=2):
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.with_suffix(".lock").open("a+") as stream:
-                deadline = time.monotonic() + 2
+                deadline = None if timeout is None else time.monotonic() + timeout
                 while True:
                     try:
                         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
                     except BlockingIOError:
-                        if time.monotonic() >= deadline:
+                        if deadline is not None and time.monotonic() >= deadline:
                             raise MaintenanceDenied("UNKNOWN")
                         time.sleep(.02)
                 yield
@@ -215,7 +216,8 @@ class Admission:
 
     def close(self):
         try:
-            with self.gate._locked():
+            # 清理不领取新工作；保留票据 flock 等待持锁者退出，不因准入超时遗留失主。
+            with self.gate._locked(timeout=None):
                 (self.gate.directory / (self.row["id"] + ".json")).unlink(missing_ok=True)
         finally:
             self.stream.close()

@@ -310,3 +310,14 @@
 旧直接入口真实跨解释器命令失败并打印相同堆栈，新增7项旧源均失败（其他6项因缺少可测试main入口），证据 `video-pytest-7o7cql7a` / `c09c85f1a108bcb95d91313ba018528016672f6c7997d1f94a65b12105ca9362`。旧巡航UNKNOWN两例均复现错误吞没，证据 `video-pytest-lmt9e7z5` / `4b9b771f59fb537a7c4373c9171c3267a22bf25df95a0db91c9aec4b6e23c4dc`。只补直接入口阶段160项通过；补齐UNKNOWN后完整候选162项通过，证据 `video-pytest-ldrkn9s4` / 83f8ee671ffac158c81725f2e5483c166b12b84184cae587a2bf4bfcd7f4a9db，探针及pytest均0，8项既有FastAPI弃用告警。独立提交源、本次运行采用另记。
 
 12:08固定初始24小时20条系统未解3、待核实14、策略3；固定48小时31条系统9、待核实16、策略6。#7007已经原生完成字幕、正文和互动图层，仍等待封面；不以字幕完成代替完整队列恢复或公开发布。证据 `live-audits/20261101T040816Z/audit.json`。未清零，历史事件不删，UNCERTAIN不重投。
+
+
+## 12:20 BJ：直接入口已采用；维护锁争用与失主登记的真实恢复
+
+直接命令入口修复 `e9544c28761f64627fbc674695b0d965c937b060` 已推送并实际采用：原生部署 `3dba9c4909734422a1991d4f3d22af19`（`deployment-r32/`）9步COMPLETE、verify.ok=true，5类驻留角色匹配实际源码摘要 `9102f743263237d66843060528b524b0d6228c35422626b64685f5a5291c0765`；证据 `runtime-adopted-r22.json`、`r22-validation.json`。最终完整运行候选及独立提交源各162项隔离通过，分别 `video-pytest-kidnbmhg` / `599b51a4d69428d2539483f531c361b696aac26b2df163f7fc6f1d792fe4bec1` 与 `video-pytest-iki1mp_z` / `7b05a13134830364562709218752fc319f8239e4bf061d3f51f26a386cb7c3b1`。
+
+该次排空发现真实新根因：ready-worker PID94875结束delivery-recovery-launch登记时，全局维护锁争用超过2秒，Admission.close在finally释放票据flock却保留文件，造成ABANDONED_ADMISSION。旧进程仍活着且维护中只睡眠，故原生失主对账正确拒绝把它当死人归档，部署也保持闭锁。新修复只让已结束票据的清理等待全局锁直到登记删除；新工作仍保持2秒有界准入，未知控制仍失败。真实跨进程争用旧代码复现失败，`video-pytest-sdt1u8l8` / `ba3800bab8e5aa26bb11d064ec7e035f3f097067ea448e88e74862753fda2fca`；新源码对应67项维护/恢复隔离测试通过，`video-pytest-ilhr0tjt` / `6d11836010ceb1a4c65d63c2c361c6d287ca0e0468c656ead379b7e490d9b421`。首次恢复验证也证明真实ps全局信息被沙盒禁止，测试改为注入进程表模型，生产仍读真实ps；真实进程、birth、角色flock、SIGTERM、僵尸退出判断、原生归档均未mock。首次现场执行因发现子进程正确拒绝，未发信号；核实两个子进程均已退出并补真实跨进程回归后才继续。
+
+受控恢复工具从已测隔离副本执行，只接受原计划绑定的ready-worker、准确维护版本和唯一delivery-recovery-launch失主ID；逐项校验源/策略/调度、真实角色锁/birth/cwd、无活跃准入、无业务锁/在途账本、无存活或未知子进程，再正常SIGTERM该精确空闲巡检。原生MaintenanceRecovery随后按原始字节、inode、SHA、PID消失与维护版本归档登记，不改业务状态、原部署计划或journal，也不开闸。现场归档 `dd37a6fe6a414a0eb344da1915e18e87`，记录SHA `8eabaefa8c9cae4d7da770eb9b4604d86d551bc38c968869d971a06baa4e902a`，原生归档计划摘要 `08cc86a6704ae31c62447ae3512c1d5e533ae3c803a4ee9f8753ac6e829d7bdc`。证据为 `deployment-r32/abandoned-ready-worker-complete.json` 与 `abandoned-ready-admission/`；原部署随后自行接续9步并恢复运行。若停止后中断，保留审计及登记，由原生reconcile_maintenance显式对账，不静默重复停止或删除文件。
+
+12:20固定初始24小时20条：系统3、待核实14、策略3；固定48小时31条：系统9、待核实16、策略6。滚动24小时21条：系统4、待核实14、策略3；证据 `live-audits/20261101T042000Z/audit.json`。#7042原600秒累计翻译预算已经600.489920084秒耗尽，51次请求，未重置或再次盲目释放；#7137上轮Gemini/DeepSeek无效对齐，仍无有效新结果。未清零、未删除历史、未把重启当业务恢复。
