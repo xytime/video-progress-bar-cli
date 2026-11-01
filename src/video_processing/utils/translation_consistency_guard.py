@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.4.0 | 2026-11-01 | Codex | 同一原文金额按真实段落比较；排除其他金额及岗位计数串配，保留真实十倍漂移。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：检查金融 close/oversubscribe 术语在整片译文中的一致性风险 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增金额单位漂移 consistency warning，捕捉同一候选中正确金额与十倍级错译并存 |
 | 1.2.0   | 2026-07-06 | Codex  | 新增受保护英文实体整片丢失 warning，减少组织/产品名漂移 |
@@ -16,10 +17,11 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import List, Sequence
 
 from .translation_entity_guard import find_missing_protected_entities
-from .translation_quality_guard import QualityIssue, extract_fact_signal
+from .translation_quality_guard import QualityIssue, evaluate_translation_batch
 
 
 _SOURCE_FUND_CLOSE_PATTERNS: Sequence[re.Pattern[str]] = tuple(
@@ -128,20 +130,25 @@ def _append_amount_consistency_issue(
     source_texts: Sequence[str],
     translated_texts: Sequence[str],
 ) -> None:
-    source_amounts = _unique_amounts(
-        amount
-        for text in source_texts
-        for amount in extract_fact_signal(text, lang="en").amounts_usd
-    )
-    translated_amounts = _unique_amounts(
-        amount
-        for text in translated_texts
-        for amount in extract_fact_signal(text, lang="zh").amounts_usd
-    )
-    if not source_amounts or len(translated_amounts) < 2:
-        return
-
+    # 同一原文金额的对应译文才能比较，不能把全片岗位数或其他真实金额串配。
+    # 复用逐段事实门的相邻单位补全；这里不改变逐段阻断规则。
+    pairs = evaluate_translation_batch(source_texts, translated_texts,
+                                      enable_numeric_checks=False).results
+    source_amounts = _unique_amounts(amount for pair in pairs
+                                    for amount in pair.source_signal.amounts_usd)
     for source_amount in source_amounts:
+        corresponding = []
+        for pair in pairs:
+            original_amounts = pair.source_signal.amounts_usd
+            if not any(_same_amount(source_amount, amount) for amount in original_amounts):
+                continue
+            for amount in pair.translation_signal.amounts_usd:
+                # 同段明确对应另一笔原文金额的译值，不能当作当前金额的漂移。
+                if any(_same_amount(amount, other) and not _same_amount(source_amount, other)
+                       for other in original_amounts):
+                    continue
+                corresponding.append(amount)
+        translated_amounts = _unique_amounts(corresponding)
         close_matches = [
             amount for amount in translated_amounts
             if _ratio(source_amount, amount) < 2
@@ -200,10 +207,14 @@ def _unique_amounts(amounts) -> List[float]:
     for amount in amounts:
         if amount <= 0:
             continue
-        if any(_ratio(amount, existing) < 1.01 for existing in unique):
+        if any(_same_amount(amount, existing) for existing in unique):
             continue
         unique.append(amount)
     return unique
+
+
+def _same_amount(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
 
 
 def _ratio(left: float, right: float) -> float:

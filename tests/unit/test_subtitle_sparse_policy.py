@@ -154,7 +154,7 @@ def test_split_amount_uses_actual_next_source_without_broad_context_pollution():
 def test_global_warning_never_masquerades_as_one_affected_segment():
     segments, translations = _video()
     segments[0]["text"], translations[0] = "The cost is $100.", "成本100美元。"
-    segments[1]["text"], translations[1] = "The next cost is $10000.", "下项成本10000美元。"
+    segments[1]["text"], translations[1] = "The same cost is $100.", "相同成本100美元，又被计为10000美元。"
     report = build_sparse_quality_report(segments, translations)
     assert report["global_warnings"]
     assert report["extent_known"] is False
