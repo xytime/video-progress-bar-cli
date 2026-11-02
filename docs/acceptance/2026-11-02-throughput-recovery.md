@@ -8,7 +8,7 @@
 
 恢复受管每分钟公开窗巡航，按原规则处理正常新任务。保留 API 密钥、供应商账户、额度与累计恢复账本。7012/7166/7168/7169/7176 不恢复、不重跑。历史失败事件和现存恢复记录不迁移、不改写；正常业务继续追加新证据。
 
-维护于北京时间 2026-11-02 10:38:45 进入，版本287。完成测试后使用项目原生维护重启部署工具，核验源码清单、工作进程身份及正常调度意图，再恢复 RUNNING。运行采用和两轮巡航证据需在完成后补记。
+维护于北京时间 2026-11-02 10:38:45 进入，版本287。测试通过后已使用原生 recover_maintenance_restart.py 完成维护重启，10:51:56 恢复 RUNNING（版本288），10:51:59 部署九步 COMPLETE。运行采用及两轮巡航证据见后文。
 
 `pipeline_preserve_history=true` 默认暂停巡航日志裁剪、旧待筛选过期归档和 ghost pending 整理。现有待筛选清理是 UPDATE EXPIRED，并非删除。正常新任务处理不受此开关影响；显式设 false 可恢复原整理行为，本次不改生产 .env。
 
@@ -70,3 +70,54 @@ tests/unit/test_source_caption_fallback.py
 ```
 
 结果：414 passed、0 failed、0 skipped，12项弃用警告，pytest耗时76.57s；OS边界探针与测试退出码均0，隔离副本已由测试工具正常回收。源码清单包含原工作区其他未提交代码；只提交本次增量，部署仍逐文件核对实际测试清单。
+
+## 最终运行回执（北京 2026-11-02 11:00）
+
+代码提交 `8493e459d877ab3a221884de37a4f2ec0e563877` — `fix(pipeline): restore cruise safely and protect subtitle review gates`，已推送 origin/main。
+
+- 维护：10:38:45 进入，10:51:56 恢复 RUNNING；巡航按每分钟恢复。crontab 与 operational-intent.json 一致，原始二者及 launchd 定义已备份到证据目录的 cruise-activation/。
+- 发布策略校验：` .venv/bin/python scripts/verify_publication_policy.py --check-installed-schedule` 通过。
+- 原生部署：`deployment-v2/journal.json` 为 COMPLETE，九步 baseline/freeze/stop/backup/adopt/start/resume/restore/verify 全通过。首次 plan 因 UNEXPECTED_UNKNOWN 拒绝，尚未停止或采用；保留该目录，再经空闲核验建立新计划，未绕过未知检查。
+- UI 16052 → 32455；Bot 16171 → 32689；ready-worker 16463 → 33049。新执行者采用源码哈希 `700ee0917c397acc3a062e41bd0bf8b7df87b88e274b86e8cc1815334f80f3c0`。549个实际运行文件与隔离测试清单一致。
+- 10:52 / 10:53 / 10:54 巡航均正常触发，因为重启后的调度轮持有作业锁而退出，没有排队积压；该调度轮把7157于10:54:13提交为 UNDER_REVIEW。
+- 第一轮实际接续巡航：`1793588108-34203`，10:55:08 → 10:58:08；7167于10:58:07变为 UNDER_REVIEW。management_verify 熔断继续阻止管理回查和 HISTORY，未阻断 NEW。
+- 第二轮：`1793588342-35462`，10:59:02 → 10:59:03，COMPLETED；没有合格候选，正常结束，无错误重试。
+- 日限按实际 DAL 口径：普通 NEW 11 + English World 0 = 11/20。原报告的“已领取10”是包含CANCELED行的原始领取数，不能直接等同当前有效日限占用；本次未修改计数规则。
+- 视频号发布准入 allowed=true、blockers=[]；授权最近验证时间有正常业务刷新。日志中的旧“4小时无受理”健康警告仍存在，不能将准入正常当作新视频号投稿成功。
+- 观察段 TaskLeaseBusy=0、新 publishing_failure_events=0。五条指定视频均未自动重跑，字幕门禁仍为 NEEDS_REPAIR。
+- 7012、7166分别在10:54:39、10:54:38发生并发控制台 POST /ignore，成为 IGNORED，error_msg也改变；本次执行未调用这些接口、未回滚该操作。历史失败事件仍能锁住两条任务。其余三条指定视频记录未变。
+- 原174条失败事件、21条字幕恢复记录、33份Codex恢复JSON逐项保持原值/原哈希；没有清账、改额度、改API密钥或供应商账户。保存的原有工作区非本次修改未被覆盖。
+
+证据：同一私有证据目录的 acceptance-final.json、historical-integrity-final.json、cruise-observation.log、runtime-adoption.json、new-translation-candidate-blockers.json。
+
+## 尚未完成的真实样本验收
+
+截至11:00，部署后新增字幕供应商attempt为0，新增成片为0；上述两条是既有成片的抖音补同步受理，不是新渲染，也不是公开可见证明。
+
+正常候选查询为0：6216/5756未满足TED点赞率门槛，7172等待源字幕有界重检。AGY仍因region_restricted冷却到12:44:54；不清冷却，不强制重跑。旧run2053/2054已证实AGY失败后Codex成功，但不能冒充此次上线后的新链式样本。Grok仍无真实成功样本。此项必须保留未验收，待正常调度遇到合格新视频且AGY实际尝试后补证，不能以单测或冷却时间推算替代。
+
+## 核实后不成立或需修正的假设
+
+1. 发布不只依赖4小时调度：独立ready-worker还会约每15秒巡查成片；恢复每分钟完整巡航主要补足包括抖音NEW同步在内的完整轮次。
+2. 30秒偏紧属实，但AGY的80–96秒是失败/超时，无法据此证明120秒必然成功；Codex也不只需要42–77秒。
+3. 人工门禁并非全部只依赖error_msg，新失败本来有独立状态；旧历史事件缺少稳定复核才是本次补强处。
+4. management_verify熔断并不全局禁止NEW，本次两条实际受理直接验证这一点。
+5. 待筛选TTL整理是归档为EXPIRED，不是删除；日志裁剪则确实替换旧日志，已暂停。
+
+## 本次文件清单
+
+| 文件 | 改动 |
+|---|---|
+| src/video_processing/utils/subtitle_provider_window.py | CLI最坏120/300/60，保留总限、质量预留及快速失败让时。 |
+| src/video_processing/db/subtitle_recovery.py | 只读历史失败事件硬门禁，具名放行绑定已存在事件序号。 |
+| src/video_processing/core/deployment_schedules.py | 维护下备份、解注释受管巡航并验证正常调度意图。 |
+| src/config/settings.py | 声明默认保留历史开关。 |
+| .env.example | 记录保留历史开关，不改生产.env。 |
+| scripts/run_publication_window.py | 保留历史时跳过日志裁剪。 |
+| src/video_processing/pipeline_manager.py | 保留历史时跳过旧待筛选/ghost归档整理。 |
+| tests/unit/test_subtitle_provider_window.py | 当前生产顺序、实测链时长及Grok余时窗口。 |
+| tests/unit/test_subtitle_recovery.py | 文案改写、旧RESOLVED链、新失败与旧放行的隔离。 |
+| tests/unit/test_deployment_schedules.py | 巡航备份/回读/后续部署，以及维护与漂移拒绝。 |
+| tests/unit/test_publication_window_runner.py | 保留历史不裁剪、不写裁剪状态。 |
+| tests/unit/test_publication_maintenance_drain.py | 两种历史保留模式及维护排空边界。 |
+| docs/acceptance/2026-11-02-throughput-recovery.md | 需求取舍、完整测试命令、上线与剩余样本验收回执。 |
