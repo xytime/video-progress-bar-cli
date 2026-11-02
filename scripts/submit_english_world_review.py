@@ -132,6 +132,8 @@ def _product_task_decision(db: PipelineDB, item: dict) -> dict:
     else:
         context = verify_product_production_context(db, manifest, state_path=state_path)
     context['review_id'] = item.get('id')
+    context['matching_manifest'] = {'path': item['manifest_path'], 'sha256': manifest_sha256}
+    context['matching_title'] = {'path': item['title_path'], 'sha256': item.get('title_sha256')}
     return freeze_task_product_decision(db, context['task_id'], context, settings.wechat_product_policy_path)
 
 

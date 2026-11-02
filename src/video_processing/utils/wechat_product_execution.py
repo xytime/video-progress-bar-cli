@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| content-match-v1 | 2026-11-02 | Codex | 回执保存当前池与内容摘要；新合同执行前核对账号及最新负面证据。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 英语世界复用安全无商品降级；明确强制绑定的验收命令及最终表单一致性仍保留。 |
 | cleanup-timeout-v1 | 2026-10-24 | Codex | 清空单步超时以明确未确认原因闭锁，回执附固定动作阶段，不放宽商品准入。 |
 | 1.5.0 | 2026-10-24 | Codex | 仅未提交的清理预算超时按既有次数/退避重检，兼容旧BLOCKED回执且不解除身份冲突。 |
@@ -22,6 +23,30 @@ from video_processing.utils.wechat_product_task import selection_from_task
 from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline, picker_diagnostic_stage
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 from video_processing.core.wechat_product_wait_policy import RECHECKABLE_CLEANUP_TIMEOUT
+from video_processing.utils.wechat_product_content_task import matching_receipt_fields, MATCH_VERSION
+
+
+def _matching_safety_block(payload, picker):
+    if payload.get('attachment_version') != MATCH_VERSION:
+        return None
+    from config.settings import settings
+    from .wechat_product_pool import load_live_pool
+    from .wechat_product_collector import read_public_account
+    pool = load_live_pool(settings.wechat_product_policy_path)
+    if not pool['ready']:
+        return pool['reason']
+    if pool['account_id'] != payload['matching_snapshot']['pool']['account_id']:
+        return 'CATALOG_ACCOUNT_CONFLICT'
+    try:
+        account = read_public_account(picker.page)
+        if not account or account['value'] != pool['account_id']:
+            return 'CATALOG_ACCOUNT_UNVERIFIED'
+    except Exception:
+        return 'CATALOG_ACCOUNT_UNVERIFIED'
+    eligible = {(p['product_id'], p['title']) for p in pool['eligible']}
+    if any((p['product_id'], p['title']) not in eligible for p in payload['product_decision']['candidates']):
+        return 'TARGET_UNAVAILABLE'
+    return None
 
 
 def _wait_row_ready(row: dict, now: float, generation: str | None) -> bool:
@@ -128,6 +153,8 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
         if payload is not None:
             if any(receipt.get(key) != payload.get(key) for key in ('task_id', 'config_version', 'config_digest')):
                 return False
+            if any(receipt.get(key) != value for key, value in matching_receipt_fields(payload).items()):
+                return False
             if receipt.get('required') is not payload['require_product']:
                 return False
         actual = picker.read_binding(timeout_ms=3000)
@@ -141,6 +168,8 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
                     or receipt.get('actual_product_id') or receipt.get('actual_title')):
                 return False
         else:
+            if payload is not None and _matching_safety_block(payload, picker):
+                return False
             if (receipt.get('state') != 'BOUND' or receipt.get('binding_confirmed') is not True
                     or receipt.get('unbound_confirmed') is True
                     or (actual.product_id, actual.title) != (receipt.get('actual_product_id'), receipt.get('actual_title'))):
@@ -185,7 +214,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
         record_adoption(policy, decision, evidence_dir, status_path, phase='STARTED', task_decision=payload)
         result = select_optional_product(decision=decision, picker=picker,
                                          timeout_seconds=decision.timeout_seconds, clock=clock,
-                                         selection_block_reason=payload.get('selection_block_reason'))
+                                         selection_block_reason=payload.get('selection_block_reason') or _matching_safety_block(payload, picker))
         binding_required = False  # 普通投稿含英语世界均允许已确认清空的无商品降级。
         receipt = dict(required=True, binding_required=binding_required, binding_confirmed=result.binding_confirmed,
                        unbound_confirmed=result.state == 'UNBOUND', state=result.state,
@@ -198,6 +227,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
                        adapter_stage=picker_diagnostic_stage(picker),
                        config_version=policy.version, config_digest=policy.digest,
                        task_id=payload['task_id'], attachment_reason=payload['reason'])
+        receipt.update(matching_receipt_fields(payload))
         atomic_json(evidence_dir / 'product_selection_receipt.json', receipt)
         record_adoption(policy, decision, evidence_dir, status_path, phase=result.state, result=result, task_decision=payload)
         if wait_output is not None and artifacts_digest:
@@ -227,6 +257,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
     receipt = dict(required=False, binding_confirmed=False, unbound_confirmed=True, state='SKIPPED',
                    reason=payload['reason'], task_id=payload['task_id'], config_digest=payload.get('config_digest'),
                    config_version=payload.get('config_version'), publisher_capability=payload['publisher_capability'])
+    receipt.update(matching_receipt_fields(payload))
     atomic_json(evidence_dir / 'product_selection_receipt.json', receipt)
     atomic_json(evidence_dir / 'product_policy_adoption.json', dict(receipt, phase='SKIPPED', context=payload['context']))
     atomic_json(status_path, dict(receipt, phase='SKIPPED', context=payload['context']))

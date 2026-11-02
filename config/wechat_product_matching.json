@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "min_score": 4,
+  "themes": {
+    "10001054866768": {
+      "title": "思考快与慢 丹尼尔卡尼曼 噪声作者行为经济学诺贝尔经济学奖 快思考慢思考 社会科学经济学心理学",
+      "phrases": [
+        "认知偏差",
+        "损失厌恶",
+        "卡尼曼",
+        "cognitive bias",
+        "loss aversion",
+        "Kahneman"
+      ],
+      "categories": []
+    },
+    "10000028955239": {
+      "title": "股市趋势技术分析10版爱德华兹原书第10版金融投资策略股票入门基础知识指标价值投资书籍书新华文轩旗舰店正",
+      "phrases": [
+        "股票",
+        "股市",
+        "技术分析",
+        "证券交易",
+        "stock market",
+        "equity market",
+        "technical analysis",
+        "stock trading"
+      ],
+      "categories": []
+    },
+    "10000006971274": {
+      "title": "快捷英语 时文阅读理解24-28期 涵盖小升初-高考 提高阅读题型成绩专项训练书",
+      "phrases": [
+        "英语阅读",
+        "英语学习",
+        "英语听力",
+        "English reading",
+        "English learning",
+        "English vocabulary"
+      ],
+      "categories": []
+    },
+    "10000129752415": {
+      "title": "维特根斯坦说逻辑与语言 (英)维特根斯坦著",
+      "phrases": [
+        "维特根斯坦",
+        "语言哲学",
+        "Wittgenstein",
+        "philosophy of language"
+      ],
+      "categories": []
+    },
+    "10000009571089": {
+      "title": "学会提问（原书第12版）",
+      "phrases": [
+        "批判性思维",
+        "逻辑谬误",
+        "critical thinking",
+        "logical fallacy"
+      ],
+      "categories": []
+    },
+    "10000015739598": {
+      "title": "《人生只有一件事》（一本教你如何活得更好的书，没有比学怎么活更重要的事，商业周刊金惟纯作品，樊登赖声川张德芬等诚挚推荐）",
+      "phrases": [
+        "人生只有一件事",
+        "金惟纯",
+        "Jin Weichun"
+      ],
+      "categories": []
+    },
+    "10000068251994": {
+      "title": "【博集】有钱人和你想的不一样1+2 副业搞钱必看 单本 套装 多规格任选 理财书籍",
+      "phrases": [
+        "财富思维",
+        "理财观念",
+        "wealth mindset",
+        "money mindset",
+        "personal finance"
+      ],
+      "categories": []
+    },
+    "10000075168893": {
+      "title": "《活出心花怒放的人生（2026新版）》（彭凯平融合40年积极心理学研究，科学破解幸福误区，助你构建心理韧性，活出快乐！）",
+      "phrases": [
+        "积极心理学",
+        "positive psychology"
+      ],
+      "categories": []
+    },
+    "10000079291348": {
+      "title": "自卑与超越2016（白岩松推荐版，个体心理学之父阿德勒代表作，全新译本；直面自我，超越自卑）",
+      "phrases": [
+        "阿德勒",
+        "自卑情结",
+        "Adler",
+        "inferiority complex"
+      ],
+      "categories": []
+    },
+    "10000101311456": {
+      "title": "中国建筑史 以本书初始面世版本为底本，最大限度还原作者本意 毛边版 部分页面需自行裁开",
+      "phrases": [
+        "中国建筑",
+        "古建筑",
+        "梁思成",
+        "Chinese architecture"
+      ],
+      "categories": []
+    },
+    "10000127150662": {
+      "title": "叫魂 1768年中国妖术大恐慌 孔飞力 上海三联书店",
+      "phrases": [
+        "叫魂",
+        "孔飞力",
+        "清代妖术",
+        "Philip Kuhn",
+        "Soulstealers"
+      ],
+      "categories": []
+    },
+    "10000136249907": {
+      "title": "逻辑思维提升系列任选",
+      "phrases": [
+        "形式逻辑",
+        "逻辑推理",
+        "formal logic",
+        "logical reasoning"
+      ],
+      "categories": []
+    },
+    "10000174342966": {
+      "title": "系统之美（2023版）",
+      "phrases": [
+        "系统思维",
+        "反馈回路",
+        "复杂系统",
+        "systems thinking",
+        "feedback loop",
+        "complex systems"
+      ],
+      "categories": []
+    },
+    "10000180078038": {
+      "title": "失去的三十年：平成日本经济史",
+      "phrases": [
+        "日本经济",
+        "失去的三十年",
+        "失去的二十年",
+        "Japanese economy",
+        "lost decades"
+      ],
+      "categories": []
+    },
+    "10000528570501": {
+      "title": "维特根斯坦传 天才之为责任 (英)蒙克 浙江大学出版社",
+      "phrases": [
+        "维特根斯坦",
+        "Wittgenstein",
+        "哲学传记",
+        "philosopher biography"
+      ],
+      "categories": []
+    }
+  }
+}

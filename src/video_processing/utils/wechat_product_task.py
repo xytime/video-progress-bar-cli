@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| content-match-v1 | 2026-11-02 | Codex | 新合同采用当前商品池与L1匹配；旧冻结任务继续精确重放。 |
 | english-preferred-v1 | 2026-10-25 | Codex | 新任务冻结优先商品及默认兜底；旧任务精确重放原单候选，不改写已冻结身份。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | english-all-v1 | 2026-10-21 | Codex | 英语世界拒绝旧冻结规则，人工商品意图不能覆盖专属快捷英语候选。 |
@@ -96,6 +97,9 @@ def validate_manual_product(policy_path: Path, alias: str) -> dict:
 def selection_from_task(payload: dict):
     if payload.get('require_product') is not True:
         raise ValueError('只有明确要求商品的任务可调用选品器')
+    from .wechat_product_content_task import validate_matching_payload, MATCH_VERSION
+    if payload.get('attachment_version') == MATCH_VERSION:
+        return validate_matching_payload(payload)
     policy = parse_product_policy(payload['policy_snapshot'])
     if policy.digest != payload['config_digest'] or policy.version != payload['config_version']:
         raise ValueError('冻结的商品策略摘要/版本不一致')
@@ -116,7 +120,8 @@ def selection_from_task(payload: dict):
 def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: Path, *, now=None) -> dict:
     old = db.get_product_task_decision(task_id)
     if old:
-        if uses_english_world_product(old) and old.get('attachment_version') not in ENGLISH_ATTACHMENT_VERSIONS:
+        from .wechat_product_content_task import MATCH_VERSION
+        if uses_english_world_product(old) and old.get('attachment_version') not in ENGLISH_ATTACHMENT_VERSIONS | {MATCH_VERSION}:
             raise ValueError('英语世界冻结决定版本未知，须重新审核，禁止直接投稿')
         return old
     if context.get('status') in STOP_STATES:
@@ -126,6 +131,13 @@ def freeze_task_product_decision(db, task_id: str, context: dict, policy_path: P
             context.get('legacy_review_id'), context.get('legacy_manifest_sha256')):
         raise ValueError('旧包兼容需要首次迁移时的审核 ID 与产物摘要')
     production = db.get_product_production(context.get('production_task_id') or task_id)
+    from .wechat_product_pool import matching_config
+    config = matching_config(policy_path)
+    if config and config['enabled'] and ((context.get('product_intent') or 'AUTO') == 'AUTO'
+                                         or context.get('content_type') == 'ENGLISH_WORLD_SHORT'):
+        from .wechat_product_content_task import freeze_matching_payload
+        return db.freeze_product_task_decision(task_id, freeze_matching_payload(
+            policy_path, task_id, context, production, config, now=now))
     outcome = attachment_decision(context, production)
     payload = dict(outcome, task_id=task_id, context=context,
                    frozen_at=(now or datetime.now(timezone.utc)).isoformat(),
@@ -167,6 +179,10 @@ def read_product_task_decision(path: Path) -> dict:
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(payload, dict) or payload.get('publisher_capability') != PUBLISHER_CAPABILITY:
         raise ValueError('商品任务契约未知')
+    from .wechat_product_content_task import validate_matching_payload, MATCH_VERSION
+    if payload.get('attachment_version') == MATCH_VERSION:
+        validate_matching_payload(payload)
+        return payload
     expected = attachment_decision(payload['context'], payload.get('production'))
     if uses_english_world_product(payload) and payload.get('attachment_version') == ENGLISH_LEGACY_VERSION:
         expected.update(attachment_version=ENGLISH_LEGACY_VERSION, reason='ATTACH_ENGLISH_ALL')

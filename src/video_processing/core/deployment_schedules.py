@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v1 | 2026-11-02 | Codex | 每日只读商品同步受管cron安装：维护、CAS、原始快照与调度意图回读。 |
 | 1.3.0 | 2026-10-21 | Codex | 常驻 Bot 绑定精确进程与入口；维护无在途及子进程后正常卸载，保留原调度意图。 |
 | 1.2.0 | 2026-10-21 | Codex | launchd 输出日志放本机 HOME，避免启动阶段打开外置卷日志被系统拒绝；保留原虚拟环境。 |
 | 1.1.0 | 2026-10-21 | Codex | 保存已核验运行调度意图，阻止冻结现场成为新基线；恢复定义使用本机私有目录。 |
@@ -243,6 +244,51 @@ class Schedules:
             self.record_operational_intent(plan)
             self.require_operational_intent()
             return {'enabled': True, 'cron_sha256': sha(candidate), 'backup': str(self.directory)}
+
+    def install_catalog_sync(self, expected_cron_sha):
+        """只追加唯一受管每日同步块；保持其他任务逐字节不变。"""
+        from .maintenance import gate
+        import shlex
+        control = gate()
+        with control._locked():
+            active, unknown = control._leases()
+            require(control._read()['state'] == 'MAINTENANCE' and not active and not unknown,
+                    'CATALOG_SCHEDULE_MAINTENANCE_REQUIRED')
+            self.require_operational_intent()
+            require(not self.directory.exists(), 'NEW_CATALOG_SCHEDULE_BACKUP_REQUIRED')
+            original = self.cron()
+            require(sha(original) == expected_cron_sha, 'CRON_EDIT_CONFLICT')
+            require(b'Video Pipeline catalog-sync (managed)' not in original
+                    and b'sync_wechat_product_catalog.py' not in original, 'CATALOG_SCHEDULE_ALREADY_PRESENT')
+            require('%' not in str(self.root) and '\n' not in str(self.root), 'CRON_PATH_UNSUPPORTED')
+            quote = lambda value: shlex.quote(str(value))
+            command = ('35 7 * * * cd ' + quote(self.root) + ' && ' + quote(self.root / '.venv/bin/python')
+                       + ' ' + quote(self.root / 'scripts/sync_wechat_product_catalog.py')
+                       + ' >> ' + quote(self.root / 'output/wechat_catalog_sync.log') + ' 2>&1\n')
+            block = ('# BEGIN Video Pipeline catalog-sync (managed)\n' + command
+                     + '# END Video Pipeline catalog-sync (managed)\n').encode()
+            candidate = original + (b'\n' if original and not original.endswith(b'\n') else b'') + block
+            self.directory.mkdir(parents=True, mode=0o700)
+            plan = self.snapshot()
+            self.baseline(plan)
+            write_json(self.directory / 'plan.before.json', plan)
+            intent = self.runtime_directory / 'operational-intent.json'
+            if intent.exists():
+                backup = self.directory / 'operational-intent.before.json'
+                backup.write_bytes(intent.read_bytes())
+                backup.chmod(0o600)
+            (self.directory / 'cron.before').write_bytes(original)
+            (self.directory / 'cron.before').chmod(0o600)
+            require(sha(self.cron()) == expected_cron_sha, 'CRON_EDIT_CONFLICT')
+            self.runner.run(['crontab', '-'], data=candidate)
+            require(self.cron() == candidate, 'CATALOG_CRON_READBACK_FAILED')
+            (self.directory / 'cron.original').write_bytes(candidate)
+            plan = plan | {'cron': sha(candidate)}
+            write_json(self.directory / 'plan.after.json', plan)
+            self.record_operational_intent(plan)
+            self.require_operational_intent()
+            return {'enabled': True, 'cron_sha256': sha(candidate), 'daily_local_time': '07:35',
+                    'backup': str(self.directory)}
 
     def owner_binding(self, definition):
         if definition.get("WorkingDirectory") == str(self.root):

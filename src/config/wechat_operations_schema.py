@@ -19,7 +19,7 @@ APPROVED = {
     "keepalive": {"rolling_24h_limit": 16},
 }
 PURPOSES = {"发布": "publish", "首评": "first_comment", "评论": "first_comment", "回复": "reply",
-            "评论扫描": "comment_scan", "作品匹配": "post_match", "保活": "keepalive"}
+            "评论扫描": "comment_scan", "作品匹配": "post_match", "保活": "keepalive", "商品同步": "catalog_sync"}
 
 
 def _pairs(items):

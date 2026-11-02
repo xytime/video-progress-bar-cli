@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v1 | 2026-11-02 | Codex | 商品同步派生独立2次/24小时、6小时间隔；既有六池配置及历史不变。 |
 | optional-publish-v1 | 2026-10-25 | Codex | 适配取消发布日额与英语世界安全无商品降级，保留其他门禁与冻结身份。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -169,6 +170,11 @@ def _operation_blocks(sessions, now, operation, policy):
 
 def _evaluate_operations(row, now, purpose, task, policy, *, account_only=False, compare_queue=True):
     """稳定期按操作独立；真实原生退避、恢复保护、投稿去重与物理锁继续有效。"""
+    if purpose == '商品同步':
+        # 持久配置继续严格验证六池；新批准用途不重写配置中心或旧额度。
+        policy = dict(policy, operations=dict(policy['operations'], catalog_sync={
+            'rolling_24h_limit': settings.wechat_product_catalog_sync_daily_limit,
+            'min_interval_seconds': settings.wechat_product_catalog_sync_interval_seconds}))
     state = row.get("schedule", {})
     actual = [s for s in state.get("sessions", []) if s["at"] > now - DAY]
     operation = PURPOSES.get(purpose)
