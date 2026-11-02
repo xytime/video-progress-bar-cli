@@ -18,6 +18,12 @@ from ..utils.render_source_binding import digest
 
 
 SOURCES = {
+    'c4umlxsvAKg': dict(
+        source_sha256='752d21452fb93bf08a155203eaf8102d3fa009d316ad143ce2c1f3d830b640e3',
+        timeline_sha256='eb26f634e6acf922695120d2cbd18048bdb9776cd6640566f75a4fb2cf570d62', duration=1511/30,
+        original_timeline_sha256='97da875d22cc91574e52394cb3bc0e9a92e56a3b95da99c3d22b7b3f37549d7a', chinese_only=True,
+        width=712, height=1280, x=184, y=70, subtitle_top=1400, subtitle_bottom=1700,
+    ),
     'RYYM-6C4Vs4': dict(
         source_sha256='f58052062dad793e8dfc6169a43ca60992c6ee74836b5d66ebfa1e765e1feff8',
         timeline_sha256='c1adf016e2d7a826062c5696fce06b217581da536cb177f7c262484ca1165f68',
@@ -72,7 +78,7 @@ def reviewed_layout(source, source_hash):
     # 旧凭证会比对 profile；分离的登记表/校验实现变化同样使旧版式凭证失效。
     return dict(profile=f'{source.stem}-framed-v1-{digest(Path(__file__))[:12]}',
                 source_sha256=source_hash,
-                **({'font_size': record['font_size']} if 'font_size' in record else {}))
+                **{k: record[k] for k in ('font_size', 'width', 'height', 'x', 'y', 'subtitle_top', 'subtitle_bottom') if k in record})
 
 
 def validate_reviewed_timeline(segments, duration, source_hash):
@@ -85,3 +91,59 @@ def validate_reviewed_timeline(segments, duration, source_hash):
     if fingerprint(timeline) != record['timeline_sha256']:
         raise ValueError('具名故障版式对白或时间轴变化，需要重新复核')
     return True
+
+
+def corrected_source_segments(source, segments):
+    """已确认的音频修正作用于副本；原 ASR 快照保留，译文合同随正文变化。"""
+    from copy import deepcopy
+    source = Path(source)
+    record = SOURCES.get(source.stem)
+    if not record or not record.get('chinese_only'):
+        return segments
+    if digest(source) != record['source_sha256']:
+        raise ValueError('已复核音频源片身份变化')
+    timeline = [{k: s[k] for k in ('start', 'end', 'text')} for s in segments]
+    identity = fingerprint(timeline)
+    if identity == record['timeline_sha256']:
+        return deepcopy(segments)
+    if identity != record['original_timeline_sha256']:
+        raise ValueError('已复核音频时间轴变化，不能套用修正')
+    result = deepcopy(segments)
+    changes = {3: ('albarrier-lining', 'barrier lining'),
+               7: (' A multi-organ congestion, apopsis,', ' It induces multi-organ congestion, apoptosis,'),
+               8: ('Hematatic', 'Hemostatic')}
+    for index, (old, new) in changes.items():
+        result[index]['text'] = result[index]['text'].replace(old, new)
+        for key in ('tokens', 'words', 'zh_text', 'vocab'):
+            result[index].pop(key, None)
+    return result
+
+
+def chinese_only_ass(source, source_hash, segments):
+    """保留完整原英文及动画；只在画外区添加中文，不参与擦字或 OCR 对齐。"""
+    record = SOURCES.get(Path(source).stem)
+    if not record or not record.get('chinese_only'):
+        return None
+    if source_hash != record['source_sha256']:
+        raise ValueError('中文补充版式源片身份变化')
+    validate_reviewed_timeline(segments, record['duration'], source_hash)
+    import pysubs2
+    from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
+    subs = pysubs2.SSAFile()
+    subs.info.update(PlayResX=1080, PlayResY=1920)
+    subs.styles['Default'] = pysubs2.SSAStyle(fontname='PingFang SC', fontsize=48,
+        primarycolor=pysubs2.Color(255,255,255), outline=2, shadow=0,
+        alignment=8, marginl=80, marginr=80, marginv=1400)
+    for seg in segments:
+        text = seg.get('zh_text', '').strip()
+        if not text or '{' in text or '}' in text or '\\' in text:
+            raise SubtitleReviewRequired('中文补充字幕缺失或含未审核排版控制符')
+        import textwrap
+        lines = textwrap.wrap(text, width=18)
+        if len(lines)>4:
+            raise SubtitleReviewRequired('中文补充字幕超过独立字幕区四行上限')
+        subs.events.append(pysubs2.SSAEvent(start=round(seg['start']*1000),end=round(seg['end']*1000),
+            text=r'{\pos(540,1400)}'+r'\N'.join(lines)))
+    path=Path(source).with_suffix('.ass')
+    subs.save(str(path))
+    return path

@@ -443,6 +443,10 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
         if self._prepared_captions.mode in {'FRAMED', 'B_PANEL'} and not self.bilingual:
             raise ValueError('单片已确认版式必须保留完整双语字幕')
+        from .reviewed_caption_sources import chinese_only_ass
+        supplement = chinese_only_ass(self.input_path, self._prepared_captions.source_hash, segments)
+        if supplement is not None:
+            return supplement
         try:
             return self._build_ass_file(segments)
         except RepairUnsuitable as exc:

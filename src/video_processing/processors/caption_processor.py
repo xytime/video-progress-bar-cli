@@ -257,6 +257,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 validate_asr_timeline(segments, source_duration)
                 checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
+            from .reviewed_caption_sources import corrected_source_segments
+            segments = corrected_source_segments(self.input_path, segments)
+
             # 普通流水线先核验已有中文字幕；独立教学/配音制作不隐式启用。
             if getattr(self, 'preserve_source_chinese', False):
                 from .native_caption_router import route
