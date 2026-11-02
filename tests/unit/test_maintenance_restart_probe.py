@@ -348,3 +348,48 @@ def test_incomplete_or_forged_expected_snapshot_is_rejected(owners, case):
     else: expected["extra"] = True
     with pytest.raises(DeploymentDenied, match="OWNER_EXPECTED_INVALID"):
         probe.verify_owners(owners.control, owners.root, expected, allow_missing=True)
+
+
+def test_registered_ready_child_of_ui_is_fully_verified(owners):
+    owners.children[7002] = 7001
+    snapshot = capture(owners)
+    assert probe.verify_owners(owners.control, owners.root, snapshot) == snapshot
+    assert snapshot["processes"]["7002"]["roles"] == ["ready-worker"]
+
+
+@pytest.mark.parametrize("fault", ["argv", "birth", "cwd", "fd", "unlocked", "grandchild"])
+def test_registered_child_does_not_bypass_identity_or_descendant_checks(owners, fault):
+    owners.children[7002] = 7001
+    if fault == "argv":
+        owners.processes[7002]["arguments"].append("--activate")
+    elif fault == "birth":
+        owners.processes[7002]["birth"] = "reused-pid"
+    elif fault == "cwd":
+        owners.processes[7002]["cwd"] = "/wrong"
+    elif fault == "fd":
+        owners.fd_missing = True
+    elif fault == "unlocked":
+        owners.release("ready-worker")
+    else:
+        owners.children[7003] = 7002
+        owners.processes[7003] = {"birth": "child"}
+    with pytest.raises(DeploymentDenied):
+        capture(owners)
+
+
+def test_registered_worker_as_child_of_worker_is_not_allowed(owners):
+    owners.add("wallstreet-worker", 7003)
+    owners.children[7003] = 7002
+    with pytest.raises(DeploymentDenied, match="OWNER_LIVE_CHILD"):
+        capture(owners)
+
+
+def test_ui_new_unknown_child_during_worker_verification_is_rejected(owners):
+    owners.children[7002] = 7001
+    def hook(arguments):
+        if "7002" in arguments and "cwd" in arguments:
+            owners.children[7003] = 7001
+            owners.processes[7003] = {"birth": "child"}
+    owners.hook = hook
+    with pytest.raises(DeploymentDenied, match="OWNER_LIVE_CHILD"):
+        capture(owners)

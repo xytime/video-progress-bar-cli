@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | 允许 UI 持有同时通过完整身份核验的 ready-worker 子进程；未知子孙仍拒绝。 |
 | 1.0.0 | 2026-10-30 | Codex | 角色 flock、PID birth、完整已知 argv、真实 cwd 与退出后集合复验。 |
 """
 from pathlib import Path
@@ -128,7 +129,7 @@ def _arguments(pid, root, roles):
     return arguments
 
 
-def _no_live_children(pid):
+def _no_live_children(pid, registered_children=None):
     rows = {}
     for line in _read(["ps", "-axo", "pid=,ppid="]).splitlines():
         if not line.strip():
@@ -143,9 +144,11 @@ def _no_live_children(pid):
         if parent != pid:
             continue
         try:
-            process_birth(child)
+            birth = process_birth(child)
         except ProcessLookupError:
             continue  # 已退出/僵尸子进程不构成活业务；权限未知仍闭锁。
+        if (registered_children or {}).get(child) == birth:
+            continue  # 仅 UI 的已登记 ready-worker；调用方仍逐个核验 argv/cwd/角色 FD。
         raise DeploymentDenied("OWNER_LIVE_CHILD")
 
 
@@ -193,16 +196,22 @@ def _capture(control, root):
     boot = boot_identity()
     workers, identities = _workers(control, root)
     groups, processes = _role_groups(workers), {}
+    ready = workers.get("ready-worker")
+    children = {ready["pid"]: ready["birth"]} if ready else {}
     for pid, roles in groups.items():
+        allowed = children if "ui" in roles else {}
         birth = process_birth(pid)
         require(all(workers[role]["birth"] == birth for role in roles), "OWNER_BIRTH_MISMATCH")
-        _no_live_children(pid)
+        _no_live_children(pid, allowed)
         arguments, cwd = _arguments(pid, root, roles), _cwd(pid, root)
         _role_descriptors(pid, control, roles, identities)
-        _no_live_children(pid)
+        _no_live_children(pid, allowed)
         require(process_birth(pid) == birth, "OWNER_BIRTH_CHANGED")
         processes[str(pid)] = dict(pid=pid, birth=birth, cwd=cwd, arguments=arguments, roles=roles,
                                    locks={role: identities[role] for role in roles})
+    # 全部执行者身份通过后，再检查完整集合；不把注册行本身当作可信身份。
+    for pid, roles in groups.items():
+        _no_live_children(pid, children if "ui" in roles else {})
     require(_workers(control, root) == (workers, identities), "OWNER_REGISTRY_CHANGED")
     require(boot_identity() == boot, "OWNER_BOOT_CHANGED")
     return dict(workers=workers, processes=processes, boot=boot)
