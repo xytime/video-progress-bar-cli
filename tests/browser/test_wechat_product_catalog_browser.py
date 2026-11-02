@@ -174,8 +174,8 @@ def test_stored_public_dialog_has_rows_but_no_explicit_total(page):
     load(page,fixture.read_text() + '''<script>let mutations=0;
       document.addEventListener('click',e=>{if(e.target.closest('input[type=radio],button')) mutations++},true);
       document.addEventListener('change',()=>mutations++,true);</script>''')
-    with pytest.raises(CatalogSyncError,match='CATALOG_TOTAL_UNVERIFIED') as error:
-        collect_catalog(page,timeout_seconds=2)
+    with pytest.raises(CatalogSyncError,match='CATALOG_ACCOUNT_UNVERIFIED') as error:
+        collect_catalog(page,timeout_seconds=8)
     diagnostic=error.value.diagnostics
     assert error.value.partial['observed_items']==14
     assert diagnostic['snapshot']['headers']==['','商品信息','商品来源','价格','库存','']

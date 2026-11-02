@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | 校验滚动遍历凭证及首页账号前后证据，保留TTL、可售与CAS门禁。 |
 | live-pool-v1 | 2026-11-02 | Codex | 独立 live 凭证、7天时效、可售与身份闭锁；人工导入不自动自证 live。 |
 """
 from __future__ import annotations
@@ -52,6 +53,26 @@ def validate_observation(catalog, proof):
     if (evidence.get('kind') != 'PUBLIC_DOM_STABLE_ID' or evidence.get('value') != catalog['account_id']
             or not evidence.get('selector') or not evidence.get('attribute')):
         raise ValueError('未取得公开稳定账号标识')
+    if evidence.get('attribute') == 'data-clipboard-text':
+        checks = proof.get('account_checks', {})
+        if checks.get('before') != evidence or checks.get('after') != evidence:
+            raise ValueError('首页稳定账号缺少采集前后核对')
+    enumeration = proof.get('completeness_evidence')
+    if enumeration is not None:
+        ids = sorted((i['product_id'], i['title']) for i in catalog['items'])
+        expected = hashlib.sha256(json.dumps(ids, ensure_ascii=False).encode()).hexdigest()
+        traces = enumeration.get('terminal_checks', [])
+        if (enumeration.get('kind') != 'PUBLIC_DOM_SCROLL_ENUMERATION' or enumeration.get('rounds') != 2
+                or type(enumeration.get('steps')) is not int or not 2 <= enumeration['steps'] <= 20
+                or enumeration.get('observed_items') != len(ids) or enumeration.get('identity_digest') != expected
+                or enumeration.get('explicit_total') is not False or not isinstance(traces, list) or not traces
+                or any(not isinstance(t, dict) for t in traces)
+                or sum(t.get('bottom') is True for t in traces) < 2
+                or any(not isinstance(t.get(k), (int, float)) for t in traces for k in ('top','height','client'))
+                or any(t['top'] < 0 or t['client'] <= 0 or t['height'] < t['client']
+                       or (t.get('bottom') is True and t['top'] + t['client'] < t['height'] - 2) for t in traces)
+                or not traces[-1].get('bottom') or catalog['total_pages'] != 1):
+            raise ValueError('滚动遍历证据不完整或身份不一致')
     urls = proof.get('page_urls', [])
     if not urls or any(urlsplit(u).scheme != 'https' or urlsplit(u).hostname != 'channels.weixin.qq.com' for u in urls):
         raise ValueError('目录来源不是官方页面')

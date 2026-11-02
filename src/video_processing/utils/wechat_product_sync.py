@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v3 | 2026-11-02 | Codex | 同一浏览器上下文采集前后读取官方首页稳定ID，失败不刷新目录。 |
 | catalog-sync-v2 | 2026-11-02 | Codex | 与发布模式一致，成功及失败均记录脱敏 DOM 诊断和全程阶段计时。 |
 | catalog-sync-v1 | 2026-11-02 | Codex | 每日同步及过期任务刷新共用2次/24小时、6小时预算；部分结果不覆盖目录。 |
 """
@@ -21,6 +22,7 @@ from video_processing.utils.wechat_product_config import load_policy, atomic_jso
 from video_processing.utils.wechat_product_catalog import catalog_digest
 from video_processing.utils.wechat_product_pool import promote_live_catalog
 from video_processing.utils.wechat_product_collector import collect_catalog, CatalogSyncError
+from video_processing.utils.wechat_catalog_account import visit_home_account
 from video_processing.utils.wechat_catalog_diagnostics import public_path, timed_phase
 
 
@@ -76,8 +78,26 @@ def run_catalog_sync(policy_path=None):
                             raise CatalogSyncError('CATALOG_LOGIN_REQUIRED')
                         if not is_official_create_url(page.url):
                             raise CatalogSyncError('CATALOG_OFFICIAL_PAGE_REQUIRED')
+                        with timed_phase(diagnostics, 'account_before'):
+                            account_before = visit_home_account(page, timeout_ms=min(5000, remaining()),
+                                diagnostics=diagnostics.setdefault('account_before', {}))
+                        # 首页与发布页共享本次独立浏览器上下文，不切换账号、不写回登录态。
+                        page.goto('https://channels.weixin.qq.com/platform/post/create',
+                                  wait_until='domcontentloaded', timeout=remaining())
+                        if check_explicit_login_prompt(page)[0]:
+                            record_current_wechat_login_required()
+                            raise CatalogSyncError('CATALOG_LOGIN_REQUIRED')
+                        if not is_official_create_url(page.url):
+                            raise CatalogSyncError('CATALOG_OFFICIAL_PAGE_REQUIRED')
                         data, proof = collect_catalog(page, timeout_seconds=remaining()/1000,
-                            max_pages=settings.wechat_product_catalog_sync_max_pages, diagnostics=diagnostics)
+                            max_pages=settings.wechat_product_catalog_sync_max_pages, diagnostics=diagnostics,
+                            account_evidence=account_before)
+                        with timed_phase(diagnostics, 'account_after'):
+                            account_after = visit_home_account(page, timeout_ms=min(5000, remaining()),
+                                diagnostics=diagnostics.setdefault('account_after', {}))
+                        if not account_before or account_before != account_after or data['account_id'] != account_after['value']:
+                            raise CatalogSyncError('CATALOG_ACCOUNT_UNVERIFIED')
+                        proof['account_checks'] = {'before': account_before, 'after': account_after}
                         remaining()
                         if current_wechat_session()._request_limited:
                             raise CatalogSyncError('CATALOG_PLATFORM_BACKOFF')

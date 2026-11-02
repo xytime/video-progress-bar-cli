@@ -1,0 +1,7 @@
+{
+  "source": "output/page_dump.html",
+  "source_captured_at": "2026-05-23T11:53:22.709199+08:00",
+  "source_sha256": "d8b5c57df7beb46f6842fb4f07ded73603389ab3d0bac8310a0a65ecc18c3030",
+  "fixture_sha256": "a753fa4b3573ffaf3cb64c3bd9c241c37e94a6de560faf045e2428aab9a4dac6",
+  "transformation": "仅保留首页菜单和稳定视频号ID的公开结构；ID替换为合成值，不含昵称、图片、链接、脚本或凭证。不作为当前账号或live证明。"
+}

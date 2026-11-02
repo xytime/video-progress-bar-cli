@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| public-dom-v3 | 2026-11-02 | Codex | 关联同一wrapper的分离表头；无总数时只接受已知非虚拟滚动表的双轮一致遍历。 |
 | public-dom-v2 | 2026-11-02 | Codex | 区分加载、明确空态与等满预算的未知结构；所有退出保留脱敏诊断。 |
 | public-dom-v1 | 2026-11-02 | Codex | 复用可见商品根；缺稳定账号或公开总数不宣称完整，不读取框架私有状态。 |
 """
@@ -16,6 +17,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .wechat_product_picker import PlaywrightProductPicker
 from .wechat_product_pool import COLLECTOR_VERSION
+from .wechat_catalog_enumeration import enumerate_scroll
 from .wechat_catalog_diagnostics import DOM_DIAGNOSTICS, sanitized_snapshot, public_path, timed_phase
 
 ACCOUNT_SELECTORS = ('[data-publisher-finder-username]', '.account-info[data-finder-username]',
@@ -49,7 +51,19 @@ def read_public_account(page, diagnostics=None):
 _SNAPSHOT = DOM_DIAGNOSTICS + r'''
 if(diagnostic.state !== 'READY') return {state:diagnostic.state, diagnostics:diagnostic, items:[]};
 const table=recognized[0];
-const heads=Array.from(table.querySelectorAll('thead th')).map(text);
+const wrapper=table.closest('.ant-table-wrapper');
+const ownHeads=Array.from(table.querySelectorAll('thead th')).map(text);
+const headerTables=wrapper ? Array.from(wrapper.querySelectorAll('.ant-table-header table')).filter(visible) : [];
+const heads=ownHeads.length ? ownHeads : headerTables.length===1
+    ? Array.from(headerTables[0].querySelectorAll('thead th')).map(text) : [];
+const body=table.closest('.ant-table-body');
+const filters=Array.from(d.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden])')).filter(visible);
+const virtual=!!d.querySelector('[aria-rowcount],.rc-virtual-list,.ant-table-virtual,.virtual-list');
+const scroll=body && wrapper && headerTables.length===1 ? {
+    top:body.scrollTop, height:body.scrollHeight, client:body.clientHeight,
+    bottom:body.scrollTop+body.clientHeight>=body.scrollHeight-2,
+    unfiltered:filters.every(e=>!e.value.trim()) && Array.from(d.querySelectorAll('.weui-desktop-dropdown__list-ele.checked')).every(e=>text(e.querySelector('.weui-desktop-dropdown__list-ele__text') || e)==='全部'), virtual
+} : null;
 const index = name => heads.findIndex(h => h.includes(name));
 const stockIndex=index('库存'), shopIndex=index('店铺'), priceIndex=index('价格');
 const rows=Array.from(table.querySelectorAll('tbody tr')).filter(visible);
@@ -76,11 +90,11 @@ const current=active.length===1 ? Number(text(active[0])) : 1;
 const next=Array.from(d.querySelectorAll('.ant-pagination-next, [aria-label="下一页"], [title="下一页"]')).filter(visible);
 const nextAvailable=next.filter(e => enabled(e) && !e.classList.contains('ant-pagination-disabled'));
 return {state:'READY', diagnostics:diagnostic, items, total_items:totals.length===1 ? totals[0] : null, page:current,
-        next_count:nextAvailable.length, empty:items.length===0};
+        next_count:nextAvailable.length, scroll, headers:heads, pagination_present:diagnostic.pagination_nodes.some(n=>n.count>0), empty:items.length===0};
 '''
 
 
-def collect_catalog(page, *, timeout_seconds=60, max_pages=20, clock=monotonic, diagnostics=None):
+def collect_catalog(page, *, timeout_seconds=60, max_pages=20, clock=monotonic, diagnostics=None, account_evidence=None):
     diagnostics = diagnostics if diagnostics is not None else {}
     diagnostics['url_path'] = public_path(page.url)
     if not 0 < timeout_seconds <= 60 or not 1 <= max_pages <= 20:
@@ -88,7 +102,7 @@ def collect_catalog(page, *, timeout_seconds=60, max_pages=20, clock=monotonic, 
     try:
         with timed_phase(diagnostics, 'collection', clock):
             return _collect_catalog(page, timeout_seconds=timeout_seconds, max_pages=max_pages,
-                                    clock=clock, diagnostics=diagnostics)
+                                    clock=clock, diagnostics=diagnostics, account_evidence=account_evidence)
     except (TimeoutError, PlaywrightTimeoutError) as exc:
         error = CatalogSyncError('CATALOG_UNSUPPORTED' if diagnostics.get('snapshot', {}).get('state') == 'LOADING'
                                  else 'CATALOG_SYNC_TIMEOUT')
@@ -101,7 +115,7 @@ def collect_catalog(page, *, timeout_seconds=60, max_pages=20, clock=monotonic, 
         raise
 
 
-def _collect_catalog(page, *, timeout_seconds, max_pages, clock, diagnostics):
+def _collect_catalog(page, *, timeout_seconds, max_pages, clock, diagnostics, account_evidence):
     end = clock() + timeout_seconds
     picker = PlaywrightProductPicker(page, clock=clock)
     # 打开失败时也能知道页面、弹窗及账号选择器命中，而不是只留一个 TimeoutError。
@@ -148,7 +162,7 @@ def _collect_catalog(page, *, timeout_seconds, max_pages, clock, diagnostics):
         if snapshot['page'] != len(pages) + 1:
             raise CatalogSyncError('CATALOG_PAGE_CONFLICT', {'pages': pages})
         diagnostics['last_phase'] = 'identity_and_total'
-        observed_account = read_public_account(page, diagnostics)
+        observed_account = read_public_account(page, diagnostics) or account_evidence
         diagnostics['account_id_observed'] = observed_account is not None
         diagnostics['total_items'] = snapshot['total_items']
         diagnostics['total_verified'] = snapshot['total_items'] is not None
@@ -157,12 +171,23 @@ def _collect_catalog(page, *, timeout_seconds, max_pages, clock, diagnostics):
         diagnostics['account_consistent'] = account is not None and observed_account == account
         if first_total is None:
             first_total = snapshot['total_items']
-        if first_total is None or snapshot['total_items'] != first_total:
+        enumeration = None
+        if first_total is None:
+            if pages:
+                raise CatalogSyncError('CATALOG_TOTAL_UNVERIFIED', {'pages': pages})
+            try:
+                rows, enumeration = enumerate_scroll(picker, _SNAPSHOT, end, max_pages, diagnostics)
+            except ValueError as exc:
+                raise CatalogSyncError(str(exc), {'observed_items': len(snapshot['items']), 'pages': pages}) from exc
+            snapshot['items'] = rows
+            first_total = len(rows)
+            diagnostics['completeness_evidence'] = enumeration
+        elif snapshot['total_items'] != first_total:
             raise CatalogSyncError('CATALOG_TOTAL_UNVERIFIED', {'observed_items': len(snapshot['items']), 'pages': pages})
         items = []
         for row in snapshot['items']:
             pid = row['product_id']
-            if not pid or pid in seen:
+            if not pid or not row['title'] or pid in seen:
                 raise CatalogSyncError('CATALOG_DUPLICATE_OR_MISSING_ID', {'pages': pages})
             seen.add(pid)
             items.append({k: row[k] for k in ('product_id', 'title', 'shop', 'price', 'stock')})
@@ -181,6 +206,8 @@ def _collect_catalog(page, *, timeout_seconds, max_pages, clock, diagnostics):
                      'captured_at': captured, 'account_id': account['value'], 'account_evidence': account,
                      'read_only': True, 'mutating_actions': [], 'observations': observations,
                      'page_urls': [parsed.scheme + '://' + parsed.netloc + parsed.path]}
+            if enumeration is not None:
+                proof['completeness_evidence'] = enumeration
             return data, proof
         if snapshot['next_count'] != 1:
             raise CatalogSyncError('CATALOG_PAGINATION_CONFLICT', {'pages': pages})

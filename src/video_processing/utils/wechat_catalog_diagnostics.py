@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | 识别真实商品表的common-table-loading加载器。 |
 | 1.0.0 | 2026-11-02 | Codex | 限定诊断字段、文本长度与 URL path；阶段计时在异常时仍保留。 |
 """
 from contextlib import contextmanager
@@ -61,7 +62,7 @@ DOM_DIAGNOSTICS = r'''
 const ds=productDialogs(), d=ds.length===1 ? ds[0] : null;
 const tables=d ? Array.from(d.querySelectorAll('table')).filter(visible) : [];
 const recognized=tables.filter(t => Array.from(t.querySelectorAll('.id-wrap')).some(visible));
-const spinners=d ? Array.from(d.querySelectorAll('[aria-busy=true], .ant-spin-spinning, .weui-desktop-loading')).filter(visible) : [];
+const spinners=d ? Array.from(d.querySelectorAll('[aria-busy=true], .ant-spin-spinning, .weui-desktop-loading, .common-table-loading')).filter(visible) : [];
 const emptyWords=/^(暂无商品|暂无数据|暂无可添加的商品|没有可添加的商品|橱窗暂无商品|暂无可售卖商品|暂无可展示的商品)$/;
 const empty=d ? Array.from(d.querySelectorAll('*')).filter(e => visible(e) && emptyWords.test(text(e))).map(text) : [];
 const hints=d ? Array.from(d.querySelectorAll('.ant-empty-description,.empty-text,.empty-tips,.no-data,[role=status],[role=alert],.weui-desktop-tips,.hint')).filter(visible).map(e => text(e).slice(0,1000)) : [];
