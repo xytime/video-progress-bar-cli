@@ -5,12 +5,14 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| manual-release-v1 | 2026-11-02 | Codex | 保留错误和历史，以具名证据 CAS 放行旧/新失败并原子消费一次领取。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 人工复核分类硬锁，旧人工错误只读识别，不因冷却到期自动释放。 |
 | 1.0.0 | 2026-10-27 | Codex | 按源与翻译合同保存失败链、幂等尝试、冷却及具名修复释放。 |
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import time
@@ -39,18 +41,44 @@ def _unreleased_manual_event_sql(video_id):
     return ("EXISTS (SELECT 1 FROM publishing_failure_events f WHERE f.video_id=" + video_id +
             " AND " + _manual_review_sql('f.reason') +
             " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery_events r WHERE r.video_id=f.video_id"
-            " AND r.event_type='RELEASED' AND r.state='RELEASED'"
+            " AND r.event_type='RELEASED' AND r.state='RELEASED' AND " + _release_available_sql('r') +
             " AND (f.id<=json_extract(r.details,'$.manual_failure_event_id') OR"
             " (json_extract(r.details,'$.manual_failure_event_id') IS NULL AND"
             " r.created_at >= (julianday(f.failed_at)-2440587.5)*86400.0))))")
+
+
+def _release_available_sql(alias):
+    # 新版授权消费后只认同次字幕成功；旧版事件沿用原边界，不反向改写历史。
+    return ("(json_extract(" + alias + ".details,'$.release_version') IS NULL OR "
+            "(json_extract(" + alias + ".details,'$.expires_at')>CAST(strftime('%s','now') AS REAL) AND NOT EXISTS (SELECT 1 FROM subtitle_recovery_events used WHERE used.event_type='CLAIMED'"
+            " AND used.video_id=" + alias + ".video_id AND json_extract(used.details,'$.release_event_id')=" + alias + ".id)) OR "
+            "EXISTS (SELECT 1 FROM subtitle_recovery_events done WHERE done.event_type='RESOLVED'"
+            " AND done.video_id=" + alias + ".video_id AND json_extract(done.details,'$.release_event_id')=" + alias + ".id))")
+
+
+def _manual_error_blocked_sql(video_id):
+    column = video_id.rsplit('.', 1)[0] + '.error_msg'
+    return ("(" + _manual_review_sql(column) + " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery_events r"
+            " WHERE r.video_id=" + video_id + " AND r.event_type='RELEASED' AND r.state='RELEASED'"
+            " AND json_extract(r.details,'$.review_error')=COALESCE(" + column + ",'')"
+            " AND " + _release_available_sql('r') + "))")
+
+
+def _consumed_trial_sql(video_id):
+    return ("EXISTS (SELECT 1 FROM subtitle_recovery_events used WHERE used.video_id=" + video_id +
+            " AND (used.event_type='CLAIMED' OR (used.event_type='RELEASED' AND json_extract(used.details,'$.expires_at')<=CAST(strftime('%s','now') AS REAL))) AND used.id=(SELECT MAX(e.id) FROM subtitle_recovery_events e"
+            " WHERE e.video_id=" + video_id + " AND e.event_type IN ('RELEASED','CLAIMED','RESOLVED')))")
+
+
+def subtitle_manual_blocked_sql(video_id):
+    return '(' + _manual_error_blocked_sql(video_id) + ' OR ' + _unreleased_manual_event_sql(video_id) + ' OR ' + _consumed_trial_sql(video_id) + ')'
 
 
 def subtitle_recovery_gate_sql(video_id: str) -> str:
     """仅供 DAL 固定列名调用；已到期 WAITING 可领，过期链须显式修复。"""
     if video_id not in {"pv.id", "processed_videos.id"}:
         raise ValueError("unsupported subtitle gate column")
-    column = video_id.rsplit('.', 1)[0] + '.error_msg'
-    return ("NOT " + _manual_review_sql(column) + " AND NOT " + _unreleased_manual_event_sql(video_id) +
+    return ("NOT " + subtitle_manual_blocked_sql(video_id) +
             " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery s WHERE s.video_id=" + video_id +
             " AND s.is_current=1 AND (s.state='NEEDS_REPAIR' OR (s.state='WAITING' AND "
             "(s.next_attempt_at>CAST(strftime('%s','now') AS REAL) OR "
@@ -132,6 +160,21 @@ class SubtitleRecoveryDAL:
                     event_type TEXT NOT NULL, attempt_id TEXT UNIQUE,
                     state TEXT NOT NULL, receipt_sha TEXT, receipt_path TEXT,
                     details TEXT NOT NULL, created_at REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS subtitle_recovery_event_video ON subtitle_recovery_events(video_id,event_type);
+                CREATE TRIGGER IF NOT EXISTS subtitle_release_claim_once AFTER UPDATE OF status ON processed_videos
+                WHEN NEW.status IN ('PROCESSING','PUBLISH_PRECHECK') AND OLD.status='PENDING'
+                BEGIN
+                    INSERT INTO subtitle_recovery_events(video_id,chain_id,youtube_id,slice_index,event_type,state,
+                        receipt_sha,receipt_path,details,created_at)
+                    SELECT r.video_id,r.chain_id,r.youtube_id,r.slice_index,'CLAIMED','CLAIMED',r.receipt_sha,r.receipt_path,
+                        json_object('release_event_id',r.id),CAST(strftime('%s','now') AS REAL)
+                    FROM subtitle_recovery_events r WHERE r.video_id=NEW.id AND r.event_type='RELEASED'
+                        AND r.id=(SELECT MAX(latest.id) FROM subtitle_recovery_events latest WHERE latest.video_id=NEW.id AND latest.event_type='RELEASED')
+                        AND json_extract(r.details,'$.release_version')=1
+                        AND NOT EXISTS (SELECT 1 FROM subtitle_recovery_events used
+                            WHERE used.video_id=r.video_id AND used.event_type='CLAIMED'
+                            AND json_extract(used.details,'$.release_event_id')=r.id);
+                END;
             """)
             columns = {r[1] for r in c.execute('PRAGMA table_info(subtitle_recovery)')}
             if 'evidence_path' not in columns:
@@ -176,10 +219,16 @@ class SubtitleRecoveryDAL:
     @classmethod
     def _subtitle_blocker_in(cls, c, video_id: int, now: float | None = None) -> dict | None:
         row = cls._subtitle_row(c, video_id)
-        video = c.execute('SELECT error_msg FROM processed_videos WHERE id=?', (video_id,)).fetchone()
-        marker = next((m for m in MANUAL_REVIEW_MARKERS if video and m in (video['error_msg'] or '')), None)
+        video = c.execute('SELECT * FROM processed_videos WHERE id=?', (video_id,)).fetchone()
+        blocked_error = c.execute('SELECT ' + _manual_error_blocked_sql('pv.id') +
+                                  ' FROM processed_videos pv WHERE pv.id=?', (video_id,)).fetchone()
+        marker = next((m for m in MANUAL_REVIEW_MARKERS if video and m in (video['error_msg'] or '')), None) if blocked_error and blocked_error[0] else None
         if not marker and c.execute('SELECT ' + _unreleased_manual_event_sql('?'), (video_id,)).fetchone()[0]:
             marker = 'unreleased_manual_failure_event'
+        # 无 recovery 行且只有 error_msg 的旧失败同样只允许一次；普通清文案不能续杯。
+        if not marker and video and video['status'] in {'PENDING', 'FAILED'}:
+            if c.execute('SELECT '+_consumed_trial_sql('?'), (video_id,video_id)).fetchone()[0]:
+                marker = 'manual_trial_consumed_or_expired'
         if marker:
             # 历史日志只读识别，不迁移失败记录、不清账本，也不受旧 WAITING 到期影响。
             return dict(code='SUBTITLE_NEEDS_REPAIR', state='NEEDS_REPAIR', next_attempt_at=None,
@@ -320,41 +369,98 @@ class SubtitleRecoveryDAL:
             c.execute("BEGIN IMMEDIATE")
             video = c.execute("SELECT * FROM processed_videos WHERE id=?", (video_id,)).fetchone()
             row = self._subtitle_row(c, video_id)
-            if not self._subtitle_eligible(c, video) or row is None or row["state"] == "RESOLVED":
+            if not self._subtitle_eligible(c, video):
+                return False
+            release = c.execute("SELECT * FROM subtitle_recovery_events WHERE video_id=? AND event_type='RELEASED' ORDER BY id DESC LIMIT 1", (video_id,)).fetchone()
+            if row is None:
+                if not release or input_sha256 is None or video['status'] not in {'PROCESSING','DOWNLOADING','COPYWRITING','TRANSCRIBING','RENDERING'}:
+                    return False
+                _sha(input_sha256)
+                if not c.execute("SELECT 1 FROM subtitle_recovery_events WHERE video_id=? AND event_type='CLAIMED' AND json_extract(details,'$.release_event_id')=?", (video_id, release['id'])).fetchone():
+                    return False
+                if c.execute("SELECT 1 FROM subtitle_recovery_events WHERE video_id=? AND event_type='RESOLVED' AND json_extract(details,'$.release_event_id')=?", (video_id, release['id'])).fetchone():
+                    return False
+                self._subtitle_transition_event(c, video, None, 'RESOLVED', details={'release_event_id': release['id'], 'input_sha256': input_sha256})
+                return True
+            if row['state'] == 'RESOLVED':
                 return False
             if (input_sha256 is not None and row["input_sha256"] != input_sha256 or
                     contract_sha256 is not None and row["contract_sha256"] != contract_sha256):
                 return False
             c.execute("UPDATE subtitle_recovery SET state='RESOLVED',next_attempt_at=NULL,updated_at=? WHERE id=?", (time.time(), row["id"]))
-            self._subtitle_transition_event(c, video, row, "RESOLVED")
+            self._subtitle_transition_event(c, video, row, "RESOLVED", details={'release_event_id': release['id']} if release else {})
             return True
 
-    def release_subtitle_recovery_after_repair(self, video_id: int, expected_receipt_sha: str) -> bool:
+    @staticmethod
+    def _subtitle_review_binding(c, video, row):
+        failure_id = c.execute('SELECT COALESCE(MAX(id),0) FROM publishing_failure_events WHERE video_id=?', (video['id'],)).fetchone()[0]
+        value = dict(video_id=video['id'], youtube_id=video['youtube_id'], slice_index=video['slice_index'],
+                     review_error=video['error_msg'] or '', manual_failure_event_id=failure_id,
+                     last_receipt_sha=row['last_receipt_sha'] if row else None)
+        token = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return value, token
+
+    def get_subtitle_manual_review(self, video_id: int) -> dict | None:
+        """只读复核凭据；API 的放行必须回传当前 token，避免误放新失败。"""
+        with self.get_connection() as c:
+            video = c.execute('SELECT * FROM processed_videos WHERE id=?', (video_id,)).fetchone()
+            if video is None:
+                return None
+            row = self._subtitle_row(c, video_id)
+            _, token = self._subtitle_review_binding(c, video, row)
+            blocker = self._subtitle_blocker_in(c, video_id)
+            release = c.execute("SELECT * FROM subtitle_recovery_events WHERE video_id=? AND event_type='RELEASED' ORDER BY id DESC LIMIT 1", (video_id,)).fetchone()
+            audit = None
+            already_released = False
+            if release:
+                details = json.loads(release['details'])
+                already_released = details.get('review_token') == token
+                audit = dict(event_id=release['id'], created_at=release['created_at'],
+                             actor=details.get('actor'), reason=details.get('reason'), expires_at=details.get('expires_at'))
+            return dict(video_id=video_id, youtube_id=video['youtube_id'], slice_index=video['slice_index'],
+                        review_token=token, expected_receipt_sha=row['last_receipt_sha'] if row else token,
+                        error_msg=video['error_msg'], last_release=audit,
+                        blocker=blocker, releasable=bool(blocker and not already_released and self._subtitle_eligible(c, video)
+                            and video['status'] in {'FAILED','PENDING'} and video['process_pid'] is None))
+
+    def release_subtitle_recovery_after_repair(self, video_id: int, expected_receipt_sha: str, *,
+                                              actor: str, reason: str, expected_review_token: str | None = None) -> bool:
         """一次 CAS 修复试跑；即使旧预算已满也不清次数、不延长原链期限。"""
         _sha(expected_receipt_sha)
+        actor, reason = _text(actor, 120), _text(reason, 1000)
+        if not actor or not reason:
+            raise ValueError('manual subtitle release requires actor and reason')
         with self.get_connection() as c:
             c.execute("BEGIN IMMEDIATE")
             video = c.execute("SELECT * FROM processed_videos WHERE id=?", (video_id,)).fetchone()
             row = self._subtitle_row(c, video_id)
-            if (not self._subtitle_eligible(c, video) or video["process_pid"] is not None or row is None or
-                    video["status"] not in {"FAILED", "PENDING"} or row["state"] in {"RELEASED", "RESOLVED"} or
-                    row["last_receipt_sha"] != expected_receipt_sha or row["released_receipt_sha"] == expected_receipt_sha):
+            if (not self._subtitle_eligible(c, video) or video["process_pid"] is not None or
+                    video["status"] not in {"FAILED", "PENDING"} or not self._subtitle_blocker_in(c, video_id)):
                 return False
-            c.execute("UPDATE subtitle_recovery SET state='RELEASED',next_attempt_at=NULL,released_receipt_sha=?,updated_at=? WHERE id=?",
-                      (expected_receipt_sha, time.time(), row["id"]))
-            c.execute("UPDATE processed_videos SET status='PENDING',error_msg='SUBTITLE_REPAIRED: 已具名释放一次字幕验证',updated_at=CURRENT_TIMESTAMP WHERE id=?", (video_id,))
-            self._subtitle_transition_event(c, video, row, "RELEASED")
+            binding, token = self._subtitle_review_binding(c, video, row)
+            if expected_review_token is not None and token != expected_review_token:
+                return False
+            if expected_receipt_sha != (row['last_receipt_sha'] if row else token):
+                return False
+            if c.execute("SELECT 1 FROM subtitle_recovery_events WHERE video_id=? AND event_type='RELEASED' AND json_extract(details,'$.review_token')=?", (video_id,token)).fetchone():
+                return False
+            if row:
+                c.execute("UPDATE subtitle_recovery SET state='RELEASED',next_attempt_at=NULL,released_receipt_sha=?,updated_at=? WHERE id=?",
+                          (expected_receipt_sha, time.time(), row['id']))
+            self._subtitle_transition_event(c, video, row, "RELEASED", details=binding | dict(
+                review_token=token, release_version=1, actor=actor, reason=reason, expires_at=time.time()+MAX_CHAIN_SECONDS))
+            c.execute("UPDATE processed_videos SET status='PENDING',updated_at=CURRENT_TIMESTAMP WHERE id=?", (video_id,))
             return True
 
     @staticmethod
-    def _subtitle_transition_event(c, video, row, state: str, *, event_type: str | None = None) -> None:
+    def _subtitle_transition_event(c, video, row, state: str, *, event_type: str | None = None, details=None) -> None:
         # 同一写事务绑定已经存在的失败序号，不用可漂移的墙钟释放未来失败。
-        details = {}
+        details = dict(details or {})
         if state == 'RELEASED':
             details['manual_failure_event_id'] = c.execute(
                 'SELECT COALESCE(MAX(id),0) FROM publishing_failure_events WHERE video_id=?',
                 (video['id'],)).fetchone()[0]
         c.execute("""INSERT INTO subtitle_recovery_events(video_id,chain_id,youtube_id,slice_index,event_type,state,
             receipt_sha,receipt_path,details,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                  (video["id"], row["id"], video["youtube_id"], video["slice_index"], event_type or state, state,
-                   row["last_receipt_sha"], row["last_receipt_path"], json.dumps(details), time.time()))
+                  (video["id"], row["id"] if row else None, video["youtube_id"], video["slice_index"], event_type or state, state,
+                   row["last_receipt_sha"] if row else details.get('review_token'), row["last_receipt_path"] if row else '', json.dumps(details,ensure_ascii=False), time.time()))

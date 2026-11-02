@@ -143,12 +143,12 @@ def test_scenario_3_recovery_skipped_and_supervisor_stopped():
     )
     diag = diagnose_task_unit(task, _env(recovery_worker_lock_held=False))
     assert diag is not None
-    assert diag.category == AnomalyCategory.FLOW_STALL.value
-    assert diag.cause_code == "RECOVERY_ITEM_SKIPPED"
+    assert diag.category == AnomalyCategory.EXECUTION_FAILURE.value
+    assert diag.cause_code == "NATIVE_CAPTION_OCR_INVALID"
     assert diag.handling_state == HandlingState.MANUAL_REQUIRED.value
-    assert diag.is_stalled is True
+    assert diag.is_stalled is False
     assert diag.unresolved is True
-    assert "预览后任务已变化" in diag.reason_summary
+    assert diag.action_kind == "repair_subtitle"
 
 
 @pytest.mark.parametrize('worker_held', [False, True])
@@ -493,3 +493,24 @@ def test_completed_operation_is_not_successful_item(item_state):
     assert not diag.is_recovered
     if item_state == "SUBMITTED_UNVERIFIED":
         assert diag.action_kind == "verify_receipt"
+
+
+@pytest.mark.parametrize('message,code',[
+    ('burned_caption_repair.py:501 源片比 9:16 更窄，需先人工规范化','CAPTION_SOURCE_TOO_NARROW'),
+    ('burned_caption_repair.py:349 第 619 帧原字幕位置或文字不确定','BURNED_CAPTION_REPAIR_UNCERTAIN'),
+    ('SUBTITLE_NEEDS_REPAIR: caption_frame_uncertain','BURNED_CAPTION_REPAIR_UNCERTAIN'),
+])
+def test_legacy_manual_errors_use_same_gate_and_text_classification(message,code):
+    task=TaskUnitFacts(video_id=7169,youtube_id='narrow',status='FAILED',error_msg=message)
+    diagnosis=diagnose_task_unit(task,_env())
+    assert diagnosis.cause_code==code
+    assert diagnosis.handling_state==HandlingState.MANUAL_REQUIRED.value
+    assert diagnosis.action_kind=='repair_subtitle'
+    assert '受控重试' not in diagnosis.next_step
+
+
+def test_released_legacy_error_is_not_still_a_manual_block():
+    task=TaskUnitFacts(video_id=7169,youtube_id='narrow',status='PENDING',error_msg='caption_source_too_narrow',
+                       subtitle_recovery={'manual_gate_blocked':False,'state':'RELEASED'})
+    diagnosis=diagnose_task_unit(task,_env())
+    assert diagnosis.action_kind!='repair_subtitle'

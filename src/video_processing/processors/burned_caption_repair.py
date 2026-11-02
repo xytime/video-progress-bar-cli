@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| overlay-roles-v1 | 2026-11-02 | Codex | 用独立时序/版式证据保留标题及人名条，微窄片允许等比补边。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 窄片及不确定帧使用人工字幕门，禁止通用失败重试。 |
 | 2.3.1 | 2026-10-28 | Codex | 允许位于画面内的全宽对白字幕，仍按实际掩膜面积与纹理决定修补或避让。 |
 | 2.3.0 | 2026-10-23 | Codex | 单片已确认独立字幕区绑定原片、完整时间轴、版式和实现凭证。 |
@@ -120,6 +121,7 @@ def _words(text):
 
 def _spoken_text(text):
     text = text.lower().replace('%', ' percent ').replace("'", '').replace('’', '')
+    text = re.sub(r'\bdr\.?\b', 'doctor', text)
     text = re.sub(r'\b(?:[a-z]-)+[a-z]\b', lambda m: m[0].replace('-', ''), text)
     def number(match):
         whole, dot, fraction = match[0].partition('.')
@@ -290,11 +292,13 @@ def _scan_file(source, fps):
 def _classify(frames, segments, fps):
     # 画面中央的疑似字幕必须有临近转录证据；不能仅凭整段文字没变就当台标放过。
     selected, boxes = [], []
+    from .caption_overlay_roles import non_dialogue_rows
+    overlays = non_dialogue_rows(frames, segments, fps, _caption_text_matches)
     # ASR 会漏掉短促应答；补位只能来自两侧直接匹配的连续轨迹。
     direct = []
     for index, rows in enumerate(frames):
         spoken = ' '.join(s.get('text', '') for s in segments if s['start']-5 <= index/fps <= s['end']+5)
-        direct.append([r for r in rows if r['confidence'] >= .9 and _caption_text_matches(r['text'], spoken)
+        direct.append([r for number,r in enumerate(rows) if (index,number) not in overlays and r['confidence'] >= .9 and _caption_text_matches(r['text'], spoken)
                        and .38 <= r['box'][1] < r['box'][3] <= .94
                        and .025 <= r['box'][3]-r['box'][1] <= .08])
     for index, rows in enumerate(frames):
@@ -303,12 +307,14 @@ def _classify(frames, segments, fps):
             if s["start"] - 5 <= now <= s["end"] + 5))
         spoken = ' '.join(s.get('text', '') for s in segments if s['start'] - 5 <= now <= s['end'] + 5)
         chosen = []
-        for row in rows:
+        for number, row in enumerate(rows):
+            if (index, number) in overlays:
+                continue
             text, box = row["text"], row["box"]
             # 只处理画面中央的原字幕，保留边缘台标、姓名条和顶部标题。
             if not (.38 <= box[1] < box[3] <= .94 and .22 <= (box[0]+box[2])/2 <= .78):
                 continue
-            if row['confidence'] < .5 and box[3]-box[1] < .018 and box[2]-box[0] < .08:
+            if row['confidence'] < .5 and box[3]-box[1] < .020 and box[2]-box[0] < .08:
                 continue  # 拉链等纹理偶发的微小低置信 OCR 不认作原字幕；不改动这些像素。
             if _outside_caption_track(row, direct[index], direct, index, fps):
                 continue
@@ -355,7 +361,7 @@ def _classify(frames, segments, fps):
             chosen.append(box)
             boxes.append(box)
         if chosen and max(b[3] for b in chosen) - min(b[1] for b in chosen) > .18:
-            raise ValueError('同帧存在多处疑似原字幕，需单独审查')
+            raise ValueError(f'第 {index} 帧存在多处疑似原字幕，需单独审查：{chosen}')
         selected.append(chosen)
     if not boxes:
         return selected, None
@@ -500,7 +506,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     """逐帧扫描全片；中途失败不返回原片，避免调用者静默叠加两套字幕。"""
     source = Path(source)
     w, h, fps, duration = _probe(source)
-    if w < h and h/w > 1920/1080 + .001:
+    if w < h and h/w > (1920/1080) / .98:
         from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
         raise SubtitleReviewRequired("源片比 9:16 更窄，现有布局会裁切，需先人工规范化",
                                      code='caption_source_too_narrow')
@@ -527,7 +533,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
                  approved.subtitle_top, approved.subtitle_bottom)
         return PreparedCaptions(source, None, source_hash, plan, mode='FRAMED')
     identity = {"version": VERSION, "source_sha256": source_hash, "vision_sha256": digest(VISION),
-                "implementation_sha256": digest(Path(__file__)), "fallback_sha256": digest(FALLBACK),
+                "implementation_sha256": digest(Path(__file__)), "overlay_sha256": digest(Path(__file__).with_name("caption_overlay_roles.py")), "fallback_sha256": digest(FALLBACK),
                 "segments_sha256": hashlib.sha256(json.dumps(segments, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
     directory = source.parent / ".caption-repair" / hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
@@ -558,7 +564,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
             fallback = fallback_geometry(rows, observations, h, fps)
     else:
         mode, fallback, reason = "NONE", None, "未检测到中央硬字幕"
-    if identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION) or identity['fallback_sha256'] != digest(FALLBACK):
+    if identity['overlay_sha256'] != digest(Path(__file__).with_name('caption_overlay_roles.py')) or identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION) or identity['fallback_sha256'] != digest(FALLBACK):
         raise ValueError('处理期间字幕实现发生变化，不能签发处理计划')
     anchors = _anchors(rows, fps)
     _write(plan, {"identity": identity, "center_y": center, "anchors": anchors, "frames": len(rows), "fps": fps,
@@ -587,7 +593,7 @@ def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaption
     _write(output.with_suffix(".captions.json"), {"version": VERSION, "source_sha256": digest(source),
         "output_sha256": digest(output), "ass_sha256": digest(ass), "plan": str(prepared.plan.resolve()),
         "plan_sha256": digest(prepared.plan), "implementation_sha256": digest(Path(__file__)),
-        "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "vision_sha256": digest(VISION),
+        "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "overlay_sha256": digest(Path(__file__).with_name("caption_overlay_roles.py")), "vision_sha256": digest(VISION),
         "approved_layout_sha256": digest(Path(__file__).with_name('approved_caption_layout.py')),
         "fallback_sha256": digest(FALLBACK), "mode": prepared.mode})
 
@@ -610,6 +616,7 @@ def render_receipt_matches(output: Path, source: Path) -> bool:
             and data["plan_sha256"] == digest(Path(data["plan"]))
             and data['renderer_sha256'] == digest(Path(__file__).with_name('vertical_processor.py'))
             and data['approved_layout_sha256'] == digest(Path(__file__).with_name('approved_caption_layout.py'))
+            and data["overlay_sha256"] == digest(Path(__file__).with_name("caption_overlay_roles.py"))
             and data["fallback_sha256"] == digest(FALLBACK)
             and data["implementation_sha256"] == digest(Path(__file__)) and data["vision_sha256"] == digest(VISION))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

@@ -43,6 +43,7 @@
 | 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
 | Version | Date | Author | Description |
 | console-receipts-v1 | 2026-10-25 | Codex | 授权回执读回、封面认证时效和人工投稿确认提示闭环。 |
+| subtitle-release-v1 | 2026-11-02 | Codex | 统一字幕人工门禁与具名一次放行，保留失败证据。 |
 | --- | --- | --- | --- |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
 | retry-resume-v1 | 2026-10-23 | Codex | 历史审核标签不再提供当前复核入口，展示真实字幕阶段与复用结果。 |
@@ -317,6 +318,8 @@ def wechat_operations_policy_status():
 
 
 from web.publishing_recovery import create_publishing_recovery_router
+from web.subtitle_review import create_subtitle_review_router
+app.include_router(create_subtitle_review_router(db))
 from video_processing.utils.publishing_recovery_worker import ensure_publishing_recovery_worker
 app.include_router(create_publishing_recovery_router(
     db, settings.project_root,
@@ -3970,6 +3973,10 @@ def reset_video_hard(youtube_id: str):
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    subtitle_blocker = db.subtitle_recovery_blocker(video['id'])
+    if subtitle_blocker:
+        return {"success": False, "error": subtitle_blocker['reason'], "subtitle_recovery": subtitle_blocker}
+
     submission_guard = _wechat_submission_guard_reason(video)
     if submission_guard:
         return {"success": False, "error": submission_guard}
@@ -4270,6 +4277,10 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
         return {"success": False, "error": "视频不存在"}
 
     status = video.get("status", "")
+
+    subtitle_blocker = db.subtitle_recovery_blocker(video['id'])
+    if subtitle_blocker:
+        return {"success": False, "error": subtitle_blocker['reason'], "subtitle_recovery": subtitle_blocker}
 
     submission_guard = _wechat_submission_guard_reason(video)
     if submission_guard:

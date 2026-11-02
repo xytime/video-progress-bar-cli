@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-release-v1 | 2026-11-02 | Codex | 统一字幕人工门禁与具名一次放行，保留失败证据。 |
 | 1.3.0 | 2026-10-29 | Codex | 关联查询失败显式上抛、全查询绑定参数不超过400，使用只读一致性快照并透传入库来源。 |
 | 1.2.0 | 2026-10-29 | Antigravity | 补充 get_cohort_task_facts 别名以兼容服务层门面调用。 |
 | 1.1.0 | 2026-10-29 | Antigravity | 优化 ISO 时间解析（支持 Z/+00:00）、分块查询防 SQLite 溢出、退避保留最大时刻与行转换拆分。 |
@@ -181,6 +182,16 @@ def _fetch_subtitle_recoveries(
         )
         for r in _safe_query(conn, sql, chunk):
             res[r["video_id"]] = dict(r)
+        from .subtitle_recovery import subtitle_manual_blocked_sql
+        for r in _safe_query(conn, 'SELECT pv.id,' + subtitle_manual_blocked_sql('pv.id') +
+                             " AS blocked, (SELECT e.event_type FROM subtitle_recovery_events e WHERE e.video_id=pv.id AND e.event_type IN ('RELEASED','CLAIMED','RESOLVED') ORDER BY e.id DESC LIMIT 1) AS release_state FROM processed_videos pv WHERE pv.id IN (" + placeholders + ')', chunk):
+            if r['blocked'] or r['id'] in res or r['release_state']:
+                value = res.setdefault(r['id'], {})
+                value['manual_gate_blocked'] = bool(r['blocked'])
+                if r['blocked']:
+                    value['state'] = 'NEEDS_REPAIR'
+                elif r['release_state'] and 'state' not in value:
+                    value['state'] = r['release_state']
     return res
 
 

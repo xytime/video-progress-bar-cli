@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 1.3.0 | 2026-11-02 | Codex | 微窄竖片按完整高度等比缩放并左右居中补边，避免裁底。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建 |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏输入视频不进行TOP_MARGIN偏移裁切，居中显示，标有 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频字幕位置动态计算，偏靠视频下方以优化排版并避免遮挡，标有 # [Gemini_3.5_Flash_planning] |
@@ -55,10 +56,14 @@ class VerticalLayout:
         scale = cls.CANVAS_WIDTH / video_w
         new_w = cls.CANVAS_WIDTH
         new_h = int(video_h * scale)
+        if video_w < video_h and new_h > cls.CANVAS_HEIGHT:
+            scale = cls.CANVAS_HEIGHT / video_h
+            new_w = int(video_w * scale) // 2 * 2
+            new_h = cls.CANVAS_HEIGHT
         
         # 2. Position Video (Fixed Top Margin instead of Center for landscape)
         # For vertical videos, center vertically to avoid cropping the bottom.
-        video_x = 0
+        video_x = (cls.CANVAS_WIDTH - new_w) // 2
         if video_w < video_h:
             # [Gemini_3.5_Flash_planning] For vertical inputs, center vertically
             video_y = max(0, (cls.CANVAS_HEIGHT - new_h) // 2)

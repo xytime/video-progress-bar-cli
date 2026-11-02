@@ -22,6 +22,7 @@
 | interaction-recovery-v1 | 2026-10-23 | Codex | 等待不耗重试；原子补齐未绑定作品；回复查询严格按作品与零上限筛选。 |
 | Version | Date       | Author                              | Description                                                                    |
 | workbench-v1 | 2026-10-25 | Codex | 注册桌面工作台 CAS 幂等审计、桌面授权来源及到期回收。 |
+| subtitle-release-v1 | 2026-11-02 | Codex | 统一字幕人工门禁与具名一次放行，保留失败证据。 |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 | deployment-v1 | 2026-10-13 | Codex | 维护一致性备份及只读完整性复验，不覆盖已有备份。 |
@@ -4513,7 +4514,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                   AND NOT EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id = processed_videos.youtube_id)
                   AND NOT EXISTS (SELECT 1 FROM recommended_channels c WHERE c.channel_id = processed_videos.channel_id AND c.status = 'BLACKLISTED')
                   AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
-                """, (owner_pid, youtube_id, slice_index))
+                  AND """ + subtitle_recovery_gate_sql('processed_videos.id'), (owner_pid, youtube_id, slice_index))
             if cursor.rowcount == 1:
                 record = conn.execute("SELECT id FROM processed_videos WHERE youtube_id=? AND slice_index=?", (youtube_id,slice_index)).fetchone()
                 self._freeze_wechat_retry_chain_conn(conn, "publish", int(record[0]))

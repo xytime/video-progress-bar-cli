@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-11-02 | Codex | 诊断与人工门禁同源；按错误文案区分窄片、定位、翻译，旧失败禁普通重试。 |
 | 1.5.0 | 2026-11-01 | Codex | FAILED 且无实际进程或任务锁时，遗留字幕心跳不遮蔽真实失败。 |
 | 1.4.0 | 2026-11-01 | Codex | 封面及投稿后的实际状态优先于旧字幕阶段，保留恢复与公开凭据要求。 |
 | 1.3.0 | 2026-11-01 | Codex | 恢复项跳过仅报告已知状态，不推断监督停止且保留当前运行及审核优先级。 |
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Optional
+from ..db.subtitle_recovery import MANUAL_REVIEW_MARKERS
 
 from .delivery_rules import (
     format_bj_timestamp, has_unresolved_submission, has_submission_evidence,
@@ -66,7 +68,9 @@ _ERR_SIGNATURES: tuple[tuple[str, str, str, str, str], ...] = (
     ("OCR_BUDGET_EXCEEDED", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_OCR_BUDGET", "原片内嵌字幕识别未完成：OCR 预算耗尽", "原片字幕 OCR 未完成 (OCR_BUDGET_EXCEEDED)，对白字幕完整性尚无法判断；预算耗尽原因待查"),
     ("[NativeCaptionReview]", AnomalyCategory.EXECUTION_FAILURE.value, "NATIVE_CAPTION_INCOMPLETE", "原片内嵌字幕对白不完整或无法确认", ""),
     ("原字幕位置或文字不确定", AnomalyCategory.EXECUTION_FAILURE.value, "BURNED_CAPTION_REPAIR_UNCERTAIN", "原片烧录字幕位置或文字不确定，停止出片", ""),
-    ("burned_caption_repair", AnomalyCategory.EXECUTION_FAILURE.value, "BURNED_CAPTION_REPAIR_UNCERTAIN", "原片烧录字幕位置或文字不确定，停止出片", "烧录字幕定位不确定，安全门禁停止出片"),
+    ("caption_frame_uncertain", AnomalyCategory.EXECUTION_FAILURE.value, "BURNED_CAPTION_REPAIR_UNCERTAIN", "原片烧录字幕位置或文字不确定，停止出片", ""),
+    ("源片比 9:16 更窄", AnomalyCategory.EXECUTION_FAILURE.value, "CAPTION_SOURCE_TOO_NARROW", "源片过窄，需规范化画面", ""),
+    ("caption_source_too_narrow", AnomalyCategory.EXECUTION_FAILURE.value, "CAPTION_SOURCE_TOO_NARROW", "源片过窄，需规范化画面", ""),
     ("[RecoveryInterrupted]", AnomalyCategory.FLOW_STALL.value, "SUBTITLE_RECOVERY_INTERRUPTED", "修复字幕期间旧等待任务被停止（检查点已保留）", ""),
 )
 
@@ -128,12 +132,12 @@ def extract_tail_error_signature(task: TaskUnitFacts) -> tuple[str, str, str, st
         return AnomalyCategory.QUALITY_POLICY_BLOCK.value, "CONTENT_CENSOR_BLOCK", "内容审核/题材风险拦截（非系统故障）", line
     if "点赞率须严格" in wait_reason or task.publication_review_required:
         return AnomalyCategory.QUALITY_POLICY_BLOCK.value, "PUBLICATION_POLICY_GATE", "发布策略/点赞率或人工复核门禁（非系统故障）", (wait_reason or "需完成发布前人工复核")
-    if "SUBTITLE_NEEDS_REPAIR" in err or str(sub.get("state") or "") == "NEEDS_REPAIR":
-        code = str(sub.get("code") or "translation_budget_exhausted")
-        return AnomalyCategory.EXECUTION_FAILURE.value, f"SUBTITLE_REPAIR_{code.upper()}", f"字幕翻译需人工修复 ({code})", f"字幕翻译耗时或预算超限 ({code})，自动退避已停止"
     for needle, cat, code, title, default_desc in _ERR_SIGNATURES:
         if needle in err:
             return cat, code, title, (default_desc or _extract_matching_line(err, needle) or title)
+    if "SUBTITLE_NEEDS_REPAIR" in err or str(sub.get("state") or "") == "NEEDS_REPAIR":
+        code = str(sub.get("code") or "manual_review")
+        return AnomalyCategory.EXECUTION_FAILURE.value, f"SUBTITLE_REPAIR_{code.upper()}", f"字幕需人工处理 ({code})", f"字幕人工门禁仍未放行 ({code})"
     tail_line = _last_meaningful_error_line(err) or "任务执行失败（详见错误日志摘要）"
     return AnomalyCategory.EXECUTION_FAILURE.value, "STAGE_EXECUTION_FAILED", f"{resolve_stage_label(task)}执行失败", tail_line
 
@@ -172,6 +176,14 @@ def resolve_occurred_time(
     return fallback_ep, (f"{label} (估算)" if est else label), est
 
 
+def _subtitle_manual_required(task):
+    sub = task.subtitle_recovery or {}
+    if 'manual_gate_blocked' in sub:
+        return bool(sub['manual_gate_blocked'])
+    evidence = [task.error_msg or ''] + [str(e.get('reason') or '') for e in task.failure_events]
+    return sub.get('state') == 'NEEDS_REPAIR' or any(m in text for text in evidence for m in MANUAL_REVIEW_MARKERS)
+
+
 def _evaluate_special_states(
     task: TaskUnitFacts, env: RuntimeEnvironmentFacts, thresholds: DiagnosisThresholds
 ) -> Optional[dict[str, Any]]:
@@ -194,6 +206,8 @@ def _evaluate_special_states(
         }
     if not task.runtime_observation_available or not env.runtime_available:
         return _observation_unknown(task, env)
+    if _subtitle_manual_required(task):
+        return _evaluate_failure_or_recovery(task, env, thresholds)
     if task.status not in ("PUBLISHED", "SUBMITTED_BOUND") and task.recovery_items:
         latest = task.recovery_items[0]
         r_state = latest.get("state")
@@ -285,12 +299,13 @@ def _evaluate_failure_or_recovery(
         or "Social Unrest Review" in (task.error_msg or "")
         or "点赞率须严格" in (task.publication_wait_reason or "")
     )
-    if task.status == "FAILED" or is_policy or str(sub.get("state") or "") in ("NEEDS_REPAIR", "FAILED"):
+    manual = _subtitle_manual_required(task)
+    if task.status == "FAILED" or is_policy or manual or str(sub.get("state") or "") in ("NEEDS_REPAIR", "FAILED"):
         cat, code, title, summary = extract_tail_error_signature(task)
         is_sys = cat != AnomalyCategory.QUALITY_POLICY_BLOCK.value
-        h_state = HandlingState.MANUAL_REQUIRED.value if (not is_sys or str(sub.get("state") or "") == "NEEDS_REPAIR") else HandlingState.UNHANDLED.value
-        next_step = "人工复核/授权豁免" if not is_sys else ("修复字幕并释放" if "SUBTITLE_REPAIR" in code else "查看错误摘要并受控重试")
-        act = "review_policy" if not is_sys else ("repair_subtitle" if "SUBTITLE_REPAIR" in code else "retry_task")
+        h_state = HandlingState.MANUAL_REQUIRED.value if (not is_sys or manual) else HandlingState.UNHANDLED.value
+        next_step = "人工复核/授权豁免" if not is_sys else ("人工复核字幕并具名放行一次" if manual else "查看错误摘要并受控重试")
+        act = "review_policy" if not is_sys else ("repair_subtitle" if manual else "retry_task")
         if is_sys and is_task_actively_running(task, env, thresholds):
             h_state, next_step, act = HandlingState.RUNNING.value, "观察当前任务进度，勿并发重试", "none"
         return {

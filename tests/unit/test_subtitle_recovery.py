@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-release-v1 | 2026-11-02 | Codex | 统一字幕人工门禁与具名一次放行，保留失败证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 覆盖历史人工门只读保护、终态次数及具名放行。 |
 | 1.1.0 | 2026-11-01 | Codex | 冷却到期用同一冻结时钟，避免高负载下墙钟漂移导致误失败。 |
 | 1.0.0 | 2026-10-27 | Codex | 覆盖幂等、跨重启、显式修复、投稿保护及正常候选/恢复领取。 |
@@ -124,11 +125,11 @@ def test_expired_chain_is_readonly_blocker_and_explicit_repair_preserves_budget(
     assert db.subtitle_recovery_blocker(video(db)['id'])['state'] == 'NEEDS_REPAIR'
     with db.get_connection() as c:
         assert tuple(c.execute('SELECT state,expires_at,attempt_count FROM subtitle_recovery').fetchone()) == tuple(before)
-    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     released = db.get_subtitle_recovery(video(db)['id'])
     assert released['state'] == 'RELEASED' and released['attempt_count'] == 1 and released['expires_at'] == row['expires_at']
     assert not db.subtitle_recovery_blocker(video(db)['id'])
-    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert record(fixture)['state'] == 'NEEDS_REPAIR'
 
 
@@ -137,11 +138,11 @@ def test_explicit_repair_after_attempt_cap_allows_only_one_failed_trial(fixture)
     for _ in range(3):
         row = record(fixture)
     assert row['attempt_count'] == 3
-    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], digest('stale-receipt'))
+    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], digest('stale-receipt'), actor='unit-reviewer', reason='verified repair')
     db.update_process_pid('subtitle-test', 123)
-    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert not db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     db.update_process_pid('subtitle-test', None)
-    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert db.claim_video_for_processing('subtitle-test')
     failed = record(fixture)
     assert failed['attempt_count'] == 3 and failed['state'] == 'NEEDS_REPAIR'
@@ -167,7 +168,7 @@ def test_unrelated_new_contract_does_not_unlock_needs_repair(fixture):
     assert changed['suppressed'] and not changed['notify']
     assert changed['contract_sha256'] == first['contract_sha256']
     assert not db.claim_video_for_processing('subtitle-test')
-    assert db.release_subtitle_recovery_after_repair(video(db)['id'], first['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], first['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     repaired = record(fixture, receipt(contract_sha256=digest('fixed-translation')))
     assert repaired['state'] == 'WAITING' and repaired['attempt_count'] == 1
     # 回退旧合同不会获得已耗尽质量链的新预算。
@@ -252,7 +253,7 @@ def test_all_submission_ledgers_protect_every_recovery_write(fixture, protection
     before = video(db)
     assert record(fixture) is None
     assert not db.resolve_subtitle_recovery(vid)
-    assert not db.release_subtitle_recovery_after_repair(vid, row['last_receipt_sha'])
+    assert not db.release_subtitle_recovery_after_repair(vid, row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert video(db) == before
     assert db.get_subtitle_recovery(vid)['last_receipt_sha'] == row['last_receipt_sha']
 
@@ -352,7 +353,7 @@ def test_terminal_failure_stays_locked_and_records_one_failure(fixture, category
     record(fixture, receipt(category, code=code))
     with db.get_connection() as c:
         assert c.execute('SELECT count(*) FROM publishing_failure_events').fetchone()[0] == 1
-    assert db.release_subtitle_recovery_after_repair(video(db)['id'], state['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], state['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert not db.subtitle_recovery_blocker(video(db)['id'])
 
 
@@ -366,7 +367,7 @@ def test_legacy_budget_reason_overrides_due_waiting_without_rewriting_chain(fixt
     assert not db.claim_video_for_processing('subtitle-test')
     assert not db.requeue_transient_pre_submission_failure('subtitle-test', 'connection timed out')
     assert db.get_subtitle_recovery(video(db)['id']) == before
-    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert db.claim_video_for_processing('subtitle-test')
 
 
@@ -407,7 +408,7 @@ def test_independent_state_survives_message_rewrite_and_release_does_not_unlock_
     db.update_video_status('subtitle-test', 'PENDING', error_msg='已改写')
     assert db.get_subtitle_recovery(vid)['state'] == 'NEEDS_REPAIR'
     assert not db.claim_video_for_processing('subtitle-test')
-    assert db.release_subtitle_recovery_after_repair(vid, state['last_receipt_sha'])
+    assert db.release_subtitle_recovery_after_repair(vid, state['last_receipt_sha'], actor='unit-reviewer', reason='verified repair')
     assert db.claim_video_for_processing('subtitle-test')
     # 即使沿用已 RELEASED 的链，新人工错误也不能被旧释放授权覆盖。
     db.update_video_status('subtitle-test', 'FAILED', error_msg='caption_frame_uncertain')

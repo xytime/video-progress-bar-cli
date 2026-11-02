@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 2.9.1 | 2026-11-02 | Codex | 前景采用完整等比几何及水平偏移，使微窄片左右补边。 |
 | 2.9.0   | 2026-10-23 | Codex | 已确认单片采用完整等比原画面及独立双语区，按实际字体边界闭锁。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
 | 1.6.0   | 2026-07-17 | Codex | 移除 CosyVoice；高品质 TTS 改由本地 IndexTTS，并迁移历史 cosyvoice 任务 |
@@ -815,16 +816,16 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # Background: Scale input to Fill 1080x1920, Blur
             filters.append(f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg]")
             # Foreground: Scale to new_h
-            filters.append(f"[0:v]scale=1080:{layout.new_height}[fg]")
+            filters.append(f"[0:v]scale={layout.new_width}:{layout.new_height}[fg]")
             # Overlay
-            filters.append(f"[bg][fg]overlay=0:{layout.video_y}[merged]")
+            filters.append(f"[bg][fg]overlay={layout.video_x}:{layout.video_y}[merged]")
         else:
             # Solid Black Background
             # Scale input to 1080:new_h
-            filters.append(f"[0:v]scale=1080:{layout.new_height}[fg]")
+            filters.append(f"[0:v]scale={layout.new_width}:{layout.new_height}[fg]")
             # Pad to 1080x1920 at correct y position
             # pad=width:height:x:y:color
-            filters.append(f"[fg]pad=1080:1920:0:{layout.video_y}:black[merged]")
+            filters.append(f"[fg]pad=1080:1920:{layout.video_x}:{layout.video_y}:black[merged]")
 
         title_filters, title_label = _build_title_drawtext_filters("merged", self.title, self.font_path)
         if framed:
