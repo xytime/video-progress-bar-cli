@@ -276,4 +276,7 @@ def test_sync_disabled_records_attempt_without_touching_catalog(live,tmp_path,mo
     monkeypatch.setattr(type(settings),'default_output_dir',property(lambda _: tmp_path/'attempts'))
     result=run_catalog_sync(active)
     assert result['reason']=='CATALOG_OPERATIONS_DISABLED' and not result['live_verified']
+    assert result['diagnostics']['browser']['launched'] is False
+    assert result['diagnostics']['url_path'] is None and result['diagnostics']['observed_items']==0
+    assert Path(result['receipt_path']).is_file()
     assert path.read_bytes()==before and len(list((tmp_path/'attempts').glob('wechat_catalog_sync/*/receipt.json')))==1

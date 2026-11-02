@@ -1,0 +1,7 @@
+{
+  "source": "output/product_frame_content.html",
+  "source_captured_at": "2026-10-10T15:54:10.031842+08:00",
+  "source_sha256": "2404afbaf0e2f0fa82f596be68632978fdcf32a4d77d48c9910fc7f62b66c021",
+  "fixture_sha256": "433826a74a838b4e00b4551b0ba91d2f11ffd05442295d432aef74e4a3cbc016",
+  "transformation": "仅保留商品弹窗公开DOM，删除脚本/媒体/表单及非class/title/type/disabled/aria-disabled属性；不含账号头部，不作为live证据，不续期目录。"
+}

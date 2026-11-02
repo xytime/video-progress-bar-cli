@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.3.0 | 2026-11-02 | Codex | 发布与只读商品采集共用 Chromium 启动参数，调用者显式传入同一 headed 配置。 |
 | 1.2.0 | 2026-10-20 | Codex | 页面导航前接入当前锁归属账户的共享限流观察，覆盖首次管理页及内部复用页。 |
 | 1.1.0   | 2026-10-13 | Antigravity | 新增：create_wechat_context 支持自定义 viewport 参数。 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始版本：统一创建微信视频号浏览器上下文，收拢 UA、Viewport 与 init_script 反检测指纹。 |
@@ -20,6 +21,17 @@ from .wechat_session_lock import guard_wechat_context
 
 # 统一微信视频号视口规格（1280x800）
 WECHAT_VIEWPORT: dict[str, int] = {"width": 1280, "height": 800}
+WECHAT_LAUNCH_PROFILE = 'publisher-chromium-v1'
+
+
+def wechat_launch_options(*, headless: bool) -> dict[str, Any]:
+    """保持原发布器启动参数；不在工厂中读取或改变登录方式。"""
+    return {'headless': headless, 'args': [
+        '--disable-web-security', '--no-sandbox',
+        '--disable-blink-features=AutomationControlled', '--disable-infobars',
+        '--window-size=1280,800', '--disable-accelerated-2d-canvas',
+        '--no-proxy-server', '--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1',
+    ]}
 
 # 统一微信视频号真实 Chrome UA
 WECHAT_USER_AGENT: str = (
@@ -53,6 +65,8 @@ __all__ = [
     "WECHAT_VIEWPORT",
     "WECHAT_USER_AGENT",
     "WECHAT_INIT_SCRIPT",
+    "WECHAT_LAUNCH_PROFILE",
+    "wechat_launch_options",
     "create_wechat_context",
 ]
 

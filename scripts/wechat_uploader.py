@@ -4,6 +4,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                              |
+| launch-parity-v1 | 2026-11-02 | Codex | 与只读商品采集共用原发布器 Chromium 参数；headed 仍由调用者控制。 |
 | 5.27.0 | 2026-10-18 | Antigravity | verify-only 接入列表页专属强控件契约（wait_for_list_ready_with_spa_guard），遇登录要求零授权/零扫码/零写回直接返回 2，并在浏览器关闭及会话锁释放后记录去重登录恢复信号。 |
 | scheduler-v1 | 2026-10-21 | Codex | 关闭旧作品自动查询，接入账户统一降频和有界核对。 |
 | 5.26.0 | 2026-10-17 | Antigravity | 修复快捷登录按钮瞬时探测竞态：有界轮询等待可信 iframe 渲染“微信快捷登录”按钮，并在启动桌面监听前唤醒显示器防熄屏漏检。 |
@@ -155,7 +156,7 @@ from video_processing.core.wechat_session_lock import (
 from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
-from video_processing.core.wechat_browser_context import create_wechat_context
+from video_processing.core.wechat_browser_context import create_wechat_context, wechat_launch_options
 from video_processing.core.wechat_product_policy import (
     choose_product_role,
     get_verified_product_catalog,
@@ -3044,22 +3045,7 @@ def run_uploader(
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
-        browser = p.chromium.launch(
-            headless=headless,
-            args=[
-                "--disable-web-security",
-                "--no-sandbox",
-                # 反检测：隐藏 Headless 特征
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--window-size=1280,800",
-                # CPU Canvas 统一可视与无界面模式的缩放结果，避免 GPU 重采样差异误拒封面。
-                "--disable-accelerated-2d-canvas",
-                # [BugFix] 禁用代理，防止 Playwright 走海外节点导致微信异地登录强制掉线
-                "--no-proxy-server",
-                "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
-            ]
-        )
+        browser = p.chromium.launch(**wechat_launch_options(headless=headless))
 
         # 加载 Cookie 状态（统一通过 wechat_browser_context 工厂配置 Viewport、UA 与 init_script）
         if relogin:
