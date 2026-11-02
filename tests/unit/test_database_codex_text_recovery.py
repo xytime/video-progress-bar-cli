@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 文字恢复正例改用非字幕合同，字幕全失败单独受人工闸保护。 |
 | 1.0.0 | 2026-10-03 | Codex | 覆盖近24小时 compare-and-set、进程占用、策略和投稿账本。 |
 """
 
@@ -22,11 +23,12 @@ def _db(tmp_path, status="FAILED", error=ERROR):
 
 
 def test_named_text_recovery_is_atomic_and_preserves_score(tmp_path):
-    db = _db(tmp_path)
-    assert db.requeue_recent_text_provider_failure("test-text", expected_error=ERROR)
+    error = "TitleContractError: no usable title"
+    db = _db(tmp_path, error=error)
+    assert db.requeue_recent_text_provider_failure("test-text", expected_error=error)
     row = db.get_video_by_youtube_id("test-text")
     assert row["status"] == "PENDING" and row["score"] == 80 and row["retry_count"] == 1
-    assert not db.requeue_recent_text_provider_failure("test-text", expected_error=ERROR)
+    assert not db.requeue_recent_text_provider_failure("test-text", expected_error=error)
 
 
 @pytest.mark.parametrize("status", ["PUBLISHED", "PUBLISHING", "LOGIN_REQUIRED", "TRANSCRIBING", "IGNORED"])

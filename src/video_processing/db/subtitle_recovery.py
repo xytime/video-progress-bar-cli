@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 人工复核分类硬锁，旧人工错误只读识别，不因冷却到期自动释放。 |
 | 1.0.0 | 2026-10-27 | Codex | 按源与翻译合同保存失败链、幂等尝试、冷却及具名修复释放。 |
 """
 from __future__ import annotations
@@ -16,18 +17,29 @@ import time
 import uuid
 
 
-CATEGORIES = frozenset({"network", "quota", "busy", "timeout", "authentication", "quality", "budget", "unavailable"})
+CATEGORIES = frozenset({"network", "quota", "busy", "timeout", "authentication", "quality", "budget", "unavailable", "review"})
 SERVICE_FAILURES = frozenset({"network", "quota", "timeout", "unavailable"})
 PRE_SUBMISSION_STATES = frozenset({"PENDING", "PROCESSING", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "FAILED"})
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_CHAIN_SECONDS = 24 * 3600
+MANUAL_REVIEW_MARKERS = ('NativeCaptionReviewRequired', '[NativeCaptionReview]',
+                        '需先人工规范化', '原字幕位置或文字不确定', 'SUBTITLE_NEEDS_REPAIR:',
+                        'native_caption_review', 'caption_source_too_narrow', 'caption_frame_uncertain',
+                        'translation_budget_exhausted', 'all_providers_failed',
+                        'All subtitle translation providers failed or were blocked.')
+
+
+def _manual_review_sql(column):
+    return '(' + ' OR '.join(f"instr(COALESCE({column},''),'{marker}')>0"
+                             for marker in MANUAL_REVIEW_MARKERS) + ')'
 
 
 def subtitle_recovery_gate_sql(video_id: str) -> str:
     """仅供 DAL 固定列名调用；已到期 WAITING 可领，过期链须显式修复。"""
     if video_id not in {"pv.id", "processed_videos.id"}:
         raise ValueError("unsupported subtitle gate column")
-    return ("NOT EXISTS (SELECT 1 FROM subtitle_recovery s WHERE s.video_id=" + video_id +
+    column = video_id.rsplit('.', 1)[0] + '.error_msg'
+    return ("NOT " + _manual_review_sql(column) + " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery s WHERE s.video_id=" + video_id +
             " AND s.is_current=1 AND (s.state='NEEDS_REPAIR' OR (s.state='WAITING' AND "
             "(s.next_attempt_at>CAST(strftime('%s','now') AS REAL) OR "
             "s.expires_at<=CAST(strftime('%s','now') AS REAL)))))")
@@ -152,6 +164,16 @@ class SubtitleRecoveryDAL:
     @classmethod
     def _subtitle_blocker_in(cls, c, video_id: int, now: float | None = None) -> dict | None:
         row = cls._subtitle_row(c, video_id)
+        video = c.execute('SELECT error_msg FROM processed_videos WHERE id=?', (video_id,)).fetchone()
+        marker = next((m for m in MANUAL_REVIEW_MARKERS if video and m in (video['error_msg'] or '')), None)
+        if marker:
+            # 历史日志只读识别，不迁移失败记录、不清账本，也不受旧 WAITING 到期影响。
+            return dict(code='SUBTITLE_NEEDS_REPAIR', state='NEEDS_REPAIR', next_attempt_at=None,
+                        reason=f'字幕需人工复核，停止出片（{marker}）；原失败证据保留，禁止自动重跑',
+                        failure_code=row['code'] if row else 'legacy_caption_review',
+                        last_receipt_sha=row['last_receipt_sha'] if row else None,
+                        last_receipt_path=row['last_receipt_path'] if row else '',
+                        quality_details=json.loads(row['quality_details']) if row else [])
         if row is None or row["state"] in {"RELEASED", "RESOLVED"}:
             return None
         now = time.time() if now is None else now
@@ -245,7 +267,7 @@ class SubtitleRecoveryDAL:
             if not suppressed and safe["category"] in SERVICE_FAILURES:
                 count = min(3, count + 1)
             repair = (suppressed or expires <= now or safe["retry_at"] > now + MAX_CHAIN_SECONDS or
-                      safe["category"] in {"authentication", "quality", "budget"} or count >= 3)
+                      safe["category"] in {"authentication", "quality", "budget", "review"} or count >= 3)
             state = "NEEDS_REPAIR" if repair else "WAITING"
             due = None if repair else max(safe["retry_at"], now + (60 if safe["category"] == "busy" else (300 if count == 1 else 900)))
             if due is not None and due >= expires:

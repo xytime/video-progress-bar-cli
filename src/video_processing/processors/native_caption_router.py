@@ -6,6 +6,7 @@ codex_text_provider -> settings；不访问数据库、Telegram 或发布器。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 人工审查异常沿用绑定字幕交接协议，保留安全原因码。 |
 | 1.3.0 | 2026-11-01 | Codex | 获批首中尾负向分流及有界补查，取消默认全片回退。 |
 | 1.5.0 | 2026-10-31 | Codex | 完整视觉证据有界分页及图片缓存；不改变整片 OCR、质量或发布规则。 |
 | 1.6.0 | 2026-11-01 | Codex | 接入经授权的首中尾抽样保留；负向或不一致仍走原严格路径。 |
@@ -63,8 +64,16 @@ def processing_budget(source):
                          * settings.codex_text_request_timeout_seconds + 1200))
 
 
-class NativeCaptionReviewRequired(ValueError):
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
+
+
+class NativeCaptionReviewRequired(SubtitleReviewRequired):
     """可恢复的复核事项；调用者保存现有转写，不触发字幕重叠或投稿。"""
+
+    def __init__(self, message):
+        signal = re.search(r'\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b', message)
+        code = 'native_caption_review' + (':' + signal[0][:120] if signal else '')
+        super().__init__(message, code=code)
 
 
 def _scan_identity(value):

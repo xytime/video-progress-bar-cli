@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 旧文字及媒体恢复入口复验字幕人工闸门。 |
 | output-retention-v1 | 2026-10-31 | Codex | 新增不初始化数据库的只读产物引用快照，多切片与跨平台未确认状态保守保护。 |
 | notification-guard-v2 | 2026-10-27 | Codex | 在字幕告警集成上接入文字通知持久防重复，不把UNKNOWN抑制当受理。 |
 | sparse-quality-v1 | 2026-10-27 | Codex | 接入字幕质量告警持久发件箱，候选与问题摘要独立幂等。 |
@@ -4320,6 +4321,8 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             ''', (youtube_id, slice_index, expected_error, min(4, max(1, int(max_retry_count))))).fetchone()
             if not row:
                 return False
+            if self._subtitle_blocker_in(conn, row["id"]):
+                return False
             conn.execute("DELETE FROM copywriter_deferred WHERE video_id = ?", (row["id"],))
             conn.execute('''
                 UPDATE processed_videos SET status = 'PENDING', error_msg = 'CODEX_TEXT_RECOVERY',
@@ -4346,6 +4349,10 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             return False
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            video = conn.execute("SELECT id FROM processed_videos WHERE youtube_id=? AND slice_index=0",
+                                 (youtube_id,)).fetchone()
+            if video and self._subtitle_blocker_in(conn, video["id"]):
+                return False
             cursor = conn.execute('''
                 UPDATE processed_videos SET status='PROCESSING', process_pid=?,
                     retry_count=retry_count+1, error_msg='CODEX_MEDIA_RECOVERY', updated_at=CURRENT_TIMESTAMP
@@ -4371,6 +4378,9 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         max_retry_count: int = 2,
     ) -> bool:
         """仅将上传前阶段的瞬态失败原子恢复为 PENDING，绝不触碰发布中或已发布任务。"""
+        from .subtitle_recovery import MANUAL_REVIEW_MARKERS
+        if any(marker in (error_msg or "") for marker in MANUAL_REVIEW_MARKERS):
+            return False
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos "
@@ -4378,7 +4388,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                 "updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ? "
                 "AND status IN ('DOWNLOADING', 'COPYWRITING', 'TRANSCRIBING') "
-                "AND retry_count < ?",
+                "AND retry_count < ? AND " + subtitle_recovery_gate_sql("processed_videos.id"),
                 (error_msg, youtube_id, slice_index, max(1, int(max_retry_count))),
             )
             conn.commit()

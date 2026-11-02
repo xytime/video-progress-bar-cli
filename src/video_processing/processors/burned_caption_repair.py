@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 窄片及不确定帧使用人工字幕门，禁止通用失败重试。 |
 | 2.3.1 | 2026-10-28 | Codex | 允许位于画面内的全宽对白字幕，仍按实际掩膜面积与纹理决定修补或避让。 |
 | 2.3.0 | 2026-10-23 | Codex | 单片已确认独立字幕区绑定原片、完整时间轴、版式和实现凭证。 |
 | 2.2.0 | 2026-10-23 | Codex | 对齐百分比与数字写法；用双向 ASR 轨迹区分字幕、孤帧 OCR 错误与画面文字。 |
@@ -346,7 +347,9 @@ def _classify(frames, segments, fps):
                 box = [min(r['box'][0] for r in pair), min(r['box'][1] for r in pair),
                        max(r['box'][2] for r in pair), max(r['box'][3] for r in pair)]
             if (row["confidence"] < .75 and not stable_ocr) or not matches:
-                raise ValueError(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}")
+                from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
+                raise SubtitleReviewRequired(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}",
+                                             code='caption_frame_uncertain')
             if box[3] - box[1] > .08 or not (0 <= box[0] < box[2] <= 1):
                 raise ValueError("原字幕字形范围超出可安全修补边界")
             chosen.append(box)
@@ -498,7 +501,9 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     source = Path(source)
     w, h, fps, duration = _probe(source)
     if w < h and h/w > 1920/1080 + .001:
-        raise ValueError("源片比 9:16 更窄，现有布局会裁切，需先人工规范化")
+        from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
+        raise SubtitleReviewRequired("源片比 9:16 更窄，现有布局会裁切，需先人工规范化",
+                                     code='caption_source_too_narrow')
     source_hash = digest(source)
     from .approved_caption_layout import approved_layout, validate_segments
     approved = approved_layout(source, source_hash)

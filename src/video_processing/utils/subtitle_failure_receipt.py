@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 人工字幕门类型化，供应商全失败停止自动重试并保留安全原因。 |
 | 1.2.0 | 2026-10-27 | Codex | 烧录前持久 intent 绑定 ASS 与正常快照，完成后绑定成片，缓存恢复拒绝遗失或替换证据。 |
 | 1.1.0 | 2026-10-27 | Codex | 成功告警绑定最终正文、全片容错报告与不可变 bad case，父进程重新计算后才交接。 |
 | 1.0.0 | 2026-10-27 | Codex | 字幕恢复安全错误链、本次原子回执及父进程身份核验。 |
@@ -23,7 +24,7 @@ from .render_source_binding import digest
 VERSION = 1
 ASS_CHECKPOINT_PREFIX = '; Subtitle-Translation-Checkpoint: '
 CATEGORIES = frozenset({'network', 'quota', 'busy', 'timeout', 'authentication',
-                        'quality', 'budget', 'unavailable'})
+                        'quality', 'budget', 'unavailable', 'review'})
 
 
 def fingerprint(value):
@@ -54,19 +55,29 @@ def safe_failure(provider, code, *, retry_at=0, quality_details=(), category=Non
             category = 'network'
         else:
             category = 'unavailable'
-    provider = provider if provider in {'codex', 'agy', 'gemini', 'deepseek', 'google', 'host'} else 'host'
+    provider = provider if provider in {'codex', 'agy', 'grok', 'gemini', 'deepseek', 'google', 'host'} else 'host'
     return dict(provider=provider, code=code, category=category,
                 retry_at=max(0, int(retry_at or 0)), quality_details=_safe_quality_details(quality_details))
 
 
 class SubtitleTranslationFailure(VideoProcessingError):
-    def __init__(self, failures, message='All subtitle translation providers failed or were blocked.'):
+    def __init__(self, failures, message='All subtitle translation providers failed or were blocked.', *, exhausted=False):
         self.failures = failures[-10:]
         # 最后实际使用的备选方案决定处置；早期供应商不可用不掩盖 Codex 的具体质量错误。
         self.failure = self.failures[-1] if self.failures else safe_failure('host', 'providers_unavailable')
+        if exhausted and self.failure['category'] not in {'quality', 'budget', 'authentication'}:
+            self.failure = safe_failure('host', 'all_providers_failed:' + self.failure['code'],
+                                        category='review', quality_details=self.failure['quality_details'])
         self.binding = {}
         self.evidence = {}
         super().__init__(message + f" [{self.failure['code']}]")
+
+
+class SubtitleReviewRequired(SubtitleTranslationFailure, ValueError):
+    """字幕安全门要求人工复核；沿用绑定回执和退出码 78，兼容既有 ValueError 调用方。"""
+
+    def __init__(self, message, *, code='native_caption_review'):
+        super().__init__([safe_failure('host', code, category='review')], message)
 
 
 def _atomic_json(path, payload):

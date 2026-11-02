@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 验证生产顺序实际窗口及快速失败余时转让。 |
 | 1.0.0 | 2026-10-31 | Codex | 验证份额转让、异常恢复、原时间轴与完整质量阻断。 |
 | 1.1.0 | 2026-11-01 | Grok Bot | CLI 优先顺序下 Codex 居中不独占剩余期限。 |
 """
@@ -40,12 +41,25 @@ def test_unavailable_fallback_does_not_reserve_idle_time():
     assert deadline(['gemini', 'google'], 1, now=240) == 480
 
 
-def test_cli_first_order_shares_time_fairly_when_codex_is_not_last():
+def test_production_order_reserves_cli_windows_within_600_seconds():
     providers = ['agy', 'codex', 'grok', 'deepseek', 'gemini', 'google']
-    assert deadline(providers, 0) == 80
-    assert deadline(providers, 1, now=80) == 160
-    # agy 快速失败时未用份额顺延给 Codex，但 Codex 不能吞掉后续供应商的时间。
-    assert deadline(providers, 1, now=10) == 10 + 470 / 5
+    now, windows = 0, []
+    for index in range(len(providers)):
+        end = deadline(providers, index, now=now)
+        windows.append(end - now)
+        now = end
+    assert windows == [30, 300, 150, 0, 0, 0]
+    # Codex 已观察到 273.524s 成功；Grok 只有超时下界，150s 并不保证成功。
+    assert windows[1] > 273.524 and windows[2] > 119.946
+    assert now == 480 and 600 - now == 120
+    assert deadline(providers, 1, now=10) == 310
+
+
+def test_fast_cli_failures_donate_time_to_api_candidates():
+    providers = ['agy', 'codex', 'grok', 'deepseek', 'gemini', 'google']
+    assert deadline(providers, 3, now=30) == 180
+    assert deadline(providers, 4, now=180) == 330
+    assert deadline(providers, 5, now=330) == 480
 
 
 def test_no_new_candidate_request_during_quality_reserve():
@@ -118,3 +132,48 @@ def test_real_orchestrator_reserves_fallback_but_keeps_quality_gate(tmp_path, mo
         assert not any(e['selected'] for e in processor._translation_quality_audit)
     assert calls == [('gemini',60),('deepseek',60),('google',60),('codex',300)]
     assert processor._translation_deadline == 700 and now[0] == 580
+
+
+@pytest.mark.parametrize('mode', ['network', 'budget', 'billing429', 'cooldown'])
+def test_real_translation_exhaustion_requires_manual_review(tmp_path, monkeypatch, mode):
+    import time
+    import video_processing.processors.caption_processor as module
+    from video_processing.utils.subtitle_failure_receipt import SubtitleTranslationFailure, safe_failure
+    config = SimpleNamespace(subtitle_translation_provider_order_list=
+        ['agy','codex','grok','deepseek','gemini','google'],
+        subtitle_provider_budget_allocation_enabled=True, subtitle_translation_total_timeout_seconds=600,
+        subtitle_translation_quality_reserve_seconds=120, subtitle_translation_fallback_reserve_seconds=300)
+    monkeypatch.setattr(module, 'settings', config)
+    class Pool:
+        def __init__(self, path):
+            pass
+        def order(self, providers, **kwargs):
+            return [] if mode == 'cooldown' else providers
+        def snapshot(self):
+            return {p: dict(cooldown_until=time.time()+3600)
+                    for p in config.subtitle_translation_provider_order_list}
+        def record_failure(self, *args, **kwargs):
+            pass
+    monkeypatch.setattr(module, 'DynamicTranslationModelPool', Pool)
+    source = tmp_path / 'source.mp4'
+    source.touch()
+    processor = module.AutoCaptionProcessor(source, tmp_path / 'output.mp4')
+    called = []
+    def build(provider, texts, context):
+        called.append(provider)
+        category, code = {
+            'network': ('network','connection'), 'budget': ('budget','translation_budget_exhausted'),
+            'billing429': ('quota','billing_429'), 'cooldown': ('unavailable','providers_cooldown'),
+        }[mode]
+        processor._last_provider_failure = safe_failure(provider, code, category=category)
+        processor._last_provider_error = code
+        return None
+    monkeypatch.setattr(processor, '_build_translation_candidate', build)
+    with pytest.raises(SubtitleTranslationFailure) as stopped:
+        processor._translate_segments([dict(text='Bonds remain stable.', start=0., end=1.)])
+    assert stopped.value.failure['category'] in {'review', 'budget', 'authentication'}
+    if mode == 'cooldown':
+        assert called == [] and 'providers_cooldown' in stopped.value.failure['code']
+    else:
+        assert called == config.subtitle_translation_provider_order_list
+    assert not (tmp_path / 'output.mp4').exists()

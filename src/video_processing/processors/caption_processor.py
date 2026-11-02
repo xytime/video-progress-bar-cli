@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 原字幕审查及布局失败绑定本次媒体回执，全供应商失败停止自动重试。 |
 | 1.44.0 | 2026-11-01 | Codex | 供应商份额按原持久兜底可执行余额预留，耗尽后保留缓存入口及全部质量门。 |
 | 1.43.0 | 2026-11-01 | Codex | 生词导出在单次调用内复用离线词典并批量预热，保留首现语境及已有音标词性。 |
 | 1.36.1 | 2026-10-11 | Antigravity | 修复切片视频生词路径关联数据库失败缺陷，清洗生词标点与字幕样式标签 |
@@ -359,6 +360,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
             
             return final_output
             
+        except SubtitleTranslationFailure as exc:
+            if not exc.binding:
+                # 原字幕路由及布局阶段也必须绑定本次媒体和已完成的 ASR。
+                exc.binding = dict(input_sha256=checkpoints.source_digest,
+                    asr_sha256=fingerprint(segments),
+                    contract_sha256=fingerprint(dict(caption_review=1, code=exc.failure['code'])),
+                    stage='SOURCE_CAPTION_REVIEW')
+            raise
         finally:
             # 清理临时文件 (音频 和 ASS文件?)
             # 用户可能想要保留 ASS 文件以便后续修改，这里暂时只清理音频
@@ -817,7 +826,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             failures.append(safe_failure('host', 'providers_cooldown', retry_at=min(due) if due else 0))
         if time.monotonic() >= self._translation_deadline:
             failures.append(safe_failure('host', 'translation_budget_exhausted'))
-        raise SubtitleTranslationFailure(failures)
+        raise SubtitleTranslationFailure(failures, exhausted=True)
 
     def _record_selected_gemini_model_quality(self, candidate: SubtitleTranslationCandidate, score: float, state_path: Optional[Path]) -> None:
         if candidate.provider.lower() != "gemini" or not candidate.model:

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | CLI 顺序预留可执行窗口，保留整片期限与质量预留。 |
 | 1.2.0 | 2026-11-01 | Grok Bot | Codex 排在中间（CLI 优先顺序）时按普通候选公平分配，不再独占剩余期限；Codex 末位兜底行为不变。 |
 | 1.1.0 | 2026-11-01 | Codex | 仅按兜底原累计可执行余额预留；未用份额交前序候选，总期限与质量预留不变。 |
 | 1.0.0 | 2026-10-31 | Codex | 防止前序网络失败耗尽全部翻译预算；不增加总时限或修改质量门。 |
@@ -13,8 +14,8 @@ import math
 
 
 def candidate_deadline(deadline, providers, index, *, now, total_seconds,
-                       quality_seconds, fallback_seconds, fallback_capacity=None):
-    """未使用的份额交给后续候选；Codex 不可用时按剩余供应商公平分配。"""
+                       quality_seconds, fallback_seconds, fallback_capacity=None, cli_seconds=None):
+    """按优先顺序预留 CLI 请求窗口；未使用份额交给后续候选。"""
     if not 0 <= index < len(providers):
         raise ValueError('provider index outside plan')
     remaining = max(0., deadline - now)
@@ -22,8 +23,14 @@ def candidate_deadline(deadline, providers, index, *, now, total_seconds,
     available = max(0., remaining - quality)
     tail = providers[index:]
     if providers[-1] != 'codex':
-        # Codex 不是末位兜底（CLI 优先顺序）时，所有候选平等分享剩余期限。
-        seconds = available / len(tail)
+        # 优先顺序不变；为后序 CLI 保留完整请求窗口，未用时间仍转交后序。
+        caps = dict(agy=120., codex=min(float(fallback_seconds), float(total_seconds) * .5), grok=150.)
+        caps.update(cli_seconds or {})
+        reserve = sum(caps.get(provider, 0.) for provider in tail[1:])
+        if fallback_capacity is not None and 'codex' in tail[1:]:
+            capacity = float(fallback_capacity)
+            reserve -= caps['codex'] - min(caps['codex'], max(0., capacity) if math.isfinite(capacity) else 0.)
+        seconds = min(caps.get(tail[0], available / len(tail)), max(0., available - reserve))
     elif 'codex' in tail and tail[0] != 'codex':
         reserve = min(float(fallback_seconds), float(total_seconds) * .5)
         if fallback_capacity is not None:
@@ -68,7 +75,9 @@ def translation_provider_window(processor, providers, index, config, *, fallback
         total_seconds=config.subtitle_translation_total_timeout_seconds,
         quality_seconds=config.subtitle_translation_quality_reserve_seconds,
         fallback_seconds=config.subtitle_translation_fallback_reserve_seconds,
-        fallback_capacity=fallback_capacity)
+        fallback_capacity=fallback_capacity,
+        cli_seconds=dict(agy=getattr(config, 'agy_timeout_sec', 120),
+                         grok=getattr(config, 'grok_timeout_sec', 150)))
     try:
         yield processor._translation_deadline > now
     finally:

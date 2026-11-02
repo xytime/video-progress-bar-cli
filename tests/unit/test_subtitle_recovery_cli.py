@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 真实 CLI 至 DAL 验证人工门控退出码、去重和自动领取阻断。 |
 | 1.0.0 | 2026-10-27 | Codex | 验证质量失败携带离线旁证而不改错误、临时故障不诊断及 ASR 复用。 |
 """
 import importlib
@@ -112,3 +113,73 @@ def test_real_cli_preserves_typed_error_evidence_and_asr_checkpoint(
     assert asr.read_bytes() == original_asr
     assert json.loads(progress.read_text())["reused_steps"] == ["asr"]
     assert json.loads(path.read_text())["attempt_id"] == again
+
+
+@pytest.mark.parametrize('gate', ['native', 'narrow', 'frame'])
+def test_manual_caption_gate_cli_to_real_dal_is_not_retryable(tmp_path, monkeypatch, gate):
+    import subprocess
+    from video_processing.processors import native_caption_router, burned_caption_repair
+    from video_processing.utils.subtitle_failure_receipt import SubtitleReviewRequired
+    from video_processing.pipeline_manager import PipelineManager
+    from video_processing.core.wechat_request_guard import WeChatRequestGuard
+    module = importlib.import_module('cli.commands.auto_caption')
+    source = tmp_path / 'source.mp4'
+    source.write_bytes(b'synthetic-media')
+    path, attempt, started = tmp_path / 'review.json', uuid.uuid4().hex, time.time()
+
+    class ReviewCaption(AutoCaptionProcessor):
+        def process(self):
+            self.preserve_source_chinese = gate == 'native'
+            return super().process()
+
+        def _source_duration(self):
+            return 10.
+
+        def _extract_audio(self):
+            return None
+
+        def _generate_ass_file(self, segments):
+            if gate == 'narrow':
+                return burned_caption_repair.prepare_source(self.input_path, segments)
+            return burned_caption_repair._classify(
+                [[dict(text='unrelated words', confidence=.5, box=[.1,.7,.8,.74])]],
+                [dict(text='Bonds are stable.', start=0., end=1.)], 25)
+
+        def _burn_subtitles(self, path):
+            pytest.fail('manual review reached renderer')
+
+    def route(*args, **kwargs):
+        raise native_caption_router.NativeCaptionReviewRequired(
+            '[NativeCaptionReview] SAMPLE_SEMANTIC_BUDGET_EXCEEDED')
+
+    monkeypatch.setattr(module, 'AutoCaptionProcessor', ReviewCaption)
+    monkeypatch.setattr(native_caption_router, 'route', route)
+    monkeypatch.setattr(burned_caption_repair, '_probe', lambda source: (500, 1000, 25, 10))
+    # 使用真实 process、CLI 和 DAL，只替换模型、路由及媒体探测边界。
+    result = CliRunner().invoke(module.auto_caption, [str(source), '--target-lang', 'en',
+        '--subtitle-receipt', str(path), '--subtitle-attempt-id', attempt,
+        '--output', str(tmp_path / 'output.mp4')])
+    assert result.exit_code == 78, result.output
+    assert 'Unexpected error' not in result.output
+    receipt = read_bound_receipt(path, attempt_id=attempt, input_path=source,
+        input_sha256=_digest(source), started_at=started)
+    assert receipt and receipt['category'] == 'review'
+    manager = PipelineManager(str(tmp_path / 'pipeline.db'))
+    manager._OUT_DIR = tmp_path
+    manager.db.add_video('review-test', 'test', 'channel', score=90)
+    manager.db.update_video_status('review-test', 'TRANSCRIBING')
+    manager.send_telegram_msg = lambda message: None
+    kwargs = dict(slice_index=0, receipt_path=path, attempt_id=attempt, input_path=source,
+                  input_sha256=_digest(source), started_at=started)
+    error = subprocess.CalledProcessError(result.exit_code, ['auto-caption'])
+    assert manager._consume_subtitle_failure('review-test', 'test', error, **kwargs)
+    assert manager._consume_subtitle_failure('review-test', 'test', error, **kwargs)
+    video = manager.db.get_video_by_youtube_id('review-test')
+    assert video['error_msg'].startswith('SUBTITLE_NEEDS_REPAIR:')
+    assert manager.db.subtitle_recovery_blocker(video['id'])['state'] == 'NEEDS_REPAIR'
+    assert not manager.db.claim_video_for_processing('review-test')
+    assert manager.db.get_high_score_pending_videos(min_score=75) == []
+    with manager.db.get_connection() as c:
+        assert c.execute('SELECT count(*) FROM publishing_failure_events WHERE video_id=?',
+                         (video['id'],)).fetchone()[0] == 1
+    assert not (tmp_path / 'output.mp4').exists()

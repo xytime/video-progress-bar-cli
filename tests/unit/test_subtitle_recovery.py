@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| subtitle-manual-gate-v2 | 2026-11-02 | Codex | 覆盖历史人工门只读保护、终态次数及具名放行。 |
 | 1.1.0 | 2026-11-01 | Codex | 冷却到期用同一冻结时钟，避免高负载下墙钟漂移导致误失败。 |
 | 1.0.0 | 2026-10-27 | Codex | 覆盖幂等、跨重启、显式修复、投稿保护及正常候选/恢复领取。 |
 """
@@ -316,3 +317,62 @@ def test_recovery_dispatch_waits_or_requests_repair_without_model_or_upload(fixt
     assert stored['state'] == expected
     assert stored['next_at'] == failed['next_attempt_at']
     assert video(db)['retry_count'] == 0
+
+
+@pytest.mark.parametrize('reason', [
+    'NativeCaptionReviewRequired: SAMPLE_SEMANTIC_BUDGET_EXCEEDED',
+    '源片比 9:16 更窄，现有布局会裁切，需先人工规范化',
+    '第 619 帧原字幕位置或文字不确定，停止出片',
+    'SUBTITLE_NEEDS_REPAIR: translation_budget_exhausted',
+    'All subtitle translation providers failed or were blocked.',
+])
+def test_legacy_manual_gate_readonly_even_without_recovery_row(fixture, reason):
+    db, _, _ = fixture
+    # 模拟旧 FAILED 或被错误重置为 PENDING；不依赖本次新增账本。
+    db.update_video_status('subtitle-test', 'PENDING', error_msg=reason)
+    before = video(db)
+    assert db.subtitle_recovery_blocker(before['id'])['state'] == 'NEEDS_REPAIR'
+    assert not db.claim_video_for_processing('subtitle-test')
+    assert db.get_high_score_pending_videos(min_score=75) == []
+    assert video(db) == before and db.get_subtitle_recovery(before['id']) is None
+    db.update_video_status('subtitle-test', 'FAILED', error_msg=reason)
+    assert not db.requeue_recent_text_provider_failure('subtitle-test', expected_error=reason)
+    assert not db.claim_failed_media_recovery('subtitle-test', expected_error=reason,
+                                            expected_retry_count=0, owner_pid=123)
+
+
+@pytest.mark.parametrize('category,code', [('budget','translation_budget_exhausted'),
+    ('review','all_providers_failed:429'), ('review','all_providers_failed:providers_cooldown')])
+def test_terminal_failure_stays_locked_and_records_one_failure(fixture, category, code):
+    db, clock, _ = fixture
+    state = record(fixture, receipt(category, code=code))
+    clock[0] += 2 * 86400
+    assert state['state'] == 'NEEDS_REPAIR'
+    assert not db.claim_video_for_processing('subtitle-test')
+    record(fixture, receipt(category, code=code))
+    with db.get_connection() as c:
+        assert c.execute('SELECT count(*) FROM publishing_failure_events').fetchone()[0] == 1
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], state['last_receipt_sha'])
+    assert not db.subtitle_recovery_blocker(video(db)['id'])
+
+
+def test_legacy_budget_reason_overrides_due_waiting_without_rewriting_chain(fixture):
+    db, clock, _ = fixture
+    row = record(fixture)
+    clock[0] = row['next_attempt_at'] + 1
+    db.update_video_status('subtitle-test', 'PENDING', error_msg='SUBTITLE_NEEDS_REPAIR: translation_budget_exhausted')
+    before = db.get_subtitle_recovery(video(db)['id'])
+    assert db.subtitle_recovery_blocker(video(db)['id'])['state'] == 'NEEDS_REPAIR'
+    assert not db.claim_video_for_processing('subtitle-test')
+    assert not db.requeue_transient_pre_submission_failure('subtitle-test', 'connection timed out')
+    assert db.get_subtitle_recovery(video(db)['id']) == before
+    assert db.release_subtitle_recovery_after_repair(video(db)['id'], row['last_receipt_sha'])
+    assert db.claim_video_for_processing('subtitle-test')
+
+
+def test_manual_signal_inside_timeout_log_does_not_get_transient_retry(fixture):
+    db, _, _ = fixture
+    before = video(db)
+    assert not db.requeue_transient_pre_submission_failure('subtitle-test',
+        'INFO timeout from earlier provider; native_caption_review:SAMPLE_SEMANTIC_BUDGET_EXCEEDED')
+    assert video(db) == before
