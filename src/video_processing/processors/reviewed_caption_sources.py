@@ -131,7 +131,7 @@ def chinese_only_ass(source, source_hash, segments):
     from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
     subs = pysubs2.SSAFile()
     subs.info.update(PlayResX=1080, PlayResY=1920)
-    subs.styles['Default'] = pysubs2.SSAStyle(fontname='PingFang SC', fontsize=48,
+    subs.styles['Default'] = pysubs2.SSAStyle(fontname='Hiragino Sans GB', fontsize=48,
         primarycolor=pysubs2.Color(255,255,255), outline=2, shadow=0,
         alignment=8, marginl=80, marginr=80, marginv=1400)
     for seg in segments:
