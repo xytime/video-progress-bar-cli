@@ -376,3 +376,54 @@ def test_manual_signal_inside_timeout_log_does_not_get_transient_retry(fixture):
     assert not db.requeue_transient_pre_submission_failure('subtitle-test',
         'INFO timeout from earlier provider; native_caption_review:SAMPLE_SEMANTIC_BUDGET_EXCEEDED')
     assert video(db) == before
+
+
+@pytest.mark.parametrize('reason', [
+    'NativeCaptionReviewRequired: SAMPLE_SEMANTIC_BUDGET_EXCEEDED',
+    '源片比 9:16 更窄，现有布局会裁切，需先人工规范化',
+    '第 619 帧原字幕位置或文字不确定，停止出片',
+    'SUBTITLE_NEEDS_REPAIR: translation_budget_exhausted',
+])
+def test_immutable_legacy_event_blocks_after_error_message_rewritten(fixture, reason):
+    db, _, _ = fixture
+    db.update_video_status('subtitle-test', 'FAILED', error_msg=reason)
+    vid = video(db)['id']
+    with db.get_connection() as c:
+        before = [tuple(r) for r in c.execute('SELECT * FROM publishing_failure_events')]
+    db.update_video_status('subtitle-test', 'PENDING', error_msg='普通信息，原错误已改写')
+    reopened = PipelineDB(db.db_path)
+    assert reopened.subtitle_recovery_blocker(vid)['state'] == 'NEEDS_REPAIR'
+    assert not reopened.claim_video_for_processing('subtitle-test')
+    assert not reopened.get_high_score_pending_videos(min_score=75)
+    assert reopened.get_subtitle_recovery(vid) is None
+    with db.get_connection() as c:
+        assert [tuple(r) for r in c.execute('SELECT * FROM publishing_failure_events')] == before
+
+
+def test_independent_state_survives_message_rewrite_and_release_does_not_unlock_future_failure(fixture):
+    db, _, _ = fixture
+    state = record(fixture, receipt('review', code='caption_frame_uncertain'))
+    vid = video(db)['id']
+    db.update_video_status('subtitle-test', 'PENDING', error_msg='已改写')
+    assert db.get_subtitle_recovery(vid)['state'] == 'NEEDS_REPAIR'
+    assert not db.claim_video_for_processing('subtitle-test')
+    assert db.release_subtitle_recovery_after_repair(vid, state['last_receipt_sha'])
+    assert db.claim_video_for_processing('subtitle-test')
+    # 即使沿用已 RELEASED 的链，新人工错误也不能被旧释放授权覆盖。
+    db.update_video_status('subtitle-test', 'FAILED', error_msg='caption_frame_uncertain')
+    db.update_video_status('subtitle-test', 'PENDING', error_msg='再次改写')
+    assert db.subtitle_recovery_blocker(vid)['state'] == 'NEEDS_REPAIR'
+    assert not db.get_high_score_pending_videos(min_score=75)
+    assert not db.claim_video_for_processing('subtitle-test')
+
+
+
+def test_resolved_chain_is_not_explicit_release_of_historical_manual_failure(fixture):
+    db, _, _ = fixture
+    state = record(fixture, receipt('budget', code='translation_budget_exhausted'))
+    vid = video(db)['id']
+    assert db.resolve_subtitle_recovery(vid)
+    db.update_video_status('subtitle-test', 'PENDING', error_msg='普通信息')
+    assert db.get_subtitle_recovery(vid)['state'] == 'RESOLVED'
+    assert db.subtitle_recovery_blocker(vid)['state'] == 'NEEDS_REPAIR'
+    assert not db.claim_video_for_processing('subtitle-test')

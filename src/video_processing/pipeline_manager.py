@@ -5509,12 +5509,13 @@ class PipelineManager:
         reconciled = self.reconcile_wechat_under_review()
         if reconciled:
             logger.info("WeChat creator-management reconciliation settled %s publication(s).", reconciled)
-        reconciled_ghosts = self.db.reconcile_pending_ghost_tasks()
-        if reconciled_ghosts:
-            logger.info("Reconciled %s ghost pending video(s).", reconciled_ghosts)
-        evicted_waitlist = self.db.cleanup_expired_waitlist_videos(ttl_days=settings.waitlist_ttl_days)
-        if evicted_waitlist:
-            logger.info("Evicted %s expired waitlist video(s) older than %s days.", evicted_waitlist, settings.waitlist_ttl_days)
+        if not settings.pipeline_preserve_history:
+            reconciled_ghosts = self.db.reconcile_pending_ghost_tasks()
+            if reconciled_ghosts:
+                logger.info("Reconciled %s ghost pending video(s).", reconciled_ghosts)
+            evicted_waitlist = self.db.cleanup_expired_waitlist_videos(ttl_days=settings.waitlist_ttl_days)
+            if evicted_waitlist:
+                logger.info("Evicted %s expired waitlist video(s) older than %s days.", evicted_waitlist, settings.waitlist_ttl_days)
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
         # 已接纳单片可自然结束；后续健康通知、补发及互动属于新工作。

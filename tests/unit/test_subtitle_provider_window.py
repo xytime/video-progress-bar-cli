@@ -48,11 +48,22 @@ def test_production_order_reserves_cli_windows_within_600_seconds():
         end = deadline(providers, index, now=now)
         windows.append(end - now)
         now = end
-    assert windows == [30, 300, 150, 0, 0, 0]
-    # Codex 已观察到 273.524s 成功；Grok 只有超时下界，150s 并不保证成功。
-    assert windows[1] > 273.524 and windows[2] > 119.946
+    assert windows == [120, 300, 60, 0, 0, 0]
+    # AGY 覆盖历史 96s 超时观察，Codex 保留 273.524s 成功请求；不承诺 Grok 成功。
+    assert windows[0] > 96.033 and windows[1] > 273.524
     assert now == 480 and 600 - now == 120
     assert deadline(providers, 1, now=10) == 310
+
+
+def test_production_config_and_observed_chain_leave_full_grok_window():
+    providers = ['agy', 'codex', 'grok', 'deepseek', 'gemini', 'google']
+    assert candidate_deadline(600, providers, 0, now=0, total_seconds=600,
+        quality_seconds=120, fallback_seconds=300, cli_seconds={'agy':150, 'grok':150}) == 120
+    # run 2053: AGY 96.015s 后 Codex 72.610s 成功。若候选质量未通过，仍留完整 Grok 窗口。
+    assert deadline(providers, 1, now=96.015) == pytest.approx(396.015)
+    assert deadline(providers, 2, now=168.625) == pytest.approx(318.625)
+    # AGY 耗尽新窗口，Codex 42.166s 结束，仍可给 Grok 150s。
+    assert deadline(providers, 2, now=162.166) == pytest.approx(312.166)
 
 
 def test_fast_cli_failures_donate_time_to_api_candidates():

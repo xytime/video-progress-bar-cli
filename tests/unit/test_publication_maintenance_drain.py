@@ -17,15 +17,17 @@ from video_processing.pipeline_manager import PipelineManager
 import scripts.run_publication_window as runner
 
 
-def test_daily_stops_after_drained_video_before_health_or_deferred_work(isolated_running_maintenance, monkeypatch):
+@pytest.mark.parametrize('preserve', [True, False])
+def test_daily_stops_after_drained_video_before_health_or_deferred_work(isolated_running_maintenance, monkeypatch, preserve):
     calls = []
+    monkeypatch.setattr(settings, 'pipeline_preserve_history', preserve)
     monkeypatch.setattr(settings, 'enable_douyin_browser_publishing', False)
     monkeypatch.setattr(settings, 'enable_kuaishou_browser_publishing', False)
     monkeypatch.setattr(settings, 'wechat_publishing_paused', False)
 
     class Daily:
-        db = SimpleNamespace(reconcile_pending_ghost_tasks=lambda: 0,
-                             cleanup_expired_waitlist_videos=lambda **kw: 0)
+        db = SimpleNamespace(reconcile_pending_ghost_tasks=lambda: calls.append('ghosts'),
+                             cleanup_expired_waitlist_videos=lambda **kw: calls.append('expire'))
         def reconcile_wechat_under_review(self): return 0
         def score_pending_videos(self): calls.append('score')
         def process_high_score_videos(self, **kw):
@@ -40,7 +42,7 @@ def test_daily_stops_after_drained_video_before_health_or_deferred_work(isolated
 
     with pytest.raises(MaintenanceDenied):
         PipelineManager._run_daily_job_unlocked(Daily())
-    assert calls == ['score', 'video_completed']
+    assert calls == ([] if preserve else ['ghosts', 'expire']) + ['score', 'video_completed']
     assert isolated_running_maintenance.status()['active'] == []
 
 

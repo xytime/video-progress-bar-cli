@@ -34,12 +34,24 @@ def _manual_review_sql(column):
                              for marker in MANUAL_REVIEW_MARKERS) + ')'
 
 
+def _unreleased_manual_event_sql(video_id):
+    """旧失败事件是稳定证据；仅晚于该事件的具名释放可以解除，普通文案更新不能。"""
+    return ("EXISTS (SELECT 1 FROM publishing_failure_events f WHERE f.video_id=" + video_id +
+            " AND " + _manual_review_sql('f.reason') +
+            " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery_events r WHERE r.video_id=f.video_id"
+            " AND r.event_type='RELEASED' AND r.state='RELEASED'"
+            " AND (f.id<=json_extract(r.details,'$.manual_failure_event_id') OR"
+            " (json_extract(r.details,'$.manual_failure_event_id') IS NULL AND"
+            " r.created_at >= (julianday(f.failed_at)-2440587.5)*86400.0))))")
+
+
 def subtitle_recovery_gate_sql(video_id: str) -> str:
     """仅供 DAL 固定列名调用；已到期 WAITING 可领，过期链须显式修复。"""
     if video_id not in {"pv.id", "processed_videos.id"}:
         raise ValueError("unsupported subtitle gate column")
     column = video_id.rsplit('.', 1)[0] + '.error_msg'
-    return ("NOT " + _manual_review_sql(column) + " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery s WHERE s.video_id=" + video_id +
+    return ("NOT " + _manual_review_sql(column) + " AND NOT " + _unreleased_manual_event_sql(video_id) +
+            " AND NOT EXISTS (SELECT 1 FROM subtitle_recovery s WHERE s.video_id=" + video_id +
             " AND s.is_current=1 AND (s.state='NEEDS_REPAIR' OR (s.state='WAITING' AND "
             "(s.next_attempt_at>CAST(strftime('%s','now') AS REAL) OR "
             "s.expires_at<=CAST(strftime('%s','now') AS REAL)))))")
@@ -166,6 +178,8 @@ class SubtitleRecoveryDAL:
         row = cls._subtitle_row(c, video_id)
         video = c.execute('SELECT error_msg FROM processed_videos WHERE id=?', (video_id,)).fetchone()
         marker = next((m for m in MANUAL_REVIEW_MARKERS if video and m in (video['error_msg'] or '')), None)
+        if not marker and c.execute('SELECT ' + _unreleased_manual_event_sql('?'), (video_id,)).fetchone()[0]:
+            marker = 'unreleased_manual_failure_event'
         if marker:
             # 历史日志只读识别，不迁移失败记录、不清账本，也不受旧 WAITING 到期影响。
             return dict(code='SUBTITLE_NEEDS_REPAIR', state='NEEDS_REPAIR', next_attempt_at=None,
@@ -334,7 +348,13 @@ class SubtitleRecoveryDAL:
 
     @staticmethod
     def _subtitle_transition_event(c, video, row, state: str, *, event_type: str | None = None) -> None:
+        # 同一写事务绑定已经存在的失败序号，不用可漂移的墙钟释放未来失败。
+        details = {}
+        if state == 'RELEASED':
+            details['manual_failure_event_id'] = c.execute(
+                'SELECT COALESCE(MAX(id),0) FROM publishing_failure_events WHERE video_id=?',
+                (video['id'],)).fetchone()[0]
         c.execute("""INSERT INTO subtitle_recovery_events(video_id,chain_id,youtube_id,slice_index,event_type,state,
             receipt_sha,receipt_path,details,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                   (video["id"], row["id"], video["youtube_id"], video["slice_index"], event_type or state, state,
-                   row["last_receipt_sha"], row["last_receipt_path"], "{}", time.time()))
+                   row["last_receipt_sha"], row["last_receipt_path"], json.dumps(details), time.time()))

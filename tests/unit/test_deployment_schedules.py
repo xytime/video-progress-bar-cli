@@ -262,3 +262,79 @@ def test_corrupt_intent_and_changed_definition_never_report_running(scheduling):
     (schedules.runtime_directory / "operational-intent.json").write_text("{")
     with pytest.raises(DeploymentDenied, match="SCHEDULE_INTENT_INVALID"):
         schedules.require_operational_intent()
+
+
+@pytest.fixture
+def cruise_scheduling(scheduling, monkeypatch, tmp_path):
+    from video_processing.core import maintenance
+    from contextlib import nullcontext
+    schedules, commands, plan = scheduling
+    schedules.freeze(plan)
+    commands.disabled[UI] = False
+    schedules.restore(plan)
+    original = commands.crontab + (
+        '# BEGIN Video Pipeline public-window cruise (managed)\n'
+        '#* * * * * cd "' + str(schedules.root) + '" && /usr/bin/lockf -ks -t 0 lock '
+        + str(schedules.root) + '/.venv/bin/python ' + str(schedules.root) +
+        '/scripts/run_publication_window.py >> log 2>&1\n'
+        '# END Video Pipeline public-window cruise (managed)\n').encode()
+    commands.crontab = original
+    # 测试原有正常记录确实包括注释巡航。
+    from video_processing.core.deployment import read_json, write_json
+    intent = schedules.runtime_directory / 'operational-intent.json'
+    write_json(intent, read_json(intent) | {'project_cron': schedules.project_cron_digest()})
+    state = {'state': 'MAINTENANCE', 'active': [], 'unknown': []}
+    monkeypatch.setattr(maintenance, 'gate', lambda: SimpleNamespace(
+        _locked=nullcontext, _read=lambda: state, _leases=lambda: (state['active'], state['unknown'])))
+    new = Schedules(schedules.root, tmp_path / 'cruise-backup', commands)
+    return new, commands, original, state, intent.read_bytes()
+
+
+def test_cruise_activation_backs_up_and_updates_verified_intent(cruise_scheduling, tmp_path):
+    from video_processing.core.deployment_sources import sha
+    schedules, commands, original, state, intent = cruise_scheduling
+    result = schedules.enable_publication_cruise(sha(original))
+    assert result['enabled'] and state['state'] == 'MAINTENANCE'
+    assert commands.crontab == original.replace(b'#* * * * * cd', b'* * * * * cd')
+    assert (schedules.directory / 'cron.before').read_bytes() == original
+    assert (schedules.directory / 'operational-intent.before.json').read_bytes() == intent
+    schedules.require_operational_intent()
+    # 后续正规部署能够重新快照并验证，不把注释状态留作正常基线。
+    next_schedules = Schedules(schedules.root, tmp_path / 'next-deployment', commands)
+    next_plan = next_schedules.snapshot()
+    next_schedules.baseline(next_plan)
+
+
+@pytest.mark.parametrize('mode', ['running', 'active', 'unknown', 'drift'])
+def test_cruise_activation_rejects_unsafe_or_stale_state(cruise_scheduling, mode):
+    from video_processing.core.deployment_sources import sha
+    schedules, commands, original, state, intent = cruise_scheduling
+    expected = sha(original)
+    if mode == 'running':
+        state['state'] = 'RUNNING'
+    elif mode in {'active','unknown'}:
+        state[mode].append({'pid': 123})
+    else:
+        expected = '0' * 64
+    with pytest.raises(DeploymentDenied):
+        schedules.enable_publication_cruise(expected)
+    assert commands.crontab == original
+    assert (schedules.runtime_directory / 'operational-intent.json').read_bytes() == intent
+
+
+
+def test_failed_cruise_readback_preserves_old_operational_intent(cruise_scheduling, monkeypatch):
+    from video_processing.core.deployment_sources import sha
+    schedules, commands, original, state, intent = cruise_scheduling
+    run = commands.run
+    def conflict(args, **kwargs):
+        result = run(args, **kwargs)
+        if args == ['crontab', '-']:
+            commands.crontab += b'unexpected concurrent edit\n'
+        return result
+    monkeypatch.setattr(commands, 'run', conflict)
+    with pytest.raises(DeploymentDenied, match='CRON_NOT_RESTORED'):
+        schedules.enable_publication_cruise(sha(original))
+    assert state['state'] == 'MAINTENANCE'
+    assert (schedules.runtime_directory / 'operational-intent.json').read_bytes() == intent
+    assert (schedules.directory / 'cron.before').read_bytes() == original

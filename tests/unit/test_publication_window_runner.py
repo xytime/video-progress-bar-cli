@@ -365,6 +365,7 @@ def test_persistent_deduplicating_filter(tmp_path: Path):
 
 
 def test_trim_log_to_recent_days(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(runner.settings, 'pipeline_preserve_history', False)
     # 固定测试时钟，避免历史样例随真实日期推移变成过期日志。
     from datetime import datetime
 
@@ -401,3 +402,15 @@ def test_trim_log_to_recent_days(tmp_path: Path, monkeypatch):
     assert "Old log line 2" not in trimmed
     assert "Recent log line 1" in trimmed
     assert "Recent log line 2" in trimmed
+
+
+def test_preserve_history_never_trims_or_creates_trim_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.settings, 'pipeline_preserve_history', True)
+    state_file = tmp_path / 'trim-state.json'
+    monkeypatch.setattr(runner, 'TRIM_STATE_PATH', state_file)
+    log_file = tmp_path / 'old.log'
+    original = b'2020-01-01 00:00:00 INFO historical evidence\n'
+    log_file.write_bytes(original)
+    assert not runner._trim_log_to_recent_days(log_file, keep_days=1, max_size_mb=0, throttle_hours=0)
+    assert log_file.read_bytes() == original
+    assert not state_file.exists()

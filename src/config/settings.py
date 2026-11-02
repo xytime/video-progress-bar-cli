@@ -222,6 +222,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # 巡航日志治理：pipeline_window.log 保留天数与高频熔断日志抑制窗口(秒)
+    pipeline_preserve_history: bool = True  # 保留排障证据：暂停旧日志裁剪及待筛选归档整理
     pipeline_window_log_keep_days: int = Field(default=7, ge=1, le=365)
     pipeline_window_log_suppression_window_sec: int = Field(default=3600, ge=60)
 

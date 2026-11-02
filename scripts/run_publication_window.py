@@ -660,6 +660,8 @@ def _trim_log_to_recent_days(
     """保留最近 N 天的日志行，清理过旧日志（无需外部 logrotate）。
     带有大小阈值与节流保护，避免每分钟巡航频繁读写大文件。
     """
+    if settings.pipeline_preserve_history:
+        return False
     if not log_path.is_file():
         return False
 

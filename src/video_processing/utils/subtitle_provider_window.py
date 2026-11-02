@@ -23,10 +23,12 @@ def candidate_deadline(deadline, providers, index, *, now, total_seconds,
     available = max(0., remaining - quality)
     tail = providers[index:]
     if providers[-1] != 'codex':
-        # 优先顺序不变；为后序 CLI 保留完整请求窗口，未用时间仍转交后序。
+        # 保留已验证的 Codex 长请求；Grok 仅保底总预算的 10%，有余时仍可用完整上限。
+        # 600s 中质量占 120s，最坏 AGY/Codex/Grok 为 120/300/60；快速失败继续让时。
         caps = dict(agy=120., codex=min(float(fallback_seconds), float(total_seconds) * .5), grok=150.)
         caps.update(cli_seconds or {})
-        reserve = sum(caps.get(provider, 0.) for provider in tail[1:])
+        reserves = caps | {'grok': min(caps['grok'], float(total_seconds) * .1)}
+        reserve = sum(reserves.get(provider, 0.) for provider in tail[1:])
         if fallback_capacity is not None and 'codex' in tail[1:]:
             capacity = float(fallback_capacity)
             reserve -= caps['codex'] - min(caps['codex'], max(0., capacity) if math.isfinite(capacity) else 0.)

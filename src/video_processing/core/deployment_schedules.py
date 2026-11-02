@@ -190,6 +190,60 @@ class Schedules:
                           "project_cron": self.project_cron_digest(), "launchd": rows})
         path.chmod(0o600)
 
+    def enable_publication_cruise(self, expected_cron_sha):
+        """维护排空后只解注释受管巡航；先备份，完整回读后更新正常调度意图。"""
+        from .maintenance import gate
+        control = gate()
+        with control._locked():
+            active, unknown = control._leases()
+            require(control._read()['state'] == 'MAINTENANCE' and not active and not unknown,
+                    'CRUISE_MAINTENANCE_REQUIRED')
+            require(not self.directory.exists(), 'NEW_CRUISE_BACKUP_REQUIRED')
+            original = self.cron()
+            require(sha(original) == expected_cron_sha, 'CRON_EDIT_CONFLICT')
+            begin = b'# BEGIN Video Pipeline public-window cruise (managed)'
+            end = b'# END Video Pipeline public-window cruise (managed)'
+            lines = original.splitlines(keepends=True)
+            require(sum(line.strip() == begin for line in lines) == 1 and
+                    sum(line.strip() == end for line in lines) == 1, 'CRUISE_BLOCK_UNKNOWN')
+            require([line.strip() for line in lines].index(begin) <
+                    [line.strip() for line in lines].index(end), 'CRUISE_BLOCK_UNKNOWN')
+            inside, changed = False, 0
+            for index, line in enumerate(lines):
+                if line.strip() == begin:
+                    inside = True
+                elif line.strip() == end:
+                    inside = False
+                elif inside and line.startswith(b'#* * * * * '):
+                    require(str(self.root).encode() in line and b'/usr/bin/lockf -ks -t 0 ' in line
+                            and b'/scripts/run_publication_window.py' in line, 'CRUISE_ENTRY_UNKNOWN')
+                    lines[index] = line[1:]
+                    changed += 1
+                elif inside:
+                    require(not line.strip() or line.startswith(b'#'), 'CRUISE_ALREADY_ACTIVE')
+            require(changed == 1, 'CRUISE_ENTRY_UNKNOWN')
+            self.directory.mkdir(parents=True, mode=0o700)
+            plan = self.snapshot()
+            self.baseline(plan)
+            write_json(self.directory / 'plan.before.json', plan)
+            intent = self.runtime_directory / 'operational-intent.json'
+            if intent.exists():
+                backup = self.directory / 'operational-intent.before.json'
+                backup.write_bytes(intent.read_bytes())
+                backup.chmod(0o600)
+            (self.directory / 'cron.before').write_bytes(original)
+            (self.directory / 'cron.before').chmod(0o600)
+            require(sha(self.cron()) == expected_cron_sha, 'CRON_EDIT_CONFLICT')
+            candidate = b''.join(lines)
+            self.runner.run(['crontab', '-'], data=candidate)
+            # 保留原始备份；从实际目标构造下一次部署可验证的完整计划。
+            (self.directory / 'cron.original').write_bytes(candidate)
+            plan = plan | {'cron': sha(candidate)}
+            write_json(self.directory / 'plan.after.json', plan)
+            self.record_operational_intent(plan)
+            self.require_operational_intent()
+            return {'enabled': True, 'cron_sha256': sha(candidate), 'backup': str(self.directory)}
+
     def owner_binding(self, definition):
         if definition.get("WorkingDirectory") == str(self.root):
             return []
