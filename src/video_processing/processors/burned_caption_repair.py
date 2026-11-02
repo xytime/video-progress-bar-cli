@@ -6,6 +6,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| safe-panel-v1 | 2026-11-02 | Codex | 大字对白只允许完整保留的 B；多区域分类与画面外安全字幕区保留全片凭证。 |
 | overlay-roles-v1 | 2026-11-02 | Codex | 用独立时序/版式证据保留标题及人名条，微窄片允许等比补边。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 窄片及不确定帧使用人工字幕门，禁止通用失败重试。 |
 | 2.3.1 | 2026-10-28 | Codex | 允许位于画面内的全宽对白字幕，仍按实际掩膜面积与纹理决定修补或避让。 |
@@ -39,6 +40,7 @@ from ..utils.render_source_binding import digest
 
 VERSION = "source-captions-ab-v2"
 FALLBACK = Path(__file__).with_name("source_caption_fallback.py")
+PANEL = Path(__file__).with_name("caption_safe_panel.py")
 from .source_caption_fallback import RepairUnsuitable, appearance, repair_quality, fallback_geometry
 VISION = Path(__file__).parents[1] / "utils/caption_vision.js"
 LOG = logging.getLogger(__name__)
@@ -198,6 +200,39 @@ def _isolated_ocr(row, pair):
             and all(abs(a-b) < .015 for a,b in zip(row['box'], pair[0]['box'])))
 
 
+def _caption_boundary_ocr(row, evidence, index, fps):
+    """保留原片时，至多两帧的出入场误识须有同侧三帧直接 ASR 支持。
+
+    仅容许一个字符编辑及一致的完整边界；不使用已恢复行作证据。
+    只供已有大字对白、因此整片禁止擦除的 B 使用。
+    """
+    if row['confidence'] < .9:
+        return False
+    compact = lambda text: ''.join(c for c in text.casefold() if c.isalnum())
+    actual = compact(row['text'])
+    if len(actual) < 4:
+        return False
+    for direction in (-1, 1):
+        anchors = []
+        for distance in range(1, min(7, max(4, round(fps*.2)))+1):
+            other = index+direction*distance
+            if not 0 <= other < len(evidence):
+                break
+            anchor = next((r for r in evidence[other]
+                           if all(abs(a-b) < .015 for a,b in zip(row['box'], r['box']))), None)
+            if anchor:
+                anchors.append((distance, anchor))
+        if len(anchors) < 3 or anchors[0][0] > 2:
+            continue
+        expected = compact(anchors[0][1]['text'])
+        if any(compact(r['text']) != expected for _,r in anchors):
+            continue
+        edits = SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes()
+        if sum(max(i2-i1,j2-j1) for tag,i1,i2,j1,j2 in edits if tag != 'equal') == 1:
+            return True
+    return False
+
+
 def _joined_line_matches(row, rows, evidence, index, fps):
     """拆行 OCR 的一字误识别须由两侧同文合框及完整并集边界确认。"""
     if row['confidence'] < .9:
@@ -249,7 +284,7 @@ def _locate(source, segments, directory, fps, progress):
                 hashlib.sha256(json.dumps(data['observations'], sort_keys=True).encode()).hexdigest()):
             observations = data['observations']
             _write(directory / 'ocr.json', data)
-            selected, center = _classify([x['rows'] for x in observations], segments, fps)
+            selected, center = _classify([x['rows'] for x in observations], segments, fps, preserve_large_text=True)
             return selected, center, observations
     capture = cv2.VideoCapture(str(source))
     frames, observations = [], []
@@ -278,7 +313,7 @@ def _locate(source, segments, directory, fps, progress):
         raise ValueError('扫描期间源片变化，不能缓存识别结果')
     _write(cache, data)
     _write(directory / 'ocr.json', data)
-    selected, center = _classify(frames, segments, fps)
+    selected, center = _classify(frames, segments, fps, preserve_large_text=True)
     return selected, center, observations
 
 
@@ -289,7 +324,7 @@ def _scan_file(source, fps):
     return source.parent / '.caption-repair' / ('scan-'+key+'.json'), identity
 
 
-def _classify(frames, segments, fps):
+def _classify(frames, segments, fps, *, preserve_large_text=False):
     # 画面中央的疑似字幕必须有临近转录证据；不能仅凭整段文字没变就当台标放过。
     selected, boxes = [], []
     from .caption_overlay_roles import non_dialogue_rows
@@ -300,7 +335,8 @@ def _classify(frames, segments, fps):
         spoken = ' '.join(s.get('text', '') for s in segments if s['start']-5 <= index/fps <= s['end']+5)
         direct.append([r for number,r in enumerate(rows) if (index,number) not in overlays and r['confidence'] >= .9 and _caption_text_matches(r['text'], spoken)
                        and .38 <= r['box'][1] < r['box'][3] <= .94
-                       and .025 <= r['box'][3]-r['box'][1] <= .08])
+                       and .025 <= r['box'][3]-r['box'][1] <= (.14 if preserve_large_text else .08)])
+    preservation_only = preserve_large_text and any(r['box'][3]-r['box'][1] > .08 for rows in direct for r in rows)
     for index, rows in enumerate(frames):
         now = index / fps
         local_words = set().union(*(_words(s.get("text", "")) for s in segments
@@ -352,12 +388,17 @@ def _classify(frames, segments, fps):
                 matches = True
                 box = [min(r['box'][0] for r in pair), min(r['box'][1] for r in pair),
                        max(r['box'][2] for r in pair), max(r['box'][3] for r in pair)]
+            if not matches and preservation_only:
+                matches = _caption_boundary_ocr(row, direct, index, fps)
             if (row["confidence"] < .75 and not stable_ocr) or not matches:
                 from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
                 raise SubtitleReviewRequired(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}",
                                              code='caption_frame_uncertain')
-            if box[3] - box[1] > .08 or not (0 <= box[0] < box[2] <= 1):
-                raise ValueError("原字幕字形范围超出可安全修补边界")
+            # 大字对白只能完整保留进入 B，不能扩大 A 的擦除边界。
+            large_b_only = (preserve_large_text and matches and row['confidence'] >= .9
+                            and box[3]-box[1] <= .14)
+            if (box[3]-box[1] > .08 and not large_b_only) or not (0 <= box[0] < box[2] <= 1):
+                raise ValueError(f"第 {index} 帧原字幕字形范围超出可安全修补边界：{text[:60]} {box}")
             chosen.append(box)
             boxes.append(box)
         if chosen and max(b[3] for b in chosen) - min(b[1] for b in chosen) > .18:
@@ -533,7 +574,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
                  approved.subtitle_top, approved.subtitle_bottom)
         return PreparedCaptions(source, None, source_hash, plan, mode='FRAMED')
     identity = {"version": VERSION, "source_sha256": source_hash, "vision_sha256": digest(VISION),
-                "implementation_sha256": digest(Path(__file__)), "overlay_sha256": digest(Path(__file__).with_name("caption_overlay_roles.py")), "fallback_sha256": digest(FALLBACK),
+                "implementation_sha256": digest(Path(__file__)), "overlay_sha256": digest(Path(__file__).with_name("caption_overlay_roles.py")), "fallback_sha256": digest(FALLBACK), "panel_sha256": digest(PANEL),
                 "segments_sha256": hashlib.sha256(json.dumps(segments, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
     directory = source.parent / ".caption-repair" / hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
@@ -556,6 +597,8 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     if center is not None:
         mode, fallback, reason = "A", None, ""
         try:
+            if any(box[3]-box[1] > .08 for frame in rows for box in frame):
+                raise RepairUnsuitable('ASR 已对齐的大字对白超过 A 字形高度；仅允许保留原片的 B 方案')
             cleaned = _repair_video(source, rows, directory, fps, w, h, progress)
         except RepairUnsuitable as exc:
             # 仅可靠定位后的外观/质量失败可评估 B；I/O、OCR、编码异常继续阻断。
@@ -564,7 +607,7 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
             fallback = fallback_geometry(rows, observations, h, fps)
     else:
         mode, fallback, reason = "NONE", None, "未检测到中央硬字幕"
-    if identity['overlay_sha256'] != digest(Path(__file__).with_name('caption_overlay_roles.py')) or identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION) or identity['fallback_sha256'] != digest(FALLBACK):
+    if identity['overlay_sha256'] != digest(Path(__file__).with_name('caption_overlay_roles.py')) or identity['implementation_sha256'] != digest(Path(__file__)) or identity['vision_sha256'] != digest(VISION) or identity['fallback_sha256'] != digest(FALLBACK) or identity['panel_sha256'] != digest(PANEL):
         raise ValueError('处理期间字幕实现发生变化，不能签发处理计划')
     anchors = _anchors(rows, fps)
     _write(plan, {"identity": identity, "center_y": center, "anchors": anchors, "frames": len(rows), "fps": fps,
@@ -587,6 +630,22 @@ def fallback_source(source, prepared, reason):
                             prepared.anchors, 'B', geometry)
 
 
+def panel_source(source, prepared, width, height, failures):
+    """保留原 B 计划，独立记录两侧失败与完整原画面的安全排版。"""
+    from .caption_safe_panel import safe_panel
+    if prepared.mode != 'B' or digest(source) != prepared.source_hash:
+        raise ValueError('不能从未知状态建立 B 画面外字幕区')
+    panel = safe_panel(width, height)
+    data = json.loads(prepared.plan.read_text())
+    fallback = dict(prepared.fallback, panel=panel.payload())
+    data.update(mode='B_PANEL', center_y=None, extra_subtitle_panel=True,
+                fallback=fallback, placement_attempts=failures, clean_sha256=digest(source))
+    plan = prepared.plan.with_name('panel-plan.json')
+    _write(plan, data)
+    return PreparedCaptions(Path(source), None, prepared.source_hash, plan,
+                            prepared.anchors, 'B_PANEL', fallback)
+
+
 def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaptions):
     if digest(source) != prepared.source_hash:
         raise ValueError("渲染期间源片变更，不能签发原位字幕凭证")
@@ -595,7 +654,7 @@ def seal_render(output: Path, source: Path, ass: Path, prepared: PreparedCaption
         "plan_sha256": digest(prepared.plan), "implementation_sha256": digest(Path(__file__)),
         "renderer_sha256": digest(Path(__file__).with_name('vertical_processor.py')), "overlay_sha256": digest(Path(__file__).with_name("caption_overlay_roles.py")), "vision_sha256": digest(VISION),
         "approved_layout_sha256": digest(Path(__file__).with_name('approved_caption_layout.py')),
-        "fallback_sha256": digest(FALLBACK), "mode": prepared.mode})
+        "fallback_sha256": digest(FALLBACK), "panel_sha256": digest(PANEL), "mode": prepared.mode})
 
 
 def render_receipt_matches(output: Path, source: Path) -> bool:
@@ -617,7 +676,7 @@ def render_receipt_matches(output: Path, source: Path) -> bool:
             and data['renderer_sha256'] == digest(Path(__file__).with_name('vertical_processor.py'))
             and data['approved_layout_sha256'] == digest(Path(__file__).with_name('approved_caption_layout.py'))
             and data["overlay_sha256"] == digest(Path(__file__).with_name("caption_overlay_roles.py"))
-            and data["fallback_sha256"] == digest(FALLBACK)
+            and data["fallback_sha256"] == digest(FALLBACK) and data["panel_sha256"] == digest(PANEL)
             and data["implementation_sha256"] == digest(Path(__file__)) and data["vision_sha256"] == digest(VISION))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return False

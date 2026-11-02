@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
+| 2.10.0 | 2026-11-02 | Codex | B 上下无安全带时保留完整主画面，双语置于画面外；记录原占用边界。 |
 | 2.9.1 | 2026-11-02 | Codex | 前景采用完整等比几何及水平偏移，使微窄片左右补边。 |
 | 2.9.0   | 2026-10-23 | Codex | 已确认单片采用完整等比原画面及独立双语区，按实际字体边界闭锁。 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
@@ -54,6 +55,7 @@ from ..core.audio_mixer import AudioMixer
 import re
 
 from ..utils.subtitle_stylist import SubtitleStylist, SubtitleLayout
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 
 def strip_trailing_punctuation(text: str) -> str:
     """[Gemini_3.5_Flash_planning] 去除段落末尾的半角/全角标点符号，防止折行时标点符号单独占一行"""
@@ -439,7 +441,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         from .burned_caption_repair import prepare_source, fallback_source, RepairUnsuitable
         self._report_progress('SOURCE_CAPTION_LOCATING')
         self._prepared_captions = prepare_source(self.input_path, segments, self._report_progress)
-        if self._prepared_captions.mode == 'FRAMED' and not self.bilingual:
+        if self._prepared_captions.mode in {'FRAMED', 'B_PANEL'} and not self.bilingual:
             raise ValueError('单片已确认版式必须保留完整双语字幕')
         try:
             return self._build_ass_file(segments)
@@ -453,6 +455,11 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         in_place = self._prepared_captions.center_y is not None
         from .approved_caption_layout import approved_layout
         framed = approved_layout(self.input_path, self._prepared_captions.source_hash) if self._prepared_captions.mode == 'FRAMED' else None
+        if self._prepared_captions.mode == 'B_PANEL':
+            from .caption_safe_panel import SafeCaptionPanel
+            framed = SafeCaptionPanel(**self._prepared_captions.fallback['panel'])
+            if not self.bilingual:
+                raise SubtitleReviewRequired('B 画面外字幕区需要完整双语内容')
         
         # Initialize ASS file
         subs = pysubs2.SSAFile()
@@ -607,7 +614,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             widths = [caption_width(r, outline) for r in rendered_segments]
             if (not heights or max(heights) > subtitle_max_height
                     or max(widths) > safe_width):
-                raise VideoProcessingError('单片独立字幕区放不下完整双语内容，停止出片')
+                raise SubtitleReviewRequired(f'{self._prepared_captions.mode} 独立字幕区放不下完整双语：'
+                    f'可用 {safe_width}×{subtitle_max_height}，实际宽 {max(widths, default=0):.1f}、'
+                    f'高 {max(heights, default=0):.1f}；主画面底 {framed.y+framed.height}；需人工处理')
             from .burned_caption_repair import _write
             import json
             plan = json.loads(self._prepared_captions.plan.read_text())
@@ -622,6 +631,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             widths = [caption_width(r, outline) for r in rendered_segments]
             if max(widths) > safe_width:
                 raise VideoProcessingError('B 字幕实际字体宽度越界，停止出片')
+            failures = []
             for side in ('above', 'below'):
                 try:
                     fallback_positions = [place_fallback(self._prepared_captions.fallback, height,
@@ -629,10 +639,17 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                         start=seg['start'], end=seg['end'], side=side, width=width)[1]
                         for seg,height,width in zip(segments,heights,widths,strict=True)]
                     break
-                except ValueError:
+                except ValueError as exc:
+                    failures.append(dict(side=side, reason=str(exc)))
                     fallback_positions = None
             if fallback_positions is None:
-                raise VideoProcessingError('整片 B 上下均无安全位置，需人工处理')
+                from .burned_caption_repair import panel_source
+                try:
+                    self._prepared_captions = panel_source(self.input_path, self._prepared_captions,
+                                                          video_w, video_h, failures)
+                except ValueError as exc:
+                    raise SubtitleReviewRequired(f'B 安全排版失败：{failures}；画面外方案：{exc}') from exc
+                return self._build_ass_file(segments)
             from .burned_caption_repair import _write
             import json
             plan = json.loads(self._prepared_captions.plan.read_text())
@@ -692,7 +709,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         """Compose 3-section layout using FFmpeg filter_complex"""
         if not hasattr(self, "_prepared_captions"):
             raise ValueError("必须先定位原字幕并生成原位 ASS，再烧录成片")
-        if self._prepared_captions.mode == 'FRAMED' and self.tts_provider:
+        if self._prepared_captions.mode in {'FRAMED', 'B_PANEL'} and self.tts_provider:
             raise ValueError('单片已确认版式仅保留原声，不允许新增配音')
         
         output_path = self.output_path or self.input_path.parent / f"{self.input_path.stem}_vertical{self.input_path.suffix}"
@@ -801,6 +818,11 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         layout = VerticalLayout.calculate(w, h)
         from .approved_caption_layout import approved_layout, picture_filters
         framed = approved_layout(self.input_path, self._prepared_captions.source_hash) if self._prepared_captions.mode == 'FRAMED' else None
+        if self._prepared_captions.mode == 'B_PANEL':
+            from .caption_safe_panel import SafeCaptionPanel
+            framed = SafeCaptionPanel(**self._prepared_captions.fallback['panel'])
+            if not self.bilingual:
+                raise SubtitleReviewRequired('B 画面外字幕区需要完整双语内容')
         if framed:
             layout = framed.geometry(w, h)
         

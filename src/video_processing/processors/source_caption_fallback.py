@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | B 失败逐侧记录候选字幕框、原字幕带及同期障碍范围。 |
 | 1.0.0 | 2026-10-21 | Codex | 实心底板/彩字选择 B；从原片规划全片统一上方或下方避让。 |
 """
 from __future__ import annotations
@@ -99,17 +100,21 @@ def place_fallback(geometry, height, *, canvas_height, video_y=0, center_x=540, 
         obstacles += [padded(b,.012) for f in frames for b in f['text']]
     top_edge = band[1]*canvas_height + video_y
     bottom_edge = band[3]*canvas_height + video_y
+    failures = []
     for candidate, top in [('above', top_edge-24-height), ('below', bottom_edge+24)]:
         if side and candidate != side:
             continue
         if top < 350 or top+height > min(1700, video_y+canvas_height):
+            failures.append(f'{candidate} 候选 y={top:.1f}–{top+height:.1f} 越出平台安全区 350–{min(1700, video_y+canvas_height)}')
             continue
         rectangle = [(center_x-width/2)/1080, (top-video_y)/canvas_height,
                      (center_x+width/2)/1080, (top+height-video_y)/canvas_height]
-        if any(overlap(rectangle, b) for b in obstacles):
+        collisions = sorted(set(tuple(round(v,3) for v in b) for b in obstacles if overlap(rectangle,b)))
+        if collisions:
+            failures.append(f'{candidate} 候选 {list(map(lambda v:round(v,3),rectangle))} 与人脸/文字占用 {collisions[:6]} 冲突（共 {len(collisions)} 种边界）')
             continue
         return candidate, float(top)
-    raise ValueError('B 方案上、下均无法避开原字幕、人脸、其它文字及平台安全边界，需人工处理')
+    raise ValueError(f'B 原字幕带 {[round(v,3) for v in band]}，时段 {start}–{end}：'+'；'.join(failures)+'；需人工处理')
 
 
 def caption_width(rendered, outline):

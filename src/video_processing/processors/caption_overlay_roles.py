@@ -5,9 +5,11 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | 先识别有成对章节条与动态对白证据的底部信息区，以及角落订阅按钮；未知多区域对白仍阻断。 |
 | 1.0.0 | 2026-11-02 | Codex | 有界开场多行卡、配对姓名书名条及独立动态对白下方常驻标题。 |
 """
 import re
+from difflib import SequenceMatcher
 
 
 def non_dialogue_rows(frames, segments, fps, matches):
@@ -17,7 +19,7 @@ def non_dialogue_rows(frames, segments, fps, matches):
         for number, row in enumerate(rows):
             if row['confidence'] < .9:
                 continue
-            text = ' '.join(row['text'].split()).casefold()
+            text = ' '.join(row['text'].strip('| •').split()).casefold()
             choices = tracks.setdefault(text, [])
             track = next((t for t in choices if abs(t[0][2]['box'][1]-row['box'][1]) < .015 and abs(t[0][2]['box'][3]-row['box'][3]) < .015 and abs((t[0][2]['box'][2]-t[0][2]['box'][0])-(row['box'][2]-row['box'][0])) < .08), None)
             if track is None:
@@ -122,4 +124,90 @@ def non_dialogue_rows(frames, segments, fps, matches):
             if nearby_button and dialogue:
                 ignored.add((i,n))
                 ignored.update((i,j) for j,_ in buttons)
+    ignored.update(_information_and_ui_rows(frames, segments, fps, matches,
+                                           [t for choices in tracks.values() for t in choices]))
     return frozenset(ignored)
+
+
+def _information_and_ui_rows(frames, segments, fps, matches, tracks):
+    """独立小字章节区须由成对标题、稳定基线及上方动态对白共同确立。
+
+    不因 ASR 中碰巧出现章节名就擦除信息条；也不凭单行静止、单纯大小写或
+    订阅字样忽略未知文字。所有返回行仍保留在原观察，作为 B 排版障碍。
+    """
+    ignored = set()
+    for i, rows in enumerate(frames):
+        for n, row in enumerate(rows):
+            box = row['box']
+            # 仅右下角紧凑按钮。中心口播字幕中的 SUBSCRIBE 不能命中。
+            if (row['confidence'] >= .9 and .68 <= box[0] < box[2] <= .98
+                    and .94 <= box[1] < box[3] <= 1 and box[3]-box[1] <= .035
+                    and box[2]-box[0] <= .23
+                    and re.fullmatch(r'[^a-zA-Z]{0,2}[DO]?\s*SUBSCRIBE[DCOTE]?[^a-zA-Z]{0,2}',
+                                     row['text'].upper())):
+                ignored.add((i, n))
+
+    def heading(text):
+        text = text.strip('| •')
+        # 章节名与完整句子的区分只能作附加证据，不能独立决定忽略。
+        return (1 <= len(text.split()) <= 7 and not re.search(r'[.!?]', text)
+                and (text.isupper() or text.istitle() or '|' in text
+                     or re.fullmatch(r'SUBSCRIBE\s+for\s+[A-Z][A-Za-z ]{2,45}', text)))
+
+    candidates = []
+    for track in tracks:
+        start, end = track[0][0], track[-1][0]
+        row, box = track[0][2], track[0][2]['box']
+        if (end-start < fps*.8 or len(track)/(end-start+1) < .6
+                or row['confidence'] < .9 or not heading(row['text'])
+                or not (.80 <= box[1] < box[3] <= .95)
+                or not (.022 <= box[3]-box[1] <= .06)):
+            continue
+        dialogue = set()
+        for i, _, _ in track:
+            spoken = ' '.join(s['text'] for s in segments if s['start']-5 <= i/fps <= s['end']+5)
+            for other in frames[i]:
+                b = other['box']
+                if (other['confidence'] >= .9 and .38 <= b[1] < b[3] < box[1]-.04
+                        and .025 <= b[3]-b[1] <= .08 and matches(other['text'], spoken)):
+                    dialogue.add(other['text'].casefold())
+        if len(dialogue) >= 2:
+            candidates.append(track)
+
+    # 至少一组同期章节主标题/副标题才能确立信息区。双路完整对白不能凭低位置放过。
+    pairs = []
+    for first in candidates:
+        a = first[0][2]
+        for second in candidates:
+            b = second[0][2]
+            overlap = min(first[-1][0], second[-1][0])-max(first[0][0], second[0][0])
+            if (first is not second and overlap >= fps*.5
+                    and (a['text'].isupper() or '|' in a['text'])
+                    and a['box'][0] <= .15 and b['box'][0] <= .15
+                    and any(r['text'].lstrip().startswith('|') for _,_,r in second)
+                    and 0 <= b['box'][1]-a['box'][3] <= .035
+                    and abs(a['box'][0]-b['box'][0]) <= .15):
+                pairs.append((first, second))
+    if not pairs:
+        return ignored
+    zone = (min(t[0][2]['box'][1] for pair in pairs for t in pair)-.015,
+            max(t[0][2]['box'][3] for pair in pairs for t in pair)+.015)
+    for track in candidates:
+        box = track[0][2]['box']
+        if zone[0] <= box[1] and box[3] <= zone[1]:
+            ignored.update((i, n) for i, n, _ in track)
+            # 稳定信息条出入场的单字 OCR 抖动，仅接纳相邻三帧同一几何范围。
+            compact = lambda text: ''.join(c for c in text.casefold() if c.isalnum())
+            expected = compact(track[0][2]['text'])
+            for i in range(max(0, track[0][0]-3), min(len(frames), track[-1][0]+4)):
+                for n, row in enumerate(frames[i]):
+                    b = row['box']
+                    if (row['confidence'] < .9 or abs(b[1]-box[1]) > .015
+                            or abs(b[3]-box[3]) > .015 or abs(b[0]-box[0]) > .035
+                            or abs(b[2]-box[2]) > .035):
+                        continue
+                    actual = compact(row['text'])
+                    edits = SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes()
+                    if len(expected) >= 8 and sum(max(i2-i1,j2-j1) for tag,i1,i2,j1,j2 in edits if tag != 'equal') <= 1:
+                        ignored.add((i,n))
+    return ignored

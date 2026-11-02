@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-02 | Codex | 多区域实片、真双路对白及仅保留 B 的大字/入场 OCR 证据回归。 |
 | 1.0.0 | 2026-11-02 | Codex | 人工门禁、一次领取、实片标题和微窄画面回归。 |
 """
 import gzip,json
@@ -76,3 +77,62 @@ def test_narrow_render_filter_uses_padding(tmp_path,monkeypatch):
     assert '[0:v]scale=1068:1920[fg]' in filters
     assert 'pad=1080:1920:6:0:black' in filters
     assert 'crop=' not in filters
+
+
+def test_multiple_regions_are_roles_before_span_check():
+    data=json.loads(gzip.decompress((Path(__file__).parents[1]/'fixtures/source_caption_c4umlxsvAKg.json.gz').read_bytes()))
+    frames=[o['rows'] for o in data['observations']]
+    ignored=non_dialogue_rows(frames,data['segments'],data['fps'],repair._caption_text_matches)
+    frame=15
+    preserved=[r['text'] for n,r in enumerate(frames[frame]) if (frame,n) in ignored]
+    assert 'PATHOGENIC INVASION' in preserved
+    assert any('Cellular Evasion' in text for text in preserved)
+    assert any('SUBSCRIB' in text.upper() for i,n in ignored for text in [frames[i][n]['text']])
+    # 完整时序证据识别信息区；前 400 帧含大字和 cells 入场 OCR 误识，仍有独立对白。
+    selected,center=repair._classify(frames[:400],data['segments'],data['fps'],preserve_large_text=True)
+    assert center is not None and selected[15]
+    assert max(b[3] for b in selected[15])<.82
+    assert all(frames[i][n]['box'] not in selected[i] for i,n in ignored if i<400)
+    # 此后的医学词与 ASR 不一致，属于独立复核原因，不能因修复多区域而一并放过。
+    with pytest.raises(ValueError,match='alveolar'):
+        repair._classify(frames,data['segments'],data['fps'],preserve_large_text=True)
+
+
+def test_true_simultaneous_dialogue_remains_blocked():
+    rows=[dict(text='We discuss immune cells',confidence=1,box=[.1,.64,.9,.69]),
+          dict(text='Another voice explains vessels',confidence=1,box=[.1,.87,.9,.92])]
+    segments=[dict(start=0,end=5,text='We discuss immune cells. Another voice explains vessels.')]
+    with pytest.raises(ValueError,match='多处疑似原字幕'):
+        repair._classify([rows for _ in range(150)],segments,30,preserve_large_text=True)
+
+
+def test_preserved_large_dialogue_never_enters_erasure(tmp_path,monkeypatch):
+    source=tmp_path/'source.mp4';source.write_bytes(b'original')
+    rows=[[[.1,.65,.9,.76]]]
+    observations=[dict(rows=[dict(text='immune cells',confidence=1,box=rows[0][0])],faces=[])]
+    monkeypatch.setattr(repair,'_probe',lambda _: (360,640,1,1))
+    monkeypatch.setattr(repair,'_locate',lambda *args:(rows,.7,observations))
+    def forbidden(*args):raise AssertionError('大字对白不可擦除')
+    monkeypatch.setattr(repair,'_repair_video',forbidden)
+    prepared=repair.prepare_source(source,[])
+    assert prepared.mode=='B' and prepared.video==source
+
+
+def test_boundary_ocr_needs_three_direct_anchors_and_one_edit():
+    row=lambda text:dict(text=text,confidence=1,box=[.4,.68,.62,.74])
+    evidence=[[],[row('cells')],[row('cells')],[row('cells')]]
+    assert repair._caption_boundary_ocr(row('cels'),evidence,0,30)
+    assert not repair._caption_boundary_ocr(row('tissue'),evidence,0,30)
+    assert not repair._caption_boundary_ocr(row('cels'),evidence[:3],0,30)
+    assert not repair._caption_boundary_ocr(row('cel'),evidence,0,30)
+
+
+def test_three_spoken_lines_cannot_be_assumed_to_be_a_chapter_pair():
+    frames=[]
+    for i in range(150):
+        frames.append([dict(text='We discuss cells' if i<75 else 'Another voice speaks',confidence=1,box=[.1,.64,.9,.69]),
+                       dict(text='IMMUNE RESPONSE',confidence=1,box=[.1,.85,.88,.885]),
+                       dict(text='Blood Vessels',confidence=1,box=[.1,.9,.65,.935])])
+    segments=[dict(start=0,end=5,text='We discuss cells. Another voice speaks. Immune response. Blood vessels.')]
+    with pytest.raises(ValueError,match='多处疑似原字幕'):
+        repair._classify(frames,segments,30,preserve_large_text=True)
