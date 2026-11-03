@@ -8,6 +8,7 @@
 | backlog-v1 | 2026-10-26 | Codex | TED 专属50分、真实资格展示与成片积压治理。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-unlimited-v1 | 2026-11-03 | Codex | 按操作者授权取消商品同步默认次数及间隔限制，保留平台退避和完整性边界。 |
 | product-pool-v1 | 2026-11-02 | Codex | 商品目录7天TTL与独立只读同步预算，批准上限不可由环境放宽。 |
 | auth-age-relogin-v1 | 2026-11-02 | Grok Bot | 新增按授权时长的自动快捷重登阈值、连续失败上限与临期提醒阈值。 |
 | bot-proxy-v1 | 2026-11-01 | Codex | 允许 Bot 单独读取真实 macOS 系统代理并沿用 TCP 连通检查，其他调用保持原选择。 |
@@ -393,8 +394,8 @@ class Settings(BaseSettings):
     wechat_product_catalog_refresh_hours: int = Field(default=24, ge=1, le=168)
     wechat_product_catalog_sync_timeout_seconds: float = Field(default=60, ge=1, le=60)
     wechat_product_catalog_sync_max_pages: int = Field(default=20, ge=1, le=20)
-    wechat_product_catalog_sync_daily_limit: int = Field(default=2, ge=1, le=2)
-    wechat_product_catalog_sync_interval_seconds: int = Field(default=21600, ge=21600, le=604800)
+    wechat_product_catalog_sync_daily_limit: int | None = Field(default=None, ge=1)
+    wechat_product_catalog_sync_interval_seconds: int = Field(default=0, ge=0, le=604800)
 
     # 视频号公众号文章扩展链接挂接（一期：已发表文章链接）。默认关闭。
     enable_wechat_article_link: bool = False

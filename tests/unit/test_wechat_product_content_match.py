@@ -233,6 +233,8 @@ def test_live_negative_veto_does_not_replace_frozen_candidate(live,tmp_path,monk
 
 
 def test_catalog_budget_independent_and_same_account_backoff(monkeypatch):
+    monkeypatch.setattr(settings,'wechat_product_catalog_sync_daily_limit',2)
+    monkeypatch.setattr(settings,'wechat_product_catalog_sync_interval_seconds',21600)
     monkeypatch.setattr(settings,'wechat_scheduler_priority_video','')
     now=200000.0; policy=dict(schema_version=1,operations=deepcopy(APPROVED),retry_policies={})
     row={'blocked_until':0,'schedule':{'sessions':[
@@ -345,3 +347,26 @@ def test_frozen_default_task_replays_and_old_snapshot_unchanged(live,tmp_path):
 def test_production_matching_config_defaults_to_ai_recorder():
     config=json.loads((Path(__file__).parents[2]/'config/wechat_product_matching.json').read_text())
     assert validate_matching_config(config)['default_products']==[AI_RECORDER]
+
+
+def test_catalog_defaults_unlimited_keep_platform_auth_and_other_budgets(monkeypatch):
+    monkeypatch.setattr(settings,'wechat_scheduler_priority_video','')
+    assert settings.wechat_product_catalog_sync_daily_limit is None
+    assert settings.wechat_product_catalog_sync_interval_seconds == 0
+    now=200000.0
+    policy=dict(schema_version=1,operations=deepcopy(APPROVED),retry_policies={})
+    original=deepcopy(policy)
+    row={'blocked_until':0,'schedule':{'sessions':[
+        {'at':now-1,'purpose':'商品同步','operation':'catalog_sync','task':'sync'} for _ in range(100)]}}
+    evaluate=lambda purpose: _evaluate_operations(row,now,purpose,'new',policy,compare_queue=False)
+    result=evaluate('商品同步')
+    assert result['allowed'] and result['daily_limit'] is None and result['interval_seconds']==0
+    row['schedule']['sessions'] += [
+        {'at':now-1,'purpose':'保活','operation':'keepalive','task':'old'} for _ in range(100)]
+    assert evaluate('商品同步')['allowed']
+    assert not evaluate('保活')['allowed']
+    row['blocked_until']=now+10
+    assert 'PLATFORM_BACKOFF' in {r['code'] for r in evaluate('商品同步')['blockers']}
+    row['requires_manual_login']=True
+    assert 'AUTH_REQUIRED' in {r['code'] for r in evaluate('商品同步')['blockers']}
+    assert policy==original
