@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publish-catalog-v1 | 2026-11-03 | Grok Bot | 发布冻结前目录过期/未核实或超过软刷新时长即在本发布优先锁内读取发表页橱窗弹窗刷新，新池直接用于本次匹配。 |
 | content-match-v1 | 2026-11-02 | Codex | 对应分片对白证据、独立同步、当前池冻结与版本校验；不重算旧任务。 |
 """
 from __future__ import annotations
@@ -153,11 +154,15 @@ def freeze_matching_payload(policy_path, task_id, context, production, config, *
     now = now or datetime.now(timezone.utc)
     pool = load_live_pool(policy_path, now=now)
     sync_result = None
-    if pool['reason'] == 'CATALOG_STALE' and Path(policy_path).resolve() == settings.wechat_product_policy_path.resolve():
+    soft_age = settings.wechat_product_catalog_refresh_hours * 3600
+    refresh = (pool['reason'] in {'CATALOG_STALE', 'CATALOG_UNVERIFIED'}
+               or (pool['ready'] and (pool.get('age_seconds') or 0) > soft_age))
+    if refresh and Path(policy_path).resolve() == settings.wechat_product_policy_path.resolve():
         from video_processing.core.wechat_session_lock import current_wechat_session
         if current_wechat_session() is None:
             from video_processing.utils.wechat_product_sync import run_catalog_sync
-            sync_result = run_catalog_sync(Path(policy_path))
+            # 所有冻结入口都在发布优先锁内；同步复用这一发布窗口，浏览器互斥与额度照常。
+            sync_result = run_catalog_sync(Path(policy_path), priority_held=True)
             pool = load_live_pool(policy_path, now=datetime.now(timezone.utc))
         else:
             sync_result = {'reason': 'SYNC_IN_PUBLISH_SESSION_DEFERRED'}

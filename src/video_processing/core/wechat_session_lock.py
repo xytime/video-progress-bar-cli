@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| publish-catalog-v1 | 2026-11-03 | Grok Bot | 发布流程自身持有发布优先锁时，同流程内的商品目录刷新不再被自身优先锁拒绝；浏览器互斥与额度不变。 |
 | demand-keepalive-v1 | 2026-10-25 | Codex | 当前受控业务会话复用强认证证据，不增加平台请求。 |
 | runtime-center-v1 | 2026-10-24 | Codex | 接入有版本的统一配置、结构化等待或执行者加载确认；保留原额度与提交保护。 |
 | operations-v1 | 2026-10-24 | Codex | 分用途滚动预算与安全有界重试接入，保留既有提交事实与内容保护。 |
@@ -220,6 +221,7 @@ class WeChatSessionLock:
         video: str = "",
         cooldown_override: str = "",
         manual_login_token: str = "",
+        priority_held: bool = False,
     ) -> None:
         self.state_path = Path(state_path).expanduser().resolve(strict=False)
         self.lock_path = canonical_wechat_session_lock_path(self.state_path)
@@ -229,6 +231,8 @@ class WeChatSessionLock:
         self.purpose = purpose
         self.video = video
         self.manual_login_token = manual_login_token
+        # 仅发布流程内的商品同步可声明：调用方已持有发布优先锁（全部冻结入口均在该锁内）。
+        self.priority_held = bool(priority_held) and purpose == "商品同步"
         self.cooldown_override = cooldown_override
         self.request_guard = WeChatRequestGuard(self.state_path)
         self._request_started = False
@@ -240,7 +244,8 @@ class WeChatSessionLock:
 
     def acquire(self) -> "WeChatSessionLock":
         """在截止时间内尝试获取锁，超时即抛出可识别的 busy 异常。"""
-        if not self.manual_login_token and self.purpose not in {"发布", "状态核对"} and read_lease_owner(self.state_path.parent / "wechat_publish_priority.lock"):
+        if (not self.manual_login_token and self.purpose not in {"发布", "状态核对"} and not self.priority_held
+                and read_lease_owner(self.state_path.parent / "wechat_publish_priority.lock")):
             raise WeChatSessionLockBusy("待发布任务优先；评论/保活本轮让出浏览器")
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.lock_path.open("a+", encoding="utf-8")

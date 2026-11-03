@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v2 | 2026-11-03 | Grok Bot | 会话占用或额度推迟的跳过以0退出，不作为失败告警。 |
 | catalog-sync-v1 | 2026-11-02 | Codex | 原生维护准入，独立账号预算与只读DOM采集；不发送消息或投稿。 |
 """
 import json
@@ -26,7 +27,7 @@ def main():
         return 0
     result = run_catalog_sync()
     print(json.dumps({k: v for k, v in result.items() if k != 'partial'}, ensure_ascii=False))
-    return 0 if result['state'] == 'COMPLETE' else 2
+    return 0 if result['state'] in {'COMPLETE', 'SKIPPED'} else 2
 
 
 if __name__ == '__main__':

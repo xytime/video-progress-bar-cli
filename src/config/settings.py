@@ -389,6 +389,8 @@ class Settings(BaseSettings):
     wechat_product_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_products.json"
     wechat_product_status_path: Path = _PROJECT_ROOT / "output" / "wechat_product_runtime.json"
     wechat_product_catalog_ttl_days: int = Field(default=7, ge=1, le=7)
+    # 有效目录超过此时长时，发布冻结前顺带尝试刷新（受同步额度约束，失败仍用原有效池）。
+    wechat_product_catalog_refresh_hours: int = Field(default=24, ge=1, le=168)
     wechat_product_catalog_sync_timeout_seconds: float = Field(default=60, ge=1, le=60)
     wechat_product_catalog_sync_max_pages: int = Field(default=20, ge=1, le=20)
     wechat_product_catalog_sync_daily_limit: int = Field(default=2, ge=1, le=2)

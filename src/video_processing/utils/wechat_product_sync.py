@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v4 | 2026-11-03 | Grok Bot | 发布流程内同步可声明已持发布优先锁；会话占用/额度推迟记为 SKIPPED 而非失败。 |
 | catalog-sync-v3 | 2026-11-02 | Codex | 同一浏览器上下文采集前后读取官方首页稳定ID，失败不刷新目录。 |
 | catalog-sync-v2 | 2026-11-02 | Codex | 与发布模式一致，成功及失败均记录脱敏 DOM 诊断和全程阶段计时。 |
 | catalog-sync-v1 | 2026-11-02 | Codex | 每日同步及过期任务刷新共用2次/24小时、6小时预算；部分结果不覆盖目录。 |
@@ -15,7 +16,8 @@ from time import monotonic, time_ns
 
 from config.settings import settings
 from video_processing.core.maintenance import gate, current, MaintenanceDenied
-from video_processing.core.wechat_session_lock import WeChatSessionLock, record_current_wechat_login_required, current_wechat_session
+from video_processing.core.wechat_session_lock import (WeChatSessionLock, WeChatSessionLockBusy,
+    record_current_wechat_login_required, current_wechat_session)
 from video_processing.core.wechat_browser_context import create_wechat_context, wechat_launch_options, WECHAT_LAUNCH_PROFILE
 from video_processing.core.wechat_page_contract import check_explicit_login_prompt, is_official_create_url
 from video_processing.utils.wechat_product_config import load_policy, atomic_json
@@ -26,7 +28,7 @@ from video_processing.utils.wechat_catalog_account import visit_home_account
 from video_processing.utils.wechat_catalog_diagnostics import public_path, timed_phase
 
 
-def run_catalog_sync(policy_path=None):
+def run_catalog_sync(policy_path=None, *, priority_held=False):
     policy_path = Path(policy_path or settings.wechat_product_policy_path)
     output = settings.default_output_dir / 'wechat_catalog_sync' / str(time_ns())
     result = {'schema_version': 1, 'started_at': datetime.now(timezone.utc).isoformat(),
@@ -53,7 +55,8 @@ def run_catalog_sync(policy_path=None):
         key = parent.key if parent else 'catalog-sync'
         with gate().admit('catalog-sync', key) as ticket:
             state_path = settings.default_output_dir / 'wechat_state.json'
-            with WeChatSessionLock(state_path, timeout_seconds=0, purpose='商品同步', video='catalog-sync'):
+            with WeChatSessionLock(state_path, timeout_seconds=0, purpose='商品同步', video='catalog-sync',
+                                   priority_held=priority_held):
                 ticket.start()
                 from playwright.sync_api import sync_playwright
                 with sync_playwright() as pw:
@@ -112,6 +115,9 @@ def run_catalog_sync(policy_path=None):
         result.update(reason=exc.reason, partial=exc.partial)
     except MaintenanceDenied:
         result.update(reason='CATALOG_MAINTENANCE_DEFERRED')
+    except WeChatSessionLockBusy as exc:
+        # 浏览器被占用或账号额度推迟：未访问平台、不刷新目录，记为跳过而非失败。
+        result.update(state='SKIPPED', reason='CATALOG_SYNC_' + type(exc).__name__)
     except Exception as exc:
         # 只记录异常类型，避免浏览器错误携带完整 URL 或凭证。
         result.update(reason='CATALOG_SYNC_' + type(exc).__name__)

@@ -257,7 +257,7 @@ def test_stale_freeze_refreshes_once_before_browser_and_never_renews_on_failure(
     doc['captured_at']=(now-timedelta(days=8)).isoformat();path.write_text(json.dumps(doc));before=path.read_bytes()
     calls=[]
     monkeypatch.setattr(settings,'wechat_product_policy_path',active)
-    monkeypatch.setattr(wechat_product_sync,'run_catalog_sync',lambda p: calls.append(p) or {'reason':'BUDGET_DEFERRED'})
+    monkeypatch.setattr(wechat_product_sync,'run_catalog_sync',lambda p, **k: calls.append(p) or {'reason':'BUDGET_DEFERRED'})
     monkeypatch.setattr(wechat_session_lock,'current_wechat_session',lambda: None)
     db=PipelineDB(str(tmp_path/'test.sqlite'))
     task=freeze_task_product_decision(db,'new',{'video_title':'stock market'},active)
