@@ -126,3 +126,19 @@ def test_account_after_change_rejects_attestation(page):
     proof['account_evidence']=before
     proof['account_checks']={'before':before,'after':dict(before,value='sphCHANGED')}
     with pytest.raises(ValueError,match='前后核对'): validate_observation(catalog,proof)
+
+
+def test_28_products_fit_two_complete_sweeps_without_skipping_viewports(page):
+    html=content(script="document.querySelector('tbody').innerHTML=Array.from({length:28},(_,i)=>row(i+1)).join('');")
+    load(page,html.replace('height:90px','height:150px'))
+    data,proof=collect_catalog(page,timeout_seconds=20,max_pages=20)
+    assert data['total_items']==28
+    assert {i['product_id'] for i in data['pages'][0]['items']}=={str(i) for i in range(1,29)}
+    enumeration=proof['completeness_evidence']
+    assert enumeration['rounds']==2 and enumeration['steps']<=20
+    assert sum(t['bottom'] for t in enumeration['terminal_checks'])==2
+    traces=enumeration['terminal_checks']
+    assert all(b['top']-a['top']<=a['client'] for a,b in zip(traces,traces[1:]) if b['top']>a['top'])
+    _,catalog=decode_catalog(json.dumps(data).encode())
+    assert len(validate_observation(catalog,proof))==28
+    assert page.evaluate('mutations')==0

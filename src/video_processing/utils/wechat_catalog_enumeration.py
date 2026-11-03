@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-11-03 | Codex | 每次前进一屏减一像素，保留连续覆盖及双轮完整性，避免重复扫描过多耗尽预算。 |
 | 1.0.0 | 2026-11-02 | Codex | 限定公开 ant 表结构、固定预算、两轮一致性和加载等待；不点击商品。 |
 """
 from hashlib import sha256
@@ -36,7 +37,7 @@ def enumerate_scroll(picker, snapshot_code, end, max_steps, diagnostics):
             if(ds.length!==1) throw Error('CATALOG_SCROLL_ROOT');
             const bodies=Array.from(ds[0].querySelectorAll('.ant-table-body')).filter(visible);
             if(bodies.length!==1) throw Error('CATALOG_SCROLL_ROOT');
-            const b=bodies[0]; b.scrollTop=arg==='top' ? 0 : Math.min(b.scrollHeight,b.scrollTop+Math.max(1,b.clientHeight*.8));
+            const b=bodies[0]; b.scrollTop=arg==='top' ? 0 : Math.min(b.scrollHeight,b.scrollTop+Math.max(1,b.clientHeight-1));
             return true;''', end, position)
         picker.page.wait_for_timeout(min(350, picker._remaining(end)))
 
