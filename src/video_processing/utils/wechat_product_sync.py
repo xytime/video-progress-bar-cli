@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| catalog-sync-v5 | 2026-11-03 | Codex | 保留公开目录候选及入库拒绝位置，支持离线复核且不更改校验。 |
 | catalog-sync-v4 | 2026-11-03 | Grok Bot | 发布流程内同步可声明已持发布优先锁；会话占用/额度推迟记为 SKIPPED 而非失败。 |
 | catalog-sync-v3 | 2026-11-02 | Codex | 同一浏览器上下文采集前后读取官方首页稳定ID，失败不刷新目录。 |
 | catalog-sync-v2 | 2026-11-02 | Codex | 与发布模式一致，成功及失败均记录脱敏 DOM 诊断和全程阶段计时。 |
@@ -13,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic, time_ns
+import traceback
 
 from config.settings import settings
 from video_processing.core.maintenance import gate, current, MaintenanceDenied
@@ -26,6 +28,21 @@ from video_processing.utils.wechat_product_pool import promote_live_catalog
 from video_processing.utils.wechat_product_collector import collect_catalog, CatalogSyncError
 from video_processing.utils.wechat_catalog_account import visit_home_account
 from video_processing.utils.wechat_catalog_diagnostics import public_path, timed_phase
+
+
+def promote_with_evidence(data, proof, policy_path, output, diagnostics, **expected):
+    """先保存公开目录候选；拒绝时可离线重放，候选不作为有效池或采集凭证。"""
+    candidate = Path(output) / 'candidate.json'
+    atomic_json(candidate, {'catalog': data, 'observation': proof})
+    diagnostics['candidate_path'] = str(candidate)
+    try:
+        return promote_live_catalog(data, proof, policy_path, **expected)
+    except ValueError as exc:
+        frame = traceback.extract_tb(exc.__traceback__)[-1]
+        # 不记录异常文本、局部变量或完整浏览器对象，避免泄露非公开内容。
+        diagnostics['promotion_error'] = {'type': type(exc).__name__,
+            'module': Path(frame.filename).name, 'function': frame.name, 'line': frame.lineno}
+        raise
 
 
 def run_catalog_sync(policy_path=None, *, priority_held=False):
@@ -105,7 +122,7 @@ def run_catalog_sync(policy_path=None, *, priority_held=False):
                         if current_wechat_session()._request_limited:
                             raise CatalogSyncError('CATALOG_PLATFORM_BACKOFF')
                         with timed_phase(diagnostics, 'promotion'):
-                            result.update(promote_live_catalog(data, proof, policy_path,
+                            result.update(promote_with_evidence(data, proof, policy_path, output, diagnostics,
                                 expected_catalog_digest=expected_catalog, expected_policy_digest=expected_policy))
                         result.update(state='COMPLETE', reason='CATALOG_SYNCED', completeness='complete')
                     finally:
