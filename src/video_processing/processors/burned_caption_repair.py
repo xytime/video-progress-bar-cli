@@ -18,6 +18,7 @@ Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被�
 """
 from __future__ import annotations
 
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 import base64
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -391,18 +392,17 @@ def _classify(frames, segments, fps, *, preserve_large_text=False):
             if not matches and preservation_only:
                 matches = _caption_boundary_ocr(row, direct, index, fps)
             if (row["confidence"] < .75 and not stable_ocr) or not matches:
-                from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
                 raise SubtitleReviewRequired(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}",
                                              code='caption_frame_uncertain')
             # 大字对白只能完整保留进入 B，不能扩大 A 的擦除边界。
             large_b_only = (preserve_large_text and matches and row['confidence'] >= .9
                             and box[3]-box[1] <= .14)
             if (box[3]-box[1] > .08 and not large_b_only) or not (0 <= box[0] < box[2] <= 1):
-                raise ValueError(f"第 {index} 帧原字幕字形范围超出可安全修补边界：{text[:60]} {box}")
+                raise SubtitleReviewRequired(f"第 {index} 帧原字幕字形范围超出可安全修补边界：{text[:60]} {box}", code='caption_safety_review')
             chosen.append(box)
             boxes.append(box)
         if chosen and max(b[3] for b in chosen) - min(b[1] for b in chosen) > .18:
-            raise ValueError(f'第 {index} 帧存在多处疑似原字幕，需单独审查：{chosen}')
+            raise SubtitleReviewRequired(f'第 {index} 帧存在多处疑似原字幕，需单独审查：{chosen}', code='caption_safety_review')
         selected.append(chosen)
     if not boxes:
         return selected, None
@@ -548,7 +548,6 @@ def prepare_source(source: Path, segments: list[dict], progress=None) -> Prepare
     source = Path(source)
     w, h, fps, duration = _probe(source)
     if w < h and h/w > (1920/1080) / .98:
-        from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
         raise SubtitleReviewRequired("源片比 9:16 更窄，现有布局会裁切，需先人工规范化",
                                      code='caption_source_too_narrow')
     source_hash = digest(source)

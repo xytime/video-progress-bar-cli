@@ -4,6 +4,7 @@
 | native-caption-routing-v1 | 2026-10-27 | Codex | 普通加工在重复字幕生成前核验原片中文字幕，保留单片证据及内容审核。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 原字幕审查及布局失败绑定本次媒体回执，全供应商失败停止自动重试。 |
 | 1.44.0 | 2026-11-01 | Codex | 供应商份额按原持久兜底可执行余额预留，耗尽后保留缓存入口及全部质量门。 |
 | 1.43.0 | 2026-11-01 | Codex | 生词导出在单次调用内复用离线词典并批量预热，保留首现语境及已有音标词性。 |
@@ -258,6 +259,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 checkpoints.save('asr', checkpoints.identity['asr'], segments, self.detected_lang)
             
             from .reviewed_caption_sources import corrected_source_segments
+            original_source_segments = deepcopy(segments)
             segments = corrected_source_segments(self.input_path, segments)
 
             # 普通流水线先核验已有中文字幕；独立教学/配音制作不隐式启用。
@@ -276,6 +278,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 contract = dict(asr_sha256=fingerprint(segments), src_lang=self.src_lang,
                                 detected_lang=self.detected_lang, target_lang=self.target_lang,
                                 translation=translation_contract(self, settings))
+                if fingerprint(original_source_segments) != fingerprint(segments):
+                    from . import reviewed_caption_sources
+                    from ..utils.render_source_binding import digest as correction_digest
+                    contract['source_correction'] = dict(
+                        original_asr_sha256=fingerprint(original_source_segments),
+                        implementation_sha256=correction_digest(Path(reviewed_caption_sources.__file__)))
                 source_segments = deepcopy(segments)
                 saved = checkpoints.load('translation', contract, source_segments)
                 quality_warning = None
@@ -630,6 +638,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         if not segments:
             return segments
 
+        from ..utils.subtitle_provider_window import require_single_video_budget
+        require_single_video_budget(len(segments), settings)
         self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
@@ -696,8 +706,20 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     provider, error_class if error_class != 'unknown' else contract_error.split(':', 1)[0],
                     category={'rate_limit': 'quota', 'network': 'network', 'budget_exhausted': 'budget',
                               'auth_or_permission': 'authentication', 'region_restricted': 'authentication',
-                              'billing': 'authentication'}.get(error_class, 'unavailable')))
-                pool.record_failure(provider, error, category=error_class)
+                              'billing': 'authentication', 'timeout': 'timeout'}.get(error_class, 'unavailable')))
+                auth_notice = pool.record_failure(provider, error, category=error_class)
+                if auth_notice:
+                    logger.warning('AGY_AUTH_REQUIRED：需人工重新登录；冷却期间跳过，不视为服务已恢复。')
+                    from ..telegram_delivery import send_text
+                    try:
+                        send_text(event_type='subtitle.agy_auth_required', priority='P1',
+                            text='AGY_AUTH_REQUIRED：字幕供应商登录失效，需人工重新登录。冷却期间已跳过。',
+                            dedupe_key=f'agy:{auth_notice}', cooldown_seconds=86400, timeout_seconds=3)
+                    except Exception as notify_error:
+                        logger.warning('AGY_AUTH_REQUIRED 告警投递未确认：%s', type(notify_error).__name__)
+                cooldown = pool.snapshot().get(provider, {}).get('cooldown_until', 0)
+                if failures[-1]['category'] == 'quota':
+                    failures[-1]['retry_at'] = max(failures[-1]['retry_at'], int(cooldown))
                 self._record_translation_attempt(
                     provider, idx + 1, "FAILED", duration_ms, error_class=error_class, error_message=error,
                 )
@@ -824,9 +846,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
         if not failures:
             snapshot = pool.snapshot()
-            due = [int(snapshot.get(p, {}).get('cooldown_until', 0)) for p in configured_providers
-                   if snapshot.get(p, {}).get('cooldown_until', 0) > time.time()]
-            failures.append(safe_failure('host', 'providers_cooldown', retry_at=min(due) if due else 0))
+            for provider in configured_providers:
+                item = snapshot.get(provider, {})
+                if item.get('cooldown_until', 0) > time.time():
+                    failures.append(safe_failure(provider, item.get('last_error_class', 'providers_cooldown'),
+                                                 retry_at=item['cooldown_until']))
+            if not failures:
+                failures.append(safe_failure('host', 'providers_cooldown'))
         if time.monotonic() >= self._translation_deadline:
             failures.append(safe_failure('host', 'translation_budget_exhausted'))
         raise SubtitleTranslationFailure(failures, exhausted=True)

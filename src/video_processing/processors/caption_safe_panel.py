@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-11-02 | Codex | 有界等比完整画面及独立双语区，禁止裁切、拉伸和遮盖。 |
 """
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 from dataclasses import asdict, dataclass
 from math import gcd
 
@@ -39,13 +40,13 @@ class SafeCaptionPanel:
 def safe_panel(width, height):
     """只接收接近标准竖屏的源，且主画面至少高 1000px；不能无界缩小以通过门禁。"""
     if not (0 < width < height and .98*9/16 <= width/height <= 1.02*9/16):
-        raise ValueError(f'B 画面外排版不支持源宽高比 {width}×{height}；需人工处理')
+        raise SubtitleReviewRequired(f'B 画面外排版不支持源宽高比 {width}×{height}；需人工处理', code='caption_safety_review')
     divisor = gcd(width, height)
     unit_w, unit_h = width//divisor, height//divisor
     multiple = min(940//unit_w, 1152//unit_h)
     panel = SafeCaptionPanel(unit_w*multiple, unit_h*multiple,
                              (1080-unit_w*multiple)//2)
     if panel.height < 1000:
-        raise ValueError(f'B 完整原画面只能缩至 {panel.width}×{panel.height}，低于主画面高度 1000；需人工处理')
+        raise SubtitleReviewRequired(f'B 完整原画面只能缩至 {panel.width}×{panel.height}，低于主画面高度 1000；需人工处理', code='caption_safety_review')
     panel.geometry(width, height)
     return panel

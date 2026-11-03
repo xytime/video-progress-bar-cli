@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | 1.0.0 | 2026-10-13 | Codex | 接入已确认的三词分页、3 秒翻页和字幕绑定缓存 |
 | 1.0.1 | 2026-10-17 | Codex | 回执同时保存完整例句和实际显示的长句片段，继续复用既有有效成片 |
 """
@@ -37,7 +38,7 @@ def clean(text: str) -> str:
     return re.sub(r'\s+', ' ', re.sub(r'\{[^}]*\}', '', text).replace(r'\N', ' ').replace(r'\n', ' ')).strip()
 
 
-def extract_items(subtitle: Path) -> list[dict]:
+def extract_items(subtitle: Path, rejected: list | None = None) -> list[dict]:
     """只从同一 ASS 的 GlossaryCard 抽取，且必须在同时间主字幕中出现。"""
     subs = pysubs2.load(str(subtitle))
     main = [e for e in subs if not e.is_comment and e.style != 'GlossaryCard']
@@ -54,6 +55,16 @@ def extract_items(subtitle: Path) -> list[dict]:
             word, meaning = word.strip(), meaning.strip()
             key = word.casefold()
             if not sep or not meaning or not re.search('[a-zA-Z]', word) or key in seen:
+                continue
+            from .vocabulary_outro_layout import fit
+            try:
+                if len(word.split()) > 6:
+                    raise ValueError('word_count')
+                fit(word, 'en', 792, 60, 36)
+            except ValueError:
+                if rejected is not None:
+                    rejected.append(dict(word=word, code='term_exceeds_layout', start=event.start / 1000))
+                seen.add(key)
                 continue
             pattern = re.compile(r'(?<![A-Za-z])' + re.escape(word) + r'(?![A-Za-z])', re.I)
             context = next((c for c in contexts if pattern.search(c) and meaning in c), None)
@@ -146,7 +157,8 @@ def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_emp
         return output
     if recover_empty and valid_empty_receipt(source, subtitle, output):
         return source
-    items = extract_items(subtitle)
+    rejected = []
+    items = extract_items(subtitle, rejected)
     info = probe(source)
     duration = float(info['format']['duration'])
     items = [i for i in items if i['start'] < duration]
@@ -155,17 +167,30 @@ def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_emp
         from video_processing.utils.vocabulary_recovery import recover_items
         items = recover_items(subtitle, duration)
         recovered = True
+    if items:
+        enrich_items(items, subtitle)
+    from .vocabulary_outro_layout import fit, fit_example, prepare_examples, render_cards, render_outro
+    suitable = []
+    for item in items:
+        try:
+            if len(item['word'].split()) > 6:
+                raise ValueError('word_count')
+            fit(item['word'], 'en', 792, 60, 36)
+            fit(item['phonetic'], 'ipa', 665, 33, 23)
+            face, lines = fit(item['meaning_zh'], 'zh', 685, 42, 26)
+            fit(item['pos'], 'ipa', 904 - 132 - face.getlength(lines[0]), 26, 20)
+            fit_example(item['excerpt'], item['word'])
+        except ValueError:
+            rejected.append(dict(word=item['word'], code='term_exceeds_layout', start=item['start']))
+            continue
+        suitable.append(item)
+    items = prepare_examples(suitable)
     if not items:
-        # 旧片尾不可继续被选中；基础视频保留。
-        receipt_path(output).unlink(missing_ok=True)
         if recover_empty:
             from video_processing.utils.wechat_product_config import atomic_json
             atomic_json(receipt_path(output), dict(inputs=inputs, status='no_suitable_terms',
-                                                  recovery_checked=True, items=[]))
+                recovery_checked=True, items=[], rejected_items=rejected))
         return source
-    enrich_items(items, subtitle)
-    from .vocabulary_outro_layout import prepare_examples, render_cards, render_outro
-    items = prepare_examples(items)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.vocab-', dir=output.parent) as temp:
         temp = Path(temp)
@@ -196,7 +221,7 @@ def build(source: Path, subtitle: Path, output: Path, title: str, *, recover_emp
         if fingerprint(source, subtitle, title) != inputs:
             raise ValueError('渲染中源视频或字幕变化')
         receipt = dict(inputs=inputs, status='rendered', items=items, pages=len(cards),
-                       example_policy='source-window-v1',
+                       example_policy='source-window-v1', rejected_items=rejected,
                        duration=actual, output_sha256=sha256(pending), recovery_checked=recovered)
         for number, card in enumerate(cards, 1):
             card.save(temp / f'page-{number}.png')

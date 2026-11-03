@@ -24,8 +24,11 @@ def test_unknown_source_has_no_automatic_framed_exemption():
 def test_framed_recovery_preserves_whole_picture_and_requires_exact_source(name):
     row = SOURCES[name]
     result = approved_layout(Path(name + '.mp4'), row['source_sha256'])
-    geometry = result.geometry(360, 640)
-    assert (geometry.new_width, geometry.new_height) == (675, 1200)
+    width, height = row.get('width', 675), row.get('height', 1200)
+    geometry = result.geometry(width, height)
+    assert (geometry.new_width, geometry.new_height) == (width, height)
+    with pytest.raises(ValueError, match='宽高比'):
+        result.geometry(width + 1, height)
     assert geometry.video_y + geometry.new_height < result.subtitle_top
     assert result.subtitle_bottom <= 1920
     with pytest.raises(ValueError, match='摘要不符'):

@@ -24,7 +24,9 @@ SERVICE_FAILURES = frozenset({"network", "quota", "timeout", "unavailable"})
 PRE_SUBMISSION_STATES = frozenset({"PENDING", "PROCESSING", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "FAILED"})
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_CHAIN_SECONDS = 24 * 3600
-MANUAL_REVIEW_MARKERS = ('NativeCaptionReviewRequired', '[NativeCaptionReview]',
+MANUAL_REVIEW_MARKERS = ('需单独审查', '需人工处理', '安全修补边界', 'binding mismatch',
+                        'subtitle_checkpoint_binding', 'caption_safety_review', 'vocabulary_outro_review',
+                        'translation_budget_preflight', 'NativeCaptionReviewRequired', '[NativeCaptionReview]',
                         '需先人工规范化', '原字幕位置或文字不确定', 'SUBTITLE_NEEDS_REPAIR:',
                         'native_caption_review', 'caption_source_too_narrow', 'caption_frame_uncertain',
                         'translation_budget_exhausted', 'all_providers_failed',

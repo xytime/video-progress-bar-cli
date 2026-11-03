@@ -32,9 +32,10 @@ def main():
         print(result)
     except Exception as exc:
         if args.record_policy:
-            update_record(args.output.parent, args.subtitle.stem, 'FAILED',
+            update_record(args.output.parent, args.subtitle.stem, 'NEEDS_REPAIR',
                           error_code=getattr(exc, 'code', type(exc).__name__))
-        raise
+        print('vocabulary_outro_review: ' + type(exc).__name__)
+        raise SystemExit(78) from exc
 
 
 if __name__ == '__main__':

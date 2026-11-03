@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 import cv2
 import numpy as np
 
@@ -114,7 +115,7 @@ def place_fallback(geometry, height, *, canvas_height, video_y=0, center_x=540, 
             failures.append(f'{candidate} 候选 {list(map(lambda v:round(v,3),rectangle))} 与人脸/文字占用 {collisions[:6]} 冲突（共 {len(collisions)} 种边界）')
             continue
         return candidate, float(top)
-    raise ValueError(f'B 原字幕带 {[round(v,3) for v in band]}，时段 {start}–{end}：'+'；'.join(failures)+'；需人工处理')
+    raise SubtitleReviewRequired(f'B 原字幕带 {[round(v,3) for v in band]}，时段 {start}–{end}：'+'；'.join(failures)+'；需人工处理', code='caption_safety_review')
 
 
 def caption_width(rendered, outline):

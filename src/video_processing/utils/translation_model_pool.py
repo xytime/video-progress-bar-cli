@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | 1.8.0 | 2026-10-05 | Codex | 单独冷却账单与地区错误，拒绝短期限无效请求。 |
 | 1.7.0 | 2026-10-03 | Codex | 纳入经济型 Codex 字幕与词汇兜底 profile。 |
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
@@ -85,7 +86,7 @@ class DynamicTranslationModelPool:
 
     _COOLDOWN_SECONDS = {
         "rate_limit": 900,
-        "auth_or_permission": 3600,
+        "auth_or_permission": 86400,
         "billing": 86400,
         "region_restricted": 21600,
         "budget_exhausted": 180,
@@ -126,16 +127,26 @@ class DynamicTranslationModelPool:
             candidates.append((missing, -(quality + profile.priority * 0.1), name))
         return [name for _, _, name in sorted(candidates)]
 
-    def record_failure(self, provider: str, error: str | None = None, *, category: str | None = None) -> None:
+    def record_failure(self, provider: str, error: str | None = None, *, category: str | None = None) -> float | None:
         name = provider.lower()
         item = self._state.setdefault(name, {})
         category = category or classify_error(error)
+        now = time.time()
+        consecutive = int(item.get('consecutive_timeouts', 0)) + 1 if category == 'timeout' else 0
+        item['consecutive_timeouts'] = consecutive
+        notice = None
+        if name == 'agy' and category == 'auth_or_permission' and not item.get('auth_incident'):
+            notice = item['auth_incident'] = now
         item["failure_count"] = int(item.get("failure_count", 0)) + 1
         item["last_error_class"] = category
         item["last_error"] = (error or "")[:240]
-        item["cooldown_until"] = time.time() + self._COOLDOWN_SECONDS.get(category, 180)
+        cooldown = self._COOLDOWN_SECONDS.get(category, 180)
+        if consecutive >= 3 and now - float(item.get('last_success_at', 0)) >= 3600:
+            cooldown = min(86400, 3600 * 2 ** min(consecutive - 3, 5))
+        item["cooldown_until"] = now + cooldown
         self._dirty[name] = dict(item)
         self._save()
+        return notice
 
     def record_quality(self, provider: str, *, score: float, warning_count: int = 0) -> None:
         item = self._state.setdefault(provider.lower(), {})
@@ -143,6 +154,8 @@ class DynamicTranslationModelPool:
         item["quality_score"] = round(previous * 0.7 + max(0.0, min(100.0, score)) * 0.3, 2)
         item["warning_count"] = int(item.get("warning_count", 0)) + warning_count
         item["last_success_at"] = time.time()
+        item["consecutive_timeouts"] = 0
+        item["auth_incident"] = None
         item["cooldown_until"] = 0
         self._dirty[provider.lower()] = dict(item)
         self._save()

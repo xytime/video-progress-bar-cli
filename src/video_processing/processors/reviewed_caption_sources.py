@@ -11,6 +11,7 @@
 | 1.1.0 | 2026-11-01 | Codex | 7031 绑定复核后的原片及 large-v3 完整对白，保留英文标题叠字。 |
 | 1.0.0 | 2026-11-01 | Codex | 三条已查明标题叠字的故障采用独立字幕区，不擦字、不裁切。 |
 """
+from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 from pathlib import Path
 
 from ..utils.caption_checkpoints import fingerprint, valid_segments
@@ -65,7 +66,7 @@ def reviewed_asr_model(source):
     if record is None or not record.get('asr_model'):
         return None
     if digest(source) != record['source_sha256']:
-        raise ValueError('具名故障版式原片摘要不符，需要重新复核')
+        raise SubtitleReviewRequired('具名故障版式原片摘要不符，需要重新复核', code='caption_safety_review')
     return record['asr_model']
 
 
@@ -74,7 +75,7 @@ def reviewed_layout(source, source_hash):
     if record is None:
         return None
     if source_hash != record['source_sha256']:
-        raise ValueError('具名故障版式原片摘要不符，需要重新复核')
+        raise SubtitleReviewRequired('具名故障版式原片摘要不符，需要重新复核', code='caption_safety_review')
     # 旧凭证会比对 profile；分离的登记表/校验实现变化同样使旧版式凭证失效。
     return dict(profile=f'{source.stem}-framed-v1-{digest(Path(__file__))[:12]}',
                 source_sha256=source_hash,
@@ -89,7 +90,7 @@ def validate_reviewed_timeline(segments, duration, source_hash):
         raise ValueError('具名故障版式需要完整双语时间轴与原片时长')
     timeline = [{key: segment[key] for key in ('start', 'end', 'text')} for segment in segments]
     if fingerprint(timeline) != record['timeline_sha256']:
-        raise ValueError('具名故障版式对白或时间轴变化，需要重新复核')
+        raise SubtitleReviewRequired('具名故障版式对白或时间轴变化，需要重新复核', code='caption_safety_review')
     return True
 
 
@@ -101,13 +102,13 @@ def corrected_source_segments(source, segments):
     if not record or not record.get('chinese_only'):
         return segments
     if digest(source) != record['source_sha256']:
-        raise ValueError('已复核音频源片身份变化')
+        raise SubtitleReviewRequired('已复核音频源片身份变化', code='caption_safety_review')
     timeline = [{k: s[k] for k in ('start', 'end', 'text')} for s in segments]
     identity = fingerprint(timeline)
     if identity == record['timeline_sha256']:
         return deepcopy(segments)
     if identity != record['original_timeline_sha256']:
-        raise ValueError('已复核音频时间轴变化，不能套用修正')
+        raise SubtitleReviewRequired('已复核音频时间轴变化，不能套用修正', code='caption_safety_review')
     result = deepcopy(segments)
     changes = {3: ('albarrier-lining', 'barrier lining'),
                7: (' A multi-organ congestion, apopsis,', ' It induces multi-organ congestion, apoptosis,'),
@@ -116,6 +117,9 @@ def corrected_source_segments(source, segments):
         result[index]['text'] = result[index]['text'].replace(old, new)
         for key in ('tokens', 'words', 'zh_text', 'vocab'):
             result[index].pop(key, None)
+    corrected = [{k: s[k] for k in ('start', 'end', 'text')} for s in result]
+    if fingerprint(corrected) != record['timeline_sha256']:
+        raise SubtitleReviewRequired('修正转录未匹配已复核时间轴', code='subtitle_checkpoint_binding')
     return result
 
 
@@ -128,7 +132,6 @@ def chinese_only_ass(source, source_hash, segments):
         raise ValueError('中文补充版式源片身份变化')
     validate_reviewed_timeline(segments, record['duration'], source_hash)
     import pysubs2
-    from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
     subs = pysubs2.SSAFile()
     subs.info.update(PlayResX=1080, PlayResY=1920)
     subs.styles['Default'] = pysubs2.SSAStyle(fontname='Hiragino Sans GB', fontsize=48,

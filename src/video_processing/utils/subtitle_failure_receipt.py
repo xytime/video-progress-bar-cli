@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 人工字幕门类型化，供应商全失败停止自动重试并保留安全原因。 |
 | 1.2.0 | 2026-10-27 | Codex | 烧录前持久 intent 绑定 ASS 与正常快照，完成后绑定成片，缓存恢复拒绝遗失或替换证据。 |
 | 1.1.0 | 2026-10-27 | Codex | 成功告警绑定最终正文、全片容错报告与不可变 bad case，父进程重新计算后才交接。 |
@@ -63,9 +64,19 @@ def safe_failure(provider, code, *, retry_at=0, quality_details=(), category=Non
 class SubtitleTranslationFailure(VideoProcessingError):
     def __init__(self, failures, message='All subtitle translation providers failed or were blocked.', *, exhausted=False):
         self.failures = failures[-10:]
-        # 最后实际使用的备选方案决定处置；早期供应商不可用不掩盖 Codex 的具体质量错误。
+        # 混合故障保留预算/质量根因；纯配额才允许有界延后。
         self.failure = self.failures[-1] if self.failures else safe_failure('host', 'providers_unavailable')
-        if exhausted and self.failure['category'] not in {'quality', 'budget', 'authentication'}:
+        all_quota = bool(self.failures) and all(f['category'] == 'quota' for f in self.failures)
+        if exhausted and self.failures:
+            for category in ('quality', 'budget', 'authentication'):
+                matches = [f for f in self.failures if f['category'] == category]
+                if matches:
+                    self.failure = matches[-1]
+                    break
+            if all_quota:
+                self.failure = safe_failure('host', 'providers_quota_exhausted', category='quota',
+                    retry_at=max(int(time.time()) + 900, max(f['retry_at'] for f in self.failures)))
+        if exhausted and not all_quota and self.failure['category'] not in {'quality', 'budget', 'authentication'}:
             self.failure = safe_failure('host', 'all_providers_failed:' + self.failure['code'],
                                         category='review', quality_details=self.failure['quality_details'])
         self.binding = {}
@@ -196,7 +207,7 @@ def begin_subtitle_render(output_path, input_path, ass_path, completion):
     marker, ass_sha256 = _ass_checkpoint_marker(ass)
     expected = json.loads(caption_checkpoint_ass_comment(completion)[len(ASS_CHECKPOINT_PREFIX):])
     if marker != expected or marker['input_sha256'] != _render_digest(source):
-        raise ValueError('subtitle render ASS completion mismatch')
+        raise SubtitleReviewRequired('subtitle render ASS completion mismatch', code='subtitle_checkpoint_binding')
     if len({source, ass, output}) != 3:
         raise ValueError('subtitle render artifacts must be distinct')
     payload, asr = _read_success_checkpoint(source, marker)
@@ -236,14 +247,14 @@ def _read_subtitle_render_intent(output_path, input_path, ass_path, *, allow_ren
     if (marker is None or marker != intent['checkpoint']
             or marker['input_sha256'] != intent['input_sha256']
             or _render_digest(source) != intent['input_sha256'] or ass_sha256 != intent['ass_sha256']):
-        raise ValueError('subtitle render input or ASS binding mismatch')
+        raise SubtitleReviewRequired('subtitle render input or ASS binding mismatch', code='subtitle_checkpoint_binding')
     if intent['state'] == 'RENDERING':
         if intent['output_sha256'] is not None or not allow_rendering:
             raise ValueError('subtitle render incomplete')
     elif (not isinstance(intent['output_sha256'], str)
             or not re.fullmatch(r'[0-9a-f]{64}', intent['output_sha256'])
             or _render_digest(output) != intent['output_sha256']):
-        raise ValueError('subtitle render output binding mismatch')
+        raise SubtitleReviewRequired('subtitle render output binding mismatch', code='subtitle_checkpoint_binding')
     return intent
 
 
@@ -289,7 +300,7 @@ def verified_checkpoint_warning(payload, asr, binding):
         return None
     if (not isinstance(warning, dict) or warning.get('status') != 'accepted_with_warnings'
             or compact_quality_warning(warning) != bound_warning):
-        raise ValueError('subtitle warning receipt mismatch')
+        raise SubtitleReviewRequired('subtitle warning receipt mismatch', code='subtitle_checkpoint_binding')
     return validate_quality_warning(
         warning, segments=payload['result']['segments'], input_sha256=binding['input_sha256'],
         asr_sha256=binding['asr_sha256'], contract_sha256=binding['contract_sha256'],
@@ -309,7 +320,7 @@ def validate_quality_warning(warning, *, segments, input_sha256, asr_sha256, con
     if (not isinstance(report, dict) or report.get('status') != 'accepted_with_warnings'
             or report_fingerprint(report) != warning['summary_sha256']
             or report.get('candidate_sha256') != warning['candidate_sha256']):
-        raise ValueError('subtitle warning report mismatch')
+        raise SubtitleReviewRequired('subtitle warning report mismatch', code='subtitle_checkpoint_binding')
     for value in (warning['summary_sha256'], warning['candidate_sha256'], bad_case['case_id'], bad_case['sha256']):
         if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
             raise ValueError('invalid subtitle warning digest')
@@ -323,7 +334,7 @@ def validate_quality_warning(warning, *, segments, input_sha256, asr_sha256, con
             or any(case[key] != binding[key] for key in ('input_sha256', 'asr_sha256', 'contract_sha256'))
             or any(case[key] != warning[key] for key in ('candidate_sha256', 'summary_sha256'))
             or case['report'] != report):
-        raise ValueError('subtitle bad case binding mismatch')
+        raise SubtitleReviewRequired('subtitle bad case binding mismatch', code='subtitle_checkpoint_binding')
     translations = [segment['zh_text'] for segment in segments]
     vocabs = [segment.get('vocab') or {} for segment in segments]
     source_segments = case['source_segments']
@@ -331,11 +342,11 @@ def validate_quality_warning(warning, *, segments, input_sha256, asr_sha256, con
             or any(any(original[key] != translated[key] for key in ('text', 'start', 'end'))
                    for original, translated in zip(source_segments, segments))
             or case['repair_history'] != report.get('repair_history')):
-        raise ValueError('subtitle bad case source or repair binding mismatch')
+        raise SubtitleReviewRequired('subtitle bad case source or repair binding mismatch', code='subtitle_checkpoint_binding')
     if candidate_fingerprint(segments, translations) != warning['candidate_sha256']:
-        raise ValueError('subtitle warning candidate mismatch')
+        raise SubtitleReviewRequired('subtitle warning candidate mismatch', code='subtitle_checkpoint_binding')
     if case['translations'] != translations:
-        raise ValueError('subtitle bad case candidate mismatch')
+        raise SubtitleReviewRequired('subtitle bad case candidate mismatch', code='subtitle_checkpoint_binding')
     recomputed = build_sparse_quality_report(
         segments, translations, context_text=case.get('context_text', ''), vocabs=vocabs,
         repair_history=report.get('repair_history') or [],
@@ -374,12 +385,22 @@ def _read_success_checkpoint(source, binding):
     expected_parent = source.parent / '.caption-checkpoints'
     if (checkpoint.name != 'translation.json' or checkpoint.parent.parent != expected_parent
             or not re.fullmatch(r'[0-9a-f]{64}', checkpoint.parent.name)):
-        raise ValueError('subtitle success checkpoint path mismatch')
+        raise SubtitleReviewRequired('subtitle success checkpoint path mismatch', code='subtitle_checkpoint_binding')
     raw = _checkpoint_bytes(checkpoint)
     if hashlib.sha256(raw).hexdigest() != binding['checkpoint_sha256']:
-        raise ValueError('subtitle success checkpoint digest mismatch')
+        raise SubtitleReviewRequired('subtitle success checkpoint digest mismatch', code='subtitle_checkpoint_binding')
     payload = json.loads(raw)
     asr = _checkpoint_json(checkpoint.with_name('asr.json'))
+    original_segments = asr['result']['segments']
+    source_segments = original_segments
+    correction = payload['contract'].get('source_correction')
+    if correction is not None:
+        from ..processors import reviewed_caption_sources
+        expected = dict(original_asr_sha256=fingerprint(original_segments),
+                        implementation_sha256=digest(Path(reviewed_caption_sources.__file__)))
+        if correction != expected:
+            raise SubtitleReviewRequired('subtitle correction contract mismatch', code='subtitle_checkpoint_binding')
+        source_segments = reviewed_caption_sources.corrected_source_segments(source, original_segments)
     if (payload['identity']['source_sha256'] != binding['input_sha256']
             or payload['identity']['source_name'] != source.name
             or checkpoint.parent.name != fingerprint(payload['identity'])
@@ -389,11 +410,14 @@ def _read_success_checkpoint(source, binding):
             or asr['identity'] != payload['identity'] or asr['contract'] != asr['identity']['asr']
             or asr['result']['completed'] is not True
             or asr['result_sha256'] != fingerprint(asr['result'])
-            or fingerprint(asr['result']['segments']) != binding['asr_sha256']
+            or fingerprint(source_segments) != binding['asr_sha256']
             or payload['contract']['asr_sha256'] != binding['asr_sha256']
             or not valid_segments(asr['result']['segments'])
-            or not valid_segments(payload['result']['segments'], True, asr['result']['segments'])):
-        raise ValueError('subtitle success checkpoint binding mismatch')
+            or not valid_segments(source_segments)
+            or not valid_segments(payload['result']['segments'], True, source_segments)):
+        raise SubtitleReviewRequired('subtitle success checkpoint binding mismatch', code='subtitle_checkpoint_binding')
+    if correction is not None:
+        asr = dict(asr, result=dict(asr['result'], segments=source_segments))
     return payload, asr
 
 
@@ -428,7 +452,7 @@ def read_cached_quality_warning(input_path, *, ass_path=None, render_path=None):
         marker, _ = _ass_checkpoint_marker(ass_path)
         if marker is not None:
             if marker['input_sha256'] != input_sha256:
-                raise ValueError('subtitle ASS checkpoint media mismatch')
+                raise SubtitleReviewRequired('subtitle ASS checkpoint media mismatch', code='subtitle_checkpoint_binding')
     if render_path is not None:
         sidecar = _subtitle_render_path(render_path)
         if sidecar.exists() or sidecar.is_symlink():
@@ -436,7 +460,7 @@ def read_cached_quality_warning(input_path, *, ass_path=None, render_path=None):
                 raise ValueError('subtitle render intent requires ASS evidence')
             intent = _read_subtitle_render_intent(render_path, source, ass_path)
             if marker != intent['checkpoint']:
-                raise ValueError('subtitle render checkpoint marker mismatch')
+                raise SubtitleReviewRequired('subtitle render checkpoint marker mismatch', code='subtitle_checkpoint_binding')
     directory = source.parent / '.caption-checkpoints'
     if marker is None and not directory.exists() and not directory.is_symlink():
         return []

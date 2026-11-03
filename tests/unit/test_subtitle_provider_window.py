@@ -182,7 +182,11 @@ def test_real_translation_exhaustion_requires_manual_review(tmp_path, monkeypatc
     monkeypatch.setattr(processor, '_build_translation_candidate', build)
     with pytest.raises(SubtitleTranslationFailure) as stopped:
         processor._translate_segments([dict(text='Bonds remain stable.', start=0., end=1.)])
-    assert stopped.value.failure['category'] in {'review', 'budget', 'authentication'}
+    if mode == 'billing429':
+        assert stopped.value.failure['category'] == 'quota'
+        assert stopped.value.failure['retry_at'] > time.time()
+    else:
+        assert stopped.value.failure['category'] in {'review', 'budget', 'authentication'}
     if mode == 'cooldown':
         assert called == [] and 'providers_cooldown' in stopped.value.failure['code']
     else:

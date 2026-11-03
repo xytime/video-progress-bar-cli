@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | maintenance-cli-drain-v1 | 2026-11-01 | Codex | 直接启动入口识别真实维护排空，未知控制状态及业务失败仍报错。 |
 | maintenance-drain-v1 | 2026-11-01 | Codex | 单片排空后在后续阶段前复验维护闸门，不产生新的健康通知、补发或互动。 |
 | recovery-fairness-v1 | 2026-10-31 | Codex | 单片边界交替批准恢复与普通任务，沿用原准入并共享本批去重。 |
@@ -1140,7 +1141,7 @@ class PipelineManager:
         return True
 
     def _check_wechat_delivery_health(self) -> None:
-        """窗口内四小时无受理或零进度失败耗尽候选时告警；同一事故四小时去重。"""
+        """窗口内四小时无投递或零进度失败耗尽候选时告警；同一事故四小时去重。"""
         if settings.wechat_publishing_paused or not settings.is_public_publish_window():
             return
         try:
@@ -1149,24 +1150,25 @@ class PipelineManager:
                 min_score=75, limit=1, channel_min_scores=settings.auto_publish_channel_min_scores,
             )
             stalled = not queue and health["recent_upload_timeouts"] > 0
-            gap = health["hours_since_acceptance"]
+            gap = health["hours_since_delivery"]
             if not stalled and (gap is None or gap < 4):
                 return
-            reason = "上传超时后可领取队列已空" if stalled else "已超过 4 小时没有新的平台受理记录"
+            reason = "上传超时后可领取队列已空" if stalled else "已超过 4 小时没有新的投递记录"
             text = (
                 f"⚠️ <b>视频号交付中断</b>\n{reason}\n"
-                f"最后受理(UTC)：{html.escape(health['last_accepted_at'] or '暂无记录')}\n"
-                f"在途 {health['active']}；今日受理 {health['accepted_today']}；"
+                f"最后投递(UTC)：{html.escape(health['last_delivery_at'] or '暂无记录')}\n"
+                f"在途 {health['active']}；今日投递 {health['attempted_today']}；确认受理 {health['accepted_today']}；"
                 f"今日确认公开 {health['confirmed_today']}。\n"
-                "平台受理与公开确认分别统计；请检查队列及失败凭据。"
+                "投递尝试、平台受理与公开确认分别统计；请检查队列及失败凭据。"
             )
-            logger.warning("WeChat delivery health: %s; last_accepted=%s", reason, health["last_accepted_at"])
-            send_telegram_text(
+            notification = send_telegram_text(
                 event_type="pipeline.wechat_delivery_gap", priority="P1", text=text,
-                dedupe_key=f"{health['last_accepted_at']}:{'upload' if stalled else 'gap'}",
+                dedupe_key=f"{health['last_delivery_at']}:{'upload' if stalled else 'gap'}",
                 cooldown_seconds=4 * 3600, timeout_seconds=10, db=self.db,
                 token=self.telegram_token, chat_id=self.telegram_chat_id,
             )
+            if not getattr(notification, 'suppressed', False):
+                logger.warning('WeChat delivery health: %s; last_delivery=%s', reason, health['last_delivery_at'])
         except Exception as exc:
             logger.error("WeChat delivery health check failed: %s", type(exc).__name__)
 
@@ -2472,9 +2474,13 @@ class PipelineManager:
         if not decision['enabled']:
             logger.info('[VocabularyOutro] %s 配置关闭，类型=%s', prefix, decision['group'])
             return
+        completed = decision.get('status') in {'RENDERED', 'NO_SUITABLE_TERMS'}
         env = _build_subprocess_env()
         env["PYTHONPATH"] = str(self._SRC_DIR)
         try:
+            if completed:
+                self._get_published_video_path(prefix)
+                return
             self._run_tracked([
                 self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/render_vocabulary_outro.py"),
                 "--source", str(source), "--subtitle", str(subtitle),
@@ -2485,9 +2491,23 @@ class PipelineManager:
             # 子进程失败或超时不能留下可被发布入口接受的旧缓存。
             self._get_published_video_path(prefix)
         except Exception as exc:
-            if read_record(self._OUT_DIR, prefix).get('status') != 'FAILED':
-                update_record(self._OUT_DIR, prefix, 'FAILED', error_code=type(exc).__name__)
-            raise
+            if not completed:
+                update_record(self._OUT_DIR, prefix, 'NEEDS_REPAIR', error_code='vocabulary_outro_review')
+            from .utils.subtitle_failure_receipt import SubtitleReviewRequired, write_failure_receipt, fingerprint
+            import uuid
+            attempt = uuid.uuid4().hex
+            receipt_path = self._OUT_DIR / 'subtitle_recovery' / prefix / f'{attempt}.json'
+            review = SubtitleReviewRequired('生词片尾无法安全完成，需人工复核', code='vocabulary_outro_review')
+            review.binding = dict(input_sha256=self._sha256_file(source),
+                asr_sha256=self._sha256_file(subtitle),
+                contract_sha256=fingerprint(dict(stage='VOCABULARY_OUTRO', policy=decision['config_digest'])),
+                stage='VOCABULARY_OUTRO')
+            receipt = write_failure_receipt(receipt_path, attempt, source, review)
+            state = self.db.record_subtitle_failure(yid, slice_index, receipt, str(receipt_path), self._sha256_file(receipt_path))
+            if not state:
+                raise review from exc
+            logger.warning('[VocabularyOutro] %s NEEDS_REPAIR vocabulary_outro_review; receipt=%s', prefix, receipt_path)
+            return False
 
     def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
         from .processors.vocabulary_outro import valid_outro, valid_empty_receipt
@@ -5206,7 +5226,8 @@ class PipelineManager:
                 if not native_captions:
                     if settings.enable_interaction_overlay:
                         self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
-                    self._process_vocabulary_outro(prefix, yid, render_title, slice_index=slice_index)
+                    if self._process_vocabulary_outro(prefix, yid, render_title, slice_index=slice_index) is False:
+                        return
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"

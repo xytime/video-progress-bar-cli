@@ -82,7 +82,7 @@ def read_record(output: Path, prefix: str) -> dict | None:
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
     if (data["prefix"] != prefix or type(data["enabled"]) is not bool
-            or data.get('status') not in {'PENDING', 'DISABLED', 'RENDERED', 'NO_SUITABLE_TERMS', 'FAILED'}
+            or data.get('status') not in {'PENDING', 'DISABLED', 'RENDERED', 'NO_SUITABLE_TERMS', 'FAILED', 'NEEDS_REPAIR'}
             or data.get('group') not in VIDEO_GROUPS
             or digest(parse_policy(data['policy'])) != data.get('config_digest')):
         raise ValueError("生词片尾任务记录损坏")

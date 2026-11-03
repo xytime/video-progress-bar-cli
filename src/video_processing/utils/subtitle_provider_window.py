@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | CLI 顺序预留可执行窗口，保留整片期限与质量预留。 |
 | 1.2.0 | 2026-11-01 | Grok Bot | Codex 排在中间（CLI 优先顺序）时按普通候选公平分配，不再独占剩余期限；Codex 末位兜底行为不变。 |
 | 1.1.0 | 2026-11-01 | Codex | 仅按兜底原累计可执行余额预留；未用份额交前序候选，总期限与质量预留不变。 |
@@ -84,3 +85,19 @@ def translation_provider_window(processor, providers, index, config, *, fallback
         yield processor._translation_deadline > now
     finally:
         processor._translation_deadline = overall
+
+
+def require_single_video_budget(segment_count, config):
+    """保守容量预检：按每批一次完整请求额度规划，不承诺模型会在平均时间内返回。"""
+    if not getattr(config, 'subtitle_provider_budget_allocation_enabled', False):
+        return
+    batch = max(30, min(int(getattr(config, 'codex_subtitle_batch_size', 40)), 50))
+    request = float(getattr(config, 'codex_text_request_timeout_seconds', 120))
+    available = max(0., float(config.subtitle_translation_total_timeout_seconds)
+                    - float(config.subtitle_translation_quality_reserve_seconds))
+    required = math.ceil(segment_count / batch) * request
+    if required > available:
+        from .subtitle_failure_receipt import SubtitleReviewRequired
+        raise SubtitleReviewRequired(
+            f'片长超出单片预算：{segment_count} 段，保守批次额度 {required:g}s，'
+            f'可用 {available:g}s；需人工选择分片方案', code='translation_budget_preflight')

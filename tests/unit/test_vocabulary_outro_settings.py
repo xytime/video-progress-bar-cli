@@ -122,8 +122,14 @@ def test_recovery_failure_blocks_pipeline_and_disabled_task_ignores_cache(api_se
     monkeypatch.setattr(manager,'_get_base_video_path',lambda *args:source)
     def failed(*args,**kwargs):raise recovery.CodexTextError('quota')
     monkeypatch.setattr(manager,'_run_tracked',failed)
-    with pytest.raises(recovery.CodexTextError):manager._process_vocabulary_outro('a','a','title')
-    assert policy.read_record(output,'a')['status']=='FAILED'
+    from video_processing.db.database import PipelineDB
+    manager.db=PipelineDB(str(output/'test.db'))
+    manager.db.add_video('a','title','channel',score=80)
+    assert manager._process_vocabulary_outro('a','a','title') is False
+    assert policy.read_record(output,'a')['status']=='NEEDS_REPAIR'
+    video=manager.db.get_video_by_youtube_id('a')
+    assert manager.db.get_subtitle_manual_review(video['id'])['blocker']
+    assert 'vocabulary_outro_review' in video['error_msg']
     derived=output/'a_vocab.mp4';derived.write_bytes(b'old')
     vo.receipt_path(derived).write_text(json.dumps(dict(inputs=vo.fingerprint(source,ass,'title'),status='rendered',output_sha256=vo.sha256(derived))))
     with pytest.raises(RuntimeError):manager._get_published_video_path('a')

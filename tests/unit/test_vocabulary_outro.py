@@ -185,7 +185,8 @@ def test_empty_vocab_invalidates_old_receipt_without_touching_base(tmp_path,monk
     output=tmp_path/'a_vocab.mp4';vo.receipt_path(output).write_text('{}')
     monkeypatch.setattr(vo,'probe',lambda _: {'format':{'duration':'2'}})
     assert vo.build(source,ass,output,'title') == source
-    assert not vo.receipt_path(output).exists() and source.read_bytes()==b'original'
+    assert vo.receipt_path(output).read_text() == '{}' and source.read_bytes()==b'original'
+    assert not vo.valid_empty_receipt(source, ass, output)
 
 
 def test_pipeline_tracked_hook_and_actual_selection(tmp_path,monkeypatch):

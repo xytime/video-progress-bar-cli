@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 旧文字及媒体恢复入口复验字幕人工闸门。 |
 | output-retention-v1 | 2026-10-31 | Codex | 新增不初始化数据库的只读产物引用快照，多切片与跨平台未确认状态保守保护。 |
 | notification-guard-v2 | 2026-10-27 | Codex | 在字幕告警集成上接入文字通知持久防重复，不把UNKNOWN抑制当受理。 |
@@ -6601,6 +6602,18 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                        (julianday('now') - julianday(max(created_at))) * 24 AS hours_since_acceptance
                 FROM wechat_submission_attempts
             ''', (since,)).fetchone()
+            delivery = conn.execute('''
+                SELECT count(DISTINCT CASE WHEN created_at >= ? THEN subject_id END) AS attempted_today,
+                       max(created_at) AS last_delivery_at,
+                       (julianday('now') - julianday(max(created_at))) * 24 AS hours_since_delivery
+                FROM (
+                    SELECT subject_id, created_at FROM wechat_submission_attempts
+                    UNION ALL
+                    SELECT subject_id, created_at FROM wechat_publications
+                    WHERE state IN ('UNCERTAIN','SUBMITTED_UNBOUND','SUBMITTED_BOUND','UNDER_REVIEW','PUBLISHED')
+                      AND evidence_path LIKE '%/submission_attempt.json'
+                )
+            ''', (since,)).fetchone()
             confirmed = conn.execute('''
                 SELECT count(DISTINCT subject_id) FROM (
                     SELECT subject_id, confirmed_at FROM wechat_publications WHERE state = 'PUBLISHED'
@@ -6614,11 +6627,11 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                        count(CASE WHEN status IN ('DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING') THEN 1 END) AS active,
                        count(CASE WHEN status = 'LOGIN_REQUIRED' THEN 1 END) AS login_required,
                        count(CASE WHEN status IN ('PENDING','FAILED') AND updated_at >= datetime('now','-24 hours')
-                           AND updated_at > COALESCE((SELECT max(created_at) FROM wechat_submission_attempts), '1970-01-01')
+                           AND updated_at > COALESCE(?, '1970-01-01')
                            AND (error_msg LIKE '%PRE_SUBMIT_UPLOAD_TIMEOUT%' OR error_msg LIKE '%Upload verification timed out%')
                            THEN 1 END) AS recent_upload_timeouts
                 FROM processed_videos
-            ''', (since,)).fetchone()
+            ''', (since, delivery['last_delivery_at'])).fetchone()
             queue = conn.execute('''
                 SELECT count(*) FROM processed_videos pv
                 WHERE pv.status = 'PENDING'
@@ -6641,7 +6654,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
                     )
                 )
             ''', (since,)).fetchone()[0]
-            return {**dict(acceptance), **dict(counts), "confirmed_today": confirmed,
+            return {**dict(acceptance), **dict(delivery), **dict(counts), "confirmed_today": confirmed,
                     "queue": queue, "blacklist_leak": leak, "day_start_utc": since}
         finally:
             conn.close()
