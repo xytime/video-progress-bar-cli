@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| content-match-v1+default | 2026-11-03 | Grok Bot | 可选 default_products：仅当前有效池内精确 ID+全名商品可作末位兜底；未配置时行为与冻结重放不变。 |
 | content-match-v1 | 2026-11-02 | Codex | 新 AUTO 以完整有效商品池和特定主题相关性准入；冻结输入可重放。 |
 """
 from __future__ import annotations
@@ -28,7 +29,8 @@ def normalize(text):
 
 
 def validate_matching_config(data):
-    if (not isinstance(data, dict) or set(data) != {'schema_version', 'enabled', 'min_score', 'themes'}
+    required = {'schema_version', 'enabled', 'min_score', 'themes'}
+    if (not isinstance(data, dict) or not required <= set(data) <= required | {'default_products'}
             or type(data['schema_version']) is not int or data['schema_version'] != 1
             or type(data['enabled']) is not bool or type(data['min_score']) is not int
             or not 4 <= data['min_score'] <= 40 or not isinstance(data['themes'], dict)):
@@ -45,6 +47,17 @@ def validate_matching_config(data):
                 raise ValueError('商品主题必须是有界短语列表')
         if any(normalize(p) in GENERIC for p in row['phrases']):
             raise ValueError('粗分类或营销词不能作为商品特定主题')
+    if 'default_products' in data:
+        defaults = data['default_products']
+        if not isinstance(defaults, list) or not 1 <= len(defaults) <= 3:
+            raise ValueError('默认商品须为 1-3 个精确身份')
+        for row in defaults:
+            if (not isinstance(row, dict) or set(row) != {'product_id', 'title'}
+                    or not isinstance(row['product_id'], str) or not re.fullmatch(r'[0-9]{1,64}', row['product_id'])
+                    or not isinstance(row['title'], str) or not row['title'].strip()):
+                raise ValueError('默认商品须绑定精确 ID 与全名')
+        if len({row['product_id'] for row in defaults}) != len(defaults):
+            raise ValueError('默认商品不能重复')
     return data
 
 
@@ -94,4 +107,12 @@ def rank_products(content, pool, config, *, max_attempts, english=False):
                        'qualified': preferred or (specific and score >= config['min_score'])})
     scores.sort(key=lambda r: (not r['english_preferred'], -r['score'], r['product_id'], r['title']))
     candidates = [{'product_id': r['product_id'], 'title': r['title']} for r in scores if r['qualified']][:max_attempts]
-    return {'reason': 'MATCH_L1' if candidates else 'MATCH_EMPTY', 'candidates': candidates, 'scores': scores}
+    reason = 'MATCH_L1' if candidates else 'MATCH_EMPTY'
+    # 默认商品只填剩余尝试位；必须与当前有效池同 ID 同全名，未配置时不改变旧结果。
+    eligible = {(p['product_id'], p['title']) for p in pool['eligible']}
+    for row in config.get('default_products', []):
+        identity = {'product_id': row['product_id'], 'title': row['title']}
+        if len(candidates) < max_attempts and (row['product_id'], row['title']) in eligible and identity not in candidates:
+            candidates.append(identity)
+            reason = 'MATCH_L1' if reason == 'MATCH_L1' else 'MATCH_DEFAULT'
+    return {'reason': reason, 'candidates': candidates, 'scores': scores}

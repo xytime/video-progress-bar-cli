@@ -280,3 +280,68 @@ def test_sync_disabled_records_attempt_without_touching_catalog(live,tmp_path,mo
     assert result['diagnostics']['url_path'] is None and result['diagnostics']['observed_items']==0
     assert Path(result['receipt_path']).is_file()
     assert path.read_bytes()==before and len(list((tmp_path/'attempts').glob('wechat_catalog_sync/*/receipt.json')))==1
+
+
+AI_RECORDER = dict(product_id='10000499518380', title='得到AI录音卡GetSeed- 录音转文字 AI智能总结 会议纪要 笔记发芽')
+
+
+def test_default_product_fills_remaining_slot_only_from_current_pool():
+    base=dict(schema_version=1,enabled=True,min_score=4,themes={})
+    pool={'ready':True,'eligible':[dict(product_id='1',title='系统反馈回路'), dict(AI_RECORDER)]}
+    config=dict(base,default_products=[dict(AI_RECORDER)])
+    empty=rank_products({'title':'unrelated giraffe'},pool,config,max_attempts=3)
+    assert empty['reason']=='MATCH_DEFAULT' and empty['candidates']==[AI_RECORDER]
+    matched=rank_products({'title':'系统反馈回路'},pool,config,max_attempts=3)
+    assert matched['reason']=='MATCH_L1' and matched['candidates']==[dict(product_id='1',title='系统反馈回路'),AI_RECORDER]
+    assert rank_products({'title':'系统反馈回路'},pool,config,max_attempts=1)['candidates']==[dict(product_id='1',title='系统反馈回路')]
+    # 同 ID 不同标题、未上架或池未就绪都不兜底；未配置时与旧结果完全一致。
+    renamed={'ready':True,'eligible':[dict(product_id=AI_RECORDER['product_id'],title='另一个版本')]}
+    assert rank_products({},renamed,config,max_attempts=3)['reason']=='MATCH_EMPTY'
+    assert rank_products({},{'ready':True,'eligible':[]},config,max_attempts=3)['candidates']==[]
+    assert rank_products({},{'ready':False,'reason':'CATALOG_STALE'},config,max_attempts=3)['reason']=='CATALOG_STALE'
+    assert rank_products({'title':'x'},pool,base,max_attempts=3)=={'reason':'MATCH_EMPTY','candidates':[],
+        'scores':rank_products({'title':'x'},pool,base,max_attempts=3)['scores']}
+
+
+@pytest.mark.parametrize('defaults', [[], [dict(product_id='abc',title='x')], [dict(product_id='1',title=' ')],
+    [dict(product_id='1',title='a',extra=1)], [dict(product_id='1',title='a'),dict(product_id='1',title='b')],
+    [dict(product_id=str(i),title='a') for i in range(4)], 'x'])
+def test_default_product_config_requires_exact_identities(defaults):
+    with pytest.raises(ValueError):
+        validate_matching_config(dict(schema_version=1,enabled=True,min_score=4,themes={},default_products=defaults))
+
+
+def test_english_preferred_stays_first_then_default(live):
+    active,doc,config,now=live
+    doc=deepcopy(doc); doc['captured_at']=(now+timedelta(seconds=1)).isoformat()
+    doc['pages'][0]['items'].append(dict(AI_RECORDER, stock=5, price='20', shop='合成店铺')); doc['total_items']+=1
+    path=active.with_name('wechat_product_catalog.json')
+    promote_live_catalog(doc, observation(doc), active, expected_catalog_digest=catalog_digest(path),
+                         expected_policy_digest=load_policy(active).digest)
+    pool=load_live_pool(active, now=now+timedelta(seconds=2))
+    ranked=rank_products({},pool,dict(config,default_products=[dict(AI_RECORDER)]),max_attempts=3,english=True)
+    assert [c['product_id'] for c in ranked['candidates']]==['10000006971274', AI_RECORDER['product_id']]
+
+
+def test_frozen_default_task_replays_and_old_snapshot_unchanged(live,tmp_path):
+    active,doc,config,now=live
+    doc=deepcopy(doc); doc['captured_at']=(now+timedelta(seconds=1)).isoformat()
+    doc['pages'][0]['items'].append(dict(AI_RECORDER, stock=5, price='20', shop='合成店铺')); doc['total_items']+=1
+    path=active.with_name('wechat_product_catalog.json')
+    promote_live_catalog(doc, observation(doc), active, expected_catalog_digest=catalog_digest(path),
+                         expected_policy_digest=load_policy(active).digest)
+    db=PipelineDB(str(tmp_path/'test.sqlite'))
+    old=freeze_task_product_decision(db,'old:empty',{'video_title':'unrelated giraffe'},active,now=now+timedelta(seconds=2))
+    assert old['reason']=='MATCH_EMPTY'
+    active.with_name('wechat_product_matching.json').write_text(json.dumps(dict(config,default_products=[dict(AI_RECORDER)])))
+    task=freeze_task_product_decision(db,'new:default',{'video_title':'unrelated giraffe'},active,now=now+timedelta(seconds=2))
+    assert task['reason']=='MATCH_DEFAULT' and task['require_product']
+    assert task['product_decision']['candidates']==[AI_RECORDER]
+    for name,payload in (('old',old),('new',task)):
+        args=write_product_task_arguments(payload,tmp_path/name)
+        assert read_product_task_decision(Path(args[1]))==payload
+
+
+def test_production_matching_config_defaults_to_ai_recorder():
+    config=json.loads((Path(__file__).parents[2]/'config/wechat_product_matching.json').read_text())
+    assert validate_matching_config(config)['default_products']==[AI_RECORDER]

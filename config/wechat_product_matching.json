@@ -163,5 +163,11 @@
       ],
       "categories": []
     }
-  }
+  },
+  "default_products": [
+    {
+      "product_id": "10000499518380",
+      "title": "得到AI录音卡GetSeed- 录音转文字 AI智能总结 会议纪要 笔记发芽"
+    }
+  ]
 }
