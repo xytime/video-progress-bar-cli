@@ -81,6 +81,16 @@ def classify_error(message: str | None) -> str:
     return "unknown"
 
 
+def requires_auth_recovery(item: dict) -> bool:
+    """认证错误不能靠计时恢复；兼容旧池，成功回执可解除旁路。"""
+    if "auth_blocked" in item:
+        return bool(item["auth_blocked"])
+    # 旧版本成功时会清零 cooldown 并移除 incident，但保留 last_error_class。
+    return bool(item.get("auth_incident") or (
+        item.get("last_error_class") == "auth_or_permission"
+        and float(item.get("cooldown_until", 0)) > 0))
+
+
 class DynamicTranslationModelPool:
     """小型持久化模型池；状态只保存 provider 名称和运行统计，不保存密钥。"""
 
@@ -109,7 +119,7 @@ class DynamicTranslationModelPool:
         required: set[str] | None = None,
         ignore_cooldown: set[str] | None = None,
     ) -> list[str]:
-        """按能力匹配、质量分和静态优先级排序；冷却中的模型排除。"""
+        """认证旁路优先于冷却例外；时间到期不代表凭据恢复。"""
         now = time.time()
         required = required or set()
         ignore_cooldown = {name.lower() for name in (ignore_cooldown or set())}
@@ -120,6 +130,8 @@ class DynamicTranslationModelPool:
             if profile is None:
                 continue
             item = self._state.setdefault(name, {})
+            if requires_auth_recovery(item):
+                continue
             if float(item.get("cooldown_until", 0)) > now and name not in ignore_cooldown:
                 continue
             missing = len(required - profile.capabilities)
@@ -131,6 +143,7 @@ class DynamicTranslationModelPool:
         name = provider.lower()
         item = self._state.setdefault(name, {})
         category = category or classify_error(error)
+        item["auth_blocked"] = category == "auth_or_permission" or requires_auth_recovery(item)
         now = time.time()
         consecutive = int(item.get('consecutive_timeouts', 0)) + 1 if category == 'timeout' else 0
         item['consecutive_timeouts'] = consecutive
@@ -156,6 +169,7 @@ class DynamicTranslationModelPool:
         item["last_success_at"] = time.time()
         item["consecutive_timeouts"] = 0
         item["auth_incident"] = None
+        item["auth_blocked"] = False
         item["cooldown_until"] = 0
         self._dirty[provider.lower()] = dict(item)
         self._save()
