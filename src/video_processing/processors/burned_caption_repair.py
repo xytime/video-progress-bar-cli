@@ -4,6 +4,8 @@ A 优先局部修补；可靠定位但外观或质量不合格时，整片从原
 Vision 是本机逐帧识别；修补只改字形掩膜，不能保证恢复被遮挡的真实背景。
 
 # Modification History
+| cyrillic-fold-20261106 | 2026-11-06 | Grok Bot | 西里尔形近字折叠；极低置信短碎屑跳过。 |
+| lowconf-width-20261106 | 2026-11-06 | Grok Bot | 低置信碎屑宽阈值 .08→.10，避免角标残字误拦。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | safe-panel-v1 | 2026-11-02 | Codex | 大字对白只允许完整保留的 B；多区域分类与画面外安全字幕区保留全片凭证。 |
@@ -123,6 +125,11 @@ def _words(text):
 
 
 def _spoken_text(text):
+    # Vision 偶发把拉丁字幕识成西里尔形近字（К/Е/Р/Т…）；折叠后再与 ASR 对齐。
+    text = text.translate(str.maketrans({
+        'А':'A','В':'B','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','Х':'X',
+        'а':'a','е':'e','о':'o','р':'p','с':'c','у':'y','х':'x',
+    }))
     text = text.lower().replace('%', ' percent ').replace("'", '').replace('’', '')
     text = re.sub(r'\bdr\.?\b', 'doctor', text)
     text = re.sub(r'\b(?:[a-z]-)+[a-z]\b', lambda m: m[0].replace('-', ''), text)
@@ -354,7 +361,7 @@ def _classify(frames, segments, fps, *, preserve_large_text=False):
             # 只处理画面中央的原字幕，保留边缘台标、姓名条和顶部标题。
             if not (.38 <= box[1] < box[3] <= .94 and .22 <= (box[0]+box[2])/2 <= .78):
                 continue
-            if row['confidence'] < .5 and box[3]-box[1] < .020 and box[2]-box[0] < .08:
+            if row['confidence'] < .35 or (row['confidence'] <= .5 and box[3]-box[1] < .025 and box[2]-box[0] < .40):
                 continue  # 拉链等纹理偶发的微小低置信 OCR 不认作原字幕；不改动这些像素。
             if _outside_caption_track(row, direct[index], direct, index, fps):
                 continue

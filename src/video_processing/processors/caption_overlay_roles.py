@@ -5,6 +5,11 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| kinetic-title-20261106h | 2026-11-06 | Grok Bot | OCR 噪声符号与左缘短碎片。 |
+| kinetic-title-20261106g | 2026-11-06 | Grok Bot | 闪词按文本分组；通栏新闻条。 |
+| kinetic-title-20261106f | 2026-11-06 | Grok Bot | 闪词不误伤 ASR 单词；数字年份；越界新闻条。 |
+| kinetic-title-20261106e | 2026-11-06 | Grok Bot | 图形簇吸收中低置信短残字。 |
+| kinetic-title-20261106d | 2026-11-06 | Grok Bot | 短暂全大写闪词；画面图形簇在已有 overlay 上下文下放行残字。 |
 | kinetic-title-20261106c | 2026-11-06 | Grok Bot | 旋转大写动能不忌主题词撞车；图形簇含已豁免上下文；图注版权条。 |
 | kinetic-title-20261106b | 2026-11-06 | Grok Bot | 动能只豁免短词子集；数字角标碎屑；短暂画面图形簇（选票 OCR）。 |
 | kinetic-title-20261106 | 2026-11-06 | Grok Bot | 动能短词语标题条与孤立单字符碎屑：不匹配 ASR 时视为非对白 overlay。 |
@@ -299,21 +304,56 @@ def non_dialogue_rows(frames, segments, fps, matches):
         elif matched / len(titles) <= .15:
             ignored.update((i, n) for i, n, _ in titles)
 
-    # 孤立短字符/数字碎屑或角标数字：高置信、无 ASR 对齐、旁无对白邻行 → 非烧录对白。
+    # 短暂全大写动能闪词（<1s，如 AT/BIG）：≥3 帧、单词语、不对齐 ASR。
+    flash = {}
     for index, rows in enumerate(frames):
-        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
         for number, row in enumerate(rows):
             if (index, number) in ignored or row['confidence'] < .9:
                 continue
             text, box = row['text'].strip(), row['box']
-            if not text or len(text) > 2:
+            if not text or len(text.split()) != 1 or len(text) > 12:
+                continue
+            letters = [ch for ch in text if ch.isalpha()]
+            if not letters or sum(ch.isupper() for ch in letters) < len(letters) * .8:
+                continue
+            if not (.70 <= box[1] < box[3] <= .90):
+                continue
+            # 必须按文本分组，否则同 y 对白轨会吞掉真正闪词（AT）。
+            key = (text.casefold(), round(box[1], 1), round(box[3], 1), round((box[0] + box[2]) / 2, 1))
+            flash.setdefault(key, []).append((index, number, row))
+    for items in flash.values():
+        # 1-2 字母闪词允许 2 帧；其它仍要 ≥3 帧，避免误伤对白。
+        min_flash = 2 if all(len(''.join(ch for ch in o['text'] if ch.isalpha())) <= 2 for _, _, o in items) else 3
+        if len(items) < min_flash:
+            continue
+        matched = 0
+        for i, _, observed in items:
+            spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= i / fps <= s['end'] + 5)
+            if not spoken:
+                continue
+            # 单词对白（kept）也必须挡住闪词误伤；多词才允许 strong_dialogue 兜底。
+            if matches(observed['text'], spoken) or (
+                    len(observed['text'].split()) >= 2 and strong_dialogue(observed['text'], spoken)):
+                matched += 1
+        if matched / len(items) <= .15:
+            ignored.update((i, n) for i, n, _ in items)
+
+    # 孤立短字符/数字碎屑或角标数字：中高置信、无 ASR 对齐、旁无对白邻行 → 非烧录对白。
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        for number, row in enumerate(rows):
+            if (index, number) in ignored or row['confidence'] < .5:
+                continue
+            text, box = row['text'].strip(), row['box']
+            digit_only = text.isdigit()
+            # 字母碎屑 ≤2；纯数字角标/年份最多 4 位。
+            if not text or (len(text) > 4 if digit_only else len(text) > 2):
                 continue
             if not (.38 <= box[1] < box[3] <= .94):
                 continue
-            # 字母碎屑更严；纯数字角标允许略大（球衣号/比分局部 OCR）。
-            digit_only = text.isdigit()
-            max_h = .06 if digit_only else .035
-            max_w = .12 if digit_only else .08
+            # 字母碎屑更严；纯数字角标允许略大（球衣号/比分/年份局部 OCR）。
+            max_h = .07 if digit_only else .05
+            max_w = .14 if digit_only else .10
             if box[3] - box[1] > max_h or box[2] - box[0] > max_w:
                 continue
             if spoken and (matches(text, spoken) or strong_dialogue(text, spoken)):
@@ -322,6 +362,80 @@ def non_dialogue_rows(frames, segments, fps, matches):
                         and abs(r['box'][1] - box[1]) < .05 and matches(r['text'], spoken)]
             if not neighbor:
                 ignored.add((index, number))
+
+    # 短暂画面图形簇：同帧已有中部 overlay，另有中部文字（含中低置信残字）完全不对齐 ASR。
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        mid_hi = [(number, row) for number, row in enumerate(rows)
+                  if row['confidence'] >= .9
+                  and .38 <= row['box'][1] < row['box'][3] <= .94
+                  and any(ch.isalnum() for ch in (row.get('text') or ''))]
+        prior = sum(1 for n, _ in mid_hi if (index, n) in ignored)
+        if prior < 1:
+            continue
+        mid_all = [(number, row) for number, row in enumerate(rows)
+                   if row['confidence'] >= .3
+                   and .38 <= row['box'][1] < row['box'][3] <= .94
+                   and any(ch.isalnum() for ch in (row.get('text') or ''))]
+        for number, row in mid_all:
+            if (index, number) in ignored:
+                continue
+            text = row['text']
+            if spoken and (matches(text, spoken) or strong_dialogue(text, spoken)):
+                continue
+            # 高置信图形字，或同帧 overlay 旁的短残字（che/300e 等）
+            if row['confidence'] >= .9 or len(text.strip()) <= 8:
+                ignored.add((index, number))
+
+    # OCR 噪声符号：含 } { ] [ | 等排版残渣、或左缘短碎片，且不对齐 ASR。
+    junk_re = re.compile(r'[}{\]\[|\\<>]|\d+[)}\]]|\(\w')
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        for number, row in enumerate(rows):
+            if (index, number) in ignored or row['confidence'] < .5:
+                continue
+            text, box = row['text'].strip(), row['box']
+            if not text or not (.38 <= box[1] < box[3] <= .94):
+                continue
+            leftish = (box[0] + box[2]) / 2 <= .36 and len(text) <= 12
+            if not (junk_re.search(text) or leftish):
+                continue
+            if spoken and (matches(text, spoken) or strong_dialogue(text, spoken)):
+                continue
+            ignored.add((index, number))
+
+    # 通栏新闻条：贴左边、宽度很大的下层滚动字，常与多行字幕并存，不走擦除。
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        mid = [(number, row) for number, row in enumerate(rows)
+               if row['confidence'] >= .9 and .55 <= row['box'][1] < row['box'][3] <= .98
+               and any(ch.isalnum() for ch in (row.get('text') or ''))]
+        if len(mid) < 2:
+            continue
+        for number, row in mid:
+            if (index, number) in ignored:
+                continue
+            text, box = row['text'].strip(), row['box']
+            if box[0] > 0.02 or box[2] - box[0] < 0.35:
+                continue
+            if spoken and strong_dialogue(text, spoken) and box[0] >= 0:
+                continue
+            ignored.add((index, number))
+
+    # 越界新闻条：OCR 框略超出 [0,1] 的滚动字幕/通栏，不能当可擦除对白。
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        for number, row in enumerate(rows):
+            if (index, number) in ignored or row['confidence'] < .9:
+                continue
+            text, box = row['text'].strip(), row['box']
+            if not text or not (.38 <= box[1] < box[3] <= .98):
+                continue
+            if box[0] >= 0 and box[2] <= 1:
+                continue
+            if spoken and strong_dialogue(text, spoken):
+                continue
+            ignored.add((index, number))
 
     # 图注版权条：Image courtesy / Shutterstock / Getty 等底部致谢，不构成烧录对白。
     credit_re = re.compile(

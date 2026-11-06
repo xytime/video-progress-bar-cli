@@ -208,3 +208,33 @@ def test_image_courtesy_credit_is_overlay():
     segments = [dict(start=0.5, end=3.0, text='cultish language shapes everyday vocabularies')]
     ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
     assert any('Shutterstock' in frames[i][n]['text'] for i, n in ignored)
+
+
+def test_brief_uppercase_flash_word_is_overlay():
+    """短暂全大写闪词（AT）不对齐 ASR → overlay。"""
+    fps = 30
+    frames = []
+    for i in range(120):
+        rows = []
+        if 50 <= i <= 55:
+            rows.append(dict(text='AT', confidence=1.0, box=[0.428, 0.784, 0.572, 0.841]))
+        frames.append(rows)
+    segments = [dict(start=0.0, end=4.0, text='crypto answered the question around london time')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert any(frames[i][n]['text'] == 'AT' for i, n in ignored)
+
+
+def test_scene_graphic_with_prior_overlay_ignores_unmatched():
+    """同帧已有 overlay 时，不对齐 ASR 的中部表格字可豁免。"""
+    fps = 30
+    # 稳定且不对齐 ASR 的中部条先成为 overlay，再出现选票 OCR 残字。
+    frames = []
+    for i in range(120):
+        rows = [dict(text='POLL TRACKER', confidence=1.0, box=[0.24, 0.60, 0.76, 0.65])]
+        if 60 <= i <= 70:
+            rows.append(dict(text='BY MAIL BA', confidence=1.0, box=[0.40, 0.395, 0.74, 0.45]))
+            rows.append(dict(text='BACK HERE', confidence=1.0, box=[0.43, 0.44, 0.73, 0.49]))
+        frames.append(rows)
+    segments = [dict(start=0.0, end=4.0, text='millions flooded local high school gyms this morning')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert any(frames[i][n]['text'] == 'BY MAIL BA' for i, n in ignored)
