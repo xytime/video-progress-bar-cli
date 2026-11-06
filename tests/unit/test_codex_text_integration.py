@@ -100,7 +100,7 @@ def _processor():
 
 @pytest.mark.parametrize("first_success", [False, True])
 def test_subtitle_existing_order_then_codex_preserves_source_and_timeline(tmp_path, monkeypatch, first_success):
-    monkeypatch.setattr(caption, "settings", _settings(tmp_path, subtitle_translation_provider_order="gemini,google"))
+    monkeypatch.setattr(caption, "settings", _settings(tmp_path, subtitle_translation_provider_order="gemini,google", subtitle_translation_windowed_resume_enabled=False))
     processor = _processor()
     calls = []
     def build(provider, texts, context):
