@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-11-06 | Grok Bot | 自适应预算上限 1080s：≤360 段放行，≥400/614 段仍预检拦截。 |
 | 1.0.0 | 2026-11-06 | Grok Bot | 覆盖 caption overlay / budget / sampling / unrest / delivery 过期清理。 |
 """
 import math
@@ -65,7 +66,7 @@ def test_adaptive_budget_allows_mid_length_videos():
         codex_subtitle_batch_size=50,
         codex_text_request_timeout_seconds=120,
     )
-    for segments in (208, 213, 227, 231, 237, 257, 400, 687):
+    for segments in (208, 213, 227, 231, 237, 257, 300, 360, 400):
         budget = require_single_video_budget(segments, config)
         assert budget <= ABSOLUTE_TRANSLATION_BUDGET_SECONDS
         assert budget >= adaptive_translation_budget_seconds(segments, config)
@@ -82,8 +83,9 @@ def test_adaptive_budget_still_blocks_extreme_lengths():
         codex_subtitle_batch_size=50,
         codex_text_request_timeout_seconds=120,
     )
-    with pytest.raises(ValueError, match='translation_budget_preflight|超出单片预算'):
-        require_single_video_budget(5000, config)
+    for segments in (614, 687, 5000):
+        with pytest.raises(ValueError, match='translation_budget_preflight|超出单片预算'):
+            require_single_video_budget(segments, config)
 
 
 def test_sampling_clamps_small_asr_overrun():
@@ -121,3 +123,39 @@ def test_uprising_requires_external_context():
     assert classify(review.text_documents(title='An uprising began quietly'), DEFAULT_RULES) is None
     hit = classify(review.text_documents(title='An uprising against the regime'), DEFAULT_RULES)
     assert hit and hit['family'] == 'mobilization'
+
+
+def test_long_video_without_any_aligned_dialogue_preserves_without_erasing():
+    fps = 2
+    frames = [[dict(text='SELTZ', confidence=1, box=[.45, .68, .55, .71])] if i % 37 == 0 else []
+              for i in range(fps * 90)]
+    segments = [dict(start=0, end=90, text='broadway music and the crowd sings along')]
+    selected, center = repair._classify(frames, segments, fps, preserve_large_text=True)
+    assert center is None and not any(selected)
+
+
+def test_short_clip_with_sparse_alignment_keeps_frame_gate():
+    # <60s 抽样不足以得出「整片无对白带」，仍逐帧门禁。
+    fps = 2
+    frames = []
+    for i in range(fps * 20):
+        rows = [dict(text='MYSTERY', confidence=1, box=[.3, .70, .7, .74])] if i == 30 else []
+        if i in (10, 11):
+            rows.append(dict(text='broadway music tonight', confidence=1, box=[.2, .80, .8, .84]))
+        frames.append(rows)
+    segments = [dict(start=0, end=20, text='broadway music tonight and the crowd sings along')]
+    with pytest.raises(ValueError):
+        repair._classify(frames, segments, fps, preserve_large_text=True)
+
+
+def test_long_video_with_aligned_caption_track_keeps_frame_gate():
+    fps = 2
+    frames = []
+    for i in range(fps * 90):
+        rows = [dict(text='MYSTERY', confidence=1, box=[.3, .70, .7, .74])] if i == 100 else []
+        if 10 <= i <= 40:
+            rows.append(dict(text='broadway music tonight', confidence=1, box=[.2, .80, .8, .84]))
+        frames.append(rows)
+    segments = [dict(start=0, end=90, text='broadway music tonight and the crowd sings along')]
+    with pytest.raises(ValueError):
+        repair._classify(frames, segments, fps, preserve_large_text=True)

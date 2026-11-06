@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| anomaly-fixes-20261106b | 2026-11-06 | Grok Bot | 自适应上限收窄到 1080s，614 段仍在预检拦截。 |
 | anomaly-fixes-20261106 | 2026-11-06 | Grok Bot | 翻译总预算随段数自适应放宽，避免 >200 段预检永久死卡。 |
 | review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | CLI 顺序预留可执行窗口，保留整片期限与质量预留。 |
@@ -88,7 +89,8 @@ def translation_provider_window(processor, providers, index, config, *, fallback
         processor._translation_deadline = overall
 
 
-ABSOLUTE_TRANSLATION_BUDGET_SECONDS = 2400.
+# 自适应放宽仅覆盖中长片（约 ≤360 段）；更长片仍须在昂贵审计前人工选分片。
+ABSOLUTE_TRANSLATION_BUDGET_SECONDS = 1080.
 
 
 def adaptive_translation_budget_seconds(segment_count, config):

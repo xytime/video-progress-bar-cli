@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.1 | 2026-11-06 | Grok Bot | 新增豁免须跨帧静止 ≥1s 且 ≥3 帧、无数字冲突；单帧/短应答不再当片头卡放过。 |
 | 1.2.0 | 2026-11-06 | Grok Bot | 识别 1–2 行片头标题卡、≥1s 稳定且不匹配 ASR 的新闻横条/讲台牌/常驻台标；避免误拦无烧录对白片。 |
 | 1.1.0 | 2026-11-02 | Codex | 先识别有成对章节条与动态对白证据的底部信息区，以及角落订阅按钮；未知多区域对白仍阻断。 |
 | 1.0.0 | 2026-11-02 | Codex | 有界开场多行卡、配对姓名书名条及独立动态对白下方常驻标题。 |
@@ -126,7 +127,16 @@ def non_dialogue_rows(frames, segments, fps, matches):
                 ignored.add((i,n))
                 ignored.update((i,j) for j,_ in buttons)
     # 片头 1–2 行大标题：首帧起、数秒内消失，且与开场对白不同；不要求满三行。
-    opening_short = [t for t in stable if t[0][0] <= max(1, round(fps * .15))
+    # 跨帧静止证据：至少 1 秒且不少于 3 个观测帧；单帧/低帧率下的一两帧不构成标题卡证据。
+    min_frames = max(3, round(fps))
+    def held(track):
+        return len(track) >= min_frames and (track[-1][0] - track[0][0]) >= max(2, fps * 1.0)
+    def numeric_conflict(text, spoken):
+        # 画面数字与同期口播数字不一致时不豁免（数字字幕契约）。
+        shown = set(re.findall(r'\d+(?:\.\d+)?', text))
+        said = set(re.findall(r'\d+(?:\.\d+)?', spoken))
+        return bool(shown) and bool(said) and not shown <= said
+    opening_short = [t for t in stable if held(t) and t[0][0] <= max(1, round(fps * .15))
                      and t[-1][0] / fps <= 8
                      and .38 <= t[0][2]['box'][1] < t[0][2]['box'][3] <= .88
                      and .028 <= t[0][2]['box'][3] - t[0][2]['box'][1] <= .12
@@ -144,7 +154,7 @@ def non_dialogue_rows(frames, segments, fps, matches):
         if all((i, n) in ignored for i, n, _ in track):
             continue
         start, end = track[0][0], track[-1][0]
-        if end - start < fps * 1.0:
+        if not held(track):
             continue
         row, box = track[0][2], track[0][2]['box']
         if not (.38 <= box[1] < box[3] <= .94):
@@ -156,7 +166,8 @@ def non_dialogue_rows(frames, segments, fps, matches):
             samples += 1
             if spoken and matches(observed['text'], spoken):
                 matched += 1
-        if samples and matched / samples <= .15:
+        spoken_all = ' '.join(s['text'] for s in segments if s['start'] - 5 <= end / fps and start / fps <= s['end'] + 5)
+        if samples and matched / samples <= .15 and not numeric_conflict(row['text'], spoken_all):
             mark(track)
 
     # 几何驻留轨：OCR 抖动/滚动字幕条会使精确文本轨碎裂；按近似框位合并 ≥1s 且几乎不匹配 ASR 的中部文字。
@@ -187,7 +198,7 @@ def non_dialogue_rows(frames, segments, fps, matches):
 
     for track in geometry_tracks:
         start, end = track[0][0], track[-1][0]
-        if end - start < fps * 1.0 or len(track) / (end - start + 1) < .55:
+        if not held(track) or len(track) / (end - start + 1) < .55:
             continue
         # 对白带会在同一几何位置换字；只有文案相对稳定的驻留条才算非对白 overlay。
         compact = lambda value: ''.join(ch for ch in value.casefold() if ch.isalnum())

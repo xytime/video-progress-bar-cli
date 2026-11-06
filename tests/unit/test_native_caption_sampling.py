@@ -191,10 +191,10 @@ def test_sample_provider_failure_is_review_never_generate_or_silent_retry(tmp_pa
     monkeypatch.setattr(sampling, 'attempt', failed)
     def forbidden(*args): raise AssertionError('provider failure must not start full OCR')
     monkeypatch.setattr(router, 'scan', forbidden)
-    if code in {'quota', 'unavailable'}:
+    if code == 'quota':  # 仅明确配额走有界退避；unavailable 等仍记 REVIEW
         with pytest.raises(SubtitleTranslationFailure) as stopped:
             router.route(source, output, evidence['segments'])
-        assert stopped.value.failure['category'] in {'quota', 'unavailable', 'timeout', 'network'}
+        assert stopped.value.failure['category'] in {'quota', 'timeout'}
         assert not decision_path(output).exists()
     else:
         with pytest.raises(router.NativeCaptionReviewRequired, match=code):

@@ -338,8 +338,9 @@ def _classify(frames, segments, fps, *, preserve_large_text=False):
                        and .38 <= r['box'][1] < r['box'][3] <= .94
                        and .025 <= r['box'][3]-r['box'][1] <= (.14 if preserve_large_text else .08)])
     preservation_only = preserve_large_text and any(r['box'][3]-r['box'][1] > .08 for rows in direct for r in rows)
-    dialogue_frames = sum(1 for rows in direct if rows)
-    dialogue_ratio = dialogue_frames / max(1, len(frames))
+    if _no_burned_dialogue(frames, direct, fps):
+        # 整片（≥60s 抽样）几乎没有任何与 ASR 对齐的中部文字：没有可擦除的原对白带，保留原画面，不擦除任何像素。
+        return [[] for _ in frames], None
     for index, rows in enumerate(frames):
         now = index / fps
         local_words = set().union(*(_words(s.get("text", "")) for s in segments
@@ -391,89 +392,42 @@ def _classify(frames, segments, fps, *, preserve_large_text=False):
                 matches = True
                 box = [min(r['box'][0] for r in pair), min(r['box'][1] for r in pair),
                        max(r['box'][2] for r in pair), max(r['box'][3] for r in pair)]
-            if not matches:
-                # 分行硬字幕上一行偶发漏对齐时，紧邻的已对齐对白行可确认同组。
-                for buddy in rows:
-                    other = buddy['box']
-                    if (buddy is row or buddy['confidence'] < .9
-                            or abs(((box[0]+box[2])-(other[0]+other[2]))/2) > .12
-                            or not 0 < other[1] - box[3] <= .04
-                            or not _caption_text_matches(buddy['text'], spoken)):
-                        continue
-                    matches = True
-                    break
             if not matches and preservation_only:
                 matches = _caption_boundary_ocr(row, direct, index, fps)
-            # 低置信且无稳定字形证据：绝不擦除，避免噪声 OCR 死卡。
-            if row['confidence'] < .75 and not stable_ocr:
-                continue
-            if not matches:
-                detail = (f"第 {index} 帧(t={index/fps:.2f}s) 原字幕位置或文字不确定，"
-                          f"OCR={text[:80]!r} box={[round(v, 3) for v in box]} "
-                          f"conf={row['confidence']:.2f} dialogue_ratio={dialogue_ratio:.1%}")
-                height, width = box[3] - box[1], box[2] - box[0]
-                # 无实质连续烧录对白带，或明显非对白形态：标题卡/台标/新闻条/Ticker/片头卡。
-                overlay_like = (
-                    dialogue_ratio < .12
-                    or height <= .028
-                    or height >= .09
-                    or width >= .82
-                    or (box[1] <= .45 and height <= .04 and width <= .35)
-                    or ((text.isupper() or (sum(ch.isupper() for ch in text if ch.isalpha())
-                         / max(1, sum(ch.isalpha() for ch in text)) >= .8))
-                        and width >= .28 and not matches)
-                    or (len(text.split()) <= 2 and width <= .30 and not matches)
-                    or (box[0] <= .02 and not matches and width <= .55)
-                )
-                dwell = 1
-                for nearby in range(index + 1, min(len(frames), index + max(1, round(fps * 1.2)) + 1)):
-                    if any(abs(r['box'][1] - box[1]) < .025 and abs(r['box'][3] - box[3]) < .025
-                           and r['confidence'] >= .9
-                           and (SequenceMatcher(None, r['text'].casefold(), text.casefold()).ratio() >= .5
-                                or abs((r['box'][0] + r['box'][2]) / 2 - (box[0] + box[2]) / 2) < .15)
-                           for r in frames[nearby]):
-                        dwell += 1
-                    else:
-                        break
-                if overlay_like or dwell / fps >= .6:
-                    continue
-                raise SubtitleReviewRequired(detail + '；停止出片', code='caption_frame_uncertain')
-            # OCR 偶发把左/右边缘读成 -0.00x；钳制后仍超界才人工复核。
-            box = [max(0., min(1., box[0])), max(0., min(1., box[1])),
-                   max(0., min(1., box[2])), max(0., min(1., box[3]))]
-            if box[2] <= box[0] or box[3] <= box[1]:
-                continue
-            # 超大号或全大写标题卡常撞口播专有名词；不擦除，留给 B 避让。
-            if box[3] - box[1] > .12 and text.isupper():
-                continue
-            if box[3] - box[1] > .14:
-                tokens = _words(text)
-                if not tokens or len(tokens & local_words) / len(tokens) < .75:
-                    continue
+            if (row["confidence"] < .75 and not stable_ocr) or not matches:
+                raise SubtitleReviewRequired(f"第 {index} 帧原字幕位置或文字不确定，停止出片：{text[:60]}",
+                                             code='caption_frame_uncertain')
             # 大字对白只能完整保留进入 B，不能扩大 A 的擦除边界。
             large_b_only = (preserve_large_text and matches and row['confidence'] >= .9
                             and box[3]-box[1] <= .14)
             if (box[3]-box[1] > .08 and not large_b_only) or not (0 <= box[0] < box[2] <= 1):
-                raise SubtitleReviewRequired(
-                    f"第 {index} 帧(t={index/fps:.2f}s) 原字幕字形范围超出可安全修补边界："
-                    f"OCR={text[:60]!r} box={box}", code='caption_safety_review')
+                raise SubtitleReviewRequired(f"第 {index} 帧原字幕字形范围超出可安全修补边界：{text[:60]} {box}", code='caption_safety_review')
             chosen.append(box)
             boxes.append(box)
         if chosen and max(b[3] for b in chosen) - min(b[1] for b in chosen) > .18:
-            # 仅当明显混入标题/台标尺寸时收敛；真·双路对白仍人工复核。
-            overlayish = [b for b in chosen if b[3] - b[1] >= .09 or b[2] - b[0] >= .82]
-            dialogueish = [b for b in chosen if b not in overlayish]
-            if overlayish and dialogueish:
-                chosen = dialogueish
-            if chosen and max(b[3] for b in chosen) - min(b[1] for b in chosen) > .18:
-                raise SubtitleReviewRequired(
-                    f'第 {index} 帧(t={index/fps:.2f}s) 存在多处疑似原字幕，需单独审查：{chosen}',
-                    code='caption_safety_review')
+            raise SubtitleReviewRequired(f'第 {index} 帧存在多处疑似原字幕，需单独审查：{chosen}', code='caption_safety_review')
         selected.append(chosen)
     if not boxes:
         return selected, None
     top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
     return selected, (top + bottom) / 2
+
+
+def _no_burned_dialogue(frames, direct, fps):
+    """整片级证据：样本 ≥60 秒、ASR 对齐帧 ≤0.5%，且对齐帧不构成任何 ≥0.5 秒连续轨。
+
+    只用于判定「没有原对白字幕可修补」，结果是零擦除；短片段或存在连续对齐字幕时仍走逐帧门禁。
+    """
+    if not fps or len(frames) < fps * 60:
+        return False
+    hits = [i for i, rows in enumerate(direct) if rows]
+    if len(hits) > len(frames) * .005:
+        return False
+    run, longest = 0, 0
+    for a, b in zip(hits, hits[1:]):
+        run = run + 1 if b - a <= 1 else 0
+        longest = max(longest, run + 1)
+    return longest < max(2, fps * .5)
 
 
 def _split_glyph_matches(row, rows, frames, index, fps, local_words):

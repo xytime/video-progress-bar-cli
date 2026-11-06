@@ -662,10 +662,8 @@ def route(source: Path, output: Path, segments: list[dict], progress=lambda _: N
         if not code and re.fullmatch('[A-Z_]+', str(exc)):
             code = str(exc)
         signal = (code or type(exc).__name__ or str(exc)).lower()
-        # 配额/超时/网络等外部瞬态：走服务退避，不永久锁进人工复核。
-        if any(token in signal for token in (
-                'quota', 'timeout', 'rate_limit', '429', 'network', 'connection',
-                'unavailable', 'busy', 'cooldown')):
+        # 仅明确的配额/限流/超时走服务退避；其余扫描或审查失败（含 *_UNAVAILABLE）仍记 REVIEW。
+        if re.search(r'(quota|rate_limit|ratelimit|\b429\b|timeout|timed_out)', signal):
             from ..utils.subtitle_failure_receipt import SubtitleTranslationFailure, safe_failure
             raise SubtitleTranslationFailure(
                 [safe_failure('host', code or type(exc).__name__)],

@@ -347,8 +347,13 @@ class PipelineExclusiveLock:
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+")
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        # 用内建 open（可被测试替换），flock 失败时必须关闭句柄，避免 FD 泄漏（CON-1）。
+        handle = open(self.path, "a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except BaseException:
+            handle.close()
+            raise
         self.handle = handle
         return self
 
