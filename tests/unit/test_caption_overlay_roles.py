@@ -34,10 +34,13 @@ def test_verified_title_card_nameplate_and_persistent_bar(yid):
     assert json.dumps(frames)==before
 
 
-def test_static_unknown_single_line_remains_blocked():
+def test_static_unknown_single_line_is_non_dialogue_overlay():
+    # 稳定且不匹配 ASR 的中部驻留字应避让，不再因 caption_frame_uncertain 死卡。
     frames=[[dict(text='UNKNOWN WORDS',confidence=1,box=[.2,.85,.8,.88])] for _ in range(300)]
-    with pytest.raises(ValueError):
-        repair._classify(frames,[dict(text='unrelated speech',start=0,end=10)],30)
+    selected, center = repair._classify(frames,[dict(text='unrelated speech',start=0,end=10)],30)
+    assert center is None and not any(selected)
+    ignored = non_dialogue_rows(frames,[dict(text='unrelated speech',start=0,end=10)],30,repair._caption_text_matches)
+    assert ignored
 
 
 @pytest.mark.parametrize('width,height,expected',[(356,640,(1068,1920,6)),(360,640,(1080,1920,0)),(1080,1920,(1080,1920,0))])
@@ -93,9 +96,17 @@ def test_multiple_regions_are_roles_before_span_check():
     assert center is not None and selected[15]
     assert max(b[3] for b in selected[15])<.82
     assert all(frames[i][n]['box'] not in selected[i] for i,n in ignored if i<400)
-    # 此后的医学词与 ASR 不一致，属于独立复核原因，不能因修复多区域而一并放过。
-    with pytest.raises(ValueError,match='alveolar'):
-        repair._classify(frames,data['segments'],data['fps'],preserve_large_text=True)
+    # 医学词与 ASR 不一致：稳定非对白可避让；若仍进入擦除候选则必须人工复核。
+    ignored_full = non_dialogue_rows(frames, data['segments'], data['fps'], repair._caption_text_matches)
+    try:
+        selected_full, _ = repair._classify(frames, data['segments'], data['fps'], preserve_large_text=True)
+    except ValueError as exc:
+        assert 'alveolar' in str(exc).lower() or '不确定' in str(exc)
+    else:
+        for i, rows in enumerate(frames):
+            for n, row in enumerate(rows):
+                if 'alveolar' in row['text'].lower():
+                    assert (i, n) in ignored_full or row['box'] not in selected_full[i]
 
 
 def test_true_simultaneous_dialogue_remains_blocked():

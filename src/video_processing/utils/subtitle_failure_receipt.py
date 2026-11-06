@@ -76,7 +76,8 @@ class SubtitleTranslationFailure(VideoProcessingError):
             if all_quota:
                 self.failure = safe_failure('host', 'providers_quota_exhausted', category='quota',
                     retry_at=max(int(time.time()) + 900, max(f['retry_at'] for f in self.failures)))
-        if exhausted and not all_quota and self.failure['category'] not in {'quality', 'budget', 'authentication'}:
+        if exhausted and not all_quota and self.failure['category'] not in {
+                'quality', 'budget', 'authentication', 'network', 'quota', 'timeout', 'unavailable', 'busy'}:
             self.failure = safe_failure('host', 'all_providers_failed:' + self.failure['code'],
                                         category='review', quality_details=self.failure['quality_details'])
         self.binding = {}

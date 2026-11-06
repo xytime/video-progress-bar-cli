@@ -20,13 +20,22 @@ def windows(segments, fps, count):
     """15 秒墙钟窗口，锚定实际对白；短片重叠窗口如实合并。"""
     if not segments or not math.isfinite(fps) or fps <= 0 or type(count) is not int or count < 1:
         raise ValueError('SAMPLE_TIMELINE_INVALID')
+    duration = count / fps
+    timeline_tolerance = 2.5
     for segment in segments:
         start, end = segment['start'], segment['end']
-        # Whisper 尾段可在实际片尾后不足一秒结束；只把抽样窗口裁到实际帧，保留原 ASR。
+        # Whisper 尾段可比容器时长多出最多 ~2.5s；钳到实际时长，保留原 ASR 文本。
         if (not math.isfinite(start) or not math.isfinite(end)
-                or not 0 <= start < min(end, count / fps)
-                or end > count / fps + max(1., 1 / fps)
                 or not isinstance(segment['text'], str) or not segment['text'].strip()):
+            raise ValueError('SAMPLE_TIMELINE_INVALID')
+        if end > duration + timeline_tolerance or start < 0 or end <= start:
+            raise ValueError('SAMPLE_TIMELINE_INVALID')
+        if start >= duration:
+            raise ValueError('SAMPLE_TIMELINE_INVALID')
+        # 后续窗口规划使用钳制后的可见区间；不改调用方 segments。
+        if end > duration:
+            end = duration
+        if not 0 <= start < end:
             raise ValueError('SAMPLE_TIMELINE_INVALID')
     if any(a['start'] > b['start'] for a, b in zip(segments, segments[1:])):
         raise ValueError('SAMPLE_TIMELINE_INVALID')

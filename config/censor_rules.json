@@ -920,7 +920,11 @@
           "non_civic": [
             "\\b(?:stock|bond|market|equity|price|prices)\\s+(?:market\\s+)?rall(?:y|ies)\\b",
             "\\brall(?:y|ies)\\s+in\\s+(?:(?:stock|bond|share)\\s+)?prices\\b",
-            "\\bstrik(?:e|es|ing)\\s+out\\b"
+            "\\bstrik(?:e|es|ing)\\s+out\\b",
+            "\\bstrike\\s+price\\b",
+            "\\bstrik(?:e|es|ing)\\s+(?:price|zone|range|prices)\\b",
+            "\\bstriking\\s+(?:similarity|resemblance|feature|contrast|example|difference|result|results)\\b",
+            "\\bwall\\s+street\\b"
           ],
           "context": [
             "群众",
@@ -931,7 +935,9 @@
             "警察",
             "政府",
             "全国",
-            "\\b(?:crowds?|workers?|students?|streets?|police|government|nationwide|union|unions)\\b",
+            "\\b(?:crowds?|workers?|students?|police|government|nationwide|union|unions)\\b",
+            "\\bin\\s+the\\s+streets\\b",
+            "\\bstreet\\s+(?:protests?|clashes|violence|march(?:es)?)\\b",
             "\\b(?:mass\\s+rally|general\\s+strike)\\b"
           ]
         },
@@ -955,13 +961,13 @@
           "context": [
             "政权",
             "推翻",
-            "起义",
             "叛乱",
             "造反",
             "号召上街",
             "走上街头",
             "警察",
-            "\\b(?:regime|overthrow(?:n|ing)?|police|streets?|uprising|insurrection)\\b"
+            "\\b(?:regime|overthrow(?:n|ing)?|police|insurrection)\\b",
+            "\\bin\\s+the\\s+streets\\b"
           ]
         }
       },
@@ -986,7 +992,8 @@
         "全国",
         "爆发",
         "镇压",
-        "\\b(?:police|government|regime|crowds?|workers?|students?|marchers?|streets?)\\b",
+        "\\b(?:police|government|regime|crowds?|workers?|students?|marchers?)\\b",
+        "\\bin\\s+the\\s+streets\\b",
         "\\b(?:fuel|diesel|petrol|pension|tax|prices?|costs?)\\b",
         "\\b(?:nationwide|anti-government|erupt(?:s|ed|ing)?|crackdown)\\b",
         "\\b(?:protesters?|demonstrators?)\\b"

@@ -29,7 +29,7 @@ MANUAL_REVIEW_MARKERS = ('需单独审查', '需人工处理', '安全修补边�
                         'translation_budget_preflight', 'NativeCaptionReviewRequired', '[NativeCaptionReview]',
                         '需先人工规范化', '原字幕位置或文字不确定', 'SUBTITLE_NEEDS_REPAIR:',
                         'native_caption_review', 'caption_source_too_narrow', 'caption_frame_uncertain',
-                        'translation_budget_exhausted', 'all_providers_failed',
+                        'translation_budget_exhausted',
                         'All subtitle translation providers failed or were blocked.')
 
 

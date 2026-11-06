@@ -185,6 +185,9 @@ def test_real_translation_exhaustion_requires_manual_review(tmp_path, monkeypatc
     if mode == 'billing429':
         assert stopped.value.failure['category'] == 'quota'
         assert stopped.value.failure['retry_at'] > time.time()
+    elif mode in {'network', 'cooldown'}:
+        # 纯服务瞬态保留原分类，供 WAITING 退避；不再强制转人工 review。
+        assert stopped.value.failure['category'] in {'network', 'unavailable', 'timeout', 'quota', 'busy'}
     else:
         assert stopped.value.failure['category'] in {'review', 'budget', 'authentication'}
     if mode == 'cooldown':

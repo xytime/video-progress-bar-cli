@@ -46,6 +46,8 @@ class DeliveryRecoveryDAL:
 
     def list_delivery_recoveries(self, limit=10):
         with self.get_connection() as c:
+            c.execute("UPDATE delivery_recoveries SET state='EXPIRED',updated_at=? WHERE state IN ('WAITING','QUEUED','HELD') AND expires_at<=?",
+                      (stamp(), stamp()))
             return [dict(r) for r in c.execute("SELECT * FROM delivery_recoveries ORDER BY created_at DESC LIMIT ?",
                                                (min(20, max(1, limit)),))]
 

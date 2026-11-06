@@ -1,10 +1,11 @@
-"""已确认的六维时空生词卡版式；文字按区域折行，不截断词条。
+"""已确认的六维时空生词卡版式；文字按区域折行；词条/释义超宽可优雅截断，例句与词性仍 fail-closed。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-13 | Codex | 固化 v4 视觉，三词分页和每页 3 秒的局部翻页 |
 | 1.0.1 | 2026-10-17 | Codex | 长例句显示含完整生词的原文片段，省略明确可见，保留既有版式 |
+| 1.0.3 | 2026-11-06 | Grok Bot | 词条/释义超宽时优雅截断；例句与词性标签仍 fail-closed |
 | 1.0.2 | 2026-10-31 | Codex | 词性使用释义右侧实际剩余宽度，保留完整标签和最低字号 |
 """
 from pathlib import Path
@@ -32,8 +33,8 @@ def font(role, size):
     return ImageFont.truetype(str(paths[role]), size)
 
 
-def fit(text, role, width, size, minimum, max_lines=1):
-    """按实际字宽测量，长句最多两行；超限明确失败，不隐藏内容。"""
+def fit(text, role, width, size, minimum, max_lines=1, *, allow_truncate=False):
+    """按实际字宽测量，长句最多两行；默认 fail-closed，词条/释义可显式允许截断。"""
     for current in range(size, minimum - 1, -1):
         face = font(role, current)
         tokens = list(text) if role == 'zh' else text.split(' ')
@@ -51,11 +52,40 @@ def fit(text, role, width, size, minimum, max_lines=1):
             lines.append(line)
         if len(lines) <= max_lines and all(face.getlength(x) <= width for x in lines):
             return face, lines
-    raise ValueError(f'生词卡文字超出版式容量: {text}')
+    if not allow_truncate:
+        raise ValueError(f'生词卡文字超出版式容量: {text}')
+    face = font(role, minimum)
+    ellipsis = '…'
+    room = max(0., width - face.getlength(ellipsis))
+    if role == 'zh':
+        kept = ''
+        for ch in text:
+            if face.getlength(kept + ch) <= room:
+                kept += ch
+            else:
+                break
+        return face, [(kept + ellipsis) if kept else ellipsis]
+    words = text.split(' ')
+    kept = []
+    for word in words:
+        candidate = ' '.join(kept + [word]) if kept else word
+        if face.getlength(candidate) <= room:
+            kept.append(word)
+        else:
+            break
+    if kept:
+        return face, [' '.join(kept) + ellipsis]
+    kept = ''
+    for ch in text:
+        if face.getlength(kept + ch) <= room:
+            kept += ch
+        else:
+            break
+    return face, [(kept + ellipsis) if kept else ellipsis]
 
 
-def text_fit(draw, xy, text, role, width, size, minimum, fill, max_lines=1):
-    face, lines = fit(text, role, width, size, minimum, max_lines)
+def text_fit(draw, xy, text, role, width, size, minimum, fill, max_lines=1, *, allow_truncate=False):
+    face, lines = fit(text, role, width, size, minimum, max_lines, allow_truncate=allow_truncate)
     for index, line in enumerate(lines):
         draw.text((xy[0], xy[1] + index * (face.size + 3)), line, font=face, fill=fill)
 
@@ -129,11 +159,11 @@ def render_cards(items, title):
         for j, item in enumerate(items[page*PAGE_SIZE:(page+1)*PAGE_SIZE]):
             y = 509+j*280
             d.rounded_rectangle((80, y, 936, y+258), radius=18, fill=PANEL)
-            text_fit(d, (112, y+24), item['word'], 'en', 792, 60, 36, WHITE)
+            text_fit(d, (112, y+24), item['word'], 'en', 792, 60, 36, WHITE, allow_truncate=True)
             text_fit(d, (113, y+100), item['phonetic'], 'ipa', 665, 33, 23, TEAL)
             stamp = item['timestamp']
             d.text((904-font('ipa', 28).getlength(stamp), y+106), stamp, font=font('ipa', 28), fill=MUTED)
-            meaning_face, lines = fit(item['meaning_zh'], 'zh', 685, 42, 26)
+            meaning_face, lines = fit(item['meaning_zh'], 'zh', 685, 42, 26, allow_truncate=True)
             d.text((112, y+152), lines[0], font=meaning_face, fill=GOLD)
             pos_x = 132 + meaning_face.getlength(lines[0])
             text_fit(d, (pos_x, y+161), item['pos'],

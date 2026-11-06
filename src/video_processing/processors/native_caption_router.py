@@ -661,6 +661,15 @@ def route(source: Path, output: Path, segments: list[dict], progress=lambda _: N
         code = getattr(exc, 'code', '')
         if not code and re.fullmatch('[A-Z_]+', str(exc)):
             code = str(exc)
+        signal = (code or type(exc).__name__ or str(exc)).lower()
+        # 配额/超时/网络等外部瞬态：走服务退避，不永久锁进人工复核。
+        if any(token in signal for token in (
+                'quota', 'timeout', 'rate_limit', '429', 'network', 'connection',
+                'unavailable', 'busy', 'cooldown')):
+            from ..utils.subtitle_failure_receipt import SubtitleTranslationFailure, safe_failure
+            raise SubtitleTranslationFailure(
+                [safe_failure('host', code or type(exc).__name__)],
+                message='原字幕识别遇到外部服务瞬态故障，稍后自动重试') from exc
         evidence['error'] = '原字幕识别未完成：' + (code or type(exc).__name__)
     decision = decide(evidence)
     entry = dict(version=VERSION, source_sha256=source_hash, asr_sha256=fingerprint(segments),

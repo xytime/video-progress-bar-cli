@@ -638,9 +638,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
         if not segments:
             return segments
 
-        from ..utils.subtitle_provider_window import require_single_video_budget
-        require_single_video_budget(len(segments), settings)
-        self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
+        from ..utils.subtitle_provider_window import require_single_video_budget, adaptive_translation_budget_seconds
+        budget = require_single_video_budget(len(segments), settings)
+        if budget is None:
+            budget = adaptive_translation_budget_seconds(len(segments), settings)
+        self._translation_deadline = time.monotonic() + float(budget)
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
         self._selected_subtitle_candidate = None

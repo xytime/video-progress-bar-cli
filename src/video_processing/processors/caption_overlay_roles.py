@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-11-06 | Grok Bot | 识别 1–2 行片头标题卡、≥1s 稳定且不匹配 ASR 的新闻横条/讲台牌/常驻台标；避免误拦无烧录对白片。 |
 | 1.1.0 | 2026-11-02 | Codex | 先识别有成对章节条与动态对白证据的底部信息区，以及角落订阅按钮；未知多区域对白仍阻断。 |
 | 1.0.0 | 2026-11-02 | Codex | 有界开场多行卡、配对姓名书名条及独立动态对白下方常驻标题。 |
 """
@@ -124,8 +125,110 @@ def non_dialogue_rows(frames, segments, fps, matches):
             if nearby_button and dialogue:
                 ignored.add((i,n))
                 ignored.update((i,j) for j,_ in buttons)
+    # 片头 1–2 行大标题：首帧起、数秒内消失，且与开场对白不同；不要求满三行。
+    opening_short = [t for t in stable if t[0][0] <= max(1, round(fps * .15))
+                     and t[-1][0] / fps <= 8
+                     and .38 <= t[0][2]['box'][1] < t[0][2]['box'][3] <= .88
+                     and .028 <= t[0][2]['box'][3] - t[0][2]['box'][1] <= .12
+                     and t[0][2]['box'][2] - t[0][2]['box'][0] >= .28]
+    if 1 <= len(opening_short) <= 4:
+        ordered = sorted(opening_short, key=lambda t: t[0][2]['box'][1])
+        spoken = ' '.join(s['text'] for s in segments if s['start'] <= 8)
+        joined = ' '.join(t[0][2]['text'] for t in ordered)
+        if not matches(joined, spoken) and all(not matches(t[0][2]['text'], spoken) for t in ordered):
+            for t in ordered:
+                mark(t)
+
+    # ≥1.0s 稳定驻留且与 ASR 基本不匹配的中部/下部画面字：新闻横条、讲台牌、常驻台标。
+    for track in stable:
+        if all((i, n) in ignored for i, n, _ in track):
+            continue
+        start, end = track[0][0], track[-1][0]
+        if end - start < fps * 1.0:
+            continue
+        row, box = track[0][2], track[0][2]['box']
+        if not (.38 <= box[1] < box[3] <= .94):
+            continue
+        matched = 0
+        samples = 0
+        for i, _, observed in track:
+            spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= i / fps <= s['end'] + 5)
+            samples += 1
+            if spoken and matches(observed['text'], spoken):
+                matched += 1
+        if samples and matched / samples <= .15:
+            mark(track)
+
+    # 几何驻留轨：OCR 抖动/滚动字幕条会使精确文本轨碎裂；按近似框位合并 ≥1s 且几乎不匹配 ASR 的中部文字。
+    geometry_tracks = []
+    for index, rows in enumerate(frames):
+        for number, row in enumerate(rows):
+            if row['confidence'] < .9 or (index, number) in ignored:
+                continue
+            box = row['box']
+            if not (.38 <= box[1] < box[3] <= .94):
+                continue
+            track = next((t for t in geometry_tracks
+                          if abs(t[0][2]['box'][1] - box[1]) < .02
+                          and abs(t[0][2]['box'][3] - box[3]) < .02
+                          and abs(((t[0][2]['box'][0] + t[0][2]['box'][2]) / 2) - ((box[0] + box[2]) / 2)) < .12
+                          and index - t[-1][0] <= max(2, round(fps * .15))), None)
+            if track is None:
+                geometry_tracks.append([(index, number, row)])
+            else:
+                track.append((index, number, row))
+    def strong_dialogue(text, spoken):
+        # 专有名词撞车（Michigan/Vote）不算对白对齐；避免标题卡被误当成烧录字幕。
+        tokens = {w for w in ''.join(ch.lower() if ch.isalnum() or ch.isspace() else ' ' for ch in text).split() if len(w) > 1}
+        local = {w for w in ''.join(ch.lower() if ch.isalnum() or ch.isspace() else ' ' for ch in spoken).split() if len(w) > 1}
+        if not tokens or not spoken:
+            return False
+        return len(tokens) >= 2 and len(tokens & local) / len(tokens) >= .75
+
+    for track in geometry_tracks:
+        start, end = track[0][0], track[-1][0]
+        if end - start < fps * 1.0 or len(track) / (end - start + 1) < .55:
+            continue
+        # 对白带会在同一几何位置换字；只有文案相对稳定的驻留条才算非对白 overlay。
+        compact = lambda value: ''.join(ch for ch in value.casefold() if ch.isalnum())
+        texts = [compact(observed['text']) for _, _, observed in track if compact(observed['text'])]
+        if not texts:
+            continue
+        top = max(texts.count(t) for t in set(texts))
+        if top / len(texts) < .55:
+            continue
+        matched = 0
+        for i, _, observed in track:
+            spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= i / fps <= s['end'] + 5)
+            if strong_dialogue(observed['text'], spoken):
+                matched += 1
+        if matched / len(track) > .2:
+            continue
+        ignored.update((i, n) for i, n, _ in track)
+        # OCR 抖动末帧：同几何邻域补认，避免标题卡尾字漏网触发人工门禁。
+        box = track[0][2]['box']
+        for i in range(max(0, start - 3), min(len(frames), end + round(fps) + 1)):
+            for n, row in enumerate(frames[i]):
+                b = row['box']
+                if (row['confidence'] >= .9 and abs(b[1] - box[1]) < .03 and abs(b[3] - box[3]) < .03
+                        and abs((b[0] + b[2]) / 2 - (box[0] + box[2]) / 2) < .18):
+                    ignored.add((i, n))
+
     ignored.update(_information_and_ui_rows(frames, segments, fps, matches,
                                            [t for choices in tracks.values() for t in choices]))
+    # 全局几何邻域扩展：标题卡/台标在 OCR 抖字时仍保持避让，不因末帧拼写漂移误拦。
+    for i, n in list(ignored):
+        if i >= len(frames) or n >= len(frames[i]):
+            continue
+        box = frames[i][n]['box']
+        if not (.38 <= box[1] < box[3] <= .94):
+            continue
+        for j in range(max(0, i - max(3, round(fps * 2))), min(len(frames), i + max(3, round(fps)) + 1)):
+            for m, other in enumerate(frames[j]):
+                b = other['box']
+                if (other['confidence'] >= .9 and abs(b[1] - box[1]) < .03 and abs(b[3] - box[3]) < .03
+                        and abs((b[0] + b[2]) / 2 - (box[0] + box[2]) / 2) < .18):
+                    ignored.add((j, m))
     return frozenset(ignored)
 
 

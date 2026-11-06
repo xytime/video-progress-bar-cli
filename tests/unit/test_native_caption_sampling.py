@@ -97,7 +97,7 @@ def test_minor_asr_tail_overrun_samples_real_video_without_rewriting_asr(fps, co
     assert planned[-1]['end'] == pytest.approx(count / fps)
     assert all(frame < count for w in planned for frame in sample_frames(w, segments, fps, count))
     assert segments == before
-    segments[-1]['end'] = count / fps + 1.1
+    segments[-1]['end'] = count / fps + 3.0
     with pytest.raises(ValueError, match='SAMPLE_TIMELINE_INVALID'):
         windows(segments,fps,count)
 
@@ -182,6 +182,8 @@ def test_source_or_asr_change_invalidates_sample_decision(tmp_path, evidence, mo
 @pytest.mark.parametrize('code', ['authentication', 'quota', 'unavailable', 'invalid_output'])
 def test_sample_provider_failure_is_review_never_generate_or_silent_retry(tmp_path, evidence, monkeypatch, code):
     from video_processing.utils.codex_text_provider import CodexTextError
+    from video_processing.utils.subtitle_failure_receipt import SubtitleTranslationFailure
+    from video_processing.utils.source_caption_contract import decision_path
     source, output = tmp_path / 'demo.mp4', tmp_path / 'demo_vertical.mp4'
     source.write_bytes(b'video')
     monkeypatch.setattr(router.settings, 'native_caption_sampling_enabled', True)
@@ -189,9 +191,15 @@ def test_sample_provider_failure_is_review_never_generate_or_silent_retry(tmp_pa
     monkeypatch.setattr(sampling, 'attempt', failed)
     def forbidden(*args): raise AssertionError('provider failure must not start full OCR')
     monkeypatch.setattr(router, 'scan', forbidden)
-    with pytest.raises(router.NativeCaptionReviewRequired, match=code):
-        router.route(source, output, evidence['segments'])
-    assert validate_decision(output)['decision'] == 'REVIEW'
+    if code in {'quota', 'unavailable'}:
+        with pytest.raises(SubtitleTranslationFailure) as stopped:
+            router.route(source, output, evidence['segments'])
+        assert stopped.value.failure['category'] in {'quota', 'unavailable', 'timeout', 'network'}
+        assert not decision_path(output).exists()
+    else:
+        with pytest.raises(router.NativeCaptionReviewRequired, match=code):
+            router.route(source, output, evidence['segments'])
+        assert validate_decision(output)['decision'] == 'REVIEW'
 
 
 class Reader:

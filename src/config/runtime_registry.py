@@ -20,7 +20,7 @@ SETTING_FIELDS = {
     "codex_subtitle_batch_size": ("字幕分批数量", "条", 5, 100, "下一批任务", "G07"),
     "google_translate_request_timeout_seconds": ("翻译单次超时", "秒", 5, 300, "下一次请求", "G07"),
     "google_translate_total_timeout_seconds": ("翻译总时限", "秒", 30, 1800, "下一批任务", "G07"),
-    "subtitle_translation_total_timeout_seconds": ("字幕翻译总时限", "秒", 30, 660, "下一批任务", "G07"),
+    "subtitle_translation_total_timeout_seconds": ("字幕翻译总时限", "秒", 30, 2400, "下一批任务", "G07"),
     "google_translate_interval_seconds": ("翻译请求间隔", "秒", 0.2, 10, "下一次请求", "G07"),
     "google_translate_max_retries": ("翻译追加重试", "次", 0, 3, "下一批任务", "G07"),
     "youtube_download_timeout_seconds": ("下载总时限", "秒", 60, 3600, "下一批任务", "G08"),

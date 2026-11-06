@@ -66,7 +66,12 @@ def test_pagination_and_fixed_brand_cta(tmp_path):
     assert layout.frame_at(cards,72).crop((80,509,936,1327)).tobytes() == cards[1].crop((80,509,936,1327)).tobytes()
 
 
-def test_text_never_silently_truncated():
+def test_text_gracefully_truncates_when_enabled():
+    face, lines = layout.fit('unbreakable'*100, 'en', 700, 60, 30, allow_truncate=True)
+    assert len(lines) == 1 and lines[0].endswith('…')
+    assert face.getlength(lines[0]) <= 700
+
+def test_text_fails_closed_by_default():
     with pytest.raises(ValueError):
         layout.fit('unbreakable'*100, 'en', 700, 60, 30)
 
