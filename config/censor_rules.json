@@ -923,7 +923,7 @@
             "\\bstrik(?:e|es|ing)\\s+out\\b",
             "\\bstrike\\s+price\\b",
             "\\bstrik(?:e|es|ing)\\s+(?:price|zone|range|prices)\\b",
-            "\\bstriking\\s+(?:similarity|resemblance|feature|contrast|example|difference|result|results|trends?)\\b",
+            "\\bstriking\\s+(?:similarity|resemblance|feature|contrast|example|difference|result|results)\\b",
             "\\bwall\\s+street\\b"
           ],
           "context": [

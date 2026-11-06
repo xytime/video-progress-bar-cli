@@ -5,6 +5,9 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| kinetic-title-20261106c | 2026-11-06 | Grok Bot | 旋转大写动能不忌主题词撞车；图形簇含已豁免上下文；图注版权条。 |
+| kinetic-title-20261106b | 2026-11-06 | Grok Bot | 动能只豁免短词子集；数字角标碎屑；短暂画面图形簇（选票 OCR）。 |
+| kinetic-title-20261106 | 2026-11-06 | Grok Bot | 动能短词语标题条与孤立单字符碎屑：不匹配 ASR 时视为非对白 overlay。 |
 | 1.2.1 | 2026-11-06 | Grok Bot | 新增豁免须跨帧静止 ≥1s 且 ≥3 帧、无数字冲突；单帧/短应答不再当片头卡放过。 |
 | 1.2.0 | 2026-11-06 | Grok Bot | 识别 1–2 行片头标题卡、≥1s 稳定且不匹配 ASR 的新闻横条/讲台牌/常驻台标；避免误拦无烧录对白片。 |
 | 1.1.0 | 2026-11-02 | Codex | 先识别有成对章节条与动态对白证据的底部信息区，以及角落订阅按钮；未知多区域对白仍阻断。 |
@@ -228,18 +231,117 @@ def non_dialogue_rows(frames, segments, fps, matches):
     ignored.update(_information_and_ui_rows(frames, segments, fps, matches,
                                            [t for choices in tracks.values() for t in choices]))
     # 全局几何邻域扩展：标题卡/台标在 OCR 抖字时仍保持避让，不因末帧拼写漂移误拦。
+    # 仅补认原豁免文案的残片/子串，避免动能邻域吞掉真正烧录对白。
     for i, n in list(ignored):
         if i >= len(frames) or n >= len(frames[i]):
             continue
         box = frames[i][n]['box']
         if not (.38 <= box[1] < box[3] <= .94):
             continue
+        seed = ''.join(ch for ch in frames[i][n]['text'].casefold() if ch.isalnum())
+        if not seed:
+            continue
         for j in range(max(0, i - max(3, round(fps * 2))), min(len(frames), i + max(3, round(fps)) + 1)):
             for m, other in enumerate(frames[j]):
                 b = other['box']
-                if (other['confidence'] >= .9 and abs(b[1] - box[1]) < .03 and abs(b[3] - box[3]) < .03
+                if not (other['confidence'] >= .9 and abs(b[1] - box[1]) < .03 and abs(b[3] - box[3]) < .03
                         and abs((b[0] + b[2]) / 2 - (box[0] + box[2]) / 2) < .18):
+                    continue
+                frag = ''.join(ch for ch in other['text'].casefold() if ch.isalnum())
+                if not frag:
+                    continue
+                if frag in seed or seed in frag or (len(frag) >= 4 and (frag[:4] in seed or frag[-4:] in seed)):
                     ignored.add((j, m))
+    # 动能标题条：同一几何框轮换短词（BIGGEST/HISTORY/DOLLARS）。
+    # 几何轨可能与同 y 对白字混轨；只对短词标题子集计 ASR，且只豁免该子集，避免对白污染匹配率。
+    def _short_title(value):
+        value = value.strip()
+        return bool(value) and 1 <= len(value.split()) <= 2 and len(value) <= 18
+
+    for track in geometry_tracks:
+        start, end = track[0][0], track[-1][0]
+        if not held(track) or len(track) / (end - start + 1) < .55:
+            continue
+        titles = [(i, n, observed) for i, n, observed in track
+                  if _short_title(observed.get('text') or '') and (i, n) not in ignored]
+        if len(titles) < max(3, min_frames):
+            continue
+        unique = {''.join(ch for ch in (observed['text'] or '').casefold() if ch.isalnum())
+                  for _, _, observed in titles}
+        unique.discard('')
+        if len(unique) < 2:
+            continue
+        upper_single = sum(
+            1 for _, _, o in titles
+            if len(o['text'].split()) == 1 and sum(ch.isupper() for ch in o['text']) >= max(1, sum(ch.isalpha() for ch in o['text'])) * .8
+        )
+        # 真动能：多词轮换且多为全大写单词。此时口播主题词撞车不阻止豁免。
+        rotating = len(unique) >= 4 and upper_single / len(titles) >= .65
+        matched = 0
+        for i, _, observed in titles:
+            spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= i / fps <= s['end'] + 5)
+            if not spoken:
+                continue
+            text = observed['text']
+            if rotating:
+                # 单词动能标题易与口播主题词撞车；仅双词以上计 matches。
+                if len(text.split()) >= 2 and (matches(text, spoken) or strong_dialogue(text, spoken)):
+                    matched += 1
+            elif matches(text, spoken) or strong_dialogue(text, spoken):
+                matched += 1
+        def _upper_title(value):
+            letters = [ch for ch in value if ch.isalpha()]
+            return bool(letters) and sum(ch.isupper() for ch in letters) >= len(letters) * .8
+
+        if rotating:
+            # 只豁免全大写短词动能标题，保留同几何轨里的大小写对白词。
+            ignored.update((i, n) for i, n, o in titles if _upper_title(o['text']))
+        elif matched / len(titles) <= .15:
+            ignored.update((i, n) for i, n, _ in titles)
+
+    # 孤立短字符/数字碎屑或角标数字：高置信、无 ASR 对齐、旁无对白邻行 → 非烧录对白。
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        for number, row in enumerate(rows):
+            if (index, number) in ignored or row['confidence'] < .9:
+                continue
+            text, box = row['text'].strip(), row['box']
+            if not text or len(text) > 2:
+                continue
+            if not (.38 <= box[1] < box[3] <= .94):
+                continue
+            # 字母碎屑更严；纯数字角标允许略大（球衣号/比分局部 OCR）。
+            digit_only = text.isdigit()
+            max_h = .06 if digit_only else .035
+            max_w = .12 if digit_only else .08
+            if box[3] - box[1] > max_h or box[2] - box[0] > max_w:
+                continue
+            if spoken and (matches(text, spoken) or strong_dialogue(text, spoken)):
+                continue
+            neighbor = [r for r in rows if r is not row and r['confidence'] >= .9
+                        and abs(r['box'][1] - box[1]) < .05 and matches(r['text'], spoken)]
+            if not neighbor:
+                ignored.add((index, number))
+
+    # 图注版权条：Image courtesy / Shutterstock / Getty 等底部致谢，不构成烧录对白。
+    credit_re = re.compile(
+        r'(?:image\s+courtesy|courtesy\s+of|shutterstock|getty\s*images|reuters|afp\b|all\s+rights\s+reserved)',
+        re.I,
+    )
+    for index, rows in enumerate(frames):
+        spoken = ' '.join(s['text'] for s in segments if s['start'] - 5 <= index / fps <= s['end'] + 5)
+        for number, row in enumerate(rows):
+            if (index, number) in ignored or row['confidence'] < .9:
+                continue
+            text, box = row['text'].strip(), row['box']
+            if not text or not (.38 <= box[1] < box[3] <= .94):
+                continue
+            if not credit_re.search(text):
+                continue
+            if spoken and strong_dialogue(text, spoken):
+                continue
+            ignored.add((index, number))
+
     return frozenset(ignored)
 
 

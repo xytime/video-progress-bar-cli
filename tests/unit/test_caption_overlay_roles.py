@@ -147,3 +147,64 @@ def test_three_spoken_lines_cannot_be_assumed_to_be_a_chapter_pair():
     segments=[dict(start=0,end=5,text='We discuss cells. Another voice speaks. Immune response. Blood vessels.')]
     with pytest.raises(ValueError,match='多处疑似原字幕'):
         repair._classify(frames,segments,30,preserve_large_text=True)
+
+
+def test_kinetic_title_rotating_words_are_overlay_not_dialogue():
+    """同一几何框轮换短词（DOLLARS/HISTORY）；即使口播含主题词仍视为非对白 overlay。"""
+    fps = 30
+    words = ['BIGGEST', 'HISTORY', 'POINT', 'DOLLARS', 'HOURS']
+    frames = []
+    for i in range(150):
+        word = words[(i // 15) % len(words)]
+        frames.append([dict(text=word, confidence=1.0,
+                            box=[0.26, 0.784, 0.739, 0.841])])
+    segments = [dict(start=0.0, end=5.0,
+                     text='the biggest crypto heist in history cost billions of dollars within hours')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert ignored, 'kinetic title words should be marked non-dialogue'
+    assert any(i == 99 for i, _ in ignored)
+
+
+def test_isolated_tiny_glyph_fragment_is_overlay():
+    """孤立单字符碎屑不构成烧录对白。"""
+    fps = 24
+    frames = []
+    for i in range(80):
+        rows = []
+        if 40 <= i <= 55:
+            rows.append(dict(text='G', confidence=1.0, box=[0.678, 0.616, 0.717, 0.638]))
+        frames.append(rows)
+    segments = [dict(start=1.0, end=3.0, text='trust the process or its all in Gods plan')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert any(frames[i][n]['text'] == 'G' for i, n in ignored)
+
+
+def test_isolated_digit_corner_mark_is_overlay():
+    """略大的孤立数字角标不构成烧录对白。"""
+    fps = 24
+    frames = []
+    for i in range(80):
+        rows = []
+        if 40 <= i <= 55:
+            rows.append(dict(text='2', confidence=1.0, box=[0.717, 0.394, 0.806, 0.447]))
+        frames.append(rows)
+    segments = [dict(start=1.0, end=3.0, text='the crowd cheered after the final whistle')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert any(frames[i][n]['text'] == '2' for i, n in ignored)
+
+
+
+
+def test_image_courtesy_credit_is_overlay():
+    """底部 Image courtesy / Shutterstock 图注不构成烧录对白。"""
+    fps = 24
+    frames = []
+    for i in range(80):
+        rows = []
+        if 20 <= i <= 70:
+            rows.append(dict(text='Image courtesy of Shutterstock', confidence=1.0,
+                             box=[0.056, 0.912, 0.556, 0.934]))
+        frames.append(rows)
+    segments = [dict(start=0.5, end=3.0, text='cultish language shapes everyday vocabularies')]
+    ignored = non_dialogue_rows(frames, segments, fps, repair._caption_text_matches)
+    assert any('Shutterstock' in frames[i][n]['text'] for i, n in ignored)
