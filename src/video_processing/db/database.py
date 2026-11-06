@@ -439,7 +439,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             "source_video_id", "youtube_id", "source_youtube_id", "source_id", "slice_index", "parent_id",
             "job_id", "clip_id", "highlight_clip_id", "review_id", "english_world_review_id", "subject_id",
             "pair_id", "publication_id", "source_type", "source_ref", "kind", "platform", "variant",
-            "state", "status", "platform_state", "production_state", "process_pid", "preparation_ready",
+            "state", "status", "platform_state", "production_state", "process_pid", "preparation_ready", "queue_boost_at",
             "requested_platforms", "platform_post_id", "external_post_id", "last_error_message",
         }
         time_columns = {
@@ -1181,6 +1181,14 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             if columns and "vocabulary_json_path" not in columns:
                 self._logger.info("[Migration] Adding vocabulary_json_path column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN vocabulary_json_path TEXT DEFAULT NULL;")
+                conn.commit()
+
+            # 加工队列插队时间戳（boost）；与微信发布 recovery_priority 无关。
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "queue_boost_at" not in columns:
+                self._logger.info("[Migration] Adding queue_boost_at column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN queue_boost_at REAL DEFAULT NULL;")
                 conn.commit()
 
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
@@ -5902,6 +5910,33 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             conn.commit()
             return next_status if cursor.rowcount == 1 else None
 
+    def boost_video_queue(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        now: float | None = None,
+        clear: bool = False,
+    ) -> bool:
+        """提升下一轮领取优先级（插队）；不抢占正在持有重型槽的在途任务。
+
+        PENDING 与已认领但可能在等槽的 PROCESSING 均可打标；真正持槽执行不受影响。
+        """
+        import time as _time
+        stamp = None if clear else float(now if now is not None else _time.time())
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET queue_boost_at = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ? "
+                "AND status IN ('PENDING','PROCESSING','DOWNLOADING','COPYWRITING','TRANSCRIBING',"
+                "'RENDERING','AI_COVER_PENDING') "
+                "AND COALESCE(source, 'AUTO') != 'DISCOVERY' "
+                "AND COALESCE(source, 'AUTO') != 'COMPLIANCE_REMIX'",
+                (stamp, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def update_video_score(self, youtube_id: str, score: int, force: bool = False, slice_index: int = 0) -> None:
         """更新特定切片的评分，支持评分锁保护。"""
         # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
@@ -6328,7 +6363,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         with self.get_connection() as conn:
             rows = conn.execute(
                 "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
-                " ORDER BY IFNULL(pv.preparation_ready,0) DESC, CASE WHEN pv.preparation_ready=1 THEN julianday(COALESCE(pv.publication_ready_at,pv.created_at)) END ASC, pv.score DESC, pv.created_at, pv.id LIMIT ?",
+                " ORDER BY CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, IFNULL(pv.preparation_ready,0) DESC, CASE WHEN pv.preparation_ready=1 THEN julianday(COALESCE(pv.publication_ready_at,pv.created_at)) END ASC, pv.score DESC, pv.created_at, pv.id LIMIT ?",
                 (*params, max(1,int(limit)))).fetchall()
             return [dict(row) for row in rows]
 
@@ -6344,7 +6379,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         with self.get_connection() as conn:
             rows = conn.execute(
                 "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
-                " AND IFNULL(pv.preparation_ready,0)=0 AND pv.source IN ('AUTO','KEYWORD') ORDER BY pv.score DESC,pv.created_at,pv.id LIMIT ?",
+                " AND IFNULL(pv.preparation_ready,0)=0 AND pv.source IN ('AUTO','KEYWORD') ORDER BY CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, pv.score DESC,pv.created_at,pv.id LIMIT ?",
                 (*params, max(1,int(limit)))).fetchall()
             return [dict(row) for row in rows]
 

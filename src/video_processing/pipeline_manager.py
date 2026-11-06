@@ -4495,6 +4495,70 @@ class PipelineManager:
             logger.warning("[SpeechOpening] %s 保留原片：%s", yid, type(exc).__name__)
             return source
 
+
+    def _defer_for_resource_slot(
+        self,
+        yid: str,
+        title: str,
+        stage: str,
+        *,
+        slice_index: int = 0,
+    ) -> None:
+        """拿不到阶段槽时安全回队，避免假 PROCESSING 堵死。"""
+        reason = f"等待资源槽:{stage}；已回队，不占 PROCESSING"
+        logger.info("[%s] %s", yid if slice_index == 0 else f"{yid}_s{slice_index}", reason)
+        self.db.update_video_status(yid, "PENDING", error_msg=reason, slice_index=slice_index)
+        self.db.update_process_pid(yid, None, slice_index=slice_index)
+
+    def _hold_prepare_gate(self, prefix: str):
+        """阶段槽开启时不抢整片 pipeline.lock；关闭时保持历史串行。"""
+        from contextlib import nullcontext
+        from .core.stage_slots import PipelineExclusiveLock, stage_slots_enabled
+        if stage_slots_enabled():
+            logger.info("[Lock] stage slots enabled; skip exclusive pipeline.lock for %s", prefix)
+            return nullcontext()
+        lock_path = self._OUT_DIR / "pipeline.lock"
+        logger.info("[Lock] Waiting for pipeline lock to process %s...", prefix)
+        return PipelineExclusiveLock(lock_path)
+
+    def _hold_stage_slot(self, stage: str, *, blocking: bool = False):
+        """阶段槽关闭时退化为空上下文（外层已持整片锁）。"""
+        from contextlib import nullcontext
+        from .core.stage_slots import hold_stage, stage_slots_enabled
+        if not stage_slots_enabled():
+            return nullcontext()
+        return hold_stage(stage, blocking=blocking)
+
+    def _enter_stage_slot(self, stage: str, yid: str, title: str, *, slice_index: int = 0, active: list | None = None):
+        """非阻塞进入阶段槽；失败则回队并返回 None。"""
+        from .core.stage_slots import StageSlotUnavailable, hold_stages, stage_slots_enabled
+        if not stage_slots_enabled():
+            return "legacy"
+        stages = ["asr", "ffmpeg"] if stage == "asr_ffmpeg" else [stage]
+        try:
+            if len(stages) == 1:
+                cm = self._hold_stage_slot(stages[0], blocking=False)
+                cm.__enter__()
+            else:
+                cm = hold_stages(stages, blocking=blocking)
+                cm.__enter__()
+        except StageSlotUnavailable as exc:
+            self._defer_for_resource_slot(yid, title, getattr(exc, "stage", stage), slice_index=slice_index)
+            return None
+        if active is not None:
+            active.append(cm)
+        return cm
+
+    @staticmethod
+    def _exit_stage_slot(handle, active: list | None = None) -> None:
+        if handle is None or handle == "legacy":
+            return
+        try:
+            handle.__exit__(None, None, None)
+        finally:
+            if active is not None and handle in active:
+                active.remove(handle)
+
     def _prepare_single_video(
         self,
         video: Dict[str, Any],
@@ -4527,14 +4591,15 @@ class PipelineManager:
         global _sigterm_received
         _sigterm_received = False  # 每个视频独立的中断状态
 
-        lock_path = self._OUT_DIR / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to process {prefix}...")
-        lock_file = None
+        from .core.stage_slots import StageSlotUnavailable
+        lock_file = None  # prepare gate 上下文；阶段槽模式下不再持有整片锁 FD
+        _active_stage_slots: list = []
         try:
             try:
-                lock_file = open(lock_path, "w")
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                logger.info(f"[Lock] Acquired pipeline lock. Processing {prefix}...")
+                prepare_gate = self._hold_prepare_gate(prefix)
+                prepare_gate.__enter__()
+                lock_file = prepare_gate
+                logger.info(f"[Lock] Prepare gate ready. Processing {prefix}...")
                 self._report_runtime_stage(
                     yid,
                     "CENSORSHIP_PRECHECK",
@@ -4627,6 +4692,11 @@ class PipelineManager:
                         self.db.update_video_status(yid, "PROCESSING", slice_index=slice_index)
                         target_file = existing
                     else:
+                        _dl_handle = self._enter_stage_slot(
+                            "download", yid, title, slice_index=slice_index, active=_active_stage_slots,
+                        )
+                        if _dl_handle is None:
+                            return
                         self._report_runtime_stage(
                             yid,
                             "DOWNLOADING",
@@ -4787,6 +4857,7 @@ class PipelineManager:
                             )
                             return
 
+                self._exit_stage_slot(locals().get("_dl_handle"), active=_active_stage_slots)
                 # ── 1b. CENSORSHIP DESC CHECK ─────────────────────────────────────
                 desc_path = self._OUT_DIR / f"{yid}.description"
                 description = ""
@@ -4858,6 +4929,11 @@ class PipelineManager:
                     _reason = checkpoint_reason or (
                         "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
                     )
+                    _copy_handle = self._enter_stage_slot(
+                        "copywriting", yid, title, slice_index=slice_index, active=_active_stage_slots,
+                    )
+                    if _copy_handle is None:
+                        return
                     self._report_runtime_stage(
                         yid,
                         "COPYWRITING",
@@ -4881,6 +4957,7 @@ class PipelineManager:
                             return
                         raise
                     self._notify_copy_numeric_warnings(yid, title, prefix)
+                    self._exit_stage_slot(locals().get("_copy_handle"), active=_active_stage_slots)
 
                 try:
                     generated_title = title_file.read_text(encoding="utf-8").strip()
@@ -5004,6 +5081,11 @@ class PipelineManager:
                     self.db.update_video_status(yid, "PROCESSING", slice_index=slice_index)
                     self._report_runtime_stage(yid, 'RENDER_REUSED', slice_index=slice_index)
                 else:
+                    _render_handle = self._enter_stage_slot(
+                        "asr_ffmpeg", yid, title, slice_index=slice_index, active=_active_stage_slots,
+                    )
+                    if _render_handle is None:
+                        return
                     self._report_runtime_stage(
                         yid,
                         "RENDERING",
@@ -5182,6 +5264,7 @@ class PipelineManager:
                         prefix, yid, render_title, _ass_file, slice_index=slice_index,
                     )
 
+                self._exit_stage_slot(locals().get("_render_handle"), active=_active_stage_slots)
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
                 self._report_runtime_stage(
                     yid,
@@ -5240,6 +5323,11 @@ class PipelineManager:
                 if title_artifacts_changed and cover_file.exists():
                     logger.info("[CacheInvalid] %s 标题展示面已变更，强制重建封面。", prefix)
                 if not cover_checkpoint_ready:
+                    _cover_handle = self._enter_stage_slot(
+                        "cover_local", yid, title, slice_index=slice_index, active=_active_stage_slots,
+                    )
+                    if _cover_handle is None:
+                        return
                     self._report_runtime_stage(
                         yid,
                         "COVER_GENERATION",
@@ -5342,6 +5430,7 @@ class PipelineManager:
                             slice_index=slice_index,
                         )
                         logger.info("[%s] queued dedicated visual task %s", prefix, task.task_id)
+                        self._exit_stage_slot(locals().get("_cover_handle"), active=_active_stage_slots)
                         return
 
                     cover_cmd = [
@@ -5363,6 +5452,7 @@ class PipelineManager:
                                        f"{res.stderr.decode()[:200]}")
                 else:
                     logger.info(f"[SKIP] Cover checkpoint: {cover_file.name}")
+                self._exit_stage_slot(locals().get("_cover_handle"), active=_active_stage_slots)
 
                 if preparation_only:
                     if not self._is_dedicated_cover(cover_file):
@@ -5439,14 +5529,18 @@ class PipelineManager:
                 self._run_garbage_collection(yid, slice_index, "FAILED")
 
         finally:
+            while _active_stage_slots:
+                try:
+                    self._exit_stage_slot(_active_stage_slots[-1], active=_active_stage_slots)
+                except Exception as ex:
+                    logger.error(f"[StageSlot] Error releasing staged slot for {prefix}: {ex}")
+                    break
             if lock_file is not None:
                 try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                    logger.info(f"[Lock] Released pipeline lock for {prefix}.")
+                    lock_file.__exit__(None, None, None)
+                    logger.info(f"[Lock] Released prepare gate for {prefix}.")
                 except Exception as ex:
-                    logger.error(f"[Lock] Error releasing lock: {ex}")
-                finally:
-                    lock_file.close()
+                    logger.error(f"[Lock] Error releasing prepare gate: {ex}")
             if settings.enable_sigterm_kill:
                 self.db.update_process_pid(yid, None, slice_index=slice_index)
 

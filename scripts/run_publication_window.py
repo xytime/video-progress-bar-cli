@@ -392,13 +392,14 @@ def reconcile_one_english_world_douyin_submission() -> None:
         "--verify-only",
     ]
     # 自动只读回查始终后台运行，独立于投稿页是否展示浏览器。
-    pipeline_lock = PROJECT_ROOT / "output/pipeline.lock"
-    pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
-    with pipeline_lock.open("a+") as lock_file:
+    # 只读回查不得与加工抢 pipeline.lock；使用专用锁避免阻塞并行分槽。
+    reconcile_lock = PROJECT_ROOT / "output/english_world_douyin_reconcile.lock"
+    reconcile_lock.parent.mkdir(parents=True, exist_ok=True)
+    with reconcile_lock.open("a+") as lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            logging.info("[EnglishWorld][Douyin] pipeline.lock 正忙，本轮跳过只读回查。")
+            logging.info("[EnglishWorld][Douyin] 回查专用锁正忙，本轮跳过只读回查。")
             return
         try:
             try:

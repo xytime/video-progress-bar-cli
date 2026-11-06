@@ -70,7 +70,7 @@ def present_engagement(video: dict) -> dict:
         reason += "；仍有执行进程记录，请先核实运行状态"
     version_data = {key: video.get(key) for key in (
         "id", "youtube_id", "slice_index", "status", "source", "score", "updated_at",
-        "error_msg", "censor_tag", "bypass_censorship", "preparation_ready", "process_pid",
+        "error_msg", "censor_tag", "bypass_censorship", "preparation_ready", "queue_boost_at", "process_pid",
         "engagement_stage", "engagement_score_line", "publication_review_required", "platforms",
     )}
     version = hashlib.sha256(json.dumps(version_data, sort_keys=True, ensure_ascii=False,

@@ -23,7 +23,13 @@ def main():
         # 首次安装创建配置，重装绝不覆盖用户已调整的名额。
         try:
             with config.open("x", encoding="utf-8") as stream:
-                json.dump({"ffmpeg_slots": DEFAULT_FFMPEG_SLOTS}, stream, indent=2)
+                from video_processing.core.stage_slots import DEFAULTS as STAGE_DEFAULTS
+                payload = {
+                    "ffmpeg_slots": DEFAULT_FFMPEG_SLOTS,
+                    "enable_stage_resource_slots": STAGE_DEFAULTS["enable_stage_resource_slots"],
+                    "stage_slots": STAGE_DEFAULTS["stage_slots"],
+                }
+                json.dump(payload, stream, indent=2, ensure_ascii=False)
                 stream.write("\n")
         except FileExistsError:
             pass

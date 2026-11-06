@@ -1912,6 +1912,7 @@ def get_stats():
         },
         "resource_control": {
             **config_status(),
+            **__import__("video_processing.core.stage_slots", fromlist=["config_status"]).config_status(),
             "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
             "pid": os.getpid(),
         },
@@ -3245,6 +3246,83 @@ def process_video_now(youtube_id: str, engagement_version: Optional[str] = None,
 
     return {"success": True, "message": ("已确认跳过本地冷却，仅尝试一次：" if override else "已在后台启动处理：") + video['title']}
 
+
+
+
+@app.post("/api/videos/{youtube_id}/boost")
+def boost_video_queue(youtube_id: str, slice_index: int = 0):
+    """插队：提升下一轮领取优先级；不抢占正在持有重型槽的在途任务。"""
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index or 0)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+    if video.get("source") == "DISCOVERY":
+        return {"success": False, "error": "发现列表请先「加入队列/提权」，不能直接插队"}
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": f"无法插队：{guard_reason}"}
+    status = str(video.get("status") or "")
+    if status not in {
+        "PENDING", "PROCESSING", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING",
+        "RENDERING", "AI_COVER_PENDING",
+    }:
+        return {"success": False, "error": f"当前状态 {status} 不支持插队"}
+    if not db.boost_video_queue(youtube_id, slice_index=slice_index or 0):
+        return {"success": False, "error": "插队未生效（可能状态已变更）"}
+    fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index or 0)
+    return {
+        "success": True,
+        "youtube_id": youtube_id,
+        "slice_index": slice_index or 0,
+        "queue_boost_at": fresh.get("queue_boost_at") if fresh else None,
+        "message": "已插队：下一轮领取优先；不中断正在跑的重型阶段",
+    }
+
+
+class ResourceLimitsUpdate(BaseModel):
+    enable_stage_resource_slots: Optional[bool] = None
+    ffmpeg_slots: Optional[int] = None
+    stage_slots: Optional[dict] = None
+
+
+@app.get("/api/resource-limits")
+def get_resource_limits():
+    """读取阶段资源槽与 FFmpeg 名额（每次申请热重载同一文件）。"""
+    from video_processing.core.stage_slots import config_status as stage_status
+    from video_processing.core.ffmpeg_slot import config_status as ffmpeg_status
+    return {
+        "success": True,
+        "ffmpeg": ffmpeg_status(),
+        "stages": stage_status(),
+        "reload_policy": "写入后下一次名额申请即重读 resource-limits.json（热生效，无需重启）",
+    }
+
+
+@app.put("/api/resource-limits")
+def put_resource_limits(body: ResourceLimitsUpdate):
+    """后台更新阶段资源槽；非法值回退默认，不放开无上限。"""
+    from video_processing.core import stage_slots as slots
+    current = slots.load_config()
+    payload = {
+        "ffmpeg_slots": body.ffmpeg_slots if body.ffmpeg_slots is not None else current["ffmpeg_slots"],
+        "enable_stage_resource_slots": (
+            body.enable_stage_resource_slots
+            if body.enable_stage_resource_slots is not None
+            else current["enable_stage_resource_slots"]
+        ),
+        "stage_slots": dict(current["stage_slots"]),
+    }
+    if body.stage_slots:
+        payload["stage_slots"].update(body.stage_slots)
+    try:
+        saved = slots.save_config(payload)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "config": saved,
+        "message": "已保存；下一次名额申请热生效",
+        "reload_policy": "热生效（短 TTL=下次 acquire 重读）",
+    }
 
 @app.post("/api/videos/{youtube_id}/promote")
 def promote_video(youtube_id: str, engagement_version: Optional[str] = None):

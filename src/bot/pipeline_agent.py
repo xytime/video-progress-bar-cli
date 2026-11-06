@@ -42,6 +42,7 @@ import logging
 import asyncio
 import subprocess
 import fcntl
+from pathlib import Path
 import time
 import inspect
 import threading
@@ -131,6 +132,25 @@ def _deepseek_json_type(annotation: Any) -> str:
         candidates = [item for item in args if item is not type(None)]
         return _deepseek_json_type(candidates[0]) if candidates else "string"
     return "string"
+
+
+
+def _agent_prepare_gate(output_dir, label: str):
+    """阶段槽开启时不抢整片 pipeline.lock。"""
+    from contextlib import nullcontext
+    from pathlib import Path as _Path
+    from video_processing.core.stage_slots import PipelineExclusiveLock, stage_slots_enabled
+    if stage_slots_enabled():
+        return nullcontext()
+    return PipelineExclusiveLock(_Path(output_dir) / "pipeline.lock")
+
+
+def _agent_stage(stage: str):
+    from contextlib import nullcontext
+    from video_processing.core.stage_slots import hold_stage, stage_slots_enabled
+    if not stage_slots_enabled():
+        return nullcontext()
+    return hold_stage(stage, blocking=False)
 
 
 class PipelineAgent:
@@ -445,12 +465,19 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        lock_path = self.output_dir / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to download {youtube_id}...")
-        lock_file = open(lock_path, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        logger.info(f"[Lock] Acquired pipeline lock to download {youtube_id}.")
+        from video_processing.core.stage_slots import StageSlotUnavailable
         try:
+            gate = _agent_prepare_gate(self.output_dir, "download")
+            gate.__enter__()
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"pipeline lock error: {exc}"})
+        stage = None
+        try:
+            try:
+                stage = _agent_stage("download")
+                stage.__enter__()
+            except StageSlotUnavailable:
+                return json.dumps({"ok": False, "error": "等待资源槽:download"})
             start_current()
             existing = self._find_downloaded_video(youtube_id)
             if existing:
@@ -510,9 +537,10 @@ class PipelineAgent:
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Unexpected download error: {e}"})
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-            logger.info(f"[Lock] Released pipeline lock after download {youtube_id}.")
+            if stage is not None:
+                stage.__exit__(None, None, None)
+            gate.__exit__(None, None, None)
+            logger.info(f"[Lock] Released prepare/stage gate after download {youtube_id}.")
 
     @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def transcribe_and_caption_video(self, youtube_id: str) -> str:
@@ -522,12 +550,23 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        lock_path = self.output_dir / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to transcribe {youtube_id}...")
-        lock_file = open(lock_path, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        logger.info(f"[Lock] Acquired pipeline lock to transcribe {youtube_id}.")
+        from video_processing.core.stage_slots import StageSlotUnavailable, hold_stages, stage_slots_enabled
+        from contextlib import nullcontext
         try:
+            gate = _agent_prepare_gate(self.output_dir, "transcribe")
+            gate.__enter__()
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"pipeline lock error: {exc}"})
+        stage = None
+        try:
+            try:
+                if stage_slots_enabled():
+                    stage = hold_stages(["asr", "ffmpeg"], blocking=False)
+                else:
+                    stage = nullcontext()
+                stage.__enter__()
+            except StageSlotUnavailable:
+                return json.dumps({"ok": False, "error": "等待资源槽:asr/ffmpeg"})
             start_current()
             video_file = self._find_downloaded_video(youtube_id)
             if not video_file:
@@ -558,9 +597,10 @@ class PipelineAgent:
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Unexpected transcription error: {e}"})
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-            logger.info(f"[Lock] Released pipeline lock after transcribe {youtube_id}.")
+            if stage is not None:
+                stage.__exit__(None, None, None)
+            gate.__exit__(None, None, None)
+            logger.info(f"[Lock] Released prepare/stage gate after transcribe {youtube_id}.")
 
     @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def generate_wechat_copy(self, youtube_id: str) -> str:
@@ -570,12 +610,19 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        lock_path = self.output_dir / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to generate copy for {youtube_id}...")
-        lock_file = open(lock_path, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        logger.info(f"[Lock] Acquired pipeline lock to generate copy for {youtube_id}.")
+        from video_processing.core.stage_slots import StageSlotUnavailable
         try:
+            gate = _agent_prepare_gate(self.output_dir, "copy")
+            gate.__enter__()
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"pipeline lock error: {exc}"})
+        stage = None
+        try:
+            try:
+                stage = _agent_stage("copywriting")
+                stage.__enter__()
+            except StageSlotUnavailable:
+                return json.dumps({"ok": False, "error": "等待资源槽:copywriting"})
             start_current()
             copy_file = self.output_dir / f"{youtube_id}_copy.txt"
             title_file = self.output_dir / f"{youtube_id}_title.txt"
@@ -620,9 +667,10 @@ class PipelineAgent:
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Unexpected copywriter error: {e}"})
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-            logger.info(f"[Lock] Released pipeline lock after copy generation for {youtube_id}.")
+            if stage is not None:
+                stage.__exit__(None, None, None)
+            gate.__exit__(None, None, None)
+            logger.info(f"[Lock] Released prepare/stage gate after copy generation for {youtube_id}.")
 
     @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def generate_video_cover(self, youtube_id: str) -> str:
@@ -632,12 +680,19 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        lock_path = self.output_dir / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to generate cover for {youtube_id}...")
-        lock_file = open(lock_path, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        logger.info(f"[Lock] Acquired pipeline lock to generate cover for {youtube_id}.")
+        from video_processing.core.stage_slots import StageSlotUnavailable
         try:
+            gate = _agent_prepare_gate(self.output_dir, "cover")
+            gate.__enter__()
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": f"pipeline lock error: {exc}"})
+        stage = None
+        try:
+            try:
+                stage = _agent_stage("cover_local")
+                stage.__enter__()
+            except StageSlotUnavailable:
+                return json.dumps({"ok": False, "error": "等待资源槽:cover_local"})
             start_current()
             vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
             if not vertical.exists():
@@ -678,9 +733,10 @@ class PipelineAgent:
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Cover generator encountered unexpected error: {e}"})
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-            logger.info(f"[Lock] Released pipeline lock after cover generation for {youtube_id}.")
+            if stage is not None:
+                stage.__exit__(None, None, None)
+            gate.__exit__(None, None, None)
+            logger.info(f"[Lock] Released prepare/stage gate after cover generation for {youtube_id}.")
 
     @guarded("bot-action", lambda self, youtube_id, *a, **kw: str(youtube_id) + ":" + str(kw.get("slice_index", 0)), waiting=True)
     def upload_to_wechat(self, youtube_id: str) -> str:
