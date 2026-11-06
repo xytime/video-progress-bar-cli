@@ -66,7 +66,7 @@ def test_remaining_progress_passes_preflight_when_short(tmp_path, monkeypatch):
     processor = AutoCaptionProcessor(video)
     monkeypatch.setattr(type(processor), '_start_translation_audit',
                         lambda self: pytest.fail('should reuse progress'))
-    monkeypatch.setattr(settings, 'subtitle_translation_windowed_resume_enabled', False, raising=False)
+    monkeypatch.setattr(settings, 'subtitle_translation_windowed_resume_enabled', True, raising=False)
     segments = [dict(start=i, end=i + 0.4, text=f'Text {i}') for i in range(10)]
     fp = cue_fingerprint(segments)
     path = progress_path(settings.default_output_dir, 'video', fp)
