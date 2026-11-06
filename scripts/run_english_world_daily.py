@@ -4,6 +4,7 @@
 # Modification History (recovery)
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.44.0 | 2026-11-07 | Bill | 来源通路预检对 YoutubeRouteError 做有界重试，消化独立出口瞬时抖动。 |
 | 2.43.0 | 2026-10-25 | Codex | 增加具名宿主阶段回执与只进入人工审核的工作台受限续做。 |
 | 2.42.0 | 2026-10-25 | Codex | 为工作台增加持久运行身份，并将具名身份传递给程序化子协调器。 |
 | english-preferred-v1 | 2026-10-25 | Codex | 生产提示对齐快捷英语优先、系统默认兜底及确认清空后的无商品策略。 |
@@ -428,6 +429,10 @@ def _preflight_youtube_source_access(
     """宿主先验证真实媒体字节通路，失败时走一次授权或指定下载节点恢复。"""
     settings, probe_access, refresh_cookies = _load_youtube_runtime_dependencies(paths)
     environment = _build_coordinator_environment(paths, settings)
+    source_root = str(paths.project_root / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from video_processing.utils.youtube_route import YoutubeRouteError
 
     def probe(current_environment: dict[str, str]) -> Any:
         return probe_access(
@@ -437,7 +442,24 @@ def _preflight_youtube_source_access(
             environment=current_environment,
         )
 
-    result = probe(environment)
+    def probe_with_route_retries(current_environment: dict[str, str], *, label: str) -> Any:
+        """出口验收偶发瞬时失败；有界重试后再把最后一次异常交给宿主失败回执。"""
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return probe(current_environment)
+            except YoutubeRouteError as exc:
+                last_error = exc
+                _log(
+                    stream,
+                    f"YouTube source access {label}: YoutubeRouteError attempt {attempt}/3",
+                )
+                if attempt < 3:
+                    time.sleep(1.5 * attempt)
+        assert last_error is not None
+        raise last_error
+
+    result = probe_with_route_retries(environment, label="preflight")
     _log(stream, f"YouTube source access preflight: code={result.code}")
     if result.ok:
         return result, settings, environment, False
@@ -453,7 +475,7 @@ def _preflight_youtube_source_access(
         )
         _log(stream, f"YouTube Cookie recovery: code={refreshed.code}")
         if refreshed.ok:
-            result = probe(environment)
+            result = probe_with_route_retries(environment, label="after Cookie recovery")
             _log(stream, f"YouTube source access after Cookie recovery: code={result.code}")
             if result.ok:
                 return result, settings, environment, False

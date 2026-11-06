@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-11-07 | Bill | 释放时清空锁文件元数据，避免 IDLE 后残留误导性占用信息。 |
 | 1.0.0 | 2026-09-23 | Codex | 分离单视频、发布执行者与加工资源的互斥范围。 |
 """
 from __future__ import annotations
@@ -45,6 +46,13 @@ class TaskLease:
 
     def __exit__(self, *args):
         if self.handle:
+            try:
+                # flock 才是占用真相；清空元数据避免人工误判残留文件为活跃锁。
+                self.handle.seek(0)
+                self.handle.truncate()
+                self.handle.flush()
+            except OSError:
+                pass
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
             self.handle.close()
             self.handle = None

@@ -26,6 +26,7 @@
 # | 2.17.0 | 2026-08-30 | Codex | 覆盖宿主媒体通路预检、Cookie/Clash 恢复分支及预检假阳性候选回退语义。 |
 # | 2.18.0 | 2026-08-30 | Codex | 固化 LaunchAgent 必须使用项目 venv，避免调度器缺失生产依赖。 |
 # | 2.19.0 | 2026-08-30 | Codex | 固化 LaunchAgent plist 为可迁移模板并由安装器逐字段核验渲染路径。 |
+# | 2.20.1 | 2026-11-07 | Bill | 覆盖来源通路 YoutubeRouteError 有界重试后成功。 |
 # | 2.20.0 | 2026-08-31 | Codex | 覆盖来源预检自身异常的失败请求、持久状态与禁止启动候选协调器边界。 |
 # | 2.21.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算与本地 Whisper 末尾泄漏门禁。 |
 # | 2.22.0 | 2026-09-01 | Codex | 成功交付请求必须绑定通过的最终音频 QA 报告。 |
@@ -383,6 +384,59 @@ def test_source_access_preflight_exception_is_reported_without_launching_candida
     assert "未开始候选筛选" in delivered[0]["failure"]
     status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=REPORTED_SOURCE_ACCESS_PREFLIGHT_EXCEPTION" in status
+
+
+def test_source_access_youtube_route_error_retries_then_succeeds(monkeypatch, tmp_path: Path):
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+
+    class Settings:
+        ytdlp_path = "yt-dlp"
+        youtube_auth_probe_url = "https://example.test/probe"
+        enable_youtube_cookie_auto_refresh = False
+        youtube_cookies_file = ""
+        youtube_cookie_browser = "chrome"
+        clash_download_node = None
+
+        def get_active_proxies(self):
+            return {}
+
+        def get_yt_cookie_args(self):
+            return ["--cookies", "cookies.txt"]
+
+    from video_processing.utils.youtube_route import YoutubeRouteError
+
+    calls = {"n": 0}
+
+    def flaky_probe(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise YoutubeRouteError("独立出口未能建立 YouTube 连接；检查自建节点或目标服务")
+        return YoutubeAccessResult(True, "READY")
+
+    monkeypatch.setattr(
+        runner,
+        "_load_youtube_runtime_dependencies",
+        lambda _paths: (Settings(), flaky_probe, lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda *_args, **_kwargs: None)
+
+    stream = StringIO()
+    result, _settings, _environment, use_clash = runner._preflight_youtube_source_access(paths, stream)
+
+    assert result.ok is True
+    assert calls["n"] == 3
+    assert use_clash is False
+    assert "YoutubeRouteError attempt 1/3" in stream.getvalue()
+    assert "YoutubeRouteError attempt 2/3" in stream.getvalue()
 
 
 def test_source_access_auth_failure_refreshes_cookie_once_then_reprobes(monkeypatch, tmp_path: Path):

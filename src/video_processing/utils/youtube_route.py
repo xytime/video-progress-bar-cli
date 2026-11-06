@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.1 | 2026-11-07 | Bill | 出口握手匹配窗口加长，降低瞬时 Clash 连接表未就绪导致的 YoutubeRouteError。 |
 | 2.0 | 2026-10-27 | Codex | 独立后台出口与 Unix 控制面，解除桌面客户端端口依赖。 |
 """
 from __future__ import annotations
@@ -56,7 +57,8 @@ def _probe_youtube_connection(config, endpoint) -> dict:
             raise YoutubeRouteError('YouTube 代理拒绝建立连接')
         # 完成真实握手后连接才进入 Clash 活跃连接表；保持打开直到回读完成。
         with ssl.create_default_context().wrap_socket(connection, server_hostname=_PROBE_HOST):
-            for attempt in range(5):
+            # Clash 活跃连接表偶发滞后；给足有界等待，避免瞬时误判为出口不可用。
+            for attempt in range(10):
                 rows = _controller_json('/connections', config).get('connections') or []
                 matches = []
                 for row in rows:
@@ -71,8 +73,8 @@ def _probe_youtube_connection(config, endpoint) -> dict:
                     return matches[0]
                 if len(matches) > 1:
                     break
-                if attempt < 4:
-                    time.sleep(0.1)
+                if attempt < 9:
+                    time.sleep(0.2)
     raise YoutubeRouteError('无法确认本次 YouTube 连接的实际出口，停止获取')
 
 
