@@ -646,28 +646,36 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
         from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
 
-        source_fp = cue_fingerprint(segments)
-        youtube_id = self.input_path.stem
-        output_dir = Path(getattr(settings, 'default_output_dir', self.input_path.parent))
-        progress_file = progress_path(output_dir, youtube_id, source_fp)
-        prior = load_progress(progress_file, source_fp, len(segments))
-        translations_state = list(prior['translations']) if prior else [None] * len(segments)
-        remaining_indices = apply_progress_to_segments(segments, translations_state)
-        if not remaining_indices:
-            logger.info("[Translate] 复用批次进度，%s 段已全部译完", len(segments))
-            return segments
-
         windowed = bool(getattr(settings, 'subtitle_translation_windowed_resume_enabled', False))
-        max_window = max_segments_for_budget(settings)
-        work_indices, partial_run = select_work_indices(remaining_indices, max_window, windowed)
-        if partial_run:
-            logger.info(
-                "[Translate] 分窗续翻 %s/%s 段（窗=%s，已完成=%s）",
-                len(work_indices), len(segments), max_window,
-                len(segments) - len(remaining_indices),
-            )
+        progress_file = None
+        translations_state = [None] * len(segments)
+        remaining_indices = list(range(len(segments)))
+        partial_run = False
+        if windowed:
+            # 仅分窗续翻启用时读写批次进度；裸跑保持原 require_single_video_budget 语义。
+            source_fp = cue_fingerprint(segments)
+            youtube_id = self.input_path.stem
+            output_dir = Path(getattr(settings, 'default_output_dir', self.input_path.parent))
+            progress_file = progress_path(output_dir, youtube_id, source_fp)
+            prior = load_progress(progress_file, source_fp, len(segments))
+            translations_state = list(prior['translations']) if prior else [None] * len(segments)
+            remaining_indices = apply_progress_to_segments(segments, translations_state)
+            if not remaining_indices:
+                logger.info("[Translate] 复用批次进度，%s 段已全部译完", len(segments))
+                return segments
+            max_window = max_segments_for_budget(settings)
+            work_indices, partial_run = select_work_indices(remaining_indices, max_window, True)
+            if partial_run:
+                logger.info(
+                    "[Translate] 分窗续翻 %s/%s 段（窗=%s，已完成=%s）",
+                    len(work_indices), len(segments), max_window,
+                    len(segments) - len(remaining_indices),
+                )
+            else:
+                require_single_video_budget(len(work_indices), settings)
         else:
-            require_single_video_budget(len(work_indices), settings)
+            require_single_video_budget(len(segments), settings)
+            work_indices = list(range(len(segments)))
 
         work_segments = [segments[i] for i in work_indices]
         budget = adaptive_translation_budget_seconds(len(work_indices), settings)
@@ -853,17 +861,19 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     if zh:
                         segments[index]['zh_text'] = zh
                         translations_state[index] = zh
-                save_progress(
-                    progress_file, youtube_id=youtube_id, source_fp=source_fp,
-                    segments=segments, translations=translations_state,
-                    done_indices=[i for i, t in enumerate(translations_state)
-                                  if isinstance(t, str) and t.strip()],
-                )
+                if progress_file is not None:
+                    save_progress(
+                        progress_file, youtube_id=youtube_id, source_fp=source_fp,
+                        segments=segments, translations=translations_state,
+                        done_indices=[i for i, t in enumerate(translations_state)
+                                      if isinstance(t, str) and t.strip()],
+                    )
                 pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
                 self._record_selected_gemini_model_quality(outcome.candidate, quality_score, state_path)
                 self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, work_segments)
                 self._write_translation_quality_report()
-                if partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state):
+                if progress_file is not None and (
+                        partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state)):
                     raise SubtitleTranslationFailure(
                         [safe_failure('host', 'translation_budget_continue', category='budget',
                                       retry_at=int(time.time()) + 45)],
@@ -894,16 +904,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 if zh:
                     segments[index]['zh_text'] = zh
                     translations_state[index] = zh
-            save_progress(
-                progress_file, youtube_id=youtube_id, source_fp=source_fp,
-                segments=segments, translations=translations_state,
-                done_indices=[i for i, t in enumerate(translations_state)
-                              if isinstance(t, str) and t.strip()],
-            )
+            if progress_file is not None:
+                save_progress(
+                    progress_file, youtube_id=youtube_id, source_fp=source_fp,
+                    segments=segments, translations=translations_state,
+                    done_indices=[i for i, t in enumerate(translations_state)
+                                  if isinstance(t, str) and t.strip()],
+                )
             self._record_selected_gemini_model_quality(outcome.candidate, 90.0, state_path)
             self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, work_segments)
             self._write_translation_quality_report()
-            if partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state):
+            if progress_file is not None and (
+                    partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state)):
                 raise SubtitleTranslationFailure(
                     [safe_failure('host', 'translation_budget_continue', category='budget',
                                   retry_at=int(time.time()) + 45)],
