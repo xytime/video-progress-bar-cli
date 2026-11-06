@@ -11,6 +11,7 @@ import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from config.settings import settings
 import time
 import uuid
 
@@ -118,7 +119,9 @@ def test_mixed_failure_keeps_budget_and_all_quota_defers(tmp_path):
 def test_614_segments_rejected_before_provider_or_audit(tmp_path, monkeypatch):
     (tmp_path/'video.mp4').write_bytes(b'media')
     processor=AutoCaptionProcessor(tmp_path/'video.mp4')
-    monkeypatch.setattr(processor, '_start_translation_audit', lambda: pytest.fail('audit started before preflight'))
+    # 关闭分窗续翻：裸跑 614 段须仍在审计前触发 preflight（分窗开启时走批次进度路径）
+    monkeypatch.setattr(settings, 'subtitle_translation_windowed_resume_enabled', False, raising=False)
+    monkeypatch.setattr(type(processor), '_start_translation_audit', lambda self: pytest.fail('audit started before preflight'))
     with pytest.raises(SubtitleReviewRequired, match='614') as exc:
         processor._translate_segments([dict(text='Bonds matter.') for _ in range(614)])
     assert exc.value.failure['code']=='translation_budget_preflight'

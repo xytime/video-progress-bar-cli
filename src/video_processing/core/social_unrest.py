@@ -42,7 +42,7 @@ DEFAULT_RULES = {
                           r"\bstrik(?:e|es|ing)\s+out\b",
                           r"\bstrike\s+price\b",
                           r"\bstrik(?:e|es|ing)\s+(?:price|zone|range|prices)\b",
-                          r"\bstriking\s+(?:similarity|resemblance|feature|contrast|example|difference|result|results)\b",
+                          r"\bstriking\s+(?:similarity|resemblance|feature|contrast|example|difference|result|results|trends?)\b",
                           r"\bwall\s+street\b"],
             "context": ["群众", "民众", "工人", "学生", "街头", "警察", "政府", "全国",
                         r"\b(?:crowds?|workers?|students?|police|government|nationwide|union|unions)\b",

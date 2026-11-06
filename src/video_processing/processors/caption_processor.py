@@ -34,6 +34,7 @@
 | 1.10.2 | 2026-06-08 | Gemini_3.5_Flash_planning | 根据用户要求将词组提取上限严格控制在 3 个以内 (2-3个)，并将 Fallback 模型修正为可用且不超限的 gemini-2.5-flash，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.3 | 2026-06-08 | Gemini_3.5_Flash_planning | 优先使用阿里云 MT 进行主字幕翻译，并将 Gemini 作为翻译 fallback 与难词提取器，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.4 | 2026-06-08 | Gemini_3.5_Flash_planning | 优化错误分类：连接断开与 5xx 服务端错误不作为立即 raise 的致命错误，允许 fallback 到备用模型，标注 # [Gemini_3.5_Flash_planning] |
+| translation-batch-progress-20261106 | 2026-11-06 | Grok Bot | 超长片翻译批次落盘与分窗续翻。 |
 | 1.10.5 | 2026-06-08 | Gemini_3.5_Flash_planning | _translate_segments 增加 try-except 容灾保护，使 Gemini 异常对调用链安全，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.6 | 2026-06-08 | Gemini_3.5_Flash_planning | 提示词升级：强制让 vocab 中的中文词汇与翻译句子中的子串完全对齐，以便于前端画下划线，标注 # [Gemini_3.5_Flash_planning] |
 | 1.11.0 | 2026-06-08 | Claude_Sonnet_4.6_planning | 将 _translate_segments_aliyun 迁移至 translation_helper 模块，实现高内聘低耦合的统一翻译接口 |
@@ -639,12 +640,43 @@ class AutoCaptionProcessor(VideoProcessorBase):
             return segments
 
         from ..utils.subtitle_provider_window import require_single_video_budget, adaptive_translation_budget_seconds
-        budget = require_single_video_budget(len(segments), settings)
-        if budget is None:
-            budget = adaptive_translation_budget_seconds(len(segments), settings)
+        from ..utils.translation_batch_progress import (
+            apply_progress_to_segments, cue_fingerprint, load_progress, max_segments_for_budget,
+            progress_path, save_progress, select_work_indices,
+        )
+        from ..utils.subtitle_failure_receipt import SubtitleReviewRequired
+
+        source_fp = cue_fingerprint(segments)
+        youtube_id = self.input_path.stem
+        output_dir = Path(getattr(settings, 'default_output_dir', self.input_path.parent))
+        progress_file = progress_path(output_dir, youtube_id, source_fp)
+        prior = load_progress(progress_file, source_fp, len(segments))
+        translations_state = list(prior['translations']) if prior else [None] * len(segments)
+        remaining_indices = apply_progress_to_segments(segments, translations_state)
+        if not remaining_indices:
+            logger.info("[Translate] 复用批次进度，%s 段已全部译完", len(segments))
+            return segments
+
+        windowed = bool(getattr(settings, 'subtitle_translation_windowed_resume_enabled', False))
+        max_window = max_segments_for_budget(settings)
+        work_indices, partial_run = select_work_indices(remaining_indices, max_window, windowed)
+        if partial_run:
+            logger.info(
+                "[Translate] 分窗续翻 %s/%s 段（窗=%s，已完成=%s）",
+                len(work_indices), len(segments), max_window,
+                len(segments) - len(remaining_indices),
+            )
+        else:
+            require_single_video_budget(len(work_indices), settings)
+
+        work_segments = [segments[i] for i in work_indices]
+        budget = adaptive_translation_budget_seconds(len(work_indices), settings)
         self._translation_deadline = time.monotonic() + float(budget)
-        logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
-        texts = [seg.get("text", "").strip() for seg in segments]
+        logger.info(
+            f"Translating {len(work_indices)}/{len(segments)} segments "
+            f"from {self.src_lang} to {self.target_lang}..."
+        )
+        texts = [seg.get("text", "").strip() for seg in work_segments]
         self._selected_subtitle_candidate = None
         self._last_subtitle_candidate = None
         self._translation_quality_audit = []
@@ -811,15 +843,35 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
             if outcome.should_use_candidate:
                 self._apply_selected_translation_candidate(
-                    segments,
+                    work_segments,
                     outcome.candidate,
                     texts,
                     translation_prompt_context,
                 )
+                for local_i, index in enumerate(work_indices):
+                    zh = work_segments[local_i].get('zh_text')
+                    if zh:
+                        segments[index]['zh_text'] = zh
+                        translations_state[index] = zh
+                save_progress(
+                    progress_file, youtube_id=youtube_id, source_fp=source_fp,
+                    segments=segments, translations=translations_state,
+                    done_indices=[i for i, t in enumerate(translations_state)
+                                  if isinstance(t, str) and t.strip()],
+                )
                 pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
                 self._record_selected_gemini_model_quality(outcome.candidate, quality_score, state_path)
-                self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, segments)
+                self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, work_segments)
                 self._write_translation_quality_report()
+                if partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state):
+                    raise SubtitleTranslationFailure(
+                        [safe_failure('host', 'translation_budget_continue', category='budget',
+                                      retry_at=int(time.time()) + 45)],
+                        f"长片翻译进度已保存 "
+                        f"{sum(1 for t in translations_state if isinstance(t, str) and t.strip())}/{len(segments)}，"
+                        f"等待下一窗续翻",
+                        exhausted=True,
+                    )
                 return segments
 
             if outcome.should_fail:
@@ -832,14 +884,34 @@ class AutoCaptionProcessor(VideoProcessorBase):
         outcome = arbiter.finish()
         if outcome.should_use_candidate:
             self._apply_selected_translation_candidate(
-                segments,
+                work_segments,
                 outcome.candidate,
                 texts,
                 translation_prompt_context,
             )
+            for local_i, index in enumerate(work_indices):
+                zh = work_segments[local_i].get('zh_text')
+                if zh:
+                    segments[index]['zh_text'] = zh
+                    translations_state[index] = zh
+            save_progress(
+                progress_file, youtube_id=youtube_id, source_fp=source_fp,
+                segments=segments, translations=translations_state,
+                done_indices=[i for i, t in enumerate(translations_state)
+                              if isinstance(t, str) and t.strip()],
+            )
             self._record_selected_gemini_model_quality(outcome.candidate, 90.0, state_path)
-            self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, segments)
+            self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, work_segments)
             self._write_translation_quality_report()
+            if partial_run or any(not (isinstance(t, str) and t.strip()) for t in translations_state):
+                raise SubtitleTranslationFailure(
+                    [safe_failure('host', 'translation_budget_continue', category='budget',
+                                  retry_at=int(time.time()) + 45)],
+                    f"长片翻译进度已保存 "
+                    f"{sum(1 for t in translations_state if isinstance(t, str) and t.strip())}/{len(segments)}，"
+                    f"等待下一窗续翻",
+                    exhausted=True,
+                )
             return segments
 
         self._finish_translation_audit(

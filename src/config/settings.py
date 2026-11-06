@@ -450,6 +450,8 @@ class Settings(BaseSettings):
     subtitle_translation_total_timeout_seconds: int = Field(default=600, ge=30, le=660)
     # 候选阶段为后续供应商和原有质量/定点修复预留时间，不延长整片期限。
     subtitle_provider_budget_allocation_enabled: bool = True
+    # 超长片：预算预检失败时按窗口翻译并落盘进度，下轮只计剩余段（裸跑单测可关）
+    subtitle_translation_windowed_resume_enabled: bool = True
     subtitle_translation_quality_reserve_seconds: int = Field(default=120, ge=0, le=180)
     subtitle_translation_fallback_reserve_seconds: int = Field(default=300, ge=30, le=480)
     # 2026-10-31 用户批准生产采用：只优化新扫描，保留旧断点、原语义及质量门。

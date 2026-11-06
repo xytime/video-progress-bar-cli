@@ -114,6 +114,7 @@ def test_wall_street_strike_price_not_social_unrest():
         'Wall Street debates the AI boom and strike price of options',
         'Options traders watch the strike price near Wall Street open',
         'The model shows a striking similarity to prior AI results',
+        'This has led to some striking trends emerging in the education sector as students become cautious',
     ):
         assert classify(review.text_documents(title=text), DEFAULT_RULES) is None, text
 
