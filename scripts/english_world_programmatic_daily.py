@@ -9,6 +9,7 @@ JSON Schema 约束的一次调用中补全中文段译、标题和适量学习�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.0 | 2026-11-06 | Cursor | 来源/引导对齐的确定性准入失败淘汰当前候选并继续预检；不放宽门禁、不换目录重跑复核。 |
 | 1.7.0 | 2026-10-25 | Codex | 将宿主运行 ID 与候选尝试身份写入工作区、阶段、失败及交付证据。 |
 | 1.6.0 | 2026-10-20 | Codex | 初稿与修订加入有界 CLI 备用通道及真实预检，故障分类跨子进程保留。 |
 | 1.5.3 | 2026-09-25 | Codex | 移除 AGY 不支持的整数枚举，在宿主校验词典索引并保留安全的供应商错误分类。 |
@@ -90,6 +91,42 @@ class CandidateReviewUnavailable(ProgrammaticDailyError):
     """预检发现既有任务不可新制；保留预算，不加入来源质量黑名单。"""
 
 
+class CandidateSourceRejected(ProgrammaticDailyError):
+    """来源证据或对齐已确定性失败。淘汰该候选并继续其它来源。
+
+    不放宽对齐或 medium 复核门禁，也不换目录重跑已经消耗的复核。
+    """
+
+
+_DETERMINISTIC_SOURCE_ADMISSION_MESSAGES = frozenset({
+    "来源 medium 复核已尝试或证据过期；禁止换目录重复复核",
+    "已冻结自然句窗口来源过期；禁止重新转写换区间",
+})
+# 立即失败的语言进程会在阶段起点后马上落盘；文件系统时钟可能略慢于 time.time_ns()。
+_LANGUAGE_RECEIPT_CLOCK_SKEW_NS = 2_000_000_000
+
+
+def _fresh_source_admission_rejection(stage: str, workspace: Path, started_ns: int) -> str | None:
+    """只承认本轮语言回执中的确定性来源准入失败；其它子进程失败保持原异常。"""
+    if stage not in {"source", "bootstrap-bind"}:
+        return None
+    path = workspace / "qa" / "language_execution_error.json"
+    try:
+        if (not path.is_file()
+                or path.stat().st_mtime_ns + _LANGUAGE_RECEIPT_CLOCK_SKEW_NS < started_ns):
+            return None
+        receipt = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(receipt, dict) or receipt.get("stage") != stage
+            or receipt.get("state") != "FAIL" or receipt.get("error_type") != "ValueError"):
+        return None
+    message = str(receipt.get("message") or "").strip()
+    if message.startswith("UNCERTAIN:") or message in _DETERMINISTIC_SOURCE_ADMISSION_MESSAGES:
+        return message
+    return None
+
+
 def _require_new_draft_budget(workspace: Path, evidence: Mapping[str, Any], *, remember_default: bool = True) -> None:
     from video_processing.study_cards.language_protocol import task_identity
     from video_processing.study_cards.language_review_service import new_draft_admission
@@ -130,6 +167,8 @@ def _candidate_failure_route(exc: Exception, *, locked_source: bool, production_
         return False, False
     if isinstance(exc, CandidateReviewUnavailable):
         return False, not locked_source
+    if isinstance(exc, CandidateSourceRejected):
+        return (False, False) if locked_source else (True, True)
     if isinstance(exc, CandidateSafetyRejected):
         return True, production_candidates < MAX_PRODUCTION_CANDIDATES
     if isinstance(exc, (OSError, StageExecutionError)):
@@ -172,6 +211,12 @@ def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | No
         try:
             value = action()
         except Exception as exc:
+            rejection = _fresh_source_admission_rejection(stage, workspace, started_ns)
+            if rejection:
+                entry.update(state="FAILED", error_class="CandidateSourceRejected", retryable=False,
+                             finished_ns=time.time_ns())
+                atomic_json(journal_path, journal)
+                raise CandidateSourceRejected(rejection) from exc
             transient = _transient_error(exc)
             blocked = False
             if safety_report is not None and safety_report.is_file() and safety_report.stat().st_mtime_ns >= started_ns:

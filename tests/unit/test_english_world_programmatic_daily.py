@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-11-06 | Cursor | 确定性来源准入失败必须淘汰当前候选并继续预检；基础设施失败仍停止且不入排除。 |
 | 1.3.3 | 2026-09-25 | Codex | 验证 AGY Schema 无整数枚举，词典候选由宿主拒绝越界与坏发音词。 |
 | 1.3.2 | 2026-09-24 | Codex | 真实词典、封面和账本覆盖发音错误替换及失败终止，验证 Schema 限制。 |
 | 1.3.1 | 2026-09-23 | Codex | 入口测试使用真实词典、布局及账本验证首次 FAIL 到唯一复审 PASS 或终止。 |
@@ -677,3 +678,164 @@ def test_semantic_candidate_review_distinguishes_content_rejection_from_uncertai
     report = daily.read_json(tmp_path / "qa/candidate_semantic_safety.json")
     assert report["scope"] == "candidate_text_only"
     assert report["coverage"] == coverage
+
+
+def _language_failure(workspace: Path, *, stage: str, message: str, error_type: str = "ValueError") -> None:
+    daily.atomic_json(workspace / "qa/language_execution_error.json", {
+        "stage": stage, "state": "FAIL", "error_type": error_type, "message": message,
+    })
+
+
+@pytest.mark.parametrize("stage,message", [
+    ("source", "来源 medium 复核已尝试或证据过期；禁止换目录重复复核"),
+    ("bootstrap-bind", "UNCERTAIN: 派生字幕无法与固定窗口对齐"),
+    ("source", "UNCERTAIN: 零宽 ASR 词没有可证明的后续边界"),
+    ("source", "UNCERTAIN: medium 模型未下载，保留 small 原始证据并停止"),
+    ("bootstrap-bind", "已冻结自然句窗口来源过期；禁止重新转写换区间"),
+])
+def test_fresh_language_admission_failure_rejects_candidate_without_retry(tmp_path, stage, message):
+    calls = []
+
+    def action():
+        calls.append(1)
+        _language_failure(tmp_path, stage=stage, message=message)
+        raise daily.StageExecutionError("子步骤失败：english_world_language.py exit=2")
+
+    with pytest.raises(daily.CandidateSourceRejected, match=message):
+        daily._stage_call(stage, tmp_path, action)
+    assert calls == [1]
+    attempt = daily.read_json(tmp_path / "qa/stage_recovery.json")["attempts"]
+    assert len(attempt) == 1 and attempt[0]["retryable"] is False
+    assert attempt[0]["error_class"] == "CandidateSourceRejected"
+    assert daily._candidate_failure_route(
+        daily.CandidateSourceRejected(message), locked_source=False, production_candidates=0) == (True, True)
+    assert daily._candidate_failure_route(
+        daily.CandidateSourceRejected(message), locked_source=True, production_candidates=0) == (False, False)
+
+
+@pytest.mark.parametrize("stage,receipt_stage,error_type,message,stale", [
+    ("source", "source", "ValueError", "Whisper 模型必须是已下载的本地文件；不自动下载", False),
+    ("source", "source", "RuntimeError", "UNCERTAIN: 派生字幕无法与固定窗口对齐", False),
+    ("review", "review", "ValueError", "UNCERTAIN: 派生字幕无法与固定窗口对齐", False),
+    ("source", "bootstrap-bind", "ValueError", "UNCERTAIN: 派生字幕无法与固定窗口对齐", False),
+    ("source", "source", "ValueError", "来源 medium 复核已尝试或证据过期；禁止换目录重复复核", True),
+])
+def test_non_admission_language_failure_stays_infrastructure(
+    tmp_path, stage, receipt_stage, error_type, message, stale,
+):
+    import os
+    if stale:
+        _language_failure(tmp_path, stage=receipt_stage, message=message, error_type=error_type)
+        os.utime(tmp_path / "qa/language_execution_error.json", (1, 1))
+
+    def action():
+        if not stale:
+            _language_failure(tmp_path, stage=receipt_stage, message=message, error_type=error_type)
+        raise daily.StageExecutionError("子步骤失败：english_world_language.py exit=2")
+
+    with pytest.raises(daily.StageExecutionError):
+        daily._stage_call(stage, tmp_path, action)
+    assert daily._candidate_failure_route(
+        daily.StageExecutionError("子步骤失败：english_world_language.py exit=2"),
+        locked_source=False, production_candidates=0) == (False, False)
+
+
+def _preflight_candidate(youtube_id: str) -> dict:
+    return {"youtube_id": youtube_id, "source_channel": "Test", "source_channel_id": "test",
+            "source_url": "https://example.test/video", "source_title": "Clean energy"}
+
+
+def _download_preflight_fixture(candidate, workspace):
+    source = workspace / "source/source.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"fixture")
+    caption = source.with_suffix(".json3")
+    words = [{"text": word, "start": index * 4, "end": (index + 1) * 4} for index, word in enumerate(
+        "Clean energy helps many families learn about our shared future.".split())]
+    daily.atomic_json(caption, daily._bootstrap_caption_payload(duration=40, words=words))
+    return source, caption, 0, 40
+
+
+def _language_boundary(command, messages):
+    if Path(command[1]).name == "english_world_language.py":
+        timeline = Path(command[command.index("--timeline") + 1])
+        youtube_id = daily.read_json(timeline)["source_provenance"]["youtube_id"]
+        assert command[2] == "source"
+        _language_failure(timeline.parent, stage="source", message=messages[youtube_id])
+        raise daily.StageExecutionError("子步骤失败：english_world_language.py exit=2")
+    if Path(command[1]).name == "record_english_world_delivery_request.py":
+        import sys
+        from scripts.record_english_world_delivery_request import main as record_main
+        previous = sys.argv
+        sys.argv = ["record_english_world_delivery_request.py", *command[2:]]
+        try:
+            assert record_main() == 0
+        finally:
+            sys.argv = previous
+        return None
+    raise AssertionError(command)
+
+
+def test_deterministic_source_failures_are_excluded_and_preflight_continues(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    messages = {
+        "we-MfBKx4Bc": "来源 medium 复核已尝试或证据过期；禁止换目录重复复核",
+        "fVOCYz386pA": "UNCERTAIN: 派生字幕无法与固定窗口对齐",
+        "ibsEIHEpAC8": "UNCERTAIN: 零宽 ASR 词没有可证明的后续边界",
+    }
+    visited = []
+
+    def download(candidate, workspace):
+        visited.append(candidate["youtube_id"])
+        return _download_preflight_fixture(candidate, workspace)
+
+    monkeypatch.setattr(daily, "_discover_candidates", lambda **_: [_preflight_candidate(item) for item in messages])
+    monkeypatch.setattr(daily, "_download_candidate", download)
+    monkeypatch.setattr(daily, "_run", lambda command, **_: _language_boundary(command, messages))
+    request = tmp_path / "slot.delivery-request.json"
+    with pytest.raises(daily.ProgrammaticDailyError, match="零宽 ASR"):
+        daily.run(request=request, output_root=tmp_path / "out", shadow_only=True)
+
+    assert visited == list(messages)
+    payload = daily.read_json(request)
+    assert payload["failure_kind"] == "source_quality"
+    assert payload["rejected_youtube_ids"] == list(messages)
+    assert payload["source_rejections"] == [
+        {"youtube_id": youtube_id, "kind": "source_quality"} for youtube_id in messages]
+    from scripts.run_english_world_daily import _recent_rejected_youtube_ids
+    assert _recent_rejected_youtube_ids(tmp_path) == tuple(sorted(messages))
+    receipts = [daily.read_json(path) for path in (tmp_path / "out").glob("*/qa/candidate_failure.json")]
+    assert {item["youtube_id"] for item in receipts} == set(messages)
+    assert {item["error_class"] for item in receipts} == {"CandidateSourceRejected"}
+    assert {item["stage"] for item in receipts} == {"source_evidence"}
+    journals = list((tmp_path / "out").glob("*/qa/stage_recovery.json"))
+    assert len(journals) == 3
+    assert all(len(daily.read_json(path)["attempts"]) == 1 for path in journals)
+
+
+def test_infrastructure_language_failure_stops_without_dropping_earlier_exclusion(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    messages = {
+        "we-MfBKx4Bc": "来源 medium 复核已尝试或证据过期；禁止换目录重复复核",
+        "aaaaaaaaaaa": "Whisper 模型必须是已下载的本地文件；不自动下载",
+        "fVOCYz386pA": "UNCERTAIN: 派生字幕无法与固定窗口对齐",
+    }
+    visited = []
+
+    def download(candidate, workspace):
+        visited.append(candidate["youtube_id"])
+        return _download_preflight_fixture(candidate, workspace)
+
+    monkeypatch.setattr(daily, "_discover_candidates", lambda **_: [_preflight_candidate(item) for item in messages])
+    monkeypatch.setattr(daily, "_download_candidate", download)
+    monkeypatch.setattr(daily, "_run", lambda command, **_: _language_boundary(command, messages))
+    request = tmp_path / "slot.delivery-request.json"
+    with pytest.raises(daily.ProgrammaticDailyError, match="aaaaaaaaaaa:source_evidence:子步骤失败"):
+        daily.run(request=request, output_root=tmp_path / "out", shadow_only=True)
+
+    assert visited == ["we-MfBKx4Bc", "aaaaaaaaaaa"]
+    payload = daily.read_json(request)
+    assert payload["failure_kind"] == "internal_error"
+    assert payload["rejected_youtube_ids"] == ["we-MfBKx4Bc"]
+    from scripts.run_english_world_daily import _recent_rejected_youtube_ids
+    assert _recent_rejected_youtube_ids(tmp_path) == ("we-MfBKx4Bc",)
