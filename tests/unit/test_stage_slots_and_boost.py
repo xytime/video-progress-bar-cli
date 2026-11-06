@@ -119,3 +119,19 @@ def test_normalize_rejects_zero_and_keeps_bounds(slot_dirs):
     assert cfg["ffmpeg_slots"] == 1
     assert cfg["enable_stage_resource_slots"] is True  # invalid type -> default True
     assert cfg["stage_slots"]["copywriting"] == 2
+
+
+def test_enter_combined_asr_ffmpeg_slot_nonblocking(slot_dirs):
+    """回归：asr_ffmpeg 组合槽不得因未定义变量崩溃（7195 线上 NameError）。"""
+    from unittest.mock import MagicMock
+    from video_processing.pipeline_manager import PipelineManager
+    pm = PipelineManager.__new__(PipelineManager)
+    pm._defer_for_resource_slot = MagicMock()
+    active = []
+    handle = pm._enter_stage_slot("asr_ffmpeg", "vid", "title", active=active)
+    assert handle not in (None, "legacy") and active == [handle]
+    blocked = pm._enter_stage_slot("asr_ffmpeg", "vid2", "title2", active=[])
+    assert blocked is None
+    pm._defer_for_resource_slot.assert_called_once()
+    pm._exit_stage_slot(handle, active)
+    assert active == []

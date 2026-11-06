@@ -4540,7 +4540,7 @@ class PipelineManager:
                 cm = self._hold_stage_slot(stages[0], blocking=False)
                 cm.__enter__()
             else:
-                cm = hold_stages(stages, blocking=blocking)
+                cm = hold_stages(stages, blocking=False)
                 cm.__enter__()
         except StageSlotUnavailable as exc:
             self._defer_for_resource_slot(yid, title, getattr(exc, "stage", stage), slice_index=slice_index)
