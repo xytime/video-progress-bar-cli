@@ -263,6 +263,21 @@ def test_agy_primary_starts_immediately_and_falls_back_at_deadline(tmp_path):
     assert task.payload["rules"]["ocr_zero_required"] is False
 
 
+def test_luna_contract_keeps_unused_agy_attempts(tmp_path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 11, 6, 4, 23, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, now, "agy", enable_luna_fallback=True)
+    (task.finish_dir / "antigravity_attempt.json").write_text(
+        json.dumps({"status": "failed", "attempt_number": 1}))
+    assert queue.antigravity_due(task, now)
+    assert not queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=300, now=now)
+    assert not queue.should_fallback(task, now)
+    (task.finish_dir / "antigravity_attempt.json").write_text(
+        json.dumps({"status": "failed", "attempt_number": 3}))
+    assert not queue.antigravity_due(task, now)
+    assert queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=300, now=now)
+
+
 def test_agy_retry_is_bounded_and_respects_claim(tmp_path):
     queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
     now = datetime(2026, 9, 27, tzinfo=timezone.utc)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.11.0 | 2026-11-07 | Cursor | Luna 交接与本地兜底只在 AGY 次数用尽、熔断或截止后；未用完的次数仍可重试。 |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-07-31 | Codex | 新增 Markdown 任务单、完成物验收与超时降级判定 |
 | 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
@@ -288,7 +289,9 @@ class AICoverQueue:
         if task.primary_provider == "codex":
             return current >= task.fallback_after
         if task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT:
-            # Codex 未交接/未实际结束，不能以 AGY 超时作为本地兜底依据。
+            # 还有 AGY 次数且未到截止时，不因过早的 Luna 失败转入本地兜底。
+            if not self.antigravity_exhausted(task) and current < task.antigravity_deadline:
+                return False
             handoff = self.luna_handoff(task)
             if not handoff:
                 return False
@@ -336,7 +339,10 @@ class AICoverQueue:
             attempt = json.loads((task.finish_dir / "antigravity_attempt.json").read_text())
         except (OSError, ValueError):
             attempt = {}
-        reason = ("agy_failed" if attempt.get("status") == "failed" else
+        attempt_number = int(attempt.get("attempt_number") or 0)
+        exhausted = (attempt.get("status") == "failed"
+                     and attempt_number >= int(task.payload.get("maximum_generation_attempts", 3)))
+        reason = ("agy_failed" if exhausted else
                   "agy_circuit_open" if circuit_open else
                   "agy_deadline" if current >= task.antigravity_deadline else None)
         if not reason:
@@ -361,7 +367,9 @@ class AICoverQueue:
     def antigravity_due(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
         """首选立即执行，旧任务仍只在备用窗口执行；失败最多三次。"""
         current = now or _utc_now()
-        if self.luna_handoff(task):
+        handoff = self.luna_handoff(task)
+        # 熔断或截止后的交接不再回到 AGY；过早的 agy_failed 交接仍留下未用完的次数。
+        if handoff and not (handoff.get("reason") == "agy_failed" and not self.antigravity_exhausted(task)):
             return False
         if current >= task.antigravity_deadline or self._has_fresh_claim(task, current):
             return False
@@ -375,9 +383,6 @@ class AICoverQueue:
         try:
             attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
             count = int(attempt.get("attempt_number", 1))
-            if (task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT
-                    and attempt.get("status") == "failed"):
-                return False
         except (OSError, ValueError, TypeError):
             return False
         return (task.primary_provider == "agy" and attempt.get("status") in {"failed", "running", "auth_required"}

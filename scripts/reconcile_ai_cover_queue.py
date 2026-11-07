@@ -6,6 +6,7 @@
 | auth-freshness-v1 | 2026-10-25 | Codex | 无待处理封面时也定期核实认证，五分钟缓存避免重复检查。 |
 | cover-source-v1 | 2026-10-15 | Codex | 贯通封面版本、投稿绑定与来源展示回执。 |
 | --- | --- | --- | --- |
+| 1.12.0 | 2026-11-07 | Cursor | 渲染失败把完整脱敏 stderr 写入任务目录；本地兜底标记不再吃掉未用完的 AGY 次数。 |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.9.1 | 2026-10-10 | Codex | 封面正常完成与回执恢复均原子入二创队列，传递启用平台和源文件路径。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
@@ -44,7 +45,9 @@ from video_processing.ai_cover_queue import AICoverQueue, AICoverTask, LUNA_FALL
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db import PipelineDB
 from video_processing.utils.subprocess_env import build_subprocess_env
-from video_processing.utils.cover_agy import run_process, QUALITY_VERSION
+from video_processing.utils.cover_agy import (
+    QUALITY_VERSION, redact_process_output, run_process, write_process_diagnostic,
+)
 from video_processing.utils.provider_circuit import ProviderCircuit
 from video_processing.utils.agy_background_auth import auth_ready, require_auth
 from video_processing.core.maintenance import running, MaintenanceDenied
@@ -270,7 +273,15 @@ def _render_locked(
         command[command.index("--brief-output") + 1] = str(staged / brief.name)
     result = run_process(command, cwd=PROJECT_ROOT, timeout=90, env=build_subprocess_env())
     if result.returncode != 0 or not _is_dedicated_cover(staged_target):
-        logger.error("[%s] cover render failed: %s", task.task_id, result.stderr[:400])
+        stderr = redact_process_output(result.stderr or "")
+        stdout = redact_process_output(result.stdout or "")
+        detail = write_process_diagnostic(task.finish_dir, "render_failure.json", {
+            "task_id": task.task_id, "returncode": result.returncode,
+            "stdout": stdout, "stderr": stderr,
+        })
+        last_line = next((line for line in reversed(stderr.splitlines()) if line.strip()), "")
+        logger.error("[%s] cover render failed: exit=%s; detail=%s; %s",
+                     task.task_id, result.returncode, detail.name, last_line[:300])
         return False
     current = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
     if not current or not db.can_resolve_ai_cover(youtube_id, slice_index=slice_index):
@@ -380,7 +391,8 @@ def reconcile() -> int:
                 if (task.finish_dir / "resolution.json").is_file():
                     resolved += int(_recover_resolution(task, db))
                     continue
-                if (task.finish_dir / "fallback_attempt.json").is_file():
+                # 本地兜底失败是终态，但不能把尚未用完的 AGY 次数一并停掉。
+                if (task.finish_dir / "fallback_attempt.json").is_file() and not queue.antigravity_due(task):
                     continue
                 visual = queue.accepted_visual(task)
                 generated_by = queue.accepted_source(task)
@@ -440,7 +452,8 @@ def reconcile() -> int:
                     if rendered is None or (task.finish_dir / "resolution.json").is_file():
                         continue
                     render_failed = True
-                if render_failed or (visual is None and queue.should_fallback(task)):
+                if ((render_failed or (visual is None and queue.should_fallback(task)))
+                        and not (task.finish_dir / "fallback_attempt.json").is_file()):
                     try:
                         fallback_ok = _render(task, None, db)
                     except (RuntimeError, OSError) as exc:

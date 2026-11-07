@@ -10,6 +10,7 @@
 | 1.3.0 | 2026-09-27 | Codex | 备用生图改走已验证的 agy CLI，隔离 API 凭据并保留文件验收 |
 | 1.4.0 | 2026-09-27 | Codex | 支持立即执行的首选任务与有限重试，失败释放 claim，保留无字硬闸 |
 | 1.5.0 | 2026-09-27 | Codex | 传入视频主题，固化已审核样图的内容关联、场景层次与细节质量要求 |
+| 1.7.0 | 2026-11-07 | Cursor | 无图片时把脱敏生成回执写入运行目录，避免 antigravity-run 目录完全空白。 |
 | 1.6.0 | 2026-10-21 | Antigravity | 接入零算力真实摄影美学预设轮换，以具体内容锚点与光学浅景深替代同质化插画 |
 """
 
@@ -39,7 +40,9 @@ from cover.creative_brief import resolve_photographic_style
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
 from video_processing.utils.agy_provider import _normalize_agy_model
 from video_processing.utils.agy_background_auth import AgyAuthRequired
-from video_processing.utils.cover_agy import run_cli, review_image, valid_quality, QUALITY_VERSION
+from video_processing.utils.cover_agy import (
+    QUALITY_VERSION, redact_process_output, review_image, run_cli, valid_quality, write_process_diagnostic,
+)
 
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -192,7 +195,12 @@ def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> st
         "--print-timeout", f"{timeout_seconds}s", "--print", prompt,
     ]
     response = run_cli(command, cwd=work_dir, timeout=timeout_seconds + 5)
-    return str(response.get("response", ""))[-500:]
+    rendered = response.get("response", "")
+    write_process_diagnostic(work_dir, "generation_diagnostic.json", {
+        "task_id": task.task_id,
+        "response": redact_process_output(rendered if isinstance(rendered, str) else json.dumps(rendered, ensure_ascii=False)),
+    })
+    return str(rendered)[-500:]
 
 
 def _run_task(args: argparse.Namespace, task: AICoverTask, queue: AICoverQueue) -> int:

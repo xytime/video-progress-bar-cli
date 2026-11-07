@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | auth-freshness-v1 | 2026-10-25 | Codex | 空闲队列也核实认证，测试桩隔离认证外部依赖。 |
+| 1.12.0 | 2026-11-07 | Cursor | 复现三次预算、三路终态，以及渲染异常尾部必须落盘。 |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
 | 1.0.0 | 2026-10-01 | Codex | 验证 Luna 新任务路由与独立来源回执 |
 """
@@ -288,6 +289,72 @@ def test_interrupted_final_attempt_falls_back_after_claim_expires(tmp_path,monke
     monkeypatch.setattr(reconciler,'run_process',renderer)
     assert reconciler.reconcile()==1
     assert db.get_video_by_youtube_id('cover-guard')['status']=='PENDING'
+
+
+def test_first_agy_failure_keeps_remaining_attempts(tmp_path, monkeypatch):
+    queue, task, db = setup_task(tmp_path, monkeypatch, age=0, luna=True)
+    monkeypatch.setattr(reconciler, "running", lambda: True)
+    calls = []
+
+    def agy(item):
+        calls.append("agy")
+        previous = 0
+        path = item.finish_dir / "antigravity_attempt.json"
+        if path.is_file():
+            previous = int(json.loads(path.read_text())["attempt_number"])
+        path.write_text(json.dumps({"status": "failed", "attempt_number": previous + 1, "stage": "generation"}))
+
+    monkeypatch.setattr(reconciler, "_run_antigravity", agy)
+    monkeypatch.setattr(reconciler, "_run_luna", lambda item: calls.append("luna"))
+    monkeypatch.setattr(reconciler, "run_process", lambda *args, **kwargs: pytest.fail("renderer called"))
+    assert reconciler.reconcile() == 0
+    assert calls == ["agy"]
+    assert not (task.finish_dir / "luna_handoff.json").exists()
+    assert not (task.finish_dir / "fallback_attempt.json").exists()
+    assert reconciler.reconcile() == 0
+    assert calls == ["agy", "agy"]
+    assert json.loads((task.finish_dir / "antigravity_attempt.json").read_text())["attempt_number"] == 2
+    assert db.get_video_by_youtube_id("cover-guard")["status"] == "AI_COVER_PENDING"
+
+
+def test_exhausted_three_paths_stay_terminal_and_keep_render_tail(tmp_path, monkeypatch, caplog):
+    queue, task, db = setup_task(tmp_path, monkeypatch, age=0, luna=True)
+    monkeypatch.setattr(reconciler, "running", lambda: True)
+    (task.finish_dir / "antigravity_attempt.json").write_text(
+        json.dumps({"status": "failed", "attempt_number": 3, "stage": "generation"}))
+    reconciler.settings.enable_codex_luna_cover_fallback = True
+    reconciler.settings.codex_luna_cover_timeout_seconds = 30
+    reconciler.settings.codex_luna_cover_review_timeout_seconds = 20
+    calls = []
+
+    def luna(item):
+        calls.append("luna")
+        (item.finish_dir / "luna_attempt.json").write_text(json.dumps(
+            {"status": "failed", "error": "CODEX_CLI_EXIT_1"}))
+
+    preamble = "Traceback (most recent call last):\n" + ("  File \"/tmp/padding.py\", line 1, in <module>\n" * 20)
+    stderr = preamble + "api_key=supersecret\nSENTINEL_EXCEPTION_TAIL\n"
+    assert "SENTINEL_EXCEPTION_TAIL" not in stderr[:400]
+
+    def render(*args, **kwargs):
+        calls.append("render")
+        return SimpleNamespace(returncode=1, stderr=stderr, stdout="")
+
+    monkeypatch.setattr(reconciler, "_run_luna", luna)
+    monkeypatch.setattr(reconciler, "_run_antigravity", lambda item: calls.append("agy"))
+    monkeypatch.setattr(reconciler, "run_process", render)
+    with caplog.at_level("ERROR"):
+        assert reconciler.reconcile() == 0
+    assert calls == ["luna", "render"]
+    saved = json.loads((task.finish_dir / "render_failure.json").read_text())
+    assert "SENTINEL_EXCEPTION_TAIL" in saved["stderr"]
+    assert "supersecret" not in saved["stderr"]
+    assert "api_key=<REDACTED>" in saved["stderr"]
+    assert "SENTINEL_EXCEPTION_TAIL" in caplog.text
+    assert (task.finish_dir / "fallback_attempt.json").is_file()
+    assert db.get_video_by_youtube_id("cover-guard")["status"] == "AI_COVER_PENDING"
+    assert reconciler.reconcile() == 0
+    assert calls == ["luna", "render"]
 
 
 def test_cli_success_exit_is_not_the_resolved_count(monkeypatch):
