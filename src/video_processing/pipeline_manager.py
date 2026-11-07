@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| copy-failure-class-v1 | 2026-11-07 | Grok Bot | 文案延后协议接受 auth/timeout/rate_limit，并保留 classes 链。 |
 | review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | maintenance-cli-drain-v1 | 2026-11-01 | Codex | 直接启动入口识别真实维护排空，未知控制状态及业务失败仍报错。 |
 | maintenance-drain-v1 | 2026-11-01 | Codex | 单片排空后在后续阶段前复验维护闸门，不产生新的健康通知、补发或互动。 |
@@ -249,6 +250,7 @@ from .utils.generated_content_validation import (
     is_upstream_error_response,
     validate_publishable_generated_content,
 )
+from .utils.agy_copy_service import match_copy_provider_deferred
 from .utils.engagement_post import engagement_receipt_section
 from .utils.subtitle_content_contract import bilingual_ass_contract_error
 from .telegram_delivery import send_text as send_telegram_text, send_video as send_telegram_review_video
@@ -978,13 +980,7 @@ class PipelineManager:
         """只消费文案子进程的专用临时退出协议；提交证据和 DAL 条件优先。"""
         if error.returncode != 75:
             return False
-        detail = error.stderr or ""
-        if isinstance(detail, bytes):
-            detail = detail.decode("utf-8", errors="replace")
-        match = re.search(
-            r"^COPY_PROVIDER_DEFERRED until=(\d+) reason=(quota|unavailable|busy|cooldown) notify=([01])$",
-            detail, re.MULTILINE,
-        )
+        match = match_copy_provider_deferred(error.stderr or "")
         prefix = yid if slice_index == 0 else f"{yid}_part{slice_index}"
         if not match or self._wechat_submission_evidence_paths(prefix):
             return False

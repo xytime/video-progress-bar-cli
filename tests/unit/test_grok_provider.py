@@ -4,9 +4,11 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-11-01 | Grok Bot | 验证无工具单轮调用参数、结构化输出提取、脱敏错误与字幕候选接入。 |
+| 1.1.0 | 2026-11-07 | Grok Bot | 长提示走文件且原样传递；压缩 schema；同时接受 structured_output。 |
 """
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,7 +18,9 @@ from video_processing.utils import grok_provider
 from video_processing.utils.grok_provider import GrokProviderError, run_grok_structured
 from video_processing.processors.caption_processor import AutoCaptionProcessor
 
-SCHEMA = {"type": "object", "properties": {"items": {"type": "array"}}}
+SCHEMA = {"type": "object", "title": "Ignore", "properties": {
+    "items": {"type": "array", "description": "do not send this prose to the CLI"},
+}}
 
 
 def _completed(stdout="", stderr="", code=0):
@@ -27,7 +31,8 @@ def test_runs_single_turn_without_tools_and_returns_structured_output(monkeypatc
     seen = {}
 
     def fake_run(args, **kwargs):
-        seen.update(args=args, kwargs=kwargs)
+        prompt_path = Path(args[args.index("--prompt-file") + 1])
+        seen.update(args=args, kwargs=kwargs, prompt=prompt_path.read_text(encoding="utf-8"))
         return _completed(json.dumps({"text": "{}", "structuredOutput": {"items": [1]}}))
 
     monkeypatch.setattr(grok_provider.subprocess, "run", fake_run)
@@ -36,9 +41,14 @@ def test_runs_single_turn_without_tools_and_returns_structured_output(monkeypatc
     args = seen["args"]
     assert result == {"items": [1]}
     assert args[args.index("--tools") + 1] == ""
-    assert {"--no-subagents", "--disable-web-search"} <= set(args)
+    assert {"--no-subagents", "--disable-web-search", "--verbatim", "--no-plan"} <= set(args)
     assert args[args.index("--max-turns") + 1] == "1"
     assert "--model" not in args
+    assert seen["prompt"] == "译"
+    assert "译" not in args
+    schema = json.loads(args[args.index("--json-schema") + 1])
+    assert schema["additionalProperties"] is False
+    assert "description" not in json.dumps(schema)
     assert seen["kwargs"]["env"] == {"HTTPS_PROXY": "http://127.0.0.1:1"}
     assert seen["kwargs"]["timeout"] == 30
 
@@ -46,8 +56,11 @@ def test_runs_single_turn_without_tools_and_returns_structured_output(monkeypatc
 def test_missing_structured_output_and_nonzero_exit_are_sanitized(monkeypatch):
     monkeypatch.setattr(grok_provider.subprocess, "run",
                         lambda args, **kw: _completed(json.dumps({"text": "secret prompt echo"})))
-    with pytest.raises(GrokProviderError, match="no structuredOutput"):
+    with pytest.raises(GrokProviderError, match="no structured output"):
         run_grok_structured("p", schema=SCHEMA, command="grok", timeout_sec=5)
+    monkeypatch.setattr(grok_provider.subprocess, "run",
+                        lambda args, **kw: _completed(json.dumps({"structured_output": {"items": [2]}})))
+    assert run_grok_structured("p", schema=SCHEMA, command="grok", timeout_sec=5) == {"items": [2]}
     monkeypatch.setattr(grok_provider.subprocess, "run",
                         lambda args, **kw: _completed(stderr="429 quota secret prompt", code=2))
     with pytest.raises(GrokProviderError) as error:

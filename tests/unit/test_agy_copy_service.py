@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-09-22 | Codex | 覆盖零 API 依赖、校验后缓存、限流、锁竞争与投稿保护。 |
 | 1.0.1 | 2026-11-01 | Grok Bot | 固定供应商顺序为仅 agy，隔离新的 CLI 文案链。 |
 | 1.0.2 | 2026-11-02 | Grok Bot | 代理合同：继承代理被丢弃、注入当前系统代理；业务凭据仍排除。 |
+| 1.0.3 | 2026-11-07 | Grok Bot | 冷却原因保留 auth/timeout/quota/rate_limit，二次命中不再改写成 cooldown。 | |
 """
 
 import fcntl
@@ -56,8 +57,10 @@ def test_invalid_output_not_cached_and_cache_revalidated(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("error,reason,delay", [
-    ("agy exit 1: rate limit", "quota", 21600),
-    ("agy timed out after 2s", "unavailable", 300),
+    ("agy exit 1: rate limit", "rate_limit", 21600),
+    ("agy exit 1: quota exceeded", "quota", 21600),
+    ("agy exit 1: AGY_AUTH_REQUIRED", "auth", 300),
+    ("agy timed out after 2s", "timeout", 300),
     ("agy command not found", "unavailable", 300),
 ])
 def test_failure_cools_down_without_repeat_requests(tmp_path, monkeypatch, error, reason, delay):
@@ -74,7 +77,7 @@ def test_failure_cools_down_without_repeat_requests(tmp_path, monkeypatch, error
     with pytest.raises(service.CopyProviderDeferred) as second:
         _call(tmp_path)
     assert not second.value.notify
-    assert second.value.reason == "cooldown"
+    assert second.value.reason == reason
     assert len(calls) == 1
     (tmp_path / "cooldown.json").write_text(json.dumps({"until": 0}))
     with pytest.raises(service.CopyProviderDeferred):
@@ -169,6 +172,23 @@ def _manager(tmp_path):
     manager.db.add_video("copy-test", "让学习充满乐趣", "test-channel", score=80)
     manager.db.update_video_status("copy-test", "COPYWRITING")
     return manager
+
+
+def test_defer_parser_keeps_auth_and_later_rate_limit():
+    until = int(time.time()) + 3600
+    text = str(service.CopyProviderDeferred(
+        until, "auth", True, classes="agy:auth,codex:quota,grok:timeout,gemini:rate_limit",
+    ))
+    match = service.match_copy_provider_deferred(text)
+    assert match is not None
+    assert (match.group(1), match.group(2), match.group(3)) == (str(until), "auth", "1")
+    assert match.group(4) == "agy:auth,codex:quota,grok:timeout,gemini:rate_limit"
+    assert service.match_copy_provider_deferred(
+        "COPY_PROVIDER_DEFERRED until=1 reason=mystery notify=0",
+    ) is None
+    assert service.match_copy_provider_deferred(
+        "COPY_PROVIDER_DEFERRED until=10 reason=quota notify=0",
+    ).group(2) == "quota"
 
 
 def test_deferred_queue_excludes_claim_until_due(tmp_path):
