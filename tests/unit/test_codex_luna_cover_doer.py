@@ -44,7 +44,8 @@ def test_luna_two_cli_sessions_write_accepted_receipt(tmp_path: Path, monkeypatc
         attempt = task.finish_dir / "antigravity_attempt.json"
         attempt.unlink()
         if route in {"failed_once", "invalid_result"}:
-            attempt.write_text(json.dumps({"status": "failed", "attempt_number": 1}))
+            # 一次失败还没用完三次预算；这里用尽次数后才允许交接。
+            attempt.write_text(json.dumps({"status": "failed", "attempt_number": 3}))
         if route == "invalid_result":
             (task.finish_dir / "result.json").write_text(json.dumps({"task_id": task.task_id}))
         if route == "expired":
@@ -78,6 +79,29 @@ def test_luna_two_cli_sessions_write_accepted_receipt(tmp_path: Path, monkeypatc
     assert receipt["transport"] == "codex_cli"
     assert receipt["image_model"] == "unknown"
     assert not (task.finish_dir / "claim.json").exists()
+
+
+def test_cli_exit_persists_redacted_stderr_tail(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+    queue, task, args = _task(tmp_path)
+    assert queue.prepare_luna_handoff(task, circuit_open=False, budget_seconds=330)
+    stderr = ("x" * 500) + "\napi_key=sekrit\nPlaywrightError: SENTINEL_TAIL\n"
+
+    def fake_run(command, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="token=abcd", stderr=stderr)
+
+    monkeypatch.setattr(worker, "run_process", fake_run)
+    monkeypatch.setattr(worker, "_generated_images_dir", lambda: tmp_path)
+    assert worker._run_task(args, task, queue) == 1
+    failure = next((task.finish_dir).glob("luna-run-*/cli_failure.json"))
+    payload = json.loads(failure.read_text())
+    assert payload["returncode"] == 1
+    assert "SENTINEL_TAIL" in payload["stderr"]
+    assert "sekrit" not in json.dumps(payload)
+    assert "abcd" not in json.dumps(payload)
+    attempt = json.loads((task.finish_dir / "luna_attempt.json").read_text())
+    assert attempt["error"] == "CODEX_CLI_EXIT_1"
+    assert "SENTINEL_TAIL" in attempt["stderr_excerpt"]
 
 
 def test_luna_rejection_falls_back_without_result(tmp_path: Path, monkeypatch):

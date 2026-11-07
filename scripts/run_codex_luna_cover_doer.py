@@ -5,6 +5,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.10.0 | 2026-10-15 | Codex | 统一 AGY 失败到 Codex 的持久化交接、独立预算与最后兜底门禁 |
+| 1.12.0 | 2026-11-07 | Cursor | CLI 非零退出时把脱敏 stdout/stderr 写入运行目录，不再只留退出码。 |
 | 1.11.0 | 2026-10-21 | Antigravity | 对齐真实摄影美学预设轮换，避免兜底接力退回同质化插画风格 |
 | 1.0.0 | 2026-10-01 | Codex | AGY 耗尽后的 Luna 最低档文件协议生成与质量回执 |
 """
@@ -31,7 +32,9 @@ if str(SRC_ROOT) not in sys.path:
 
 from cover.creative_brief import resolve_photographic_style
 from video_processing.ai_cover_queue import AICoverQueue, LUNA_FALLBACK_CONTRACT, LUNA_QUALITY_VERSION
-from video_processing.utils.cover_agy import QUALITY_SCHEMA, run_process, valid_quality
+from video_processing.utils.cover_agy import (
+    QUALITY_SCHEMA, redact_process_output, run_process, valid_quality, write_process_diagnostic,
+)
 from video_processing.utils.subprocess_env import build_subprocess_env
 
 
@@ -87,6 +90,11 @@ def _generated_images_dir() -> Path:
 def _run_cli(command: list[str], work_dir: Path, timeout: int) -> int | None:
     result = run_process(command, cwd=work_dir, timeout=timeout, env=_env())
     if result.returncode != 0:
+        write_process_diagnostic(work_dir, "cli_failure.json", {
+            "returncode": result.returncode,
+            "stdout": redact_process_output(result.stdout or ""),
+            "stderr": redact_process_output(result.stderr or ""),
+        })
         raise RuntimeError(f"CODEX_CLI_EXIT_{result.returncode}")
     usage = re.search(r"tokens used\s+([\d,]+)", result.stderr + "\n" + result.stdout)
     return int(usage.group(1).replace(",", "")) if usage else None
@@ -195,8 +203,15 @@ def _run_task(args: argparse.Namespace, task, queue: AICoverQueue) -> int:
         _write_json(attempt_path, {"task_id": task.task_id, "status": "succeeded", "completed_at": _iso(completed_at)})
         return 0
     except Exception as exc:
+        failure_path = work_dir / "cli_failure.json"
+        stderr_excerpt = ""
+        try:
+            stderr_excerpt = str(json.loads(failure_path.read_text(encoding="utf-8")).get("stderr") or "")[-2000:]
+        except (OSError, ValueError, TypeError):
+            stderr_excerpt = ""
         _write_json(attempt_path, {"task_id": task.task_id, "status": "failed", "stage": stage,
-                                  "failed_at": _iso(_now()), "error": str(exc)[:200]})
+                                  "failed_at": _iso(_now()), "error": str(exc)[:200],
+                                  "stderr_excerpt": stderr_excerpt})
         print(f"LUNA_COVER_FAILED: stage={stage}; type={type(exc).__name__}", file=sys.stderr)
         return 1
     finally:

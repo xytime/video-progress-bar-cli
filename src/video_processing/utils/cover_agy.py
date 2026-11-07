@@ -1,6 +1,11 @@
 """封面 AGY 进程边界和独立质量复核，不调用 Codex 或付费 API 备用。
 
 依赖：scripts → 本模块 → subprocess_env/settings；队列只使用纯回执校验。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-11-07 | Cursor | 子进程失败回执保留完整脱敏输出，供封面渲染与 CLI 诊断。 |
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from video_processing.utils.agy_provider import _normalize_agy_model
@@ -29,6 +35,32 @@ QUALITY_SCHEMA = {
     "required": [*QUALITY_FLAGS, "decision", "observed_content", "reason"],
     "additionalProperties": False,
 }
+
+
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|cookie|session)(['\"=: ]+)([^\s'\"]+)"
+)
+_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+/=]+")
+_DIAGNOSTIC_LIMIT = 65536
+
+
+def redact_process_output(text: str, *, limit: int = _DIAGNOSTIC_LIMIT) -> str:
+    """去掉凭据，保留异常末尾。追踪栈的结论在最后，不能只留开头。"""
+    cleaned = _BEARER.sub("Bearer <REDACTED>", text or "")
+    cleaned = _SECRET_ASSIGNMENT.sub(r"\1\2<REDACTED>", cleaned)
+    if len(cleaned) > limit:
+        cleaned = cleaned[-limit:]
+    return cleaned
+
+
+def write_process_diagnostic(directory: Path, name: str, payload: dict) -> Path:
+    """原子写入任务目录内的诊断文件；不写队列状态，也不触发下一次生成。"""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    temporary = path.with_name(f".{path.name}.{time.time_ns()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+    return path
 
 
 def valid_quality(review: object) -> bool:
