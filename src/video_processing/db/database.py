@@ -4,6 +4,7 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
+| ted-claim-order-v1 | 2026-11-07 | Grok | 两个自动领取入口的 ORDER BY 最前增加 TED/TEDx 频道降级键；boost 只在同档内生效。 |
 | review-fixes-20261103 | 2026-11-03 | Codex | 修复片尾降级、投递口径、字幕预算或复核绑定；保留历史证据。 |
 | subtitle-manual-gate-v2 | 2026-11-02 | Codex | 旧文字及媒体恢复入口复验字幕人工闸门。 |
 | output-retention-v1 | 2026-10-31 | Codex | 新增不初始化数据库的只读产物引用快照，多切片与跨平台未确认状态保守保护。 |
@@ -6311,6 +6312,25 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
             (*TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_min_like_rate_pct),
         )
 
+    @staticmethod
+    def _ted_claim_order_sql() -> tuple[str, tuple[Any, ...]]:
+        """自动领取排序最前的 TED/TEDx 降级键。非 TED=0，TED/TEDx=1，升序。
+
+        身份只认 ``TED_AUTO_PUBLISH_CHANNEL_IDS``（即 ``config.publishing.TED_CHANNEL_IDS``），
+        与点赞率门禁同源；不看标题。切片以原视频频道为准，原视频缺失时才回落任务自身频道。
+        该键必须位于 queue_boost 之前：任意非 TED 先于任意 TED，boost 只在同档内提权。
+        """
+        channel_ids = tuple(TED_AUTO_PUBLISH_CHANNEL_IDS)
+        if not channel_ids:
+            return "0", ()
+        placeholders = ", ".join("?" for _ in channel_ids)
+        return (
+            "CASE WHEN COALESCE(origin.channel_id, pv.channel_id, '') IN ("
+            + placeholders
+            + ") THEN 1 ELSE 0 END ASC",
+            channel_ids,
+        )
+
     def is_ted_like_rate_eligible(self, youtube_id: str, slice_index: int = 0) -> bool:
         """提交前读取最新原视频指标；不使用调用者的排队快照。"""
         rate_sql, rate_params = self._ted_like_rate_filter()
@@ -6349,6 +6369,7 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         [Claude_Opus_4.8 黑名单根治] 这是所有自动发布路径（dashboard 调度器 / pipeline_manager /
         rescore 重算）取「可发候选」的唯一咽喉。在此 SQL 层硬过滤 BLACKLISTED 频道与 blacklisted_videos
         墓碑视频，确保任何路径都绝不发布被拉黑频道的视频（含已在库的存量 PENDING）。
+        TED/TEDx 只降到队尾、不丢弃：降级键在 queue_boost 之前，其余键保持原相对次序。
         """
         gates = self._publication_gates(
             min_score=min_score, channel_min_scores=channel_min_scores, ready_only=ready_only,
@@ -6360,27 +6381,34 @@ class PipelineDB(NotificationDeliveryDAL, SubtitleQualityNotificationsDAL, Subti
         if ready_only is not None:
             condition += ' AND IFNULL(pv.preparation_ready,0) = ?'
             params.append(int(ready_only))
+        ted_order, ted_params = self._ted_claim_order_sql()
         with self.get_connection() as conn:
             rows = conn.execute(
                 "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
-                " ORDER BY CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, IFNULL(pv.preparation_ready,0) DESC, CASE WHEN pv.preparation_ready=1 THEN julianday(COALESCE(pv.publication_ready_at,pv.created_at)) END ASC, pv.score DESC, pv.created_at, pv.id LIMIT ?",
-                (*params, max(1,int(limit)))).fetchall()
+                " ORDER BY " + ted_order +
+                ", CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, IFNULL(pv.preparation_ready,0) DESC, CASE WHEN pv.preparation_ready=1 THEN julianday(COALESCE(pv.publication_ready_at,pv.created_at)) END ASC, pv.score DESC, pv.created_at, pv.id LIMIT ?",
+                (*params, *ted_params, max(1,int(limit)))).fetchall()
             return [dict(row) for row in rows]
 
     def get_high_score_preparation_candidates(
         self, *, min_score: int = 75, limit: int = 1, retry_hours: Optional[int] = None,
         channel_min_scores: Optional[Dict[str, int]] = None,
     ) -> List[Dict[str, Any]]:
-        """预加工复用同一份候选门禁；仍只允许 AUTO/KEYWORD。"""
+        """预加工复用同一份候选门禁；仍只允许 AUTO/KEYWORD。
+
+        与待发布领取共用 TED/TEDx 降级键，并保持其后的 boost / score / created_at / id 次序。
+        """
         gates = self._publication_gates(min_score=min_score, channel_min_scores=channel_min_scores,
                                         ready_only=False, source_subtitle_retry_hours=retry_hours)
         condition = ' AND '.join('(' + sql + ')' for _, _, sql, _ in gates)
         params = [p for _, _, _, args in gates for p in args]
+        ted_order, ted_params = self._ted_claim_order_sql()
         with self.get_connection() as conn:
             rows = conn.execute(
                 "SELECT pv.* FROM processed_videos pv LEFT JOIN processed_videos origin ON origin.id=COALESCE(pv.parent_id,pv.id) WHERE " + condition +
-                " AND IFNULL(pv.preparation_ready,0)=0 AND pv.source IN ('AUTO','KEYWORD') ORDER BY CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, pv.score DESC,pv.created_at,pv.id LIMIT ?",
-                (*params, max(1,int(limit)))).fetchall()
+                " AND IFNULL(pv.preparation_ready,0)=0 AND pv.source IN ('AUTO','KEYWORD') ORDER BY " + ted_order +
+                ", CASE WHEN pv.queue_boost_at IS NOT NULL THEN 0 ELSE 1 END, pv.queue_boost_at DESC, pv.score DESC,pv.created_at,pv.id LIMIT ?",
+                (*params, *ted_params, max(1,int(limit)))).fetchall()
             return [dict(row) for row in rows]
 
     def get_rescore_candidates(
